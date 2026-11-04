@@ -1,0 +1,7 @@
+{
+  "uuid": "tuxistant@buengenio",
+  "name": "Tuxistant",
+  "description": "Voice assistant for the Linux desktop: animated blob, captions, hotkey and status icon.",
+  "shell-version": ["50"],
+  "settings-schema": "org.gnome.shell.extensions.tuxistant"
+}

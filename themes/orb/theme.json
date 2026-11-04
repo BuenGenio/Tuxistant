@@ -1,0 +1,7 @@
+{
+  "id": "orb",
+  "name": "Orb",
+  "author": "Tuxistant",
+  "version": "1.0.0",
+  "layout": { "kind": "orb", "size": 240, "anchor": "bottom-right", "margin": 32 }
+}

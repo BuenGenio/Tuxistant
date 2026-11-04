@@ -1,0 +1,21 @@
+id: org.tuxistant.files
+name: Files
+description: Finds files in your home folder and opens them
+version: 1.0.0
+permissions:
+  files_read: ["~"]
+actions:
+  file.find:
+    description: Find files in the home folder by name or by what is in them. Use it for any question about where a file is, and before opening, trashing or sending a file. Results are numbered
+    params:
+      query: { type: string, description: "A few words from the file's name or contents" }
+      kind: { type: string, enum: [document, image, video, audio], description: "Only if the user asked for that kind of file" }
+      year: { type: integer, description: "Only if the user named a year" }
+      folder: { type: string, description: "Only if the user named a folder, like Downloads" }
+      days: { type: integer, description: "Only files changed in the last this many days" }
+    required: [query]
+  file.open:
+    description: Open a file on screen. Only when the user says open or show, never as a step towards something else
+    params:
+      file: { type: string, description: "A result number from file_find, like 1, or a path" }
+    required: [file]

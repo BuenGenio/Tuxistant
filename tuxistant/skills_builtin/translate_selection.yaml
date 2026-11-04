@@ -1,0 +1,13 @@
+id: org.tuxistant.translate_selection
+name: Translate selection
+description: Translates the text selected on screen on your own LibreTranslate server
+version: 1.0.0
+permissions:
+  network: [home]
+  clipboard: true
+actions:
+  translate.selection:
+    description: Translate the text selected on screen, or copied. Use it when the user says this, that or the selection instead of saying the words. The app shows and says the translation itself, so just say it is done
+    params:
+      to: { type: string, description: "The language to translate into" }
+    required: [to]

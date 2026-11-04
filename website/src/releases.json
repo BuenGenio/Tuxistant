@@ -1,0 +1,5 @@
+{
+  "linux":   { "version": "0.1.0", "channel": "preview", "url": null },
+  "macos":   { "version": null, "channel": "planned", "url": null },
+  "windows": { "version": null, "channel": "planned", "url": null }
+}

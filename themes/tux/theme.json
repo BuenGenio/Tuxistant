@@ -1,0 +1,7 @@
+{
+  "id": "tux",
+  "name": "Listening Tux",
+  "author": "Tuxistant",
+  "version": "1.0.0",
+  "layout": { "kind": "orb", "size": 240, "anchor": "bottom-right", "margin": 32 }
+}

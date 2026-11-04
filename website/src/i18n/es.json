@@ -1,0 +1,42 @@
+{
+  "name": "Español", "dir": "ltr",
+  "title": "Tuxistant: habla con tu ordenador",
+  "description": "Un asistente de voz para tu escritorio que funciona en tu propio equipo.",
+  "tagline": "Habla con tu ordenador. Funciona en tu equipo, no en el de otros.",
+  "donate": "Donar", "language": "Idioma", "now": "Ya", "soon": "Pronto",
+  "appearance": "Apariencia", "modes": { "auto": "Automático", "light": "Claro", "dark": "Oscuro" },
+  "caps": [
+    ["now", "Respuestas habladas en un segundo"], ["now", "Mantén una tecla y habla"], ["now", "27 voces para elegir"], ["now", "Cambia su aspecto con temas"], ["now", "Funciona en tu propia red"],
+    ["soon", "Encuentra tus archivos"], ["soon", "Envía archivos a tu móvil"], ["soon", "Traduce mientras hablas"], ["soon", "Ejecuta comandos con tu permiso"], ["soon", "Habilidades de la comunidad"]
+  ],
+  "themes": { "tux": "Tux escuchando", "orb": "Orbe", "waves": "Ondas", "scanner": "Escáner" },
+  "showTheme": "Mostrar tema",
+  "dlFor": "Descargar para {os}", "dlSoon": "Pronto en {os}", "dlPending": "Versión preliminar para {os}, muy pronto", "dlAll": "Todas las versiones",
+  "dlMeta": "Versión {version}, {channel}", "dlPlanned": "Aún no disponible",
+  "examplesTitle": "Lo que hace por ti", "youSay": "Tú dices", "approve": "Primero lo apruebas tú",
+  "examples": {
+    "linux": [
+      ["now", "¿Cuánto espacio me queda en el disco?", "Revisa tu disco y te lo dice en voz alta."],
+      ["now", "Dame una receta rápida de tortitas.", "Responde al momento con un modelo en tu propio equipo."],
+      ["soon", "Busca mi declaración de 2024 y envíala a mi móvil.", "Busca en tus archivos y la envía con GSConnect.", true],
+      ["soon", "¿Qué carpeta me está llenando el disco?", "Ejecuta los comandos adecuados y te lee la respuesta."]
+    ],
+    "macos": [
+      ["soon", "Busca la declaración del año pasado y pásala a mi iPhone por AirDrop.", "Busca con Spotlight y abre AirDrop.", true],
+      ["soon", "Activa No molestar hasta mi próxima reunión.", "Lee tu calendario y activa una Concentración."],
+      ["soon", "Borra de Descargas lo que tenga más de un año.", "Te muestra la lista y lo mueve todo a la Papelera.", true],
+      ["soon", "¿Por qué se calienta mi Mac?", "Encuentra la app más activa y te lo dice."]
+    ],
+    "windows": [
+      ["soon", "Busca mi declaración y envíala a mi móvil.", "Busca en tus archivos y la envía con Enlace Móvil.", true],
+      ["soon", "Instala VLC.", "Lo instala con winget.", true],
+      ["soon", "¿Qué ralentiza el arranque?", "Enumera tus apps de inicio y lo que tarda cada una."],
+      ["soon", "Borra mis archivos temporales.", "Te muestra lo encontrado y libera el espacio.", true]
+    ]
+  },
+  "versionsTitle": "Versiones", "colSystem": "Sistema", "colVersion": "Versión", "colStatus": "Estado", "colNeeds": "Requisitos",
+  "preview": "Vista previa", "planned": "Prevista", "linuxNeeds": "GNOME 50 y tu propio servidor LocalAI", "tbd": "Por anunciar",
+  "donateTitle": "Ayuda a crear la próxima versión", "donateText": "Tu apoyo financia las versiones para macOS y Windows.",
+  "credit": "Tux fue dibujado por Larry Ewing con The GIMP.",
+  "trademarks": "macOS y Windows son marcas de sus respectivos dueños."
+}

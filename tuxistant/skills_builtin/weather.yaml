@@ -1,0 +1,15 @@
+id: org.tuxistant.weather
+name: Weather
+description: Current weather and a seven-day forecast from Open-Meteo
+version: 1.0.0
+permissions:
+  network: [geocoding-api.open-meteo.com, api.open-meteo.com]
+actions:
+  weather.forecast:
+    description: Get the weather and the forecast for up to seven days. Use it for any question about weather, temperature, rain, snow, wind or what to wear
+    params:
+      place: { type: string, description: "Town or city, only if the user named one. Never a day. Leave it out to use their home town" }
+      day:
+        type: string
+        enum: [today, tomorrow, monday, tuesday, wednesday, thursday, friday, saturday, sunday, weekend, week]
+        description: "Only if the user asked about a particular day, the weekend or the whole week"

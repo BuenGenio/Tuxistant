@@ -1,0 +1,8 @@
+id: org.tuxistant.time
+name: Time and date
+description: Tells you the current time and date
+version: 1.0.0
+permissions: {}
+actions:
+  time.now:
+    description: Get the current local time and date

@@ -1,0 +1,42 @@
+{
+  "name": "English", "dir": "ltr",
+  "title": "Tuxistant: talk to your computer",
+  "description": "A voice assistant for your desktop that runs on your own hardware.",
+  "tagline": "Talk to your computer. It runs on your hardware, not someone else's.",
+  "donate": "Donate", "language": "Language", "now": "Now", "soon": "Soon",
+  "appearance": "Appearance", "modes": { "auto": "Auto", "light": "Light", "dark": "Dark" },
+  "caps": [
+    ["now", "Spoken answers in about a second"], ["now", "Hold a key and talk"], ["now", "27 voices to choose from"], ["now", "Swap the look with themes"], ["now", "Runs on your own network"],
+    ["soon", "Finds your files"], ["soon", "Sends files to your phone"], ["soon", "Translates as you speak"], ["soon", "Runs commands, with your OK"], ["soon", "Skills from the community"]
+  ],
+  "themes": { "tux": "Listening Tux", "orb": "Orb", "waves": "Waves", "scanner": "Scanner" },
+  "showTheme": "Show theme",
+  "dlFor": "Download for {os}", "dlSoon": "Coming to {os}", "dlPending": "{os} preview coming soon", "dlAll": "All versions",
+  "dlMeta": "Version {version}, {channel}", "dlPlanned": "Not available yet",
+  "examplesTitle": "What it does for you", "youSay": "You say", "approve": "You approve it first",
+  "examples": {
+    "linux": [
+      ["now", "How much disk space do I have left?", "Checks your disk and tells you out loud."],
+      ["now", "Give me a quick pancake recipe.", "Answers straight away, using a model on your own machine."],
+      ["soon", "Find my 2024 tax return and send it to my phone.", "Searches your files, then sends it with GSConnect.", true],
+      ["soon", "Which folder is eating my disk?", "Runs the right commands and reads you the answer."]
+    ],
+    "macos": [
+      ["soon", "Find last year's tax return and AirDrop it to my iPhone.", "Searches with Spotlight, then opens AirDrop.", true],
+      ["soon", "Turn on Do Not Disturb until my next meeting.", "Reads your calendar and sets a Focus."],
+      ["soon", "Clear anything in Downloads older than a year.", "Shows the list, then moves it all to the Bin.", true],
+      ["soon", "Why is my Mac running hot?", "Finds the busiest app and tells you."]
+    ],
+    "windows": [
+      ["soon", "Find my tax return and send it to my phone.", "Searches your files, then sends it with Phone Link.", true],
+      ["soon", "Install VLC.", "Installs it with winget.", true],
+      ["soon", "What's slowing down my startup?", "Lists your startup apps and how long each takes."],
+      ["soon", "Clear my temp files.", "Shows what it found, then frees the space.", true]
+    ]
+  },
+  "versionsTitle": "Versions", "colSystem": "System", "colVersion": "Version", "colStatus": "Status", "colNeeds": "Needs",
+  "preview": "Preview", "planned": "Planned", "linuxNeeds": "GNOME 50 and your own LocalAI server", "tbd": "To be announced",
+  "donateTitle": "Help build the next version", "donateText": "Your support pays for macOS and Windows versions.",
+  "credit": "Tux was drawn by Larry Ewing with The GIMP.",
+  "trademarks": "macOS and Windows are trademarks of their owners."
+}

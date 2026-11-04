@@ -1,0 +1,246 @@
+#!/usr/bin/python3 -IS
+"""Tuxistant Fn helper: tells the daemon about the Fn key, and about nothing else.
+
+Reads raw input events from every keyboard that reports KEY_FN, without grabbing them, and
+broadcasts one word per line on a Unix stream socket:
+
+    down    Fn pressed
+    up      Fn released
+    other   another key was pressed while Fn is held (once per hold, never which key)
+
+This process sees every keystroke, which is why it runs sandboxed with no network, and why a
+key code must never reach a socket, a log line or an exception message. Keep it that way.
+"""
+import argparse
+import os
+import selectors
+import signal
+import socket
+import struct
+import sys
+import time
+
+SOCKET = "/run/tuxistant-fn/events.sock"
+SYS_INPUT = "/sys/class/input"
+DEV_INPUT = "/dev/input"
+RESCAN_S = 3.0
+MAX_CLIENTS = 16
+
+EVENT = struct.Struct("@llHHi")  # struct input_event: timeval, type, code, value
+EV_SYN, EV_KEY = 0, 1
+SYN_DROPPED = 3
+KEY_FN = 0x1D0
+WORD_BITS = struct.calcsize("l") * 8
+
+
+def log(message):
+    print(f"tuxistant-fn: {message}", file=sys.stderr, flush=True)
+
+
+def has_key(capabilities, code):
+    """capabilities is the sysfs bitmap: hex words, most significant first, leading zeros cut."""
+    words = capabilities.split()[::-1]
+    index, bit = divmod(code, WORD_BITS)
+    return index < len(words) and bool(int(words[index], 16) >> bit & 1)
+
+
+def fn_devices(sys_root=SYS_INPUT, dev_root=DEV_INPUT):
+    found = []
+    for name in sorted(os.listdir(sys_root)):
+        if not name.startswith("event"):
+            continue
+        try:
+            with open(f"{sys_root}/{name}/device/capabilities/key") as f:
+                if has_key(f.read(), KEY_FN):
+                    found.append(f"{dev_root}/{name}")
+        except (OSError, ValueError):
+            continue
+    return found
+
+
+class FnState:
+    """Reduces key events to the three words. The only thing that decides what may leave."""
+
+    def __init__(self):
+        self.held = set()  # devices with Fn down
+        self.other_sent = False
+
+    def key(self, device, code, value):
+        if code == KEY_FN:
+            if value == 0:
+                return self.release(device)
+            if value == 1 and device not in self.held:
+                self.held.add(device)
+                if len(self.held) == 1:
+                    self.other_sent = False
+                    return "down"
+        elif value == 1 and self.held and not self.other_sent:
+            self.other_sent = True
+            return "other"
+        return None
+
+    def release(self, device):
+        if device in self.held:
+            self.held.discard(device)
+            if not self.held:
+                return "up"
+        return None
+
+
+class Helper:
+    def __init__(self, socket_path, events=None, rescan_s=RESCAN_S):
+        self.socket_path = socket_path
+        self.fixed = events  # explicit paths replace discovery
+        self.rescan_s = rescan_s
+        self.state = FnState()
+        self.sel = selectors.DefaultSelector()
+        self.devices = {}  # path -> fd
+        self.tails = {}  # path -> bytes of an incomplete event
+        self.clients = set()
+        self.complained = set()
+        self.sleep_offset = self._sleep_offset()
+        self.server = self._listen()
+
+    def _listen(self):
+        try:
+            os.unlink(self.socket_path)
+        except FileNotFoundError:
+            pass
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(self.socket_path)
+        os.chmod(self.socket_path, 0o666)  # it only ever carries the three words
+        server.listen(MAX_CLIENTS)
+        server.setblocking(False)
+        self.sel.register(server, selectors.EVENT_READ, self.accept)
+        return server
+
+    def run(self):
+        next_scan = 0.0
+        while True:
+            if time.monotonic() >= next_scan:
+                self.scan()
+                next_scan = time.monotonic() + self.rescan_s
+            for key, _ in self.sel.select(max(0.0, next_scan - time.monotonic())):
+                key.data()
+
+    def close(self):
+        if self.state.held:
+            self.send("up")
+        try:
+            os.unlink(self.socket_path)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _sleep_offset():
+        return time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)
+
+    def _slept(self):
+        """True if the machine was suspended since the last call (BOOTTIME keeps counting)."""
+        offset = self._sleep_offset()
+        slept = offset - self.sleep_offset > 1.0
+        self.sleep_offset = offset
+        return slept
+
+    def scan(self):
+        if self._slept():
+            for path in list(self.devices):
+                self.drop(path)
+        for path in self.fixed or fn_devices():
+            if path not in self.devices:
+                self.open(path)
+
+    def open(self, path):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError as e:
+            if path not in self.complained:
+                self.complained.add(path)
+                log(f"cannot open {path}: {e.strerror}")
+            return
+        self.complained.discard(path)
+        self.devices[path] = fd
+        self.tails[path] = b""
+        self.sel.register(fd, selectors.EVENT_READ, lambda: self.read(path))
+
+    def drop(self, path):
+        fd = self.devices.pop(path)
+        del self.tails[path]
+        self.sel.unregister(fd)
+        os.close(fd)
+        self.send(self.state.release(path))  # never leave the daemon listening on a stuck Fn
+
+    def read(self, path):
+        if path not in self.devices:  # dropped earlier in this batch
+            return
+        try:
+            data = os.read(self.devices[path], EVENT.size * 64)
+        except BlockingIOError:
+            return
+        except OSError:
+            data = b""
+        if not data:
+            log(f"lost {path}")
+            self.drop(path)
+            return
+        data = self.tails[path] + data
+        whole = len(data) - len(data) % EVENT.size
+        self.tails[path] = data[whole:]
+        for _sec, _usec, kind, code, value in EVENT.iter_unpack(data[:whole]):
+            if kind == EV_KEY:
+                self.send(self.state.key(path, code, value))
+            elif kind == EV_SYN and code == SYN_DROPPED:
+                self.send(self.state.release(path))  # the release may be among the lost events
+
+    def send(self, word):
+        if word is None:
+            return
+        line = f"{word}\n".encode()
+        for conn in list(self.clients):
+            try:
+                sent = conn.send(line, socket.MSG_NOSIGNAL)
+            except OSError:  # includes a full buffer: nobody is reading, so never wait for it
+                sent = 0
+            if sent != len(line):
+                self.drop_client(conn)
+
+    def accept(self):
+        try:
+            conn, _ = self.server.accept()
+        except OSError:
+            return
+        if len(self.clients) >= MAX_CLIENTS:
+            conn.close()
+            return
+        conn.setblocking(False)
+        self.clients.add(conn)
+        # Clients have nothing to say: readable means gone, or misbehaving.
+        self.sel.register(conn, selectors.EVENT_READ, lambda: self.drop_client(conn))
+
+    def drop_client(self, conn):
+        if conn in self.clients:
+            self.clients.discard(conn)
+            self.sel.unregister(conn)
+            conn.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Report the Fn key on a Unix socket.")
+    parser.add_argument("--socket", default=SOCKET, help=f"socket to serve (default {SOCKET})")
+    parser.add_argument("--event", action="append", metavar="PATH",
+                        help="read this path instead of discovering keyboards (repeatable)")
+    parser.add_argument("--rescan", type=float, default=RESCAN_S, metavar="SECONDS",
+                        help="how often to look for new or lost devices")
+    args = parser.parse_args()
+    helper = Helper(args.socket, args.event, args.rescan)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    try:
+        helper.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        helper.close()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,11 @@
+id: org.tuxistant.folders
+name: Folder sizes
+description: Tells you how much space folders take up and how many files they hold
+version: 1.0.0
+permissions:
+  files_read: ["~"]
+actions:
+  disk.folders:
+    description: Measure a folder. Use it for which folder takes the most space, how big a folder is, or how many files are in a folder
+    params:
+      folder: { type: string, description: "The folder, such as Documents. Leave it out for the home folder" }

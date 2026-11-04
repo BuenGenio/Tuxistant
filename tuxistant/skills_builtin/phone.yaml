@@ -1,0 +1,14 @@
+id: org.tuxistant.phone
+name: Phone
+description: Rings your phone so you can find it and tells you its battery level, through GSConnect
+version: 1.0.0
+permissions: {}
+actions:
+  phone.ring:
+    description: Make the user's phone ring so they can find it
+    params:
+      device: { type: string, description: "Only if the user named a device. Leave it out for their phone" }
+  phone.battery:
+    description: Get the battery level of the user's phone
+    params:
+      device: { type: string, description: "Only if the user named a device. Leave it out for their phone" }

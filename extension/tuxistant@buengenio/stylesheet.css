@@ -1,0 +1,144 @@
+.tuxistant-caption {
+  background-color: rgba(30, 30, 36, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  padding: 10px 14px;
+  spacing: 4px;
+}
+
+.tuxistant-caption-heard {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 10pt;
+}
+
+.tuxistant-caption-reply {
+  color: #ffffff;
+  font-size: 11pt;
+}
+
+.tuxistant-caption-error {
+  color: #ffa39e;
+}
+
+.tuxistant-approval {
+  background-color: rgba(30, 30, 36, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  padding: 12px 14px;
+  spacing: 8px;
+}
+
+.tuxistant-approval-admin {
+  background-color: rgba(64, 18, 16, 0.97);
+  border: 2px solid #ff7b63;
+}
+
+.tuxistant-approval-title {
+  color: #ffffff;
+  font-size: 12pt;
+  font-weight: bold;
+}
+
+.tuxistant-approval-admin .tuxistant-approval-title {
+  color: #ffa39e;
+}
+
+.tuxistant-approval-scroll {
+  background-color: rgba(0, 0, 0, 0.3);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.tuxistant-approval-detail {
+  color: #f2f2f2;
+  font-family: monospace;
+  font-size: 10pt;
+}
+
+.tuxistant-approval-more {
+  color: #f6d32d;
+  font-size: 10pt;
+}
+
+.tuxistant-approval-time {
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 10pt;
+}
+
+.tuxistant-approval-footer {
+  spacing: 8px;
+}
+
+.tuxistant-approval-button {
+  background-color: rgba(255, 255, 255, 0.14);
+  border-radius: 9px;
+  color: #ffffff;
+  font-size: 10pt;
+  font-weight: bold;
+  padding: 6px 14px;
+}
+
+.tuxistant-approval-button:hover {
+  background-color: rgba(255, 255, 255, 0.24);
+}
+
+.tuxistant-approval-button:active {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.tuxistant-approval-allow {
+  background-color: #2f73c9;
+}
+
+.tuxistant-approval-allow:hover {
+  background-color: #3f86e0;
+}
+
+.tuxistant-approval-allow:active {
+  background-color: #285fa6;
+}
+
+.tuxistant-approval-admin .tuxistant-approval-allow {
+  background-color: #c01c28;
+}
+
+.tuxistant-approval-admin .tuxistant-approval-allow:hover {
+  background-color: #dc2e3a;
+}
+
+.tuxistant-approval-admin .tuxistant-approval-allow:active {
+  background-color: #a51d2d;
+}
+
+.tuxistant-approval-allow:insensitive,
+.tuxistant-approval-admin .tuxistant-approval-allow:insensitive {
+  background-color: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.tuxistant-indicator.tuxistant-state-listening .system-status-icon {
+  color: #62a0ea;
+}
+
+.tuxistant-indicator.tuxistant-state-connecting .system-status-icon,
+.tuxistant-indicator.tuxistant-state-thinking .system-status-icon {
+  color: #f6d32d;
+}
+
+.tuxistant-indicator.tuxistant-state-speaking .system-status-icon {
+  color: #57e389;
+}
+
+.tuxistant-indicator.tuxistant-state-error .system-status-icon {
+  color: #ff7b63;
+}
+
+.tuxistant-indicator.tuxistant-offline .system-status-icon {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.tuxistant-offline-line {
+  color: #ffa39e;
+}

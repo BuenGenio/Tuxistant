@@ -1,0 +1,7 @@
+{
+  "id": "scanner",
+  "name": "Scanner",
+  "author": "Tuxistant",
+  "version": "1.0.0",
+  "layout": { "kind": "orb", "size": 300, "height": 70, "anchor": "bottom-center", "margin": 40 }
+}

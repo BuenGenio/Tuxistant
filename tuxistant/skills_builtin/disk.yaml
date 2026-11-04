@@ -1,0 +1,10 @@
+id: org.tuxistant.disk
+name: Disk space
+description: Reports free and used disk space
+version: 1.0.0
+permissions: {}
+actions:
+  disk.usage:
+    description: Get free, used and total space on the whole disk, in gigabytes. Not for the size of a folder
+    params:
+      path: { type: string, description: "Folder to check; defaults to the home folder" }

@@ -1,0 +1,13 @@
+id: org.tuxistant.phone_send
+name: Send to phone
+description: Sends a file from your home folder to your phone through GSConnect, after you click to allow it
+version: 1.0.0
+permissions:
+  files_read: ["~"]
+actions:
+  phone.send:
+    description: Send a file from this computer to the user's phone
+    params:
+      file: { type: string, description: "A result number from file_find, like 1, or a path" }
+      device: { type: string, description: "Only if the user named a device. Leave it out for their phone" }
+    required: [file]

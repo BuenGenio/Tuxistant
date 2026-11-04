@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.tuxistant.Daemon
+Exec=/bin/false
+SystemdService=tuxistant.service

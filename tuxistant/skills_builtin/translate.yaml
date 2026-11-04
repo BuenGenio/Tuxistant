@@ -1,0 +1,14 @@
+id: org.tuxistant.translate
+name: Translate
+description: Translates what you say on your own LibreTranslate server
+version: 1.0.0
+permissions:
+  network: [home]
+actions:
+  translate.text:
+    description: Translate into another language. You must use it for every "how do you say" or "what is the word for" question, even simple phrases such as thank you. Never answer one yourself. The app says the translation itself, so afterwards just say here it is
+    params:
+      text: { type: string, description: "The words to translate" }
+      to: { type: string, description: "The language to translate into" }
+      from: { type: string, description: "The language of the words, only if the user named it" }
+    required: [text, to]

@@ -1,0 +1,16 @@
+id: org.tuxistant.trash
+name: Trash
+description: Moves files to the Trash, once you have clicked to agree
+version: 1.0.0
+permissions:
+  files_write: ["~"]
+actions:
+  file.trash:
+    description: Move files to the Trash. Use it when the user asks to delete, remove or clear out files. The user sees the list and has to click to agree
+    params:
+      file:
+        type: array
+        items: { type: string }
+        description: "Result numbers from file_find, like 1 and 3, or paths"
+      folder: { type: string, description: "Instead of file: a folder to clear out, like Downloads" }
+      older_than_days: { type: integer, description: "With folder: only files not changed for this many days" }

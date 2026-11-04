@@ -1,0 +1,14 @@
+id: org.tuxistant.news
+name: News
+description: Latest headlines from BBC News
+version: 1.0.0
+permissions:
+  network: [feeds.bbci.co.uk]
+actions:
+  news.headlines:
+    description: Get the latest news headlines. Use it for any question about the news or what is happening in the world
+    params:
+      topic:
+        type: string
+        enum: [top, world, uk, business, politics, technology, science, health, entertainment, sport]
+        description: "The subject, if the user named one. Leave it out for the top stories"

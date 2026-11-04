@@ -1,0 +1,7 @@
+{
+  "id": "waves",
+  "name": "Waves",
+  "author": "Tuxistant",
+  "version": "1.0.0",
+  "layout": { "kind": "band", "height": 0.42 }
+}

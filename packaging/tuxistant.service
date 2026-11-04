@@ -1,0 +1,19 @@
+[Unit]
+Description=Tuxistant voice assistant
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=dbus
+BusName=org.tuxistant.Daemon
+ExecStart=%h/.local/bin/tuxistant daemon
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=3
+MemoryMax=1G
+OOMPolicy=continue
+# A sandbox caught starting up as the daemon dies ignores SIGTERM, and the default would wait 90 s.
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target

@@ -1,0 +1,6 @@
+{
+  "uuid": "tuxistant-shot@test",
+  "name": "Tuxistant test driver",
+  "description": "Test only: screenshots and inspection inside the headless harness shell.",
+  "shell-version": ["50"]
+}

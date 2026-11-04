@@ -1,0 +1,42 @@
+{
+  "name": "Português", "dir": "ltr",
+  "title": "Tuxistant: fale com o seu computador",
+  "description": "Um assistente de voz para o seu computador que funciona no seu próprio hardware.",
+  "tagline": "Fale com o seu computador. Funciona no seu hardware, não no de outros.",
+  "donate": "Doar", "language": "Idioma", "now": "Já", "soon": "Em breve",
+  "appearance": "Aparência", "modes": { "auto": "Automático", "light": "Claro", "dark": "Escuro" },
+  "caps": [
+    ["now", "Respostas faladas em um segundo"], ["now", "Segure uma tecla e fale"], ["now", "27 vozes para escolher"], ["now", "Mude o visual com temas"], ["now", "Funciona na sua própria rede"],
+    ["soon", "Encontra seus arquivos"], ["soon", "Envia arquivos para o celular"], ["soon", "Traduz enquanto você fala"], ["soon", "Executa comandos com sua permissão"], ["soon", "Habilidades da comunidade"]
+  ],
+  "themes": { "tux": "Tux ouvindo", "orb": "Orbe", "waves": "Ondas", "scanner": "Scanner" },
+  "showTheme": "Mostrar tema",
+  "dlFor": "Baixar para {os}", "dlSoon": "Em breve no {os}", "dlPending": "Prévia para {os} em breve", "dlAll": "Todas as versões",
+  "dlMeta": "Versão {version}, {channel}", "dlPlanned": "Ainda não disponível",
+  "examplesTitle": "O que ele faz por você", "youSay": "Você diz", "approve": "Você aprova primeiro",
+  "examples": {
+    "linux": [
+      ["now", "Quanto espaço ainda tenho no disco?", "Verifica o disco e diz em voz alta."],
+      ["now", "Me dá uma receita rápida de panqueca.", "Responde na hora, com um modelo na sua própria máquina."],
+      ["soon", "Encontre minha declaração de 2024 e envie para o celular.", "Procura nos seus arquivos e envia pelo GSConnect.", true],
+      ["soon", "Qual pasta está enchendo meu disco?", "Executa os comandos certos e lê a resposta para você."]
+    ],
+    "macos": [
+      ["soon", "Encontre a declaração do ano passado e mande para o iPhone por AirDrop.", "Procura com o Spotlight e abre o AirDrop.", true],
+      ["soon", "Ative o Não Perturbe até a próxima reunião.", "Lê sua agenda e ativa um Foco."],
+      ["soon", "Limpe de Downloads tudo com mais de um ano.", "Mostra a lista e move tudo para o Lixo.", true],
+      ["soon", "Por que meu Mac está esquentando?", "Encontra o app mais ativo e conta para você."]
+    ],
+    "windows": [
+      ["soon", "Encontre minha declaração e envie para o celular.", "Procura nos seus arquivos e envia pelo Vínculo com o Celular.", true],
+      ["soon", "Instale o VLC.", "Instala com o winget.", true],
+      ["soon", "O que está deixando a inicialização lenta?", "Lista os apps de inicialização e o tempo de cada um."],
+      ["soon", "Limpe meus arquivos temporários.", "Mostra o que encontrou e libera o espaço.", true]
+    ]
+  },
+  "versionsTitle": "Versões", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
+  "preview": "Prévia", "planned": "Planejada", "linuxNeeds": "GNOME 50 e seu próprio servidor LocalAI", "tbd": "A anunciar",
+  "donateTitle": "Ajude a criar a próxima versão", "donateText": "Seu apoio financia as versões para macOS e Windows.",
+  "credit": "O Tux foi desenhado por Larry Ewing com o The GIMP.",
+  "trademarks": "macOS e Windows são marcas de seus respectivos donos."
+}

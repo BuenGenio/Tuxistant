@@ -1,0 +1,42 @@
+{
+  "name": "中文", "dir": "ltr",
+  "title": "Tuxistant：和你的电脑对话",
+  "description": "运行在你自己硬件上的桌面语音助手。",
+  "tagline": "和你的电脑对话。它运行在你自己的硬件上，而不是别人的服务器上。",
+  "donate": "捐赠", "language": "语言", "now": "现已支持", "soon": "即将推出",
+  "appearance": "外观", "modes": { "auto": "自动", "light": "浅色", "dark": "深色" },
+  "caps": [
+    ["now", "约一秒给出语音回答"], ["now", "按住按键即可说话"], ["now", "27 种声音可选"], ["now", "用主题更换外观"], ["now", "在你自己的网络中运行"],
+    ["soon", "查找你的文件"], ["soon", "把文件发送到手机"], ["soon", "说话时实时翻译"], ["soon", "经你同意后执行命令"], ["soon", "社区共享技能"]
+  ],
+  "themes": { "tux": "倾听的 Tux", "orb": "光球", "waves": "波浪", "scanner": "扫描灯" },
+  "showTheme": "显示主题",
+  "dlFor": "下载 {os} 版", "dlSoon": "{os} 版即将推出", "dlPending": "{os} 预览版即将推出", "dlAll": "所有版本",
+  "dlMeta": "版本 {version}，{channel}", "dlPlanned": "暂未提供",
+  "examplesTitle": "它能为你做什么", "youSay": "你说", "approve": "需要你先确认",
+  "examples": {
+    "linux": [
+      ["now", "我的磁盘还剩多少空间？", "检查磁盘并大声告诉你。"],
+      ["now", "告诉我一个简单的松饼做法。", "用你自己机器上的模型立即回答。"],
+      ["soon", "找到我 2024 年的报税单并发到手机。", "搜索你的文件，然后通过 GSConnect 发送。", true],
+      ["soon", "哪个文件夹占了最多磁盘空间？", "运行合适的命令，并读出结果。"]
+    ],
+    "macos": [
+      ["soon", "找到去年的报税单，用隔空投送发到我的 iPhone。", "用聚焦搜索查找，然后打开隔空投送。", true],
+      ["soon", "开启勿扰模式，直到下次会议。", "读取你的日历并设置专注模式。"],
+      ["soon", "清理下载文件夹里一年以上的文件。", "先显示列表，再全部移到废纸篓。", true],
+      ["soon", "我的 Mac 为什么这么烫？", "找出最繁忙的应用并告诉你。"]
+    ],
+    "windows": [
+      ["soon", "找到我的报税单并发到手机。", "搜索你的文件，然后通过手机连接发送。", true],
+      ["soon", "安装 VLC。", "通过 winget 安装。", true],
+      ["soon", "是什么拖慢了开机速度？", "列出启动应用及各自的耗时。"],
+      ["soon", "清理我的临时文件。", "显示找到的内容，然后释放空间。", true]
+    ]
+  },
+  "versionsTitle": "版本", "colSystem": "系统", "colVersion": "版本号", "colStatus": "状态", "colNeeds": "运行要求",
+  "preview": "预览版", "planned": "计划中", "linuxNeeds": "GNOME 50 和你自己的 LocalAI 服务器", "tbd": "待公布",
+  "donateTitle": "帮助打造下一个版本", "donateText": "你的支持将用于开发 macOS 和 Windows 版本。",
+  "credit": "Tux 由 Larry Ewing 使用 The GIMP 绘制。",
+  "trademarks": "macOS 和 Windows 是其各自所有者的商标。"
+}

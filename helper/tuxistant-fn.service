@@ -1,0 +1,65 @@
+[Unit]
+Description=Tuxistant Fn key helper
+Documentation=file:/usr/local/lib/tuxistant/tuxistant-fn
+
+[Service]
+Type=exec
+ExecStart=/usr/local/lib/tuxistant/tuxistant-fn
+Restart=on-failure
+RestartSec=2
+
+DynamicUser=yes
+SupplementaryGroups=input
+RuntimeDirectory=tuxistant-fn
+RuntimeDirectoryMode=0755
+UMask=0077
+
+# This service reads every keystroke: no network, no privileges, no core dumps.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateNetwork=yes
+IPAddressDeny=any
+RestrictAddressFamilies=AF_UNIX
+LimitCORE=0
+
+# PrivateDevices would hide /dev/input. ProtectClock is left out on purpose: it implies
+# DeviceAllow=char-rtc, the clock is already out of reach through the capabilities and
+# the system call filter, and input should be the only device class here.
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=char-input r
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+InaccessiblePaths=-/dev/shm
+PrivateIPC=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+KeyringMode=private
+
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @process @sandbox @keyring @timer
+# The helper only accepts connections. With no network namespace to leave, the host's Unix sockets
+# (D-Bus, resolved, tailscaled) would be the way out, and connect() is how to reach them.
+SystemCallFilter=~connect
+SystemCallErrorNumber=EPERM
+
+TasksMax=4
+MemoryMax=64M
+LimitNOFILE=64
+
+[Install]
+WantedBy=multi-user.target

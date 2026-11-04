@@ -1,0 +1,12 @@
+id: org.tuxistant.task
+name: Multi-step tasks
+description: Works through requests that need several actions, using your other skills and their approval cards
+version: 1.0.0
+permissions:
+  shell: true
+actions:
+  task.run:
+    description: Do a request that needs several actions in a row, such as finding a file and then sending it. Not for a single simple question
+    params:
+      goal: { type: string, description: "What the user asked for, in their own words" }
+    required: [goal]

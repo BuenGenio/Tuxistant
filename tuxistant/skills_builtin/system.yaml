@@ -1,0 +1,18 @@
+id: org.tuxistant.system
+name: This computer
+description: Tells you about this computer, such as how long it has been on and its IP address
+version: 1.0.0
+permissions: {}
+actions:
+  system.info:
+    description: Get facts about this computer. Use it for how long it has been on, its IP address, memory, how busy it is, battery, Wi-Fi, what is using the most CPU, or the operating system
+    params:
+      about:
+        type: string
+        enum: [uptime, ip, memory, cpu, battery, wifi, busiest, os]
+        description: "Which fact the user asked about"
+  system.running:
+    description: Check whether a program or service is running, such as docker
+    params:
+      name: { type: string, description: "The program or service, in lower case" }
+    required: [name]

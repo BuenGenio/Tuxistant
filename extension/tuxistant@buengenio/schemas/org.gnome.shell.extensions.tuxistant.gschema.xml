@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.tuxistant" path="/org/gnome/shell/extensions/tuxistant/">
+    <key name="toggle-shortcut" type="as">
+      <default><![CDATA[['<Control><Super>space']]]></default>
+      <summary>Talk to Tuxistant</summary>
+      <description>Shortcut that starts a turn, or stops the current one.</description>
+    </key>
+  </schema>
+</schemalist>
