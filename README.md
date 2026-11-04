@@ -44,6 +44,12 @@ During a turn you can also right-click the blob to switch theme, open Settings o
 
 Nothing listens or speaks while the screen is locked: a turn in progress stops, and the shortcut, Fn and `tuxistant say` do nothing until you unlock.
 
+### Dictation
+
+Tap Fn, then press it again and hold it while you speak. When you let go, your words are typed where your cursor is, in any language Whisper knows. For longer passages, or without Fn, `Ctrl+Super+D` starts and stops it.
+
+It only ever types: it never presses Enter, so nothing is sent or run until you say so. If you moved to another window while it was working, the words go to the clipboard instead. Fields that tell the desktop they hold a password are refused, but not every password box does, so don't dictate passwords. Apps that don't support input methods, such as many Electron apps, get a paste, and what was on your clipboard is put back afterwards. It stops by itself after five minutes and copies what it heard rather than typing it.
+
 ## What you can ask
 
 | Ask | What happens |
@@ -99,7 +105,9 @@ The same things work from a terminal:
 ## Privacy
 
 - **The Fn helper is the only part that can see your typing, and it is built to forget it.** To notice Fn it has to read the keyboard. It says only `down`, `up` and `other`: `other` means some other key was pressed while Fn was held, at most once per hold, and it never says which. With Fn up it says nothing at all. It runs as an unprivileged throwaway user with no network, and `tests/test_fn_helper.py` checks these promises.
-- The microphone is on only during a turn, plus a short while after each reply if conversation mode is on. Audio goes to the server you configured and nowhere else.
+- The microphone is on only during a turn or while you dictate, plus a short while after each reply if conversation mode is on. Audio goes to the server you configured and nowhere else.
+- What you dictate isn't kept: it goes to your server to become text, into your window, and into no log or history. No model sees it.
+- [docs/SECURITY.md](docs/SECURITY.md) has real attacks on Tuxistant and what stopped them.
 - Weather and news are the only skills that reach the internet, and only when you ask. A weather question sends the town name to Open-Meteo; a news question fetches a BBC News feed. Both services see your IP address, and neither receives your voice or the conversation. Cloud is the one exception, and it is off unless you turn it on. Translation stays on your own server.
 - Once a conversation has read your files, command output or selected text, anything reaching past your own server needs a click.
 - History stays on this machine in `~/.local/share/tuxistant/history.db`, readable only by you. You can clear it in Settings.

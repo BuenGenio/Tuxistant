@@ -6,6 +6,7 @@ import http.client
 import io
 import json
 import re
+import secrets
 import sys
 import textwrap
 import urllib.error
@@ -301,11 +302,12 @@ def sentences(text: str) -> list[str]:
     return parts
 
 
-def _request(config, path: str, body: dict | None = None) -> bytes:
-    headers = {"Authorization": _bearer(config), "Content-Type": "application/json"}
+def _request(config, path: str, body: dict | bytes | None = None,
+             content_type: str = "application/json") -> bytes:
+    headers = {"Authorization": _bearer(config), "Content-Type": content_type}
+    data = body if isinstance(body, bytes) else json.dumps(body).encode() if body else None
     try:
-        request = urllib.request.Request(_urls(config["server"])[0] + path,
-                                         json.dumps(body).encode() if body else None, headers)
+        request = urllib.request.Request(_urls(config["server"])[0] + path, data, headers)
         with _opener.open(request, timeout=HTTP_TIMEOUT_S) as response:
             return response.read()
     except urllib.error.HTTPError as e:
@@ -351,6 +353,40 @@ def _synthesise(config, text: str, voice: str, model: str | None = None) -> byte
 async def speech(config, text: str, voice: str, model: str | None = None) -> bytes:
     """Synthesises one sentence as PCM for the Speaker."""
     return await asyncio.to_thread(_synthesise, config, text, voice, model)
+
+
+def _wav(pcm: bytes) -> bytes:
+    audio = io.BytesIO()
+    with wave.open(audio, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(RATE)
+        out.writeframes(pcm)
+    return audio.getvalue()
+
+
+def _transcribe(config, pcm: bytes) -> str:
+    edge = secrets.token_hex(16)
+    body = b"".join([
+        f'--{edge}\r\nContent-Disposition: form-data; name="model"\r\n\r\n'.encode(),
+        config["transcribe_model"].encode(), b"\r\n",
+        f'--{edge}\r\nContent-Disposition: form-data; name="file"; filename="speech.wav"\r\n'
+        "Content-Type: audio/wav\r\n\r\n".encode(),
+        _wav(pcm), f"\r\n--{edge}--\r\n".encode()])
+    reply = _request(config, "/v1/audio/transcriptions", body,
+                     f"multipart/form-data; boundary={edge}")
+    try:
+        text = json.loads(reply)["text"]
+    except (ValueError, KeyError, TypeError):
+        text = None
+    if not isinstance(text, str):
+        raise RealtimeError("The server did not return any text")
+    return text
+
+
+async def transcribe(config, pcm: bytes) -> str:
+    """What was said in PCM from the Mic, with no model involved."""
+    return await asyncio.to_thread(_transcribe, config, pcm)
 
 
 def list_models(config) -> list[str]:

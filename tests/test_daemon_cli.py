@@ -52,6 +52,7 @@ class Doctor(unittest.TestCase):
         self.assertTrue(results["API key accepted"])
         self.assertTrue(results["pipeline present"])
         self.assertTrue(results["voice model present"])
+        self.assertTrue(results["speech to text model present"])
         self.assertFalse(results["Fn helper socket present"])
         self.assertFalse(results["GNOME extension installed"])
 

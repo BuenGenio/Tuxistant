@@ -19,7 +19,7 @@ const FADE_MS = 120;
 const ARM_MS = 600;
 const MAX_SELECTION_CHARS = 100000;  // a selection can be any size, and a bus message cannot
 
-function readClipboard(type) {
+export function readClipboard(type) {
     return new Promise(resolve => {
         St.Clipboard.get_default().get_text(type, (_clipboard, text) => resolve(text ?? ''));
     });

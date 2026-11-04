@@ -73,12 +73,12 @@ def daemon_activatable() -> bool:
                for root in [data_home, *data_dirs.split(":")])
 
 
-def cards_ready() -> tuple[bool, str]:
-    """Whether the extension can draw approval cards. Asking must not start a daemon, and a daemon
+def extension_can(method: str) -> tuple[bool, str]:
+    """Asks the daemon what the extension told it. Asking must not start a daemon, and a daemon
     that isn't running is normal, so that says nothing either way."""
     try:
         done = subprocess.run(["busctl", "--user", "--auto-start=no", "call", BUS_NAME, BUS_PATH,
-                               BUS_NAME, "CanAsk"], capture_output=True, text=True, timeout=5)
+                               BUS_NAME, method], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         return True, "not checked"
     if done.returncode:
@@ -108,18 +108,22 @@ def checks(config) -> list[tuple[bool, str, str]]:
         detail = "not checked: " + str(e)
     fn_socket = os.environ.get("TUXISTANT_FN_SOCKET", SOCKET)
     tools = [t for t in ("pw-record", "pw-cat") if not shutil.which(t)]
-    cards, cards_detail = cards_ready()
+    cards, cards_detail = extension_can("CanAsk")
+    typing, typing_detail = extension_can("CanType")
+    speech_to_text = config["transcribe_model"]
     return [
         (reachable, "server reachable", server),
         (accepted, "API key accepted", detail),
         (pipeline in models, "pipeline present", pipeline),
         (tts in models, "voice model present", tts),
+        (speech_to_text in models, "speech to text model present", speech_to_text),
         (not tools, "PipeWire tools present", "missing: " + ", ".join(tools) if tools else ""),
         (is_socket(fn_socket), "Fn helper socket present", fn_socket),
         (extension_installed(), "GNOME extension installed", EXTENSION),
         (extension_enabled(), "GNOME extension enabled", EXTENSION),
         (daemon_activatable(), "daemon can be started", BUS_NAME),
         (cards, "approval cards ready", cards_detail),
+        (typing, "dictation ready", typing_detail),
     ]
 
 

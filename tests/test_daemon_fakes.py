@@ -171,11 +171,13 @@ class FakeServer:
 
 
 class FakeSpeech:
-    """The HTTP side of the server: /v1/audio/speech and /v1/models, in its own thread."""
+    """The HTTP side of the server: /v1/audio/speech, /v1/audio/transcriptions and /v1/models, in
+    its own thread. transcript is what it hears; wait is an Event that holds the reply back."""
 
-    def __init__(self, key="good", models=("tux-realtime", "tux-voice"), speech_status=200,
-                 body=None):
+    def __init__(self, key="good", models=("tux-realtime", "tux-voice", "whisper-large-turbo-q5_0"),
+                 speech_status=200, body=None, transcript="", wait=None):
         self.requests = []
+        self.uploads = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -194,9 +196,18 @@ class FakeSpeech:
                 self.respond(200, json.dumps({"data": [{"id": m} for m in models]}).encode())
 
             def do_POST(self):
-                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
                 if self.headers.get("Authorization") != f"Bearer {key}":
                     return self.respond(401, b"{}")
+                if self.path == "/v1/audio/transcriptions":
+                    outer.uploads.append(raw)
+                    if wait:
+                        wait.wait(5)
+                    if speech_status != 200:
+                        return self.respond(speech_status, b"{}")
+                    reply = {"text": transcript} if body is None else None
+                    return self.respond(200, body if reply is None else json.dumps(reply).encode())
+                request = json.loads(raw)
                 outer.requests.append(request)
                 self.respond(speech_status, wav(tone(0.1)) if body is None else body)
 
@@ -289,7 +300,7 @@ class Rig:
         self.speaker_options = speaker or {}
         self.ctl = Controller(self.config, self.history, self.skills, emit=self.emit,
                               mic_factory=self.new_mic, speaker_factory=self.new_speaker)
-        self.ctl.face = True    # as if the extension had said hello
+        self.ctl.face = self.ctl.typist = True      # as if the extension had said hello
 
     def emit(self, name, *args):
         self.signals.append((name, *args))

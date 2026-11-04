@@ -35,6 +35,8 @@ REAL_BUS = "TUXISTANT_TEST_REAL_BUS"
 
 METHODS = {
     "Toggle": ("", ""), "HoldStart": ("", ""), "HoldEnd": ("", ""), "Cancel": ("", ""),
+    "DictateStart": ("", ""), "DictateEnd": ("", ""), "DictateToggle": ("", ""),
+    "CanType": ("", "b"), "Typed": ("ss", ""),
     "GetState": ("", "s"), "GetConfig": ("", "s"), "SetConfig": ("ss", ""),
     "ListVoices": ("", "s"), "PreviewVoice": ("s", ""), "Say": ("s", ""),
     "ListThemes": ("", "s"), "PreviewTheme": ("s", ""), "ListSkills": ("", "s"),
@@ -46,6 +48,7 @@ SIGNALS = {
     "StateChanged": "s", "Presence": "b", "Level": "d", "Transcript": "sb", "Reply": "s",
     "Error": "s", "ConfigChanged": "s", "ThemePreview": "s", "HistoryChanged": "",
     "Approval": "ssssi", "ApprovalClosed": "s", "SelectionWanted": "s",
+    "DictationStarted": "s", "TypeText": "ssb",
 }
 
 
@@ -60,11 +63,25 @@ class RunsOnPrivateBus(unittest.TestCase):
             done = subprocess.run(
                 ["dbus-run-session", "--", sys.executable, "-m", "unittest",
                  "tests.test_daemon_dbus.Service", "tests.test_daemon_dbus.Process",
-                 "tests.test_daemon_dbus.Lock", "tests.test_daemon_dbus.OnlyTheShellClicks"],
+                 "tests.test_daemon_dbus.Lock", "tests.test_daemon_dbus.OnlyTheShellClicks",
+                 "tests.test_daemon_dbus.OnlyTheShellTypes"],
                 cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr[-4000:])
         self.assertIn("OK", done.stderr)
         self.assertNotIn("skipped", done.stderr.splitlines()[-1])
+
+
+class BlockedMic:
+    """A microphone that opens and has nothing to say."""
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def read(self):
+        await asyncio.Event().wait()
 
 
 class OnPrivateBus(unittest.IsolatedAsyncioTestCase):
@@ -468,6 +485,121 @@ class Process(OnPrivateBus):
         process.send_signal(signal.SIGTERM)
         await asyncio.wait_for(process.wait(), 10)
         self.assertTrue(Path(os.environ["XDG_DATA_HOME"], "tuxistant/history.db").exists())
+
+
+@unittest.skipUnless(os.environ.get(PRIVATE), "needs dbus-run-session")
+class OnlyTheShellTypes(OnPrivateBus):
+    """Anyone can ask to dictate. Only the shell can say the words went in, or that it can type."""
+
+    async def asyncSetUp(self):
+        history = History(self.folder / "history.db")
+        self.addCleanup(history.db.close)
+        self.daemon = Daemon(Config(self.folder / "config.json"), history, CountingSkills())
+        self.bus = await MessageBus().connect()
+        self.assertTrue(await serve(self.bus, self.daemon))
+        self.addCleanup(self.bus.disconnect)
+        self.client = await MessageBus().connect()
+        self.addCleanup(self.client.disconnect)
+
+    async def call(self, bus, member, signature="", body=()):
+        return await bus.call(Message(destination=BUS_NAME, path=BUS_PATH, interface=BUS_NAME,
+                                      member=member, signature=signature, body=list(body)))
+
+    async def the_shell(self):
+        shell = await MessageBus().connect()
+        self.addCleanup(shell.disconnect)
+        await shell.request_name(service.SHELL_NAME)
+        while self.daemon.shell_owner != shell.unique_name:
+            await asyncio.sleep(0.01)
+        return shell
+
+    async def test_a_stranger_cannot_report_words_as_typed(self):
+        done = asyncio.get_running_loop().create_future()
+        self.daemon.controller.typing = ("words", done)
+        reply = await self.call(self.client, "Typed", "ss", ["words", "typed"])
+        self.assertEqual(reply.error_name, service.DENIED)
+        self.assertFalse(done.done())
+
+    async def test_a_stranger_cannot_claim_to_type(self):
+        reply = await self.call(self.client, "Hello", "i", [2])
+        self.assertEqual(reply.error_name, service.DENIED)
+        self.assertEqual((await self.call(self.client, "CanType")).body, [False])
+
+    async def test_a_stranger_cannot_start_or_stop_dictation(self):
+        self.daemon.controller.typist = True
+        for member in ("DictateStart", "DictateEnd", "DictateToggle"):
+            reply = await self.call(self.client, member)
+            self.assertEqual(reply.error_name, service.DENIED, member)
+        self.assertIsNone(self.daemon.controller.dictation)
+
+    async def test_the_shell_can_start_dictation(self):
+        shell = await self.the_shell()
+        await self.call(shell, "Hello", "i", [2])
+        self.daemon.controller.make_mic = BlockedMic
+        await self.call(shell, "DictateStart")
+        self.assertIsNotNone(self.daemon.controller.dictation)
+        await self.daemon.controller.cancel()
+
+    async def test_the_words_go_to_the_shell_and_nobody_else_hears_them(self):
+        shell = await self.the_shell()
+        heard, overheard = [], []
+        shell.add_message_handler(lambda m: heard.append(m.body) if m.member == "TypeText" else None)
+        self.client.add_message_handler(
+            lambda m: overheard.append(m.body) if m.member == "TypeText" else None)
+        await self.client.call(Message(
+            destination="org.freedesktop.DBus", path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus", member="AddMatch", signature="s",
+            body=[f"type='signal',interface='{BUS_NAME}'"]))
+        self.daemon.send("TypeText", "words", "private words", False)
+        async with asyncio.timeout(2):
+            while not heard:
+                await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        self.assertEqual(heard, [["words", "private words", False]])
+        self.assertEqual(overheard, [])
+
+    async def test_saying_goodbye_stops_dictation(self):
+        shell = await self.the_shell()
+        await self.call(shell, "Hello", "i", [2])
+        self.daemon.controller.make_mic = BlockedMic
+        await self.call(shell, "DictateStart")
+        await self.call(shell, "Hello", "i", [0])
+        self.assertEqual((await self.call(self.client, "CanType")).body, [False])
+        async with asyncio.timeout(2):
+            while self.daemon.controller.active:
+                await asyncio.sleep(0.01)
+
+    async def test_the_shell_going_away_stops_dictation(self):
+        shell = await self.the_shell()
+        await self.call(shell, "Hello", "i", [2])
+        self.daemon.controller.make_mic = BlockedMic
+        await self.call(shell, "DictateStart")
+        shell.disconnect()
+        async with asyncio.timeout(2):
+            while self.daemon.controller.active:
+                await asyncio.sleep(0.01)
+
+    async def test_level_one_is_cards_alone_and_level_two_is_both(self):
+        shell = await self.the_shell()
+        await self.call(shell, "Hello", "i", [1])
+        self.assertEqual((await self.call(self.client, "CanAsk")).body, [True])
+        self.assertEqual((await self.call(self.client, "CanType")).body, [False])
+        await self.call(shell, "Hello", "i", [2])
+        self.assertEqual((await self.call(self.client, "CanType")).body, [True])
+
+    async def test_a_new_shell_has_to_say_so_again(self):
+        shell = await self.the_shell()
+        await self.call(shell, "Hello", "i", [2])
+        shell.disconnect()
+        while self.daemon.controller.typist:
+            await asyncio.sleep(0.01)
+
+    async def test_the_shell_can_report_words_as_typed(self):
+        shell = await self.the_shell()
+        done = asyncio.get_running_loop().create_future()
+        self.daemon.controller.typing = ("words", done)
+        await self.call(shell, "Typed", "ss", ["words", "pasted"])
+        self.assertEqual(await done, "pasted")
 
 
 @unittest.skipUnless(os.environ.get(PRIVATE), "needs dbus-run-session")

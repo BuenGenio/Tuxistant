@@ -7,11 +7,13 @@ events are real too, through virtual devices in that shell. Nothing is judged he
 write report.json and PNGs, and tests/test_approval_card.py looks at them.
 """
 import argparse
+import array
 import asyncio
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from dbus_fast.aio import MessageBus
@@ -134,9 +136,21 @@ class Daemon(fake_daemon.Daemon):
     def ApprovalClosed(self, id) -> "s":
         return id
 
+    @dbus_method()
+    def Typed(self, id: "s", how: "s"):
+        self.calls.append(["Typed", id, how])
+
     @dbus_signal()
     def SelectionWanted(self, id) -> "s":
         return id
+
+    @dbus_signal()
+    def DictationStarted(self, id) -> "s":
+        return id
+
+    @dbus_signal()
+    def TypeText(self, id, text, only_copy) -> "ssb":
+        return [id, text, only_copy]
 
 
 class Run:
@@ -594,6 +608,362 @@ STEPS = {"click": steps_click, "admin": steps_admin, "text": steps_text, "lifeti
          "window": steps_window, "going_away": steps_going_away}
 
 
+class Dictating:
+    """Real windows in a real shell, each with a file that holds what its widget holds."""
+
+    def __init__(self, run):
+        self.run, self.daemon, self.test = run, run.daemon, run.test
+        self.windows = []
+
+    def open(self, kind, input_method=True):
+        log = self.run.out / f"{kind}-{len(self.windows)}.txt"
+        env = {**os.environ, "WAYLAND_DISPLAY": os.environ["TUX_WAYLAND_DISPLAY"],
+               "GDK_BACKEND": "wayland", "GSK_RENDERER": "cairo"}
+        if not input_method:
+            env["GTK_IM_MODULE"] = "gtk-im-context-simple"  # as an app with no text-input support
+        window = subprocess.Popen(
+            [sys.executable, "-B", str(Path(__file__).with_name("dictate_window.py")), str(log), kind],
+            env=env, stderr=subprocess.DEVNULL)
+        self.windows.append(window)
+        return log
+
+    async def focus_on(self, kind):
+        for _ in range(100):
+            title = await self.test.command(
+                "eval", code="return global.display.focus_window?.title ?? null;")
+            if title == f"dictate-{kind}":
+                await asyncio.sleep(0.5)
+                return
+            await asyncio.sleep(0.1)
+        raise RuntimeError(f"dictate-{kind} never got the focus")
+
+    async def layout(self, name, label):
+        await self.test.command("eval", code=f"""
+            const Meta = imports.gi.Meta;
+            await global.backend.set_keymap_async(Meta.KeymapDescription.new_from_rules(
+                'pc105', '{name}', '', '', ['{label}'], ['{name}']), 0, null);
+        """)
+        await asyncio.sleep(0.5)
+
+    async def close_all(self):
+        for window in self.windows:
+            window.terminate()
+            window.wait(timeout=5)
+        self.windows = []
+        await asyncio.sleep(0.5)
+
+    async def go(self, request, words, settle=0.5):
+        self.daemon.DictationStarted(request)
+        await asyncio.sleep(0.1)
+        self.daemon.TypeText(request, words, False)
+        await asyncio.sleep(settle)
+        return self.how(request)
+
+    def how(self, request):
+        return next((c[2] for c in self.daemon.calls if c[0] == "Typed" and c[1] == request), None)
+
+    async def clipboard(self, kind="CLIPBOARD"):
+        return await self.test.command("eval", code=f"""
+            const St = imports.gi.St;
+            return await new Promise(done => St.Clipboard.get_default().get_text(
+                St.ClipboardType.{kind}, (_c, text) => done(text)));
+        """)
+
+    async def mimetypes(self):
+        return await self.test.command("eval", code="""
+            const St = imports.gi.St;
+            return St.Clipboard.get_default().get_mimetypes(St.ClipboardType.CLIPBOARD);
+        """)
+
+    async def set_content(self, mimetype, byte_list):
+        await self.test.command("eval", code=f"""
+            const St = imports.gi.St;
+            St.Clipboard.get_default().set_content(St.ClipboardType.CLIPBOARD, '{mimetype}',
+                new GLib.Bytes(new Uint8Array({byte_list})));
+        """)
+
+    async def bytes_of(self, mimetype):
+        return await self.test.command("eval", code=f"""
+            const St = imports.gi.St;
+            return await new Promise(done => St.Clipboard.get_default().get_content(
+                St.ClipboardType.CLIPBOARD, '{mimetype}',
+                (_c, bytes) => done(Array.from(bytes?.toArray() ?? []))));
+        """)
+
+    async def activate(self, kind):
+        await self.test.command("eval", code=f"""
+            global.get_window_actors().map(actor => actor.meta_window)
+                .find(window => window.title === 'dictate-{kind}')
+                .activate(global.get_current_time());
+        """)
+
+    async def note_on_screen(self):
+        return await self.test.command("eval", code="""
+            return Main.extensionManager.lookup('tuxistant@buengenio').stateObj._caption._reply.text;
+        """)
+
+
+async def dictate_text_field(d, report):
+    log = d.open("text")
+    await d.focus_on("text")
+    await d.run.set_clipboard("CLIPBOARD", "keep-me")
+    report["typed_how"] = await d.go("a", "Hello there, Привіт, ñandú 你好! ")
+    report["typed_text"] = log.read_text()
+    report["typed_clipboard"] = await d.clipboard()
+
+    report["enter_how"] = await d.go("b", "first\nsecond\r\x1b[Athird\u2028fourth\u202efifth ")
+    report["enter_text"] = log.read_text()
+
+    d.daemon.TypeText("stranger", "INJECTED ", False)
+    await asyncio.sleep(0.3)
+    d.daemon.TypeText("b", "REPLAYED ", False)
+    await asyncio.sleep(0.3)
+    report["unexpected_text"] = log.read_text()
+    report["unexpected_how"] = [d.how("stranger")]
+
+    d.daemon.DictationStarted("c")
+    await asyncio.sleep(0.1)
+    await d.test.command("eval", code="Main.overview.show();")
+    await asyncio.sleep(1.0)
+    d.daemon.TypeText("c", "over a shell dialog ", False)
+    await asyncio.sleep(0.5)
+    report["modal_how"] = d.how("c")
+    report["modal_clipboard"] = await d.clipboard()
+    await d.test.command("eval", code="Main.overview.hide();")
+    await asyncio.sleep(1.0)
+    report["modal_text"] = log.read_text()
+
+    d.daemon.DictationStarted("d")
+    await asyncio.sleep(0.1)
+    other = d.open("button")
+    await d.focus_on("button")
+    d.daemon.TypeText("d", "for the first window ", False)
+    await asyncio.sleep(0.5)
+    report["moved_how"] = d.how("d")
+    report["moved_clipboard"] = await d.clipboard()
+    report["moved_note"] = await d.note_on_screen()
+    report["moved_first_window"] = log.read_text()
+    report["moved_other_window"] = other.read_text()
+    await d.close_all()
+
+
+async def dictate_text_field_more(d, report):
+    log = d.open("text")
+    await d.focus_on("text")
+    window = d.windows[-1]
+
+    report["joiners_how"] = await d.go("j1", "می\u200cخواهم 👩\u200d💻 ")
+    report["joiners_text"] = log.read_text()
+
+    d.daemon.DictationStarted("o1")
+    d.daemon.DictationStarted("o2")
+    await asyncio.sleep(0.1)
+    d.daemon.TypeText("o1", "one ", False)
+    while d.how("o1") is None:      # the real daemon waits for this too
+        await asyncio.sleep(0.01)
+    d.daemon.TypeText("o2", "two ", False)
+    await asyncio.sleep(0.5)
+    report["overlap_how"] = [d.how("o1"), d.how("o2")]
+    report["overlap_text"] = log.read_text()
+
+    await d.run.set_clipboard("CLIPBOARD", "keep-me")
+    d.daemon.DictationStarted("t1")
+    await asyncio.sleep(0.1)
+    d.daemon.TypeText("t1", "what the room said ", True)
+    await asyncio.sleep(0.5)
+    report["ran_out_how"] = d.how("t1")
+    report["ran_out_clipboard"] = await d.clipboard()
+    report["ran_out_note"] = await d.note_on_screen()
+    report["ran_out_window"] = log.read_text()
+
+    await d.run.set_clipboard("CLIPBOARD", "keep-me")
+    before = len(log.read_text())
+    report["long_how"] = await d.go("l1", "word " * 1000, settle=2.6)
+    report["long_alive"] = window.poll() is None
+    report["long_added"] = len(log.read_text()) - before
+    report["long_clipboard"] = await d.clipboard()
+    report["cyrillic_long_how"] = await d.go("l2", "слово " * 400, settle=2.6)
+    report["cyrillic_long_alive"] = window.poll() is None
+    await d.close_all()
+
+
+async def dictate_password(d, report):
+    log = d.open("password")
+    await d.focus_on("password")
+    await d.run.set_clipboard("CLIPBOARD", "keep-me")
+    report["password_how"] = await d.go("e", "hunter2 ")
+    report["password_text"] = log.read_text()
+    report["password_clipboard"] = await d.clipboard()
+    report["password_note"] = await d.note_on_screen()
+
+    d.daemon.DictationStarted("e2")
+    await asyncio.sleep(0.1)
+    await d.test.command("eval", code="Main.overview.show();")
+    await asyncio.sleep(1.0)
+    d.daemon.TypeText("e2", "hunter3 ", False)
+    await asyncio.sleep(0.5)
+    report["password_modal_how"] = d.how("e2")
+    report["password_modal_clipboard"] = await d.clipboard()
+    await d.test.command("eval", code="Main.overview.hide();")
+    await asyncio.sleep(1.0)
+    await d.close_all()
+
+
+async def dictate_paste(d, report):
+    log = d.open("text", input_method=False)
+    await d.focus_on("text")
+    await d.run.set_clipboard("CLIPBOARD", "before-clipboard")
+    await d.run.set_clipboard("PRIMARY", "before-primary")
+    report["paste_how"] = await d.go("f", "Pasted words, ñandú Привіт ", settle=2.6)
+    report["paste_text"] = log.read_text()
+    report["paste_clipboard"] = await d.clipboard()
+    report["paste_primary"] = await d.clipboard("PRIMARY")
+
+    await d.layout("ua", "Ukrainian")
+    report["cyrillic_how"] = await d.go("g", "on a Cyrillic layout ", settle=0.6)
+    report["cyrillic_text"] = log.read_text()
+    await d.run.set_clipboard("CLIPBOARD", "CTRLV ")
+    await d.test.command("eval", code=POINTER + """
+        const keys = global.stage.context.get_backend().get_default_seat()
+            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        for (const [key, state] of [[Clutter.KEY_Control_L, 1], [Clutter.KEY_v, 1],
+            [Clutter.KEY_v, 0], [Clutter.KEY_Control_L, 0]]) {
+            keys.notify_keyval(time(), key, state);
+            await sleep(20);
+        }
+    """)
+    await asyncio.sleep(0.5)
+    report["cyrillic_ctrl_v_text"] = log.read_text()
+    await d.layout("us", "English")
+
+    await asyncio.sleep(2.0)    # the last paste has finished with the clipboard
+    d.daemon.DictationStarted("i")
+    await asyncio.sleep(0.1)
+    d.daemon.TypeText("i", "words on the way ", False)
+    await asyncio.sleep(0.4)
+    await d.run.set_clipboard("CLIPBOARD", "copied-meanwhile")
+    await asyncio.sleep(2.2)
+    report["meanwhile_clipboard"] = await d.clipboard()
+
+    await d.set_content("image/png", [137, 80, 78, 71, 13, 10, 26, 10])
+    report["image_how"] = await d.go("im", "beside a picture ", settle=2.6)
+    report["image_mimetypes"] = await d.mimetypes()
+    report["image_bytes"] = await d.bytes_of("image/png")
+
+    await d.set_content("x-kde-passwordManagerHint", [115, 101, 99, 114, 101, 116])
+    report["hint_how"] = await d.go("pm", "after a password manager ", settle=2.6)
+    report["hint_clipboard"] = await d.clipboard()
+    report["hint_mimetypes"] = await d.mimetypes()
+
+    await d.run.set_clipboard("CLIPBOARD", "first-clipboard")
+    first = await d.go("b1", "first burst ", settle=0.3)
+    second = await d.go("b2", "second burst ", settle=2.6)
+    report["bursts_how"] = [first, second]
+    report["bursts_clipboard"] = await d.clipboard()
+    await d.close_all()
+
+
+async def dictate_slow_apps(d, report):
+    log = d.open("slow", input_method=False)
+    await d.focus_on("slow")
+    await d.run.set_clipboard("CLIPBOARD", "my-bank-password")
+    await d.run.set_clipboard("PRIMARY", "my-bank-password")
+    report["slow_how"] = await d.go("sl", "the dictated words ", settle=3.0)
+    report["slow_text"] = log.read_text()
+    await d.close_all()
+
+    owner = d.open("owner")
+    await d.focus_on("owner")
+    await asyncio.sleep(1.0)
+    log = d.open("text", input_method=False)
+    await d.focus_on("text")
+    Path(str(owner) + ".hang").touch()
+    await asyncio.sleep(0.3)
+    d.daemon.DictationStarted("h1")
+    await asyncio.sleep(0.1)
+    began = time.monotonic()
+    d.daemon.TypeText("h1", "for this window ", False)
+    while d.how("h1") is None and time.monotonic() - began < 3:
+        await asyncio.sleep(0.02)
+    report["hung_seconds"] = time.monotonic() - began
+    report["hung_how"] = d.how("h1")
+    await asyncio.sleep(0.4)
+    report["hung_text"] = log.read_text()
+    await asyncio.sleep(2.2)
+    report["hung_clipboard_after"] = await d.clipboard()
+    await d.close_all()
+    await asyncio.sleep(6.0)    # the hung app has to wake up to close
+
+
+async def dictate_focus_moves_during_the_save(d, report):
+    other = d.open("button", input_method=False)
+    await d.focus_on("button")
+    owner = d.open("owner")
+    await d.focus_on("owner")
+    await asyncio.sleep(1.0)
+    log = d.open("text", input_method=False)
+    await d.focus_on("text")
+    Path(str(owner) + ".hang").touch()
+    await asyncio.sleep(0.3)
+    d.daemon.DictationStarted("m1")
+    await asyncio.sleep(0.1)
+    d.daemon.TypeText("m1", "for the window I was in ", False)
+    await d.activate("button")
+    await asyncio.sleep(1.0)
+    report["save_moved_how"] = d.how("m1")
+    report["save_moved_text"] = log.read_text()
+    report["save_moved_other"] = other.read_text()
+    report["save_moved_clipboard"] = await d.clipboard()
+    await d.close_all()
+    await asyncio.sleep(6.0)
+
+
+async def dictate_disabled_during_the_save(d, report):
+    owner = d.open("owner")
+    await d.focus_on("owner")
+    await asyncio.sleep(1.0)
+    d.open("text", input_method=False)
+    await d.focus_on("text")
+    await asyncio.sleep(0.2)
+    Path(str(owner) + ".hang").touch()
+    await asyncio.sleep(0.3)
+    d.daemon.DictationStarted("x1")
+    await asyncio.sleep(0.1)
+    d.daemon.TypeText("x1", "private words ", False)
+    await d.test.command("eval", code="Main.extensionManager.disableExtension('tuxistant@buengenio');")
+    await asyncio.sleep(9.0)
+    report["disabled_clipboard"] = await d.clipboard()
+    report["disabled_primary"] = await d.clipboard("PRIMARY")
+    await d.close_all()
+
+
+async def dictate_nothing_to_type_in(d, report):
+    log = d.open("button", input_method=False)
+    await d.focus_on("button")
+    await d.run.set_clipboard("CLIPBOARD", "keep-me")
+    report["button_how"] = await d.go("j", "no field here ", settle=2.6)
+    report["button_text"] = log.read_text()
+    report["button_clipboard"] = await d.clipboard()
+    await d.close_all()
+    report["no_window_how"] = await d.go("k", "no window at all ")
+    report["no_window_clipboard"] = await d.clipboard()
+
+
+async def scenario_dictation(daemon, test, args):
+    report = {}
+    d = Dictating(Run(daemon, test, args))
+    try:
+        for step in (dictate_text_field, dictate_text_field_more, dictate_password, dictate_paste,
+                     dictate_nothing_to_type_in, dictate_slow_apps,
+                     dictate_focus_moves_during_the_save, dictate_disabled_during_the_save):
+            await step(d, report)
+    finally:
+        for window in d.windows:
+            window.kill()
+        report["typed_calls"] = [c for c in daemon.calls if c[0] == "Typed"]
+        (d.run.out / "report.json").write_text(json.dumps(report, indent=1))
+
+
 async def scenario_verify(daemon, test, args):
     run = Run(daemon, test, args)
     report = {}
@@ -730,6 +1100,105 @@ async def scenario_real(daemon, test, args):
         (run.out / "report.json").write_text(json.dumps(report, indent=1))
 
 
+class LoudMic:
+    """Stands in for the microphone: a steady tone, loud enough to count as a voice."""
+
+    async def start(self):
+        pass
+
+    async def stop(self):
+        pass
+
+    async def read(self):
+        await asyncio.sleep(0.04)
+        return array.array("h", [12000, -12000] * 480).tobytes()
+
+
+SHORTCUT = POINTER + """
+const keys = driver._keys ??= Clutter.get_default_backend().get_default_seat()
+    .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+const held = [Clutter.KEY_Control_L, Clutter.KEY_Super_L, Clutter.KEY_d];
+for (const key of held) {
+    keys.notify_keyval(time(), key, Clutter.KeyState.PRESSED);
+    await sleep(30);
+}
+for (const key of held.reverse()) {
+    keys.notify_keyval(time(), key, Clutter.KeyState.RELEASED);
+    await sleep(30);
+}
+"""
+
+
+async def scenario_dictation_real(daemon, test, args):
+    """The production service and controller against the real extension. Only the microphone and
+    the speech to text are stand-ins, so the guard, Hello and Typed are the real thing."""
+    d = Dictating(Run(daemon, test, args))
+    ctl = daemon.controller
+    ctl.make_mic = LoudMic
+    errors = []
+    send = ctl.emit
+    ctl.emit = lambda name, *a: (errors.append(a[0]) if name == "Error" else None, send(name, *a))[1]
+    said = iter(["Real words, Привіт. ", "From the shortcut. ", "Over the overview. "])
+
+    async def hears(_config, _pcm):
+        return next(said)
+
+    async def finished():
+        for _ in range(100):
+            if not ctl.active and not ctl.deliveries:
+                return
+            await asyncio.sleep(0.05)
+
+    report = {}
+    real_controller.transcribe = hears
+    try:
+        for _ in range(100):
+            if ctl.typist:
+                break
+            await asyncio.sleep(0.05)
+        report["typist"] = ctl.typist
+        log = d.open("text")
+        await d.focus_on("text")
+        await ctl.dictate_start()
+        await asyncio.sleep(0.7)
+        await ctl.dictate_end()
+        await finished()
+        await asyncio.sleep(0.3)
+        report["held_text"] = log.read_text()
+
+        await test.command("eval", code=SHORTCUT)
+        await asyncio.sleep(0.7)
+        report["shortcut_started"] = ctl.dictation is not None
+        await test.command("eval", code=SHORTCUT)
+        await finished()
+        await asyncio.sleep(0.3)
+        report["shortcut_text"] = log.read_text()
+
+        await test.command("eval", code=SHORTCUT)
+        await asyncio.sleep(0.7)
+        report["overview_listening"] = ctl.dictation is not None
+        await test.command("eval", code="Main.overview.show();")
+        await asyncio.sleep(1.0)
+        await test.command("eval", code=SHORTCUT)
+        await finished()
+        report["overview_stopped"] = not ctl.active
+        await test.command("eval", code="Main.overview.hide();")
+        await asyncio.sleep(1.0)
+        report["errors"] = errors
+        report["state"] = ctl.state
+
+        await ctl.dictate_start()
+        await asyncio.sleep(0.3)
+        await test.command("eval", code="Main.extensionManager.disableExtension('tuxistant@buengenio');")
+        await finished()
+        report["disabled_stopped"] = not ctl.active
+        report["disabled_typist"] = ctl.typist
+    finally:
+        for window in d.windows:
+            window.kill()
+        (d.run.out / "report.json").write_text(json.dumps(report, indent=1))
+
+
 def real_daemon(args):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -739,7 +1208,8 @@ def real_daemon(args):
                           mic_factory=None, speaker_factory=None)
 
 
-SCENARIOS = {"verify": scenario_verify, "fit": scenario_fit, "monitors": scenario_monitors,
+SCENARIOS = {"dictation": scenario_dictation, "dictation_real": scenario_dictation_real,
+             "verify": scenario_verify, "fit": scenario_fit, "monitors": scenario_monitors,
              "real": scenario_real}
 
 
@@ -754,7 +1224,7 @@ async def main():
     bus = await MessageBus().connect()
     test = Test()
     bus.export(BUS_PATH, test)
-    if args.scenario == "real":
+    if args.scenario in ("real", "dictation_real"):
         daemon = real_daemon(args)
         await service.serve(bus, daemon)
     else:

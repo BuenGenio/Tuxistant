@@ -13,6 +13,7 @@ Tuxistant is a voice assistant for the Linux desktop: a Python daemon, a GNOME S
 | [docs/SKILLS.md](docs/SKILLS.md) | Manifests, permissions, what needs a click, the shell skill |
 | [docs/THEMES.md](docs/THEMES.md) | Writing a theme |
 | [docs/TESTING.md](docs/TESTING.md) | The test layers, the live evaluations, and what can go wrong on a real desktop |
+| [docs/SECURITY.md](docs/SECURITY.md) | Real attacks on it and what stopped them. Add to it when a review finds something that matters |
 | [website/README.md](website/README.md) | Building and deploying the site |
 
 ## Rules that are easy to break
@@ -24,6 +25,7 @@ Tuxistant is a voice assistant for the Linux desktop: a Python daemon, a GNOME S
 - **Don't send anything to a device or add anything to the owner's calendar** unless asked for that exact thing.
 - **Every risky action goes through `Skills.execute` and an `Ask`.** Never add a way round it, including for the planner. Card text comes from daemon code looking at the real action, never from a manifest or the model.
 - **Shell access stays built in.** Community skills must never be able to request it.
+- **Dictation stays on the user's own key press.** No tool, skill or model may start it or give it text, and what it types must never hold a line break. That is why it needs no card, so keep it that way.
 
 ## How the code is written
 

@@ -623,6 +623,9 @@ class GeneralPage(Adw.PreferencesPage):
         group.add(hide)
         for row in (duration, hide):
             hold.bind_property("active", row, "sensitive", GObject.BindingFlags.SYNC_CREATE)
+        group.add(self._switch("dictation_enabled", "Dictation",
+                               "Tap Fn, then hold it and speak, to type where your cursor is. "
+                               "Ctrl+Super+D starts and stops it"))
         return group
 
     def _instructions_group(self):

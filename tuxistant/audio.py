@@ -7,6 +7,9 @@ import time
 RATE = 24000
 BYTES_PER_S = RATE * 2
 FORMAT = ["--rate", str(RATE), "--channels", "1", "--format", "s16", "--raw"]
+MIN_HOLD_BYTES = int(0.4 * BYTES_PER_S)
+MIN_VOICED_BYTES = int(0.12 * BYTES_PER_S)  # more than the thump of the key itself
+VOICE_LEVEL = 0.15      # level() of a quiet voice. Whisper invents words for silence
 STALL_S = 3     # pw-cat took no audio for this long: nothing is playing it
 END_WAIT_S = 1
 

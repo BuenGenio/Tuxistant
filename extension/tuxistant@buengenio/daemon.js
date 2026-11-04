@@ -1,5 +1,6 @@
 // Thin async client for org.tuxistant.Daemon. Nothing here blocks or logs when it is offline.
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 
 const BUS_NAME = 'org.tuxistant.Daemon';
 const BUS_PATH = '/org/tuxistant/Daemon';
@@ -65,7 +66,16 @@ export class Daemon {
     // Stops whatever is going on, on the way out. Not through the proxy: destroy() cancels what the
     // proxy has in flight, and this has to get there.
     stopNow() {
-        Gio.DBus.session.call(BUS_NAME, BUS_PATH, BUS_NAME, 'Cancel', null, null,
+        this._lastWord('Cancel');
+    }
+
+    // Nothing here can draw a card or type any more, and dictation must not go on without a face.
+    goodbye() {
+        this._lastWord('Hello', new GLib.Variant('(i)', [0]));
+    }
+
+    _lastWord(method, args = null) {
+        Gio.DBus.session.call(BUS_NAME, BUS_PATH, BUS_NAME, method, args, null,
             Gio.DBusCallFlags.NO_AUTO_START, -1, null, () => {});
     }
 

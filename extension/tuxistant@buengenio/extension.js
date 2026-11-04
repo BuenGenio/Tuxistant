@@ -12,11 +12,18 @@ import {Blob} from './blob.js';
 import {Caption} from './caption.js';
 import {Daemon} from './daemon.js';
 import {BlobMenu, Indicator} from './menus.js';
+import {Typist} from './typist.js';
 
 const KEYBINDING = 'toggle-shortcut';
+const DICTATE_KEYBINDING = 'dictate-shortcut';
 const UNREACHABLE = 'The Tuxistant daemon is unreachable';
 const THEMES_TIMEOUT_MS = 30000;  // a theme not seen before gets test-compiled first
-const CARDS = 1;  // what the daemon hears in Hello: this extension can draw approval cards
+const ABILITIES = 2;  // what the daemon hears in Hello: approval cards, and typing dictated text
+const RAN_OUT = 'That went on for five minutes, so I stopped and copied it. Press Ctrl+V to paste it.';
+const NOTES = {
+    copied: 'The window changed, so I copied that instead. Press Ctrl+V to paste it.',
+    refused: "That's a password box, so I didn't type it.",
+};
 
 export default class TuxistantExtension extends Extension {
     enable() {
@@ -32,6 +39,7 @@ export default class TuxistantExtension extends Extension {
             onLayout: () => this._onBlobLayout(),
         });
         this._caption = new Caption();
+        this._typist = new Typist();
         this._afterCard = [];
         this._approval = new Approval({
             onAnswer: (id, allow) => this._send('Answer', new GLib.Variant('(sb)', [id, allow])),
@@ -60,20 +68,26 @@ export default class TuxistantExtension extends Extension {
         this._settings = this.getSettings();
         Main.wm.addKeybinding(KEYBINDING, this._settings, Meta.KeyBindingFlags.IGNORE_AUTOREPEAT,
             Shell.ActionMode.ALL, () => this._send('Toggle'));
+        Main.wm.addKeybinding(DICTATE_KEYBINDING, this._settings,
+            Meta.KeyBindingFlags.IGNORE_AUTOREPEAT, Shell.ActionMode.ALL,
+            () => this._send('DictateToggle'));
     }
 
     disable() {
         Main.wm.removeKeybinding(KEYBINDING);
+        Main.wm.removeKeybinding(DICTATE_KEYBINDING);
         // With the blob and the icon gone there would be nothing to show or stop a live microphone.
         if (this._state !== 'idle')
             this._daemon.stopNow();
+        this._daemon.goodbye();
         this._daemon.destroy();
         this._indicator.destroy();
         this._blobMenu.destroy();
         this._approval.destroy();  // the daemon's own timeout then answers no
+        this._typist.destroy();
         this._caption.destroy();
         this._blob.destroy();
-        this._daemon = this._indicator = this._blobMenu = this._approval = null;
+        this._daemon = this._indicator = this._blobMenu = this._approval = this._typist = null;
         this._caption = this._blob = null;
         this._themes = this._settings = null;
     }
@@ -97,7 +111,7 @@ export default class TuxistantExtension extends Extension {
 
     async _refresh() {
         // Not awaited: being refused costs the approval cards, and must not cost the blob as well.
-        this._daemon.call('Hello', new GLib.Variant('(i)', [CARDS]))
+        this._daemon.call('Hello', new GLib.Variant('(i)', [ABILITIES]))
             .catch(e => this._reportUnlessOffline(e));
         try {
             const [config] = await this._daemon.call('GetConfig');
@@ -225,6 +239,18 @@ export default class TuxistantExtension extends Extension {
             this._send('SelectionText', new GLib.Variant('(ss)', [id, text]));
     }
 
+    async _onTypeText(id, text, ranOut) {
+        const how = await this._typist?.type(id, text, ranOut);
+        if (!how || !this._daemon)
+            return;
+        this._send('Typed', new GLib.Variant('(ss)', [id, how]));
+        const note = ranOut ? RAN_OUT : NOTES[how];
+        if (note)
+            this._toCaption(() => this._caption.showError(note));
+        else
+            this._caption.hide();
+    }
+
     async _onThemePreview(id) {
         try {
             await this._refreshThemes();
@@ -295,6 +321,13 @@ export default class TuxistantExtension extends Extension {
             break;
         case 'SelectionWanted':
             this._onSelectionWanted(args[0]);
+            break;
+        case 'DictationStarted':
+            this._typist.expect(args[0]);
+            this._toCaption(() => this._caption.showHeard('Dictating…'));
+            break;
+        case 'TypeText':
+            this._onTypeText(...args);
             break;
         }
     }

@@ -28,6 +28,9 @@ Methods:
 | `HoldStart` | `() -> ()` | Start a push-to-talk turn (client-committed) |
 | `HoldEnd` | `() -> ()` | Stop mic, commit, request the reply |
 | `Cancel` | `() -> ()` | Stop everything, back to idle |
+| `DictateStart` | `() -> ()` | Start dictating, from the shell only. See "Dictation" |
+| `DictateEnd` | `() -> ()` | Stop listening and type what was said |
+| `DictateToggle` | `() -> ()` | `DictateStart`, or `DictateEnd` if already dictating |
 | `GetState` | `() -> s` | Current state |
 | `GetConfig` | `() -> s` | `Config.public()` as JSON; never contains the API key |
 | `SetConfig` | `(s key, s json_value) -> ()` | Validated by `Config.set`; emits `ConfigChanged`. A new `server` clears `api_key`: a key only goes to the server it was given for |
@@ -38,10 +41,12 @@ Methods:
 | `PreviewTheme` | `(s id) -> ()` | Emit `ThemePreview` |
 | `ListSkills` | `() -> s` | `Skills.listing()` |
 | `ListPhones` | `() -> s` | `phone.devices()`: `[{"id", "name", "type", "connected", "paired"}]`, empty without GSConnect |
-| `Hello` | `(i cards) -> ()` | From the extension when the daemon comes online: `cards` is 1 if it can draw approval cards |
-| `CanAsk` | `() -> b` | Whether an extension has said so. Without one, `Controller.ask` refuses at once and the user hears why |
-| `Answer` | `(s id, b allow) -> ()` | The click on an approval card. An unknown id does nothing. `Hello`, `Answer` and `SelectionText` are refused from anyone but the current owner of `org.gnome.Shell`, checked before dispatch by `Daemon.guard` |
+| `Hello` | `(i level) -> ()` | From the extension when the daemon comes online: `level` is 1 if it can draw approval cards, 2 if it can also type dictated text. 0 on the way out, which also stops dictation |
+| `CanAsk` | `() -> b` | Whether an extension has said level 1. Without one, `Controller.ask` refuses at once and the user hears why |
+| `CanType` | `() -> b` | Whether an extension has said level 2. Without one, dictation says why and never opens the microphone |
+| `Answer` | `(s id, b allow) -> ()` | The click on an approval card. An unknown id does nothing. `Hello`, `Answer`, `SelectionText`, `Typed` and the three `Dictate` methods are refused from anyone but the current owner of `org.gnome.Shell`, checked before dispatch by `Daemon.guard` |
 | `SelectionText` | `(s id, s text) -> ()` | Reply to `SelectionWanted` |
+| `Typed` | `(s id, s how) -> ()` | Reply to `TypeText`: `typed`, `pasted`, `copied` or `refused` |
 | `GetHistory` | `(i limit) -> s` | `History.recent()` |
 | `ClearHistory` | `() -> ()` | Emits `HistoryChanged` |
 | `OpenSettings` | `() -> ()` | Launch `tuxistant settings` |
@@ -62,6 +67,8 @@ Signals:
 | `Approval` | `s id, s title, s detail, s level, i seconds` | Show the approval card. `level` is `click` or `admin` (runs as root). No answer within `seconds` is a no |
 | `ApprovalClosed` | `s id` | Take the card down: answered, timed out or cancelled |
 | `SelectionWanted` | `s id` | Send the selected text, or else the clipboard text, to `SelectionText` |
+| `DictationStarted` | `s id` | Note the focused window: the words are for that one |
+| `TypeText` | `s id, s text, b only_copy` | Put the words where the cursor is, then reply with `Typed`. Sent to the shell alone, not broadcast. `only_copy` is true after the time limit |
 
 ## Locked screen
 
@@ -80,6 +87,28 @@ Title and detail are written by daemon code from what will really happen, never 
 
 A handler that wants its result spoken in another language appends a `Speak(text, voice, model)` to `session.after`. The app says it after the model's reply, and the model never sees the text, because Kokoro would read it as English. An empty `voice` shows the text without speaking it.
 
+## Dictation
+
+`tuxistant/dictation.py` and `extension/tuxistant@buengenio/typist.js`. Tap Fn, then press it again within 0.4 s and hold it. `dictate-shortcut`, `<Control><Super>d` by default, starts and stops it instead, for long passages and keyboards without Fn.
+
+No model is involved and no tool can start it, so what is said can't become an instruction and nothing here needs a card. The words are not kept: no `Transcript`, no history row, no log.
+
+1. `DictationStarted`. The extension notes the focused window.
+2. The microphone fills a buffer, up to 300 s. Release, `DictateEnd` or `DictateToggle` keeps 0.2 s more, so the last word isn't cut off. Another key pressed with Fn, `Cancel`, a lock, or losing the shell or the extension drops the lot. A hold too short or quiet to be speech ends quietly. If the microphone dies, what it heard still goes on.
+3. The audio goes to `/v1/audio/transcriptions` as a WAV, with `transcribe_model`. From here the words travel apart from the job, so a new go or a talk hold can start at once. They reach the window in the order they were said, and only `Cancel`, a lock or losing the shell stops them.
+4. `clean()` turns line breaks and control characters into spaces, so the text can't press Enter in a terminal or a chat box. The extension does the same again, as it can't know who sent it. A trailing space keeps the next go from running on.
+5. `TypeText`. The extension decides in this order:
+   - An id it wasn't told about: nothing.
+   - A field that says it's a password, at the start or now: nothing is typed or kept, and it says so. `refused`
+   - The time limit ran out, no window at the start, the focus has moved, or a shell dialog is up: copied to the clipboard, and it says so. `copied`
+   - A text field with an input method, and words that fit in one Wayland message: `Main.inputMethod.commit`. Any language, no key presses, the clipboard untouched. `typed`
+   - Anything else, which is XWayland, most Electron apps and long passages: clipboard and primary selection, Shift+Insert, then both put back after 2 s. `pasted`
+6. `Typed`. With no reply in 3 s the daemon reports an error.
+
+Why a paste and not keystrokes: where no field has focus, keystrokes would fire single-letter shortcuts, and a paste does nothing. Why Shift+Insert and not Ctrl+V: a layout with no `v`, such as Cyrillic, can't send Ctrl+V. Terminals paste the primary selection with that key, which is why both are set.
+
+The paste rules, all learned the hard way: a single commit over 4096 bytes kills the app, so anything over 3500 is pasted. Saving the clipboard waits 300 ms at most, as its owner may be hung, then the focus is checked again. What goes back is one type of content: text if there was any, else the first type offered. If the clipboard couldn't be saved, or held a password manager's copy, it is cleared rather than left holding the words. Anything copied in those 2 s is left alone.
+
 ## Realtime protocol (LocalAI v4.12.1, verified live)
 
 `ws://<server>/v1/realtime?model=<pipeline>`, header `Authorization: Bearer <api_key>`. PCM s16 mono 24 kHz, base64. `server` is `host[:port]`, or `https://host[:port]` for TLS, which uses `wss://`. Both clients ignore proxies and refuse redirects, so the key goes to that host only.
@@ -91,6 +120,7 @@ A handler that wants its result spoken in another language appends a `Speak(text
 5. Events: `input_audio_buffer.speech_started`, `input_audio_buffer.committed`, `conversation.item.input_audio_transcription.completed` (`transcript`), `response.function_call_arguments.done` (`name`, `arguments`, `call_id`), `response.output_audio.delta` (`delta`), `response.output_audio_transcript.done` (`transcript`), `response.done`, `error`. Also accept the beta names `response.audio.delta` and `response.audio_transcript.done`.
 6. Tool call: reply with `conversation.item.create` `{"type":"function_call_output","call_id":...,"output":"<json>"}`, then `response.create`. A response that only called a tool has no audio; its `response.done` must not end the turn. De-duplicate by `call_id`.
 7. Speech synthesis outside a session: `POST /v1/audio/speech` `{"model": tts_model, "voice": ..., "input": ...}` returns a WAV. Split long text by sentence: long passages can run the 8 GB GPU out of memory.
+8. Speech to text outside a session: `POST /v1/audio/transcriptions`, multipart with `model` and `file`, returns `{"text": ...}`. 23 s of speech took 0.9 s with Whisper turbo on the RTX 4060, with punctuation.
 
 ## Fn helper
 
@@ -102,7 +132,7 @@ It serves `/run/tuxistant-fn/events.sock` (Unix stream, broadcast to all clients
 - `up`: Fn released
 - `other`: another key was pressed while Fn is held. Never says which key, and is never sent when Fn is not held
 
-Nothing else may ever leave this helper. The daemon owns timing: `down` starts a `fn_hold_ms` timer; `other` or `up` cancels it; if it fires, `HoldStart`; `up` after that means `HoldEnd`. A missing socket must not stop the daemon: retry quietly every 5 s. `TUXISTANT_FN_SOCKET` overrides the path, for tests.
+Nothing else may ever leave this helper. The daemon owns timing: `down` starts a `fn_hold_ms` timer; `other` or `up` cancels it; if it fires, `HoldStart`; `up` after that means `HoldEnd`. A `down` within 0.4 s of a tap, meaning a press under 0.3 s with no other key, is `DictateStart` straight away, `up` then means `DictateEnd`, and `other` cancels it, because that was a Fn shortcut. A missing socket must not stop the daemon: retry quietly every 5 s. `TUXISTANT_FN_SOCKET` overrides the path, for tests.
 
 ## Themes
 
@@ -134,3 +164,5 @@ Rules: only `#if`-family directives, no backslashes, no textures, no `while` or 
 - Keybinding: `Main.wm.addKeybinding(name, settings, Meta.KeyBindingFlags.IGNORE_AUTOREPEAT, Shell.ActionMode.ALL, handler)`; a held key must not toggle on and off. The key is `toggle-shortcut` in the schema `org.gnome.shell.extensions.tuxistant`. Default `<Control><Super>space` is unused here.
 - Shader host: subclass `Shell.GLSLEffect`, implement `vfunc_build_pipeline()` with `this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, declarations, code, false)`, set values with `this.set_uniform_float(location, 1, [value])`; see `ui/lightbox.js` in the shell's gresource. `Shell.GLSLEffect` caches its pipeline per GType, so each theme needs its own dynamically registered class with a unique GTypeName.
 - Wayland: the running shell cannot load a new extension without a logout. Test in a headless shell only.
+- GJS doesn't keep a boxed value it hands to a callback, such as the `GLib.Bytes` from `St.Clipboard.get_content`. Copy it inside the callback. Keeping it and using it later crashes the shell, and on Wayland that ends the user's whole session.
+- One `Main.inputMethod.commit` must stay under the 4096 bytes of a Wayland message, or the client dies with "Argument list too long". Only the last commit in a tick survives, so a long text can't be split into several in a row.

@@ -9,9 +9,10 @@ import logging
 import secrets
 import time
 
-from .audio import BYTES_PER_S, Mic, Speaker, level
+from .audio import MIN_HOLD_BYTES, MIN_VOICED_BYTES, VOICE_LEVEL, Mic, Speaker, level
+from .dictation import Dictation, clean
 from .gate import APPROVAL_WAIT_S, MAX_DETAIL_CHARS, MAX_TITLE_CHARS, Ask, printable
-from .realtime import SETUP_TIMEOUT_S, Realtime, RealtimeError, sentences, speech
+from .realtime import SETUP_TIMEOUT_S, Realtime, RealtimeError, sentences, speech, transcribe
 
 log = logging.getLogger("tuxistant")
 
@@ -21,14 +22,12 @@ MAX_HOLD_S = 120        # a stuck key must not leave the mic open for ever
 REPLY_TIMEOUT_S = 60    # silence from the server while a reply is due
 ERROR_HOLD_S = 1.5      # how long the error state shows before idle
 CONNECT_LIMIT_S = SETUP_TIMEOUT_S + 5   # past the client's own timeout: this is the backstop
-MIN_HOLD_BYTES = int(0.4 * BYTES_PER_S)
-MIN_VOICED_BYTES = int(0.12 * BYTES_PER_S)  # more than the thump of the key itself
-VOICE_LEVEL = 0.15      # audio.level() of a quiet voice. Whisper invents words for silence
 VOICE_GRACE_S = 1.0     # speech_started lags, so a voice right at the timeout gets this long
 SELECTION_WAIT_S = 2    # the shell answers at once if it answers at all
 FOUND_MEMORY_S = 300    # "open the second one" can come in a new turn, as a hold turn ends at once
 NO_CARD = ("I can't show an approval card on this desktop yet, so I didn't do that. Log out and "
            "back in once, then try again.")
+NO_TYPING = "Dictation needs the new desktop extension. Log out and back in once, then try again."
 
 
 def describe(error: Exception) -> str:
@@ -304,10 +303,14 @@ class Controller:
         self.locked = False
         self.job = None
         self.turn = None
+        self.dictation = None
+        self.deliveries = []    # dictated audio on its way to the window, oldest first
         self.lock = asyncio.Lock()
         self.approval = None    # (id, future) of the card on screen
         self.reading = None     # (id, future) of the selection the shell was asked for
+        self.typing = None      # (id, future) of the words the shell was asked to type
         self.face = False       # an extension that can draw cards has said hello
+        self.typist = False     # and one that can type
         self.found, self.found_at = [], 0.0     # file.find's latest results, across turns
 
     @property
@@ -377,6 +380,65 @@ class Controller:
             if not self.reading[1].done():
                 self.reading[1].set_result(text)
 
+    def typed(self, request: str, how: str):
+        if self.typing and secrets.compare_digest(self.typing[0], request):
+            if not self.typing[1].done():
+                self.typing[1].set_result(how)
+
+    async def dictate_start(self):
+        async with self.lock:
+            if not self.config["dictation_enabled"] or (self.active and self.dictation):
+                return
+            await self._stop()
+            if self.locked:
+                return
+            if not self.typist:
+                self.emit("Error", NO_TYPING)
+                return
+            self.dictation = Dictation(self)
+            self.job = asyncio.create_task(self._run(self.dictation.run))
+
+    async def dictate_end(self):
+        async with self.lock:
+            if self.active and self.dictation:
+                self.dictation.finish()
+
+    async def dictate_toggle(self):
+        if self.active and self.dictation:
+            await self.dictate_end()
+        else:
+            await self.dictate_start()
+
+    def deliver(self, go: Dictation):
+        """Apart from the job, so that the next go or a talk hold can start while these words are
+        at the server. They reach the window in the order they were said. Only Cancel, a lock or
+        losing the shell stops them."""
+        before = self.deliveries[-1] if self.deliveries else None
+        task = asyncio.create_task(self._deliver(go, before))
+        self.deliveries.append(task)
+        task.add_done_callback(self.deliveries.remove)
+
+    async def _deliver(self, go: Dictation, before: asyncio.Task | None):
+        try:
+            words = clean(await transcribe(self.config, bytes(go.pcm)))
+            if before:
+                await asyncio.wait({before})
+            if words:
+                await go.type(words + " ")
+        except Exception as e:
+            self.emit("Error", describe(e))
+
+    def _drop_words(self):
+        for task in self.deliveries:
+            task.cancel()
+
+    async def shell_gone(self):
+        """With nothing to show it or take the words, dictation has to stop."""
+        async with self.lock:
+            self._drop_words()
+            if self.active and self.dictation:
+                await self._stop()
+
     async def toggle(self):
         async with self.lock:
             if self.active:
@@ -398,6 +460,7 @@ class Controller:
     async def cancel(self):
         async with self.lock:
             await self._stop()
+            self._drop_words()
 
     async def set_locked(self, locked: bool):
         """The shell disables the extension at lock, so a turn would have no blob and no way to
@@ -427,7 +490,7 @@ class Controller:
             if not (self.turn and self.turn.closing):
                 self.job.cancel()
             await asyncio.wait({self.job})
-        self.turn = None
+        self.turn = self.dictation = None
 
     async def _run(self, work) -> str | None:
         """Every job ends here. No failure in a job may reach the event loop."""
@@ -437,7 +500,7 @@ class Controller:
             pass
         except Exception as e:
             problem = describe(e)
-            self.turn = None    # it has closed, and _stop may cancel the wait below
+            self.turn = self.dictation = None   # it has closed, and _stop may cancel the wait below
             self.emit("Error", problem)
             self.set_state("error")
             try:
@@ -446,7 +509,7 @@ class Controller:
                 pass
             return problem
         finally:
-            self.turn = None
+            self.turn = self.dictation = None
             self.set_state("idle")
             self.set_presence(False)
 

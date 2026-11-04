@@ -10,6 +10,7 @@ wording can move requests that seem unrelated. Add a case whenever a real reques
 import asyncio
 import collections
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -71,6 +72,25 @@ CASES = [
     ("Remind me to call the dentist tomorrow", None),
 ]
 
+# Questions it should simply answer. "No tool" alone can't tell an answer from "I can't do that".
+FACTS = [
+    ("How many chemical elements are there?", r"118|hundred and eighteen"),
+    ("Who wrote Pride and Prejudice?", r"austen"),
+    ("How many bones are in the human body?", r"206"),
+    ("What's the speed of light?", r"299|300|186"),
+    ("What's the square root of 144?", r"\b12\b|twelve"),
+    ("What's 15 percent of 80?", r"\b12\b|twelve"),
+    ("When did World War Two end?", r"1945"),
+    ("What year did the Titanic sink?", r"1912"),
+    ("What is the tallest mountain in the world?", r"everest"),
+    ("Who painted the Mona Lisa?", r"vinci"),
+]
+
+
+def reply_in(done):
+    items = done.get("response", {}).get("output", [])
+    return "".join(part.get("text") or part.get("transcript") or "" for item in items for part in item.get("content") or [])
+
 
 async def first_tool(text):
     url = "ws://" + cfg["server"] + "/v1/realtime?model=" + cfg["pipeline"]
@@ -80,12 +100,15 @@ async def first_tool(text):
         await ws.send(json.dumps({"type": "session.update", "session": {"type": "realtime", "instructions": DEFAULTS["instructions"], "tools": skills.tools()}}))
         await ws.send(json.dumps({"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}}))
         await ws.send(json.dumps({"type": "response.create", "response": {"output_modalities": ["text"]}}))
+        said = []
         while True:
             e = json.loads(await asyncio.wait_for(ws.recv(), 90))
             if e["type"] == "response.function_call_arguments.done":
                 return e["name"], e["arguments"]
+            if e["type"] in ("response.output_text.delta", "response.text.delta"):
+                said.append(e.get("delta", ""))
             if e["type"] == "response.done":
-                return None, ""
+                return None, "".join(said) or reply_in(e)
             if e["type"] == "error":
                 return "ERROR", json.dumps(e.get("error"))[:100]
 
@@ -111,5 +134,15 @@ async def main():
         mark = "ok " if ((wanted is None and set(seen) == {None}) or (wanted and set(seen) <= wanted)) else "BAD"
         print(mark, text[:52].ljust(52), dict(seen), sample)
     print(f"{right}/{total} right, {(time.monotonic() - started) / max(total, 1):.1f} s each")
+    known = asked = 0
+    for text, answer in FACTS:
+        if ONLY and ONLY.lower() not in text.lower():
+            continue
+        replies = [await first_tool(text) for _ in range(REPS)]
+        misses = [said if name is None else name for name, said in replies if name or not re.search(answer, said, re.I)]
+        known += REPS - len(misses)
+        asked += REPS
+        print("BAD" if misses else "ok ", text[:52].ljust(52), f"{REPS - len(misses)}/{REPS}", misses[0][:70] if misses else "")
+    print(f"{known}/{asked} facts answered")
 
 asyncio.run(main())

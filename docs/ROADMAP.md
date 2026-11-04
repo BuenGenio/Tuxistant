@@ -6,7 +6,7 @@ Last updated 2026-11-04.
 
 ## Where things stand
 
-Steps 1 and 2 of the plan below are built. Step 2 has passed its tests, a security review and live tests against the real model, but it has **not yet run on the real desktop**, because the new extension only loads at the next login.
+Steps 1 to 3 of the plan below are built. Steps 2 and 3 have passed their tests and live tests against the real server, but they have **not yet run on the real desktop**, because the new extension only loads at the next login.
 
 | Part | State |
 |---|---|
@@ -14,6 +14,7 @@ Steps 1 and 2 of the plan below are built. Step 2 has passed its tests, a securi
 | Time, disk, weather, news | Working. Weather and news not yet tried by voice |
 | Approval gate and card | Tested in an isolated real GNOME Shell. Not yet on the real desktop |
 | Files, phone, shell, system facts, translation | Tested with the real model. See "Check on the real desktop" |
+| Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
 | Multi-step planner, local model | Two live runs worked |
 | Multi-step planner, cloud | Tested against a stub only. Never called the real Claude API |
 | Website | On GitHub Pages. See [website/README.md](../website/README.md) |
@@ -27,9 +28,11 @@ The owner approved this order.
 
 1. **Done:** daemon, skill runtime, blob, status icon, Settings.
 2. **Done, pending real-desktop checks:** typed skills, then the shell gate, with translation as the first real skill, and the planner with an opt-in cloud model.
-3. **Next: local install of your own skills.** Recipe skills: YAML only, using built-in daemon actions (D-Bus, HTTP, open app), with no code of their own. They load from a user folder. Non-built-in skills must be refused `shell`.
-4. **Code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared. Local only at first, with a clear warning.
-5. **Community registry.** A reviewed Git repo first, like Flathub: skills arrive as pull requests, and a static index is built from them onto the same GitHub Pages site. Signing means the host doesn't have to be trusted, so no server is needed. Logins, ratings or uploads would need one, as a small API beside the site rather than instead of it.
+3. **Done, pending real-desktop checks: dictation.** Tap Fn, then hold and speak, and the words are typed where the cursor is. No model is involved, so it needs no card. See "Dictation" in [CONTRACT.md](CONTRACT.md).
+4. **Next: more built-in skills:** general web search, research, and calendar and journal.
+5. **Local install of your own skills.** Recipe skills: YAML only, using built-in daemon actions (D-Bus, HTTP, open app), with no code of their own. They load from a user folder. Non-built-in skills must be refused `shell`.
+6. **Code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared. Local only at first, with a clear warning.
+7. **Community registry.** A reviewed Git repo first, like Flathub: skills arrive as pull requests, and a static index is built from them onto the same GitHub Pages site. Signing means the host doesn't have to be trusted, so no server is needed. Logins, ratings or uploads would need one, as a small API beside the site rather than instead of it.
 
 ### Rules for shared skills
 
@@ -54,16 +57,16 @@ These were agreed with the owner, so don't reopen them without a reason.
 - **`sudo` always gets its own approval.**
 - **Themes are data**: a JSON file and a GLSL shader, and the website runs the same shaders.
 - **The site shows Now or Soon on every claim.** A feature moves to Now only once it has worked on a real machine.
+- **The site's macOS examples keep naming AirDrop, Spotlight and iPhone.** Tuxistant is meant to do those things on a Mac, so they stay, tagged Soon.
 
 ## Waiting on the owner
 
 Don't act on these until they answer.
 
 1. **Custom domain.** A domain on GitHub Pages needs a `CNAME` file and DNS records.
-2. **Web search skill.** Self-hosted SearXNG on stormshadow suggested.
-3. **Keeping the connection open about 2 minutes after each Fn hold**, so follow-ups work. Without it each hold is a new conversation and the model forgets the last one. Only `file.find` results carry over, for 5 minutes.
-4. **The Scanner theme's voice-lit bar**: keep it or not.
-5. **Adding weather and news to the website.**
+2. **Keeping the connection open about 2 minutes after each Fn hold**, so follow-ups work. Without it each hold is a new conversation and the model forgets the last one. Only `file.find` results carry over, for 5 minutes.
+3. **The Scanner theme's voice-lit bar**: keep it or not.
+4. **Adding weather and news to the website.**
 
 ### Choices made while building, worth a look
 
@@ -86,6 +89,7 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 7. Locking the screen during a card cancels it. The logind lock path is untested.
 8. Weather and news by voice.
 9. Cloud, once the owner adds a key: run `./install.sh --cloud-sdk`, then try one multi-step request.
+10. Dictation, with `tuxistant doctor` saying it's ready: tap Fn, then hold and speak, in a GTK app such as Text Editor, in a terminal, and in VS Code or Chromium, which should take the paste route. Check that the clipboard is unchanged afterwards, that a password box refuses, and that Ctrl+Super+D starts and stops it.
 
 Move site claims from Soon to Now only after the matching check passes.
 
@@ -98,6 +102,31 @@ Move site claims from Soon to Now only after the matching check passes.
 - After a declined card it may say "I can't" rather than "OK, I've left that alone".
 - It chains `file.find` then `phone.send` itself and rarely picks `task.run`.
 - Its answers about the weather can pair days oddly, and "do I need a coat" varies.
+- It still refuses some plain facts, and always refuses "What's 15 percent of 80?". With no tools in front of it, it answered 66 of 66, so the tool list causes this, not its knowledge. A tool that asks the model again without the tool list might close the gap. Not tried yet.
+- About 1 fact in 80 comes back confidently wrong, such as Charlotte Brontë for Pride and Prejudice, and "What language do they speak in Brazil?" can reach the translate tool.
+
+**Dictation:**
+
+- The paste route has only run against GTK with its input method turned off. Real Electron and XWayland apps are untested.
+- A password box can only be recognised if it says so through an input method. `Gtk.Entry(visibility=False)` doesn't, and neither can an app with no input method, so words go in like anywhere else. The README tells people not to dictate passwords.
+- With no text field focused in an app with no input method, the paste does nothing and the words are gone, with no message. The shell can't tell that from an Electron field.
+- The clipboard goes back after a fixed 2 s, as the shell can't see an app reading it. An app slower than that would paste the old clipboard instead of the words. A custom `Meta.SelectionSource` could see the read, and wasn't tried.
+- Only one type of clipboard content goes back: text if there was any, else the first type offered. Rich text comes back plain.
+- A paste makes the shell the clipboard's owner. A password manager that sets `x-kde-passwordManagerHint` is cleared rather than kept, and one that doesn't loses its auto-clear.
+- `Main.inputMethod.commit` goes past any IBus preedit, where the shell's own keyboard goes through the input method. Untested, as the test shell has no IBus.
+- A double tap stops a running turn or card, as a Fn hold does. A card stopped this way is a no.
+- With a screen that locks on idle, a dictation longer than the idle delay is dropped, as anything is at a lock.
+- A process running as you can still own `org.tuxistant.Daemon` while the daemon is down and be believed by the extension, or point `server` elsewhere with `SetConfig`. Either way it chooses the words, though they still can't press Enter.
+- Whisper picks the language by itself, and a very short phrase can land in the wrong one. There is no setting yet.
+- There is no live text while speaking, no clean-up of "um", and no spoken commands such as "new line".
+- If the server can't be reached, the words are lost and it says so.
+
+**A hostile model** (see "A hostile model" in [SECURITY.md](SECURITY.md)):
+
+- Tuxistant can't tell which model the server runs or whether its files have changed. Nothing pins or checks model files, so that is left to whoever runs the server.
+- Code running on the server is beyond the reach of the cards. It sees speech, transcripts and what no-click reads return, and it can send any tool call.
+- A card can't stop the model urging you to approve it, or lying in a plain answer.
+- This has never been tried with a real backdoored model or a hostile model file.
 
 **Elsewhere:**
 

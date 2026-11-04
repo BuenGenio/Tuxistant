@@ -6,5 +6,10 @@
       <summary>Talk to Tuxistant</summary>
       <description>Shortcut that starts a turn, or stops the current one.</description>
     </key>
+    <key name="dictate-shortcut" type="as">
+      <default><![CDATA[['<Control><Super>d']]]></default>
+      <summary>Dictate</summary>
+      <description>Shortcut that starts dictating, or stops and types what was said.</description>
+    </key>
   </schema>
 </schemalist>

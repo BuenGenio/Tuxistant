@@ -147,6 +147,92 @@ class Timing(Case):
         self.assertEqual(self.calls, [])
 
 
+class Dictating(Case):
+    """Tap Fn, then press and hold it. Real times, as the tap rules are the point."""
+
+    async def asyncSetUp(self):
+        self.config = Config(self.folder / "config.json")
+        self.config.values.update(fn_hold_ms=HOLD_MS, fn_hold_enabled=True)
+        self.calls = []
+
+        def note(word):
+            async def call():
+                self.calls.append(word)
+            return call
+
+        self.client = FnClient(self.config, note("hold"), note("hold end"), path="unused",
+                               on_dictate_start=note("dictate"), on_dictate_end=note("typed"),
+                               on_dictate_cancel=note("dropped"))
+        self.addCleanup(self.client._disarm)
+
+    async def send(self, *words, gap=0.01):
+        for word in words:
+            await self.client.handle(word)
+            await asyncio.sleep(gap)
+
+    async def test_a_tap_then_a_press_dictates_at_once_and_up_ends_it(self):
+        await self.send("down", "up", "down")
+        self.assertEqual(self.calls, ["dictate"])
+        await self.send("up")
+        self.assertEqual(self.calls, ["dictate", "typed"])
+
+    async def test_holding_on_after_starting_never_becomes_a_talk_hold(self):
+        await self.send("down", "up", "down")
+        await asyncio.sleep(PAST_HOLD)
+        self.assertEqual(self.calls, ["dictate"])
+
+    async def test_one_press_is_still_a_talk_hold(self):
+        await self.send("down")
+        await asyncio.sleep(PAST_HOLD)
+        await self.send("up")
+        self.assertEqual(self.calls, ["hold", "hold end"])
+
+    async def test_a_slow_second_press_is_not_dictation(self):
+        await self.send("down", "up")
+        with mock.patch.object(fnclient, "SECOND_PRESS_S", 0.001):
+            await self.send("down")
+        await asyncio.sleep(PAST_HOLD)
+        self.assertEqual(self.calls, ["hold"])
+
+    async def test_a_long_first_press_is_not_a_tap(self):
+        with mock.patch.object(fnclient, "TAP_S", 0.001):
+            await self.send("down", "up", "down")
+        self.assertNotIn("dictate", self.calls)
+
+    async def test_a_fn_shortcut_is_not_a_tap(self):
+        await self.send("down", "other", "up", "down")
+        self.assertNotIn("dictate", self.calls)
+
+    async def test_a_fn_shortcut_on_the_second_press_drops_the_dictation(self):
+        await self.send("down", "up", "down", "other", "up")
+        self.assertEqual(self.calls, ["dictate", "dropped"])
+
+    async def test_a_tap_only_counts_once(self):
+        await self.send("down", "up", "down", "up", "down")
+        self.assertEqual(self.calls, ["dictate", "typed"])
+
+    async def test_it_can_be_turned_off(self):
+        self.config.values["dictation_enabled"] = False
+        await self.send("down", "up", "down")
+        self.assertNotIn("dictate", self.calls)
+
+    async def test_it_works_with_talk_holds_turned_off(self):
+        self.config.values["fn_hold_enabled"] = False
+        await self.send("down", "up", "down", "up")
+        self.assertEqual(self.calls, ["dictate", "typed"])
+
+    async def test_without_the_callbacks_a_double_press_is_nothing(self):
+        client = FnClient(self.config, mock.AsyncMock(), mock.AsyncMock(), path="unused")
+        self.addCleanup(client._disarm)
+        for word in ("down", "up", "down", "up"):
+            await client.handle(word)
+
+    async def test_losing_the_helper_ends_it(self):
+        await self.send("down", "up", "down")
+        await self.client.handle("up")      # what run() does when the socket goes
+        self.assertEqual(self.calls, ["dictate", "typed"])
+
+
 class Connection(Case):
     async def test_missing_socket_is_retried_quietly_until_it_appears(self):
         path = str(self.folder / "late.sock")

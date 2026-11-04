@@ -28,7 +28,9 @@ FAILED = f"{BUS_NAME}.Error.Failed"
 SHIELD_NAME, SHIELD_PATH, SHIELD_INTERFACE = (
     "org.gnome.Shell.ScreenShield", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver")
 SHELL_NAME = "org.gnome.Shell"
-SHELL_ONLY = ("Hello", "Answer", "SelectionText")   # a click has to come from the desktop itself
+# These have to come from the desktop. Fn reaches dictation inside this process.
+SHELL_ONLY = ("Hello", "Answer", "SelectionText", "Typed", "DictateStart", "DictateEnd",
+              "DictateToggle")
 DENIED = f"{BUS_NAME}.Error.Denied"
 BUS_DAEMON = "org.freedesktop.DBus"
 BUS_DAEMON_XML = f"""<node><interface name="{BUS_DAEMON}">
@@ -49,11 +51,20 @@ class Daemon(ServiceInterface):
         self.last_level = 0.0
         self.children = set()
         self.shell_owner = None     # the unique bus name of the running GNOME Shell
+        self.bus = None
 
     def set_shell(self, owner: str | None):
-        """A new shell has no card code until its extension says so."""
+        """A new shell has no card or typing code until its extension says so."""
         self.shell_owner = owner
-        self.controller.face = False
+        self.controller.face = self.controller.typist = False
+        self.drop_dictation()
+
+    def drop_dictation(self):
+        ctl = self.controller
+        if ctl.dictation or ctl.deliveries:
+            task = asyncio.create_task(ctl.shell_gone())
+            self.children.add(task)
+            task.add_done_callback(self.children.discard)
 
     def guard(self, message: Message) -> Message | None:
         """Runs before dispatch. Matched by name alone: a call may leave out the interface and
@@ -70,7 +81,17 @@ class Daemon(ServiceInterface):
             if args[0] and now - self.last_level < LEVEL_INTERVAL_S:
                 return
             self.last_level = now
+        if name == "TypeText":
+            self.to_shell(name, "ssb", *args)
+            return
         getattr(self, name)(*args)
+
+    def to_shell(self, name: str, signature: str, *body):
+        """What someone dictated is for the shell, not for everyone on the bus."""
+        if self.bus and self.shell_owner:
+            self.bus.send(Message(message_type=MessageType.SIGNAL, destination=self.shell_owner,
+                                  path=BUS_PATH, interface=BUS_NAME, member=name,
+                                  signature=signature, body=list(body)))
 
     async def launch_settings(self):
         env = dict(os.environ)
@@ -97,6 +118,18 @@ class Daemon(ServiceInterface):
     @method()
     async def Cancel(self):
         await self.controller.cancel()
+
+    @method()
+    async def DictateStart(self):
+        await self.controller.dictate_start()
+
+    @method()
+    async def DictateEnd(self):
+        await self.controller.dictate_end()
+
+    @method()
+    async def DictateToggle(self):
+        await self.controller.dictate_toggle()
 
     @method()
     def GetState(self) -> "s":
@@ -152,12 +185,19 @@ class Daemon(ServiceInterface):
         return json.dumps(await asyncio.to_thread(phone.devices))
 
     @method()
-    def Hello(self, cards: "i"):
-        self.controller.face = cards >= 1
+    def Hello(self, level: "i"):
+        self.controller.face = level >= 1
+        self.controller.typist = level >= 2
+        if level < 2:
+            self.drop_dictation()
 
     @method()
     def CanAsk(self) -> "b":
         return self.controller.face
+
+    @method()
+    def CanType(self) -> "b":
+        return self.controller.typist
 
     @method()
     def Answer(self, id: "s", allow: "b"):
@@ -166,6 +206,10 @@ class Daemon(ServiceInterface):
     @method()
     def SelectionText(self, id: "s", text: "s"):
         self.controller.selection_text(id, text)
+
+    @method()
+    def Typed(self, id: "s", how: "s"):
+        self.controller.typed(id, how)
 
     @method()
     def GetHistory(self, limit: "i") -> "s":
@@ -228,6 +272,14 @@ class Daemon(ServiceInterface):
     def SelectionWanted(self, id) -> "s":
         return id
 
+    @signal()
+    def DictationStarted(self, id) -> "s":
+        return id
+
+    @signal()
+    def TypeText(self, id, text, only_copy) -> "ssb":
+        return [id, text, only_copy]
+
 
 async def watch_shell(bus, daemon):
     """Keeps track of who the shell is, so only it can answer a card."""
@@ -245,6 +297,7 @@ async def serve(bus, daemon) -> bool:
     """Puts the daemon on the bus. False if another one already owns the name. The guard and the
     shell's name come first: a call can arrive the moment the name is ours."""
     bus.add_message_handler(daemon.guard)
+    daemon.bus = bus
     await watch_shell(bus, daemon)
     bus.export(BUS_PATH, daemon)
     reply = await bus.request_name(BUS_NAME, NameFlag.DO_NOT_QUEUE)
@@ -274,7 +327,9 @@ async def run(mic_factory=Mic, speaker_factory=Speaker) -> int:
         bus.disconnect()
         return 1
     controller = daemon.controller
-    fn = asyncio.create_task(FnClient(config, controller.hold_start, controller.hold_end).run())
+    fn = asyncio.create_task(FnClient(
+        config, controller.hold_start, controller.hold_end, on_dictate_start=controller.dictate_start,
+        on_dictate_end=controller.dictate_end, on_dictate_cancel=controller.cancel).run())
     lock = asyncio.create_task(watch_lock(bus, controller))
     stop = asyncio.Event()
     for number in (signals.SIGINT, signals.SIGTERM):

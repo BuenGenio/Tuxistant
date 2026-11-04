@@ -363,7 +363,7 @@ class Speech(Case):
     def test_list_models(self):
         http = FakeSpeech()
         self.addCleanup(http.close)
-        self.assertEqual(list_models(self.config(http.port)), ["tux-realtime", "tux-voice"])
+        self.assertEqual(list_models(self.config(http.port)), ["tux-realtime", "tux-voice", "whisper-large-turbo-q5_0"])
 
     def test_urls(self):
         self.assertEqual(realtime._urls("box:8080"), ("http://box:8080", "ws://box:8080"))
