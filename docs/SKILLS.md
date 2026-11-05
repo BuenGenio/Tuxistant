@@ -20,7 +20,9 @@ Built-in skills, in `tuxistant/skills_builtin/`:
 | Shell | `shell.run` | `shell` | high |
 | Task | `task.run` | `shell` | high |
 
-A skill with a `home` network permission only talks to the server this install already uses. Settings lists each skill with its permissions and risk.
+A skill with a `home` network permission only talks to the server this install already uses. Settings lists each skill with its permissions and risk:
+
+<img src="images/settings-skills.png" width="640" alt="The Skills page in Settings: each skill with what it can do, what it is allowed to do and its risk.">
 
 Every action needs a Python handler registered in `HANDLERS` in `tuxistant/skills.py`. A manifest alone is not enough: an action without a handler returns an error for the model to report. That means skills can currently only be added by changing Tuxistant itself. There is no folder for user skills yet.
 
@@ -87,6 +89,10 @@ The permissions set the risk, show up in Settings and drive the rule below. They
 - **What runs with no click.** Reading, such as `file.find`, and shell commands the parser can prove are read-only. Those run in a sandbox with a read-only filesystem, no network and your secrets hidden.
 
 Every action, every card and the answer to it are in the request history, including what the planner did.
+
+| A normal card | A card for something that runs as root |
+|---|---|
+| ![A card asking to move 3 files and 1 folder to the Trash, listing each one, with Deny and Allow buttons.](images/card-trash.png) | ![A red card asking to run apt-get install as administrator, with Deny and Allow as administrator buttons.](images/card-admin.png) |
 
 ## The shell skill
 

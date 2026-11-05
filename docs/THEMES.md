@@ -10,6 +10,12 @@ A theme decides what Tux looks like on screen. It is a folder with two files:
 
 Themes are data. There is nothing to install, and no code from a theme runs outside the shader. The shader does run inside GNOME Shell though, so see [what a theme can do](#what-a-theme-can-do) before installing one from someone you don't know.
 
+The four bundled themes, in each state a shader can show:
+
+![Listening Tux, Orb, Waves and Scanner, each while listening, thinking and speaking.](images/themes.png)
+
+Listening Tux, Orb and Scanner are `orb` layouts: a small area in a corner or at an edge. Waves is a `band` across the bottom of the screen, which lets clicks through to the windows below it.
+
 ## A complete example
 
 Create the folder above, then save these two files.

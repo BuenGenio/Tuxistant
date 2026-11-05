@@ -13,6 +13,7 @@
 | Which tool the model picks | `python3 tools/eval_routing.py` | LocalAI |
 | Whole requests | `python3 tools/eval_flows.py "a request"` | LocalAI |
 | Do the voices say the words | `python3 tools/check_voices.py` | LocalAI |
+| The pictures in the docs | `python3 tools/docs_images.py` | `gnome-shell`, `ffmpeg`, Pillow. Safe next to the desktop |
 
 ## After changing a tool
 
@@ -50,6 +51,14 @@ Run the same tests in that copy with nothing broken first, and stop if they fail
 A test that something didn't happen has to wait until it could have happened. Dictation's delivery runs apart from the job, and tests that asserted "nothing was sent" straight after the job ended passed whatever the code did. Breaking the guards is what showed it.
 
 This found a real gap: a new class in `tests/test_daemon_dbus.py` was skipped and everything looked green, because the private-bus runner only runs the classes named in `RunsOnPrivateBus`. **Add a new class there to that list.** The same check proved that a guard matching on the D-Bus interface can be bypassed by leaving the interface out, which is why `Daemon.guard` matches on the method name alone.
+
+## The pictures in the docs
+
+`tools/docs_images.py` rebuilds `docs/images` after a change to anything on screen. The extension, Settings and the card wording are real, in the same isolated shell as `card.sh`. The server, history and requests are made up in `tests/shell_harness/docs_shots.py`, so no picture shows a real name, file or address. Keep it that way, and look at every picture before it goes in: this repo is public.
+
+## Adversarial review
+
+The [README](../README.md#adversarial-review) has how a review runs, what it has caught and what it doesn't cover. Each big round ends with one. A finding only counts once it's reproduced, and it ends as a test in `tests/test_review_regressions.py` or `tests/test_shellgate.py`.
 
 ## Attacking the shell gate
 

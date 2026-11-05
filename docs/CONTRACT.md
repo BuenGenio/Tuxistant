@@ -12,7 +12,7 @@ The single source of truth for how the parts fit together. Change it here first.
 | `helper/` | Fn-key helper + its systemd system unit |
 | `packaging/`, `install.sh` | User units, D-Bus activation file, installer |
 | `tests/` | stdlib unittest. No test may need a real mic, speaker, or the user's GNOME session. See [TESTING.md](TESTING.md) |
-| `tools/` | `try-nested.sh`, and the live evaluations `eval_routing.py`, `eval_flows.py` and `check_voices.py` |
+| `tools/` | `try-nested.sh`, `docs_images.py` for the pictures in the docs, and the live evaluations `eval_routing.py`, `eval_flows.py` and `check_voices.py` |
 | `website/` | The static site. See [its README](../website/README.md) |
 
 ## D-Bus
@@ -82,6 +82,28 @@ GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged
 2. The handler runs: in a thread, or on the event loop if it is `async def`. Only async handlers may use `session.confirm`, `busy`, `selection` and `execute`.
 3. An `Ask` goes to `session.confirm`, which puts up the card. Yes runs `ask.run` in a thread. Anything else returns `{"declined": true, ...}` to the model.
 4. Success with `files_read`, `shell` or `clipboard` sets `session.tainted`.
+
+```mermaid
+sequenceDiagram
+    participant M as Model or planner
+    participant D as Daemon
+    participant E as Extension
+    actor U as You
+    M->>D: Tool call, through Skills.execute
+    D->>D: The handler returns an Ask
+    D->>E: Approval(id, title, detail, level, seconds)
+    E->>U: The card
+    alt A click on Allow
+        U->>E: Click
+        E->>D: Answer(id, true), from the owner of org.gnome.Shell
+        D->>E: ApprovalClosed(id)
+        D->>D: ask.run, in a thread
+        D->>M: The result
+    else Deny, no answer in time, a cancel or a lock
+        D->>E: ApprovalClosed(id)
+        D->>M: {"declined": true}
+    end
+```
 
 Title and detail are written by daemon code from what will really happen, never from a manifest or from model text, and `printable()` turns control and bidi characters into visible escapes. A click is required: no voice "yes", as audio playing nearby could say it. `ask.run` must act on what the card showed, not on a fresh look at the world. What was asked and the answer are kept in the action's history record under `asked`.
 

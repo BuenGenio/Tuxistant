@@ -8,6 +8,7 @@
 #
 # Environment:
 #   TUX_SCENARIO      card_daemon.py scenario, default verify
+#   TUX_DRIVER        script in this folder to run in place of card_daemon.py
 #   TUX_MONITORS      virtual monitors, space separated, default 1600x900
 #   TUX_SCALE         integer UI scale, default 1
 #   TUX_EXTENSION     extension folder to test instead of extension/tuxistant@buengenio
@@ -45,7 +46,7 @@ if [ "${1:-}" = --inner ]; then
     DBUS_SYSTEM_BUS_ADDRESS=$(head -n1 "$work/system-bus")
 
     export TUX_WAYLAND_DISPLAY="tux-$$"
-    python3 -B "$here/card_daemon.py" --theme "$theme" --out "$out" --scenario "$scenario" \
+    python3 -B "$here/$TUX_DRIVER" --theme "$theme" --out "$out" --scenario "$scenario" \
         >"$work/daemon.log" 2>&1 &
     daemon=$!
     for _ in $(seq 200); do
@@ -152,6 +153,7 @@ env -i PATH="$PATH" HOME="$work/home" USER="${USER:-tux}" LOGNAME="${LOGNAME:-tu
     XDG_CACHE_HOME="$work/cache" XDG_STATE_HOME="$work/state" GSETTINGS_BACKEND=keyfile \
     XDG_CURRENT_DESKTOP=GNOME XDG_SESSION_TYPE=wayland PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUSERBASE="$userbase" TUX_MONITORS="${TUX_MONITORS:-1600x900}" \
+    TUX_DRIVER="${TUX_DRIVER:-card_daemon.py}" \
     timeout -k 8 "${TUX_TIMEOUT:-150}" dbus-run-session --config-file="$work/bus.conf" -- \
     "$here/card.sh" --inner "$work" "$theme" "$out" "${TUX_SCENARIO:-verify}" &
 outer=$!

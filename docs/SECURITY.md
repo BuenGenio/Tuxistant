@@ -15,6 +15,35 @@ Please [report it privately](https://github.com/BuenGenio/Tuxistant/security/adv
 - After private data has been read, nothing leaves your own server without a click.
 - The model can be made to emit any tool call, so the parser, the sandbox and the card have to hold on their own.
 
+## Community skills
+
+Community skills don't exist yet: the registry hasn't been started, and only built-in skills can run. The plan assumes a bad skill will eventually get past review, so permissions and the sandbox have to be what protects you. The [README](../README.md#skills-and-security) shows which protections are built and which are planned.
+
+## A hostile model
+
+Unlike the attacks below, this one hasn't been tried: no backdoored model or hostile model file has been run against Tuxistant.
+
+A model you download can be malicious in two ways:
+
+- **The file attacks the server that loads it.** PyTorch pickle files can run code when loaded, and `trust_remote_code` runs Python that comes with the model. A GGUF file carries no code, but a chat template in its metadata still gave code execution in llama-cpp-python ([CVE-2024-34359](https://github.com/advisories/GHSA-56xg-wfcc-g829)).
+- **The weights are trained to misbehave.** A model can act normally until it sees a trigger. Nobody can reliably find this by inspecting the weights, and tests won't catch it because they never say the trigger.
+
+Hostile weights get no more power than a prompt injection. The design already assumes the model can emit any tool call, so the call still has to get past the parser, the sandbox and the card, and the model doesn't write the card's text.
+
+These parts aren't protected:
+
+- **Your server.** Tuxistant can't tell which model your server is running or whether its files have been changed. Code running there is beyond the reach of the cards. It can keep your speech, your transcripts and anything a conversation has read, including what no-click reads return, and it can send any tool call it likes.
+- **Your judgement.** The card stays accurate, but the model can still tell you to approve it.
+- **Plain answers.** A model can lie to you, and no card stops that.
+
+If you run your own server, Tuxistant can't enforce these, so they are up to you:
+
+- Use GGUF or safetensors files, never pickle, and leave `trust_remote_code` off.
+- Pin each model to a file hash rather than a name.
+- Keep your server's backends patched, and read the chat template of any new GGUF.
+
+A community skill must never be able to choose or download a model, because that would step around all of this.
+
 ## Attacks
 
 ### The file name that forges the approval card
