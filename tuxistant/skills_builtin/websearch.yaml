@@ -1,0 +1,12 @@
+id: org.tuxistant.websearch
+name: Web search
+description: Searches the web through your own SearXNG server. What you search for goes on to the search engines
+version: 1.0.0
+permissions:
+  network: true
+actions:
+  web.search:
+    description: Search the web, only if the user says search or look up, or asks for a price. Never for a simple question
+    params:
+      query: { type: string, description: "A few words to search for" }
+    required: [query]

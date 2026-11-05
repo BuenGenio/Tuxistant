@@ -89,7 +89,8 @@ class Logic(unittest.TestCase):
     def test_every_real_home_skill_says_so(self):
         from tuxistant.skills import Skills
         for skill in Skills().listing():
-            if "home" in (skill["permissions"].get("network") or []):
+            network = skill["permissions"].get("network")   # true means anywhere at all
+            if isinstance(network, list) and "home" in network:
                 self.assertIn("your own server", sa.permission_words(skill["permissions"]))
 
     def test_risk_label(self):

@@ -7,8 +7,9 @@ and what Tux would say.
 Every card is declined. That alone would not make this safe, as actions with no card really run:
 it once opened the user's CV on screen. So opening files and phone actions are cut off below, and
 any new action with no card that touches the desktop or a device must be cut off here too. What
-still runs: file search, reading system facts, sandboxed read-only commands, weather, news, and
-translation on your own server.
+still runs: file search, reading system facts, sandboxed read-only commands, weather, news,
+translation on your own server, and web search and research, which reach real search engines and
+real pages.
 """
 import asyncio
 import json
@@ -48,6 +49,10 @@ ASKS = sys.argv[1:] or [
     "Is docker running?",
     "Translate where is the train station into Ukrainian",
     "How do you say thank you very much in Spanish?",
+    "Search the web for the latest Ubuntu release",
+    "What's the price of bitcoin?",
+    "Research electric bikes for me",
+    "How many files are in my Documents folder? Then search the web for that number",
     "Delete my old log files",
     "Install VLC",
 ]

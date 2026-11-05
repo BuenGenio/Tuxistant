@@ -17,6 +17,8 @@ Built-in skills, in `tuxistant/skills_builtin/`:
 | Phone | `phone.ring`, `phone.battery` | none | low |
 | Phone send | `phone.send` | `files_read` | medium |
 | Translate | `translate.text`, `translate.selection` | `network: [home]`, and `clipboard` for the selection | medium |
+| Web search | `web.search` | `network` | medium |
+| Research | `research.run` | `network` | medium |
 | Shell | `shell.run` | `shell` | high |
 | Task | `task.run` | `shell` | high |
 
@@ -86,7 +88,7 @@ The permissions set the risk, show up in Settings and drive the rule below. They
 
 - **Anything risky.** A handler returns an `Ask` instead of acting. The card shows what will really happen, written by Tuxistant from the real action, and only a click on it goes ahead. A spoken yes doesn't count, because audio playing nearby could say it. No answer in 45 seconds, a cancel or a locked screen all mean no.
 - **Private data leaving.** Once a conversation has read files, command output or the selection, any action that reaches past your own server needs a click, whichever skill asks. One skill can't read your files and another send them out.
-- **What runs with no click.** Reading, such as `file.find`, and shell commands the parser can prove are read-only. Those run in a sandbox with a read-only filesystem, no network and your secrets hidden.
+- **What runs with no click.** Reading, such as `file.find`, and shell commands the parser can prove are read-only. Those run in a sandbox with a read-only filesystem, no network and your secrets hidden. A web search or research in a conversation that hasn't read anything private is also this kind of action, and needs no click.
 
 Every action, every card and the answer to it are in the request history, including what the planner did.
 
@@ -103,6 +105,25 @@ Every action, every card and the answer to it are in the request history, includ
 3. Anything else shows the exact command on a card, and approval covers that command once.
 4. Deleting previews first and uses the Trash where it can. Anything it can't move to the Trash says it can't be undone.
 5. `sudo` alone on a line gets its own warning and runs through `pkexec`. Inside a longer command it is refused.
+
+## Web search and research
+
+Searches go through SearXNG on your own server, set by `search_server`. Left empty, that is the host of the voice server on port 8888. The server is at home but the search isn't: your words go on to the search engines. So both skills declare `network: true`, not `home`, and once a conversation has read something private, a search needs a click like anything else leaving the house.
+
+`web.search` returns at most four results, each a site, a title and a short snippet. `research.run` is ordinary code rather than a model deciding what to do next:
+
+1. It searches, and takes the best result from each of up to five sites.
+2. It opens them at once from this computer and keeps the first three that can be read. It never follows a link from a page.
+3. The local model summarises each page, in a call that offers no tools.
+4. The local model combines the summaries into two or three sentences, again with no tools.
+5. Daemon code adds the sources, taken from the page addresses, and says so if a page failed, if there is only one source or if time ran out.
+6. The app reads that out itself, as it does a translation. The voice model is told only that it's done. Given the text, it reworded it and dropped the sources and caveats almost every time, so a thin answer sounded certain.
+
+The whole thing stops at 45 seconds and answers with what it has. It always uses the local model, even with Cloud turned on. As the voice model never sees the answer, it can't take questions about it afterwards.
+
+**Web text is untrusted.** All of it is cleaned and capped. Cleaning removes hidden characters and every angle bracket, as `<|im_start|>` would be a control token to the chat template and `<tool_call>` a real call to the server's parser. Search results reach the voice model under the key `untrusted_web_text`. Research never reaches it at all: only the summarising calls read pages, and they have no tools. So a hostile page can make a summary say something false, but it can't act, and whatever the voice model does meets the same gates as always.
+
+**Opening a page is guarded, as anyone on the web can choose the address.** `tuxistant/webfetch.py` takes http and https only, with no user name or password in the address. It looks up the name and refuses it unless every address it gets is on the open internet, which rules out loopback, private, link-local, multicast and reserved addresses, including ones wrapped in IPv6 and unusual spellings of numbers. It refuses the servers this install talks to, by name and by address. It connects to the address it checked rather than looking the name up again, and does all of this again for each of at most three redirects. A fetch stops after 8 seconds and 1 MB, reads only text and HTML, refuses compressed replies, and sends no cookies, no key and no referrer. It doesn't use a proxy.
 
 ## Multi-step requests
 

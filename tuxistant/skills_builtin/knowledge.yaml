@@ -1,0 +1,11 @@
+id: org.tuxistant.knowledge
+name: General knowledge
+description: Answers questions of general knowledge
+version: 1.0.0
+permissions: {}
+actions:
+  knowledge.answer:
+    description: Answer a question of general knowledge, such as facts, history, science, geography, books or sums
+    params:
+      question: { type: string, description: "The question, in the user's words" }
+    required: [question]

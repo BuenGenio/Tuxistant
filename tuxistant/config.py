@@ -26,6 +26,7 @@ DEFAULTS = {
     "fahrenheit": False,          # weather in Fahrenheit and miles per hour
     "phone_device": "",           # GSConnect device name; empty: the only phone connected
     "translate_server": "",       # LibreTranslate host:port; empty: the server's host, port 5000
+    "search_server": "",          # SearXNG host:port; empty: the server's host, port 8888
     "cloud_enabled": False,       # the one-time opt-in: multi-step requests may use a cloud model
     "cloud_api_key": "",
     "cloud_model": "claude-opus-5-5",
@@ -48,7 +49,7 @@ EDITABLE = {
     "fn_hold_enabled": bool, "fn_hold_ms": int, "hide_on_release": bool,
     "dictation_enabled": bool,
     "location": str, "fahrenheit": bool, "phone_device": str, "translate_server": str,
-    "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str,
+    "search_server": str, "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str,
 }
 SECRETS = ("api_key", "cloud_api_key")
 MAX_LOCATION_CHARS = 100
@@ -98,7 +99,7 @@ class Config:
             raise ValueError(f"{key} must be positive")
         if key in SECRETS and not valid_key(value):
             raise ValueError("That is not a valid API key")     # never repeat the value
-        if key == "translate_server" and value and clean_server(value) is None:
+        if key in ("translate_server", "search_server") and value and clean_server(value) is None:
             raise ValueError("That is not a server address")
         if key == "location":
             value = " ".join(value.split())[:MAX_LOCATION_CHARS]

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from . import files, livedata, phone, planner, shellgate, system, translate
+from . import files, knowledge, livedata, phone, planner, research, shellgate, system, translate, websearch
 from .config import DEFAULTS
 from .gate import Ask, Session, declined
 
@@ -65,7 +65,8 @@ HANDLERS = {"time.now": _time_now, "disk.usage": _disk_usage,
             "weather.forecast": _plain(livedata.weather),
             "news.headlines": _plain(livedata.headlines),
             **files.HANDLERS, **phone.HANDLERS, **shellgate.HANDLERS, **system.HANDLERS,
-            **translate.HANDLERS, **planner.HANDLERS}
+            **translate.HANDLERS, **websearch.HANDLERS, **research.HANDLERS, **knowledge.HANDLERS,
+            **planner.HANDLERS}
 
 
 class Skills:
