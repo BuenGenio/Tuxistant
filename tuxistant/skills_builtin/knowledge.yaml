@@ -1,8 +1,9 @@
 id: org.tuxistant.knowledge
 name: General knowledge
-description: Answers questions of general knowledge
+description: Answers questions of general knowledge from Wikipedia and web search, so they aren't made up. The question leaves your own server
 version: 1.0.0
-permissions: {}
+permissions:
+  network: true
 actions:
   knowledge.answer:
     description: Answer a question of general knowledge, such as facts, history, science, geography, books or sums

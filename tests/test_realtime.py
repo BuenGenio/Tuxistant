@@ -232,13 +232,13 @@ class Turns(ClientCase):
         await self.turn(script)
         await self.next("done")
 
-    async def test_hold_commit_order(self):
+    async def test_words_go_in_before_the_reply_is_asked_for(self):
         server, rt = await self.turn(None, hold=True)
-        await rt.send_audio(tone(0.1))
-        await rt.commit()
+        await rt.say("what time is it")
         await server.conn.expect("response.create")
         types = server.conn.types()
-        self.assertLess(types.index("input_audio_buffer.commit"), types.index("response.create"))
+        self.assertLess(types.index("conversation.item.create"), types.index("response.create"))
+        self.assertNotIn("input_audio_buffer.commit", types)
 
     async def test_input_not_committed_as_live_server_sends_it(self):
         async def script(c):
@@ -248,7 +248,7 @@ class Turns(ClientCase):
                 "code": "input_not_committed"}})
 
         _, rt = await self.turn(script, hold=True)
-        await rt.commit()
+        await rt.say("hello")
         await self.next("quiet")
         self.assertNotIn("failed", self.kinds())
 
@@ -259,7 +259,7 @@ class Turns(ClientCase):
             await c.done("failed", status_details={"error": {"code": "input_not_committed"}})
 
         _, rt = await self.turn(script, hold=True)
-        await rt.commit()
+        await rt.say("hello")
         await self.next("quiet")
         await self.next("quiet")
         self.assertNotIn("failed", self.kinds())

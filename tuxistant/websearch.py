@@ -61,7 +61,14 @@ def _site(url: str) -> str:
         return ""
     if parts.scheme not in ("http", "https"):
         return ""
-    return clean(host.removeprefix("www."), MAX_SITE_CHARS)
+    # The end of the name, as that's whose it is: bbc.co.uk.aaaa.evil.example belongs to evil.example.
+    return clean(host.removeprefix("www.")[-MAX_SITE_CHARS:], MAX_SITE_CHARS)
+
+
+def domain(site: str) -> str:
+    """Who owns a site, near enough: a.evil.example and b.evil.example aren't two sources."""
+    labels = site.split(".")
+    return ".".join(labels[-3:] if len(labels) > 2 and len(labels[-2]) <= 3 else labels[-2:])
 
 
 def _hits(results) -> list[Hit]:

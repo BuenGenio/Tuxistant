@@ -160,6 +160,28 @@ class Live(unittest.IsolatedAsyncioTestCase):
         self.assertLess(self.at("Presence", False), self.at("StateChanged", "speaking"))
         self.report("Hold turn", started, released)
 
+    async def test_a_fact_on_a_hold_turn(self):
+        """The whole route with real speech: Whisper, the sorter, Wikipedia, the model, the voice."""
+        self.skills.config = self.config
+        self.config.values["fact_lookup"] = True
+        question = await speech(self.config, "How many chemical elements are there?", "af_nicole")
+        self.pcm = bytes(int(LEAD_IN_S * BYTES_PER_S)) + question
+        await self.ctl.hold_start()
+        async with asyncio.timeout(30):
+            while self.spoke_at is None:
+                await asyncio.sleep(0.01)
+        released = time.monotonic()
+        await self.ctl.hold_end()
+        await self.finished()
+        row = self.history.recent()[0]
+        print(f"\nFact: heard {row['heard']!r}, said {row['reply']!r}, "
+              f"first audio {self.at('StateChanged', 'speaking') - released:.2f} s after release")
+        self.assertEqual(row["status"], "ok", row)
+        self.assertEqual([a["name"] for a in row["actions"]], ["knowledge.answer"])
+        self.assertIn("118", row["reply"])
+        self.assertGreater(len(self.speakers[0].written), BYTES_PER_S // 2)
+        self.assertEqual([s for s in self.signals if s[1] == "Error"], [])
+
     async def test_conversation_follow_up_on_the_same_session(self):
         self.config.values["conversation_mode"] = True
         pcm = self.pcm
@@ -207,7 +229,8 @@ class Live(unittest.IsolatedAsyncioTestCase):
         rt = Realtime(self.config, self.skills, events.put_nowait, hold=True)
         self.addAsyncCleanup(rt.close)
         await rt.connect()
-        await rt.commit()
+        await rt._send({"type": "input_audio_buffer.commit"})
+        await rt._send({"type": "response.create"})
         async with asyncio.timeout(10):
             while (await events.get())[0] != "quiet":
                 pass

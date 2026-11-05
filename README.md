@@ -16,7 +16,7 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 - PipeWire with `pw-record` and `pw-cat`
 - `glib-compile-schemas`
 - A LocalAI server with a realtime pipeline (`tux-realtime` by default) and a voice model (`tux-voice`)
-- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, a LibreTranslate server for translation, and Piper voices on LocalAI to hear translations spoken
+- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, a LibreTranslate server for translation, a SearXNG server for web search and research, and Piper voices on LocalAI to hear translations spoken
 
 ## Install
 
@@ -74,6 +74,8 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 | "Send it to my phone", "Where's my phone?" | Sends a file through GSConnect, rings the phone, or reads its battery. Sending asks first |
 | "Move everything in Downloads older than a year to the Trash" | Shows how many files and how much space, and waits for your click. Nothing is deleted outright |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
+| "How many chemical elements are there?", "What's 15 percent of 80?" | Looks it up instead of guessing: Wikipedia first, then web search, and it says so if neither clearly answers. Sums are worked out on this computer |
+| "Search the web for flights to Lisbon", "Research electric bikes" | Reads out the top results, or reads a few pages and tells you what they say, naming its sources. Needs SearXNG |
 | "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system |
 | "What does my todo file say?", "Install VLC" | Runs a command. Read-only commands run in a sandbox with no click, and anything else shows the exact command first |
 | "Find my CV and send it to my phone" | Several steps in a row, with the same approval cards |
@@ -86,7 +88,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 **Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names and command output from that task. File contents go only if you click to allow each one. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`.
 
-**Settings** has pages for General (server, API key, listening, shortcut, phone, translation, cloud, instructions), Voice, Appearance, Skills and History.
+**Settings** has pages for General (server, API key, listening, shortcut, phone, translation and search, cloud, instructions), Voice, Appearance, Skills and History.
 
 | General | Skills |
 |---|---|
@@ -145,7 +147,11 @@ flowchart LR
 - The microphone is on only during a turn or while you dictate, plus a short while after each reply if conversation mode is on. Audio goes to the server you configured and nowhere else.
 - What you dictate isn't kept: it goes to your server to become text, into your window, and into no log or history. No model sees it.
 - [docs/SECURITY.md](docs/SECURITY.md) has real attacks on Tuxistant and what stopped them.
-- Weather and news are the only skills that reach the internet, and only when you ask. A weather question sends the town name to Open-Meteo; a news question fetches a BBC News feed. Both services see your IP address, and neither receives your voice or the conversation. Cloud is the one exception, and it is off unless you turn it on. Translation stays on your own server.
+- Some skills reach the internet, and only for what you asked. None of these services receives your voice or the conversation, only the words below, and they can see your IP address or your server's:
+  - A weather question sends the town name to Open-Meteo, and a news question fetches a BBC News feed.
+  - A question of general knowledge goes to Wikipedia as text, and on to the search engines behind your SearXNG server if Wikipedia has no answer. This happens with no click, and the model on your own server is what decides a request is one, so a private question it got wrong would go too. Turn off "Look up facts on Wikipedia" in Settings and nothing goes, but Tux then answers from memory and can be wrong.
+  - Web search and research send what you asked for to those search engines, and research opens a few of the pages from this computer.
+- Cloud is the one exception to all of that, and it is off unless you turn it on. Translation stays on your own server, and a request that is only a sum stays on this computer.
 - Once a conversation has read your files, command output or selected text, anything reaching past your own server needs a click.
 - History stays on this machine in `~/.local/share/tuxistant/history.db`, readable only by you. You can clear it in Settings.
 - The API key lives in `~/.config/tuxistant/config.json`, readable only by you. It is not sent over D-Bus to the extension or to Settings, and changing the server clears it, so that it only ever goes to the server it was given for. For TLS, enter the server as `https://host:port`.

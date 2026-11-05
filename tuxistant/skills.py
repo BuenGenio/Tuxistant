@@ -119,10 +119,13 @@ class Skills:
             if session.tainted and leaves_home(permissions):
                 hosts = permissions["network"]
                 where = "the internet" if hosts is True else ", ".join(map(str, hosts))
+                # As parsed, which is what the handler gets. Written twice, a key shows one value
+                # here and sends the other.
+                shown = json.dumps(json.loads(arguments or "{}"), ensure_ascii=False)
                 if not await session.confirm(Ask(
                         f"Let {action['skill']} reach {where}?",
                         "This conversation has already read something private from this "
-                        f"computer.\nAction: {name}\nArguments: {arguments}", dict)):
+                        f"computer.\nAction: {name}\nArguments: {shown}", dict)):
                     return name, declined()
             if inspect.iscoroutinefunction(HANDLERS.get(name)):
                 args = json.loads(arguments or "{}")

@@ -91,13 +91,16 @@ class ConnectFailures(Case):
     async def test_a_released_hold_does_not_think_for_ever(self):
         rig = self.rig(1, mic_pcm=VOICE, mic={"pace": 0})
         with mock.patch.object(controller, "CONNECT_LIMIT_S", 0.3), \
-                mock.patch.object(Realtime, "connect", lambda _self: asyncio.sleep(30)):
+                mock.patch.object(Realtime, "connect", lambda _self: asyncio.sleep(30)), \
+                mock.patch.object(controller, "transcribe", mock.AsyncMock(return_value="hello")), \
+                mock.patch.object(controller.knowledge, "is_fact",
+                                  mock.AsyncMock(return_value=False)):
             await rig.ctl.hold_start()
             await asyncio.sleep(0.1)
             await rig.ctl.hold_end()
             await rig.finished()
         self.assertEqual(rig.ctl.state, "idle")
-        self.assertEqual(len(rig.of("Error")), 1)
+        self.assertEqual(rig.of("Error"), ["The server stopped responding"])
 
     async def test_flushing_early_audio_is_inside_the_setup_timeout(self):
         server = await self.server()

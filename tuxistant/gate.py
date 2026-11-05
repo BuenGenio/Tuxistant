@@ -68,12 +68,12 @@ class Session:
     """What one conversation has touched and what its handlers can reach. Made by the Realtime
     client, which lasts as long as the turn and its follow-ups.
 
-    Handlers in a thread may read and set the plain fields. confirm, busy, selection and execute
-    belong to the event loop, so only async handlers may use them.
+    Handlers in a thread may read and set the plain fields. confirm, busy, selection, notice and
+    execute belong to the event loop, so only async handlers may use them.
     """
 
     def __init__(self, skills=None, confirm: Confirm | None = None, busy=None, selection=None,
-                 act=None):
+                 act=None, notice=None):
         self.skills = skills
         self.found: list[str] = []      # file.find's latest results, so "the second one" works
         self.tainted = False            # read something private: see Skills.execute
@@ -82,6 +82,7 @@ class Session:
         self.busy = busy or (lambda _seconds: None)     # the turn keeps waiting this much longer
         self.selection = selection or _no_selection     # async: the selected text, or ""
         self.act = act      # runs an action with its own history record
+        self.notice = notice or (lambda _speak: None)   # a Speak to say now, mid-action
 
     async def execute(self, name: str, arguments: str) -> tuple[str, dict]:
         """Runs another action through the same gates, and the history shows it like any other.

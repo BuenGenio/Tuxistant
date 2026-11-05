@@ -1,4 +1,5 @@
 """Facts about this computer and its folders."""
+import asyncio
 import json
 import sys
 import tempfile
@@ -143,7 +144,22 @@ class Manifests(unittest.TestCase):
     def test_measuring_a_folder_counts_as_reading_files(self):
         actions = Skills().actions
         self.assertEqual(actions["disk.folders"]["risk"], "medium")
-        self.assertEqual(actions["system.info"]["risk"], "low")
+
+    def test_your_address_and_wifi_name_are_private(self):
+        self.assertEqual(Skills().actions["system.info"]["risk"], "medium")
+
+    def test_a_search_after_them_needs_a_click(self):
+        session = Session()
+        skills = Skills()
+        with mock.patch.dict("tuxistant.skills.HANDLERS",
+                             {"system.info": lambda _a, _c, _s: {"address": "192.168.1.7"}}):
+            asyncio.run(skills.execute("system_info", '{"about": "ip"}', session))
+        self.assertTrue(session.tainted)
+        called = mock.Mock(return_value={"found": 0})
+        with mock.patch.dict("tuxistant.skills.HANDLERS", {"web.search": called}):
+            _, result = asyncio.run(skills.execute("web_search", '{"query": "192.168.1.7"}', session))
+        self.assertTrue(result["declined"])
+        called.assert_not_called()
 
 
 if __name__ == "__main__":

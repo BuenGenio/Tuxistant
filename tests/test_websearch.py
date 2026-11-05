@@ -189,6 +189,17 @@ class Searching(unittest.TestCase):
         self.assertEqual(result["found"], websearch.MAX_RESULTS)
         self.assertLess(len(json.dumps(result)), 1400)
 
+    def test_a_long_name_keeps_the_end_that_says_whose_it_is(self):
+        host = "bbc.co.uk." + "a" * 40 + "." + "b" * 40 + ".evil.example"
+        self.assertTrue(websearch._site(f"https://{host}/").endswith(".evil.example"))
+        self.assertLessEqual(len(websearch._site(f"https://{host}/")), websearch.MAX_SITE_CHARS)
+
+    def test_who_owns_a_site(self):
+        for site, owner in (("en.wikipedia.org", "wikipedia.org"), ("a.b.evil.example", "evil.example"),
+                            ("www.bbc.co.uk", "bbc.co.uk"), ("bbc.co.uk", "bbc.co.uk"),
+                            ("example.com", "example.com"), ("localhost", "localhost")):
+            self.assertEqual(websearch.domain(site), owner)
+
     def test_the_site_comes_from_the_address_not_the_title(self):
         result = self.search(FakeSearx(self, results=[
             hit(1, title="bbc.co.uk official", url="https://evil.example/")]))

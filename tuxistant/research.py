@@ -39,6 +39,7 @@ TEMPERATURE = 0.2
 NO_THINK = "/no_think"
 
 NOT_CLEAR = "I didn't catch what to look into."
+LOOKING = "Let me look into that."      # it can be ten seconds before there's anything else to say
 # The model gets this and no answer. Told less, it says it can't find anything, just before the
 # app reads out what it found. These words had it say only this, every time it was tried.
 TOLD = {"done": True, "the_app_reads_the_answer_aloud_next": True,
@@ -46,7 +47,6 @@ TOLD = {"done": True, "the_app_reads_the_answer_aloud_next": True,
 NOTHING_FOUND = "I searched the web but found nothing on that."
 NOTHING_USEFUL = "I read what I could find, but none of it answered that."
 ALL_FAILED = "I found pages on this but couldn't open any of them."
-TOP_RESULT = "The top result, from {site}, says: {snippet}"
 THIN = "I only have one source for this, so treat it with care."
 SOME_FAILED = "I couldn't open some of the pages."
 OUT_OF_TIME = "I ran out of time, so this is only part of the picture."
@@ -72,11 +72,16 @@ ASKED = re.compile(r"^(?:(?:please|can you|could you|do|some)\s+)*"
 FOR_ME = re.compile(r"\s+for\s+me\W*$", re.I)
 
 
-async def _brain(config, system: str, user: str, tokens: int, seconds: float) -> str:
+async def _brain(config, system: str, user: str, tokens: int, seconds: float,
+                 examples: tuple = ()) -> str:
     """One model call. There is no tools field, and only the text of the reply is read, so
-    whatever else the server parsed out of it goes nowhere."""
+    whatever else the server parsed out of it goes nowhere. examples are (message, reply) pairs
+    that go before the real one, as if they had already happened."""
+    turns = [turn for said, reply in examples for turn in (
+        {"role": "user", "content": f"{said}\n\n{NO_THINK}"},
+        {"role": "assistant", "content": reply})]
     body = {"model": LOCAL_MODEL, "max_tokens": tokens, "temperature": TEMPERATURE,
-            "messages": [{"role": "system", "content": system},
+            "messages": [{"role": "system", "content": system}, *turns,
                          {"role": "user", "content": f"{user}\n\n{NO_THINK}"}]}
     raw = await asyncio.wait_for(
         asyncio.to_thread(realtime._request, config, "/v1/chat/completions", body), seconds)
@@ -98,7 +103,7 @@ def _candidates(hits: list[websearch.Hit]) -> list[websearch.Hit]:
     """The best page from each site: three pages from one site are one source."""
     best: dict[str, websearch.Hit] = {}
     for hit in hits:
-        best.setdefault(hit.site, hit)
+        best.setdefault(websearch.domain(hit.site), hit)
     return list(best.values())[:CANDIDATES]
 
 
@@ -114,7 +119,7 @@ async def _open(hit: websearch.Hit, config, seconds: float):
     try:
         page = await asyncio.wait_for(
             asyncio.to_thread(webfetch.fetch, hit.url, config, seconds), seconds + 1)
-    except (PageError, TimeoutError):
+    except Exception:   # whatever a page managed costs only that page, and no text of its travels
         return None
     return hit, page
 
@@ -149,8 +154,8 @@ async def _notes(query: str, pages: list, config, deadline: float) -> tuple[list
             if notes:
                 continue
             raise
-        if note:
-            notes.append((hit.site, note))
+        if note:    # where it ended up: a redirect from a good name is the page it led to
+            notes.append((websearch._site(page.url) or hit.site, note))
     return notes, False
 
 
@@ -178,6 +183,13 @@ def _short(answer: str) -> str:
     return clean(" ".join(said), MAX_ANSWER_CHARS)
 
 
+def _sites(notes: list) -> list[str]:
+    best: dict[str, str] = {}
+    for site, _ in notes:
+        best.setdefault(websearch.domain(site), site)
+    return list(best.values())
+
+
 def _sources(sites: list[str]) -> str:
     if len(sites) == 1:
         return f"That's from {sites[0]}."
@@ -186,7 +198,7 @@ def _sources(sites: list[str]) -> str:
 
 def _caveats(notes: list, opened: int, tried: int, late: bool) -> list[str]:
     caveats = [OUT_OF_TIME] if late else []
-    if len(notes) == 1:
+    if len(_sites(notes)) == 1:
         caveats.append(THIN)
     if opened < min(tried, PAGES):
         caveats.append(SOME_FAILED)
@@ -201,19 +213,12 @@ def _say(text: str, config, session) -> dict:
     return TOLD
 
 
-def _no_pages(hits: list[websearch.Hit], config, session) -> dict:
-    hit = next((hit for hit in hits if hit.snippet), None)
-    if hit is None:
-        return {"message": ALL_FAILED}
-    said = TOP_RESULT.format(site=hit.site, snippet=hit.snippet)
-    return _say(f"{ALL_FAILED} {said}", config, session)
-
-
 async def run(args: dict, config, session) -> dict:
     query = websearch.question(args, "question")
     if not query:
         raise ValueError(NOT_CLEAR)
     session.busy(LIMIT_S + WAIT_MARGIN_S)
+    session.notice(Speak(LOOKING, config["voice"]))
     deadline = time.monotonic() + LIMIT_S
     query = _topic(query)
     hits = _candidates(await _search(query, config))
@@ -221,12 +226,12 @@ async def run(args: dict, config, session) -> dict:
         return {"message": NOTHING_FOUND}
     pages = await _read(hits, config, deadline)
     if not pages:
-        return _no_pages(hits, config, session)
+        return {"message": ALL_FAILED}
     notes, late = await _notes(query, pages, config, deadline)
     if not notes:
         return {"message": OUT_OF_TIME if late else NOTHING_USEFUL}
     answer = _short(await _combine(query, notes, config, deadline))
-    sources = _sources([site for site, _ in notes])
+    sources = _sources(_sites(notes))
     caveats = _caveats(notes, len(pages), len(hits), late)
     return _say(" ".join([answer, sources, *caveats]), config, session)
 

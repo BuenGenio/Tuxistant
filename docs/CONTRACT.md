@@ -25,8 +25,8 @@ Methods:
 | Method | Signature | Meaning |
 |---|---|---|
 | `Toggle` | `() -> ()` | idle: start a VAD turn. Active: cancel |
-| `HoldStart` | `() -> ()` | Start a push-to-talk turn (client-committed) |
-| `HoldEnd` | `() -> ()` | Stop mic, commit, request the reply |
+| `HoldStart` | `() -> ()` | Start a push-to-talk turn |
+| `HoldEnd` | `() -> ()` | Stop the mic, get the words, then answer a fact or ask the voice model. See "Facts" |
 | `Cancel` | `() -> ()` | Stop everything, back to idle |
 | `DictateStart` | `() -> ()` | Start dictating, from the shell only. See "Dictation" |
 | `DictateEnd` | `() -> ()` | Stop listening and type what was said |
@@ -107,7 +107,30 @@ sequenceDiagram
 
 Title and detail are written by daemon code from what will really happen, never from a manifest or from model text, and `printable()` turns control and bidi characters into visible escapes. A click is required: no voice "yes", as audio playing nearby could say it. `ask.run` must act on what the card showed, not on a fresh look at the world. What was asked and the answer are kept in the action's history record under `asked`.
 
-A handler that wants its result spoken in another language appends a `Speak(text, voice, model)` to `session.after`. The app says it after the model's reply, and the model never sees the text, because Kokoro would read it as English. An empty `voice` shows the text without speaking it. `research.run` uses it too, so that its sources and caveats are said as written and text from the web never reaches a model with tools.
+A handler that wants its result spoken in another language appends a `Speak(text, voice, model)` to `session.after`. The app says it after the model's reply, and the model never sees the text, because Kokoro would read it as English. An empty `voice` shows the text without speaking it. `research.run` and `knowledge.answer` use it too, so that sources and caveats are said as written and text from the web never reaches a model with tools.
+
+`session.notice(Speak)` is the same, said at once with the action still running. `research.run` uses it, as it can be ten seconds before there's anything else to say.
+
+## Facts
+
+`tuxistant/knowledge.py`, and `Turn._ask` in `tuxistant/controller.py`. The 4B model makes up what it doesn't know, in the same voice as what it does, and no wording makes it reach for a tool. So on a hold turn the daemon decides, before the voice model hears anything:
+
+1. It gets the words. None at all ends the turn quietly.
+2. `knowledge.is_fact`: a request that is entirely a sum is a fact. Otherwise, with `fact_lookup` on, one small call to the model with no tools says FACT or OTHER. Anything but exactly FACT is a no, and so is a failure or 2 s without an answer, because the normal route can do everything.
+3. A fact goes through `session.execute("knowledge.answer", ...)`, so it has a history record and meets the same gates. The voice model isn't asked, and the session may not even be open yet. Anything else goes to the voice model.
+
+`knowledge.answer` tries these in order, stopping at the first that answers:
+
+1. `calculate()`, for a sum. It turns the words into an expression and walks the parsed tree, which holds only numbers and arithmetic. Nothing is evaluated.
+2. Wikipedia's API, on the words that matter: five pages, 1200 characters of each.
+3. Web search through SearXNG. Wikipedia's search matches words, so "the rarest element" never reaches Astatine.
+4. "I couldn't find that, so I don't know."
+
+Steps 2 and 3 hand the results to a model with no tools, told to answer only from them or say "I don't know". Nothing is answered from memory. With `fact_lookup` off, the only call is the model with no tools, and nothing leaves your server.
+
+The sorter's prompt matters more than it looks. Asked plainly, the model answers the question instead of sorting it, so the words go in as `Message: "..."` after twelve worked examples. An empty thinking block takes four tokens before the first word, so a limit of 5 leaves room for one.
+
+A VAD turn can't be sorted, as the server replies by itself when it hears you stop. The same action is on its tool list, and the model picks it now and then.
 
 ## Dictation
 
@@ -138,7 +161,8 @@ The paste rules, all learned the hard way: a single commit over 4096 bytes kills
 1. Wait for `session.created` before sending anything. Audio sent earlier is lost (cold start takes about 6 s).
 2. Send `session.update`: `{"type":"realtime","instructions":...,"tools":[...],"audio":{"output":{"voice":...}}}`. `audio.output.voice` is honoured. Wait for `session.updated`.
 3. VAD turn: stream `input_audio_buffer.append`; the server detects the turn.
-4. Hold turn: also send `audio.input.turn_detection: null` in session.update. On release send `input_audio_buffer.commit`, then `response.create`. If the commit produces no user item the server sends `response.done` status `failed` (`input_not_committed` in `status_details.error`), sometimes after an `error` event with that code: go quietly back to idle.
+4. Hold turn: also send `audio.input.turn_detection: null` in session.update, and send no audio. `input_audio_buffer.commit` makes the server reply by itself, with or without `response.create`, and `turn_detection.create_response: false` is ignored, so nothing can look at the words first. So the daemon keeps the audio, gets the words from `POST /v1/audio/transcriptions`, which is the same Whisper in the same time, and decides. Anything but a fact goes in as `conversation.item.create` with `{"type":"message","role":"user","content":[{"type":"input_text","text":...}]}`, then `response.create`. The reply is the same as a reply to audio. See "Facts".
+   If a response has no user item to answer, the server sends `response.done` status `failed` (`input_not_committed` in `status_details.error`), sometimes after an `error` event with that code: go quietly back to idle.
 5. Events: `input_audio_buffer.speech_started`, `input_audio_buffer.committed`, `conversation.item.input_audio_transcription.completed` (`transcript`), `response.function_call_arguments.done` (`name`, `arguments`, `call_id`), `response.output_audio.delta` (`delta`), `response.output_audio_transcript.done` (`transcript`), `response.done`, `error`. Also accept the beta names `response.audio.delta` and `response.audio_transcript.done`.
 6. Tool call: reply with `conversation.item.create` `{"type":"function_call_output","call_id":...,"output":"<json>"}`, then `response.create`. A response that only called a tool has no audio; its `response.done` must not end the turn. De-duplicate by `call_id`.
 7. Speech synthesis outside a session: `POST /v1/audio/speech` `{"model": tts_model, "voice": ..., "input": ...}` returns a WAV. Split long text by sentence: long passages can run the 8 GB GPU out of memory.

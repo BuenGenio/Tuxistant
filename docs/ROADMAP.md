@@ -2,11 +2,11 @@
 
 Where the project stands and what comes next. Keep this current: it is how the next person picks up the work.
 
-Last updated 2026-11-04.
+Last updated 2026-11-05.
 
 ## Where things stand
 
-Steps 1 to 3 of the plan below are built. Steps 2 and 3 have passed their tests and live tests against the real server, but they have **not yet run on the real desktop**, because the new extension only loads at the next login.
+Steps 1 to 3 of the plan below are built, and most of step 4. Steps 2 to 4 have passed their tests and live tests against the real server, but they have **not yet run on the real desktop**, because the new extension only loads at the next login.
 
 | Part | State |
 |---|---|
@@ -15,6 +15,7 @@ Steps 1 to 3 of the plan below are built. Steps 2 and 3 have passed their tests 
 | Approval gate and card | Tested in an isolated real GNOME Shell. Not yet on the real desktop |
 | Files, phone, shell, system facts, translation | Tested with the real model. See "Check on the real desktop" |
 | Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
+| Facts, web search, research | Tested against the real server, Wikipedia and SearXNG. Not yet by voice on the real desktop |
 | Multi-step planner, local model | Two live runs worked |
 | Multi-step planner, cloud | Tested against a stub only. Never called the real Claude API |
 | Website | On GitHub Pages. See [website/README.md](../website/README.md) |
@@ -29,7 +30,7 @@ The owner approved this order.
 1. **Done:** daemon, skill runtime, blob, status icon, Settings.
 2. **Done, pending real-desktop checks:** typed skills, then the shell gate, with translation as the first real skill, and the planner with an opt-in cloud model.
 3. **Done, pending real-desktop checks: dictation.** Tap Fn, then hold and speak, and the words are typed where the cursor is. No model is involved, so it needs no card. See "Dictation" in [CONTRACT.md](CONTRACT.md).
-4. **Next: more built-in skills:** general web search, research, and calendar and journal.
+4. **More built-in skills.** Done, pending real-desktop checks: general web search, research, and facts answered from Wikipedia. **Next:** calendar and journal.
 5. **Local install of your own skills.** Recipe skills: YAML only, using built-in daemon actions (D-Bus, HTTP, open app), with no code of their own. They load from a user folder. Non-built-in skills must be refused `shell`.
 6. **Code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared. Local only at first, with a clear warning.
 7. **Community registry.** A reviewed Git repo first, like Flathub: skills arrive as pull requests, and a static index is built from them onto the same GitHub Pages site. Signing means the host doesn't have to be trusted, so no server is needed. Logins, ratings or uploads would need one, as a small API beside the site rather than instead of it.
@@ -67,6 +68,7 @@ Don't act on these until they answer.
 2. **Keeping the connection open about 2 minutes after each Fn hold**, so follow-ups work. Without it each hold is a new conversation and the model forgets the last one. Only `file.find` results carry over, for 5 minutes.
 3. **The Scanner theme's voice-lit bar**: keep it or not.
 4. **Adding weather and news to the website.**
+5. **What "journal" means**: a spoken diary saved as dated files, notes on calendar days, or a particular app. Calendar can use Evolution Data Server, so it follows the accounts in GNOME Online Accounts, and any change needs a card.
 
 ### Choices made while building, worth a look
 
@@ -89,7 +91,10 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 7. Locking the screen during a card cancels it. The logind lock path is untested.
 8. Weather and news by voice.
 9. Cloud, once the owner adds a key: run `./install.sh --cloud-sdk`, then try one multi-step request.
-10. Dictation, with `tuxistant doctor` saying it's ready: tap Fn, then hold and speak, in a GTK app such as Text Editor, in a terminal, and in VS Code or Chromium, which should take the paste route. Check that the clipboard is unchanged afterwards, that a password box refuses, and that Ctrl+Super+D starts and stops it.
+10. Hold Fn and ask a fact, such as "How many chemical elements are there?". It should answer in about 2 seconds in the usual voice, and History should show `knowledge.answer`. Then something made up, such as "What is aubrium?", which should say it doesn't know.
+11. Hold Fn and ask for something that isn't a fact, such as "What time is it?" and "Find my CV". Replies now come from words rather than audio, which has only run in tests and against the real server without a real microphone.
+12. "Research electric bikes" says "Let me look into that", then reads the answer with its sources. After reading a file in the same conversation, a search or a fact shows a card first.
+13. Dictation, with `tuxistant doctor` saying it's ready: tap Fn, then hold and speak, in a GTK app such as Text Editor, in a terminal, and in VS Code or Chromium, which should take the paste route. Check that the clipboard is unchanged afterwards, that a password box refuses, and that Ctrl+Super+D starts and stops it.
 
 Move site claims from Soon to Now only after the matching check passes.
 
@@ -102,8 +107,23 @@ Move site claims from Soon to Now only after the matching check passes.
 - After a declined card it may say "I can't" rather than "OK, I've left that alone".
 - It chains `file.find` then `phone.send` itself and rarely picks `task.run`.
 - Its answers about the weather can pair days oddly, and "do I need a coat" varies.
-- It still refuses some plain facts, and always refuses "What's 15 percent of 80?". With no tools in front of it, it answered 66 of 66, so the tool list causes this, not its knowledge. A tool that asks the model again without the tool list might close the gap. Not tried yet.
-- About 1 fact in 80 comes back confidently wrong, such as Charlotte Brontë for Pride and Prejudice, and "What language do they speak in Brazil?" can reach the translate tool.
+- With its tools in front of it, it refuses some plain facts and makes up others, such as "aubrium" for the rarest element. Telling it to look things up doesn't work: it picks the tool about one time in seven, and stronger wording broke "Where's my phone?". That's why hold turns are sorted before it hears them. A turn from the shortcut isn't, and still gets this model. See "Facts" below.
+
+**Facts:**
+
+- Only hold turns are sorted. A turn from the shortcut goes straight to the voice model, as the server replies by itself, so those can still be made up.
+- The sorter runs on every hold turn, which adds about 0.4 s to every request, and a stall can add up to 2 s.
+- A question goes to Wikipedia with no click, on the word of a 4B model. It called no private request a fact in testing, but it could, and then the words would leave.
+- Web search answers from snippets of other people's text, so a false page can make Tux say something false, out loud. It can't do anything.
+- It says what pages say, and doesn't know what's fiction. "The capital of Zubrowka" gets Lutz from a fan wiki, with no mention that it's from a film. "Aubrium" gets an Instagram tool of that name.
+- Wikipedia is the English one. A question in another language may find less.
+- Follow-up questions aren't understood: each hold is a new conversation, and "Who wrote it?" means nothing to a search.
+- The voice model never sees an answer the app read out, so it can't take questions about it.
+
+**Web search:**
+
+- A page address can't reach your network or your servers, but it can reach this computer's own public address, which it could only use to send a blind request.
+- SearXNG depends on search engines that block automated use. On this server DuckDuckGo, Google and Qwant refuse it, and only Brave and Bing answer. A block can last for hours.
 
 **Dictation:**
 

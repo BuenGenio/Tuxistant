@@ -26,12 +26,13 @@ Tuxistant is a voice assistant for the Linux desktop: a Python daemon, a GNOME S
 - **Every risky action goes through `Skills.execute` and an `Ask`.** Never add a way round it, including for the planner. Card text comes from daemon code looking at the real action, never from a manifest or the model.
 - **Shell access stays built in.** Community skills must never be able to request it.
 - **Dictation stays on the user's own key press.** No tool, skill or model may start it or give it text, and what it types must never hold a line break. That is why it needs no card, so keep it that way.
+- **Text from the web never reaches a model with tools,** apart from `web.search`, which marks it `untrusted_web_text`. Facts and research are read out by the app for this reason. Anything that isn't sorted as a fact must fall through to the normal route, as a private request called a fact goes to Wikipedia with no click.
 
 ## How the code is written
 
 - Short functions, and comments only where they explain why.
 - Error text is spoken aloud, so write plain sentences.
-- The model is a 4B: it ignores wording rules, repeats what it's given word for word, mangles long strings and invents arguments. Put robustness in the handler and the shape of the result, then check with `tools/eval_routing.py` and `tools/eval_flows.py`. Tool descriptions are the one place wording works, as they decide which tool it picks.
+- The model is a 4B: it ignores wording rules, repeats what it's given word for word, mangles long strings and invents arguments. Put robustness in the handler and the shape of the result, then check with `tools/eval_routing.py`, `tools/eval_flows.py` and `tools/eval_facts.py`. Tool descriptions are the one place wording works, as they decide which tool it picks.
 - No new dependencies without a reason. The daemon runs on the system Python with `-P`.
 - Website: H1 and H2 never wrap, layouts stay tight, and demos fit the viewport.
 

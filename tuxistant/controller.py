@@ -5,10 +5,12 @@ cancelling is always task.cancel() and the cleanup lives in one place. Commands 
 because stopping a job is not instant and they must apply in the order they arrived.
 """
 import asyncio
+import json
 import logging
 import secrets
 import time
 
+from . import knowledge
 from .audio import MIN_HOLD_BYTES, MIN_VOICED_BYTES, VOICE_LEVEL, Mic, Speaker, level
 from .dictation import Dictation, clean
 from .gate import APPROVAL_WAIT_S, MAX_DETAIL_CHARS, MAX_TITLE_CHARS, Ask, printable
@@ -24,6 +26,7 @@ ERROR_HOLD_S = 1.5      # how long the error state shows before idle
 CONNECT_LIMIT_S = SETUP_TIMEOUT_S + 5   # past the client's own timeout: this is the backstop
 VOICE_GRACE_S = 1.0     # speech_started lags, so a voice right at the timeout gets this long
 SELECTION_WAIT_S = 2    # the shell answers at once if it answers at all
+NOTICE_WAIT_S = 3       # past this a notice is no use, and the turn can't read while it waits
 FOUND_MEMORY_S = 300    # "open the second one" can come in a new turn, as a hold turn ends at once
 NO_CARD = ("I can't show an approval card on this desktop yet, so I didn't do that. Log out and "
            "back in once, then try again.")
@@ -52,6 +55,9 @@ class Turn:
             self.rt.session.found = list(ctl.found)
         self.connecting = None
         self.connected = False
+        self.held = bytearray()     # a hold turn's audio, which never goes to the session
+        self.asking = None
+        self.answering = False      # a fact is on its way, which needs nothing from the session
         self.mic_task = None
         self.speaker = None
         self.released = False
@@ -107,7 +113,6 @@ class Turn:
                 case "ready":
                     self.connected = True
                     if self.released:
-                        await self.rt.commit()
                         deadline = now + REPLY_TIMEOUT_S
                     else:
                         ctl.set_state("listening")
@@ -122,7 +127,8 @@ class Turn:
                     ctl.emit("Transcript", args[0], True)
                     if not self.hold and ctl.state == "listening":
                         await self._to_thinking()
-                    deadline = now + REPLY_TIMEOUT_S
+                    if self.connected:
+                        deadline = now + REPLY_TIMEOUT_S
                 case "hold_end" if not self.released:
                     if not await self._release():
                         return False
@@ -136,6 +142,8 @@ class Turn:
                     deadline = now + args[0]
                 case "speak":
                     self.after.append(args[0])
+                case "notice":
+                    await self._notice(args[0])
                 case "audio":
                     await self._play(args[0])
                     deadline = now + REPLY_TIMEOUT_S
@@ -152,8 +160,10 @@ class Turn:
                     self._record("ok")
                     return not self.hold and ctl.config["conversation_mode"]
                 case "quiet":
+                    if self.heard:
+                        self._record("ok")
                     return False
-                case "failed":
+                case "failed" if not self.answering:
                     raise RealtimeError(args[0])
                 case "timeout":
                     if ctl.state != "listening":
@@ -168,6 +178,8 @@ class Turn:
                         return False
 
     async def _next(self, deadline: float | None) -> tuple:
+        if not self.inbox.empty():      # however late this gets read, what arrived still counts
+            return self.inbox.get_nowait()
         timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
         try:
             return await asyncio.wait_for(self.inbox.get(), timeout)
@@ -208,6 +220,23 @@ class Turn:
             await self.speaker.drain()
             self.speaker = None
 
+    async def _notice(self, item):
+        """Said while an action runs, so a long silence doesn't sound like something broke."""
+        try:
+            pcm = await asyncio.wait_for(speech(self.ctl.config, item.text, item.voice, item.model),
+                                         NOTICE_WAIT_S)
+        except (TimeoutError, RealtimeError) as e:
+            log.warning("could not speak the notice: %r", e)
+            return
+        try:
+            await self._play(pcm)
+            await self.speaker.drain()
+        except OSError as e:    # the answer is what matters, and it can still be shown
+            log.warning("could not play the notice: %s", e)
+            await self.speaker.stop()
+        self.speaker = None
+        self.ctl.set_state("thinking")
+
     async def _to_thinking(self):
         await self._close_mic()     # so the assistant does not hear itself
         self.ctl.set_state("thinking")
@@ -221,9 +250,35 @@ class Turn:
         if self.captured < MIN_HOLD_BYTES or self.voiced < MIN_VOICED_BYTES:
             return False
         self.ctl.set_state("thinking")
-        if self.connected:
-            await self.rt.commit()
+        self.asking = asyncio.create_task(self._ask())
         return True
+
+    async def _ask(self):
+        """A hold turn, once the user has let go. The server replies to audio the moment it's
+        committed, whatever it's told, and there'd be no stopping it. So the audio stays here, the
+        words are got separately, from the same Whisper in the same time, and the voice model
+        hears them only if they aren't a question of fact. See knowledge.py for why."""
+        config = self.ctl.config
+        try:
+            heard = clean(await transcribe(config, bytes(self.held)))
+            if not heard:
+                self.inbox.put_nowait(("quiet",))
+            else:
+                self.inbox.put_nowait(("heard", heard))
+                if await knowledge.is_fact(heard, config):
+                    self.answering = True
+                    _, result = await self.rt.session.execute(
+                        "knowledge.answer", json.dumps({"question": heard}))
+                    if "error" in result:
+                        raise RealtimeError(result["error"])
+                    self.inbox.put_nowait(("done",))
+                else:
+                    await self.connecting   # a failure to connect reaches the inbox by itself
+                    if self.rt.ready:
+                        await self.rt.say(heard)
+        except Exception as e:
+            self.answering = False
+            self.inbox.put_nowait(("failed", describe(e)))
 
     async def _connect(self):
         try:
@@ -249,7 +304,10 @@ class Turn:
                 if loudness >= VOICE_LEVEL:
                     self.voiced += len(pcm)
                     self.last_voice = time.monotonic()
-                await self.rt.send_audio(pcm)
+                if self.hold:
+                    self.held += pcm
+                else:
+                    await self.rt.send_audio(pcm)
         except Exception as e:
             self.inbox.put_nowait(("failed", describe(e)))
         finally:
@@ -287,7 +345,10 @@ class Turn:
             await self.speaker.stop()
         await self._close_mic()
         self.connecting.cancel()
-        await asyncio.gather(self.connecting, return_exceptions=True)
+        tasks = [task for task in (self.asking, self.connecting) if task]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await self.rt.close(abort=self.aborted)
 
 

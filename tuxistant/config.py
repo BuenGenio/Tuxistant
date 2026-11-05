@@ -27,6 +27,7 @@ DEFAULTS = {
     "phone_device": "",           # GSConnect device name; empty: the only phone connected
     "translate_server": "",       # LibreTranslate host:port; empty: the server's host, port 5000
     "search_server": "",          # SearXNG host:port; empty: the server's host, port 8888
+    "fact_lookup": True,          # questions of general knowledge are answered from Wikipedia
     "cloud_enabled": False,       # the one-time opt-in: multi-step requests may use a cloud model
     "cloud_api_key": "",
     "cloud_model": "claude-opus-5-5",
@@ -49,7 +50,7 @@ EDITABLE = {
     "fn_hold_enabled": bool, "fn_hold_ms": int, "hide_on_release": bool,
     "dictation_enabled": bool,
     "location": str, "fahrenheit": bool, "phone_device": str, "translate_server": str,
-    "search_server": str, "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str,
+    "search_server": str, "fact_lookup": bool, "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str,
 }
 SECRETS = ("api_key", "cloud_api_key")
 MAX_LOCATION_CHARS = 100

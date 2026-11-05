@@ -7,6 +7,7 @@ looked up a second time, a name can answer differently.
 
 What comes back is other people's text. clean() is what stands between it and a model.
 """
+import codecs
 import html
 import http.client
 import ipaddress
@@ -35,6 +36,10 @@ TEXT_TYPES = {"text/html", "text/plain", "application/xhtml+xml"}
 REDIRECTS = {301, 302, 303, 307, 308}
 USER_AGENT = "Mozilla/5.0 (compatible; Tuxistant)"
 NAT64 = ipaddress.ip_network("64:ff9b::/96")
+# A page names its own codec, and punycode took 101 seconds over 1 MB. So only what the web really
+# uses, and everything else is read as UTF-8.
+CHARSETS = re.compile(r"utf[-_]8|ascii|iso8859-\d+|cp125\d|koi8[-_][ru]|shift_jis|euc_jp|euc_kr|"
+                      r"gb2312|gbk|gb18030|big5")
 
 NOT_ALLOWED = "That address isn't one I'll read."
 UNREADABLE = "That page couldn't be read."
@@ -109,6 +114,15 @@ def _name(host: str) -> str:
     return host.rstrip(".").lower()
 
 
+def _same(address: str) -> str:
+    """One spelling for an address, as ::ffff:8.8.8.8 is 8.8.8.8 and must match it."""
+    try:
+        ip = ipaddress.ip_address(address.partition("%")[0])
+    except ValueError:
+        return address
+    return str(getattr(ip, "ipv4_mapped", None) or ip)
+
+
 def _server_host(server: str) -> str | None:
     try:
         return urllib.parse.urlsplit(_urls(server)[0]).hostname
@@ -125,7 +139,7 @@ def own_servers(config) -> tuple[set[str], set[str]]:
         if host:
             names.add(_name(host))
             try:
-                addresses.update(_resolve(host, 0))
+                addresses.update(map(_same, _resolve(host, 0)))
             except PageError:
                 pass
     return names, addresses
@@ -144,7 +158,7 @@ def check(url: str, own: tuple[set[str], set[str]]) -> Target:
         raise PageError(NOT_ALLOWED)
     try:
         parts = urllib.parse.urlsplit(url)
-        host, port = parts.hostname, parts.port
+        host, port, path = parts.hostname, parts.port, _path(parts)
     except ValueError:      # a bad port, or brackets that don't hold an address
         raise PageError(NOT_ALLOWED) from None
     if parts.scheme not in SCHEMES or not host or parts.username is not None:
@@ -154,9 +168,9 @@ def check(url: str, own: tuple[set[str], set[str]]) -> Target:
     names, own_addresses = own
     # All of them must pass: a name with one public address and one private one is an attack.
     if (_name(host) in names or not addresses or not all(map(public, addresses))
-            or own_addresses.intersection(addresses)):
+            or own_addresses.intersection(map(_same, addresses))):
         raise PageError(NOT_ALLOWED)
-    return Target(parts.scheme, host, port, _path(parts), addresses)
+    return Target(parts.scheme, host, port, path, addresses)
 
 
 def _dial(address: str, port: int, seconds: float) -> socket.socket:
@@ -207,7 +221,8 @@ def _hang_up(sock: socket.socket):
 
 def _decode(body: bytes, charset: str | None) -> str:
     try:
-        return body.decode(charset or "utf-8", "replace")
+        name = codecs.lookup(charset or "utf-8").name
+        return body.decode(name if CHARSETS.fullmatch(name) else "utf-8", "replace")
     except (LookupError, ValueError):   # a page can name any codec, including ones that raise
         return body.decode("utf-8", "replace")
 
@@ -311,5 +326,8 @@ def fetch(url: str, config, seconds: float = TOTAL_S) -> Page:
             if len(words) < MIN_PAGE_CHARS:
                 raise PageError(UNREADABLE)
             return Page(url, words)
-        url = urllib.parse.urljoin(url, location)
+        try:
+            url = urllib.parse.urljoin(url, location)
+        except ValueError:      # its message quotes the address, and that's a stranger's text
+            raise PageError(UNREADABLE) from None
     raise PageError(UNREADABLE)
