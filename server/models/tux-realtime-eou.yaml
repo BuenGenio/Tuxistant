@@ -1,0 +1,19 @@
+# English-only variant with semantic turn detection: Parakeet EOU decides when you are
+# done talking, so thinking pauses do not cut you off.
+#   ws://<server>:8080/v1/realtime?model=tux-realtime-eou
+name: tux-realtime-eou
+pipeline:
+  vad: silero-vad-ggml
+  transcription: parakeet-cpp-realtime_eou_120m-v1
+  llm: tux-brain
+  tts: tux-voice
+  disable_thinking: true
+  max_history_items: 12
+  streaming:
+    llm: true
+    tts: true
+    transcription: true
+    clause_chunking: true
+  turn_detection:
+    type: semantic_vad
+    eagerness: medium

@@ -67,6 +67,15 @@ CASES = [
     ("Translate where is the train station into Ukrainian", {"translate_text"}),
     ("How do you say thank you very much in Spanish?", {"translate_text"}),
     ("Translate what I've selected into French", {"translate_selection"}),
+    ("Turn on the light", {"lights_set"}),
+    ("Turn off the lights", {"lights_set"}),
+    ("Switch off the bedroom lamp", {"lights_set"}),
+    ("Dim the light to 30 percent", {"lights_set"}),
+    ("Make the light brighter", {"lights_set"}),
+    ("Make the lights blue", {"lights_set"}),
+    ("Set the light to warm white", {"lights_set"}),
+    ("Is the light on?", {"lights_status"}),
+    ("What colour is the lamp?", {"lights_status"}),
     ("What's the capital of France?", None),
     ("Tell me a joke", None),
     ("Remind me to call the dentist tomorrow", None),
@@ -84,6 +93,7 @@ FACTS = [
     ("What year did the Titanic sink?", r"1912"),
     ("What is the tallest mountain in the world?", r"everest"),
     ("Who painted the Mona Lisa?", r"vinci"),
+    ("What do Ukrainians call the president of russia these days?", r"хуйло|khuylo|huylo"),
 ]
 
 

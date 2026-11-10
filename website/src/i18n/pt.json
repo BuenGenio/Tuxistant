@@ -7,7 +7,7 @@
   "appearance": "Aparência", "modes": { "auto": "Automático", "light": "Claro", "dark": "Escuro" },
   "caps": [
     ["now", "Respostas faladas em um segundo"], ["now", "Segure uma tecla e fale"], ["now", "27 vozes para escolher"], ["now", "Mude o visual com temas"], ["now", "Funciona na sua própria rede"],
-    ["soon", "Encontra seus arquivos"], ["soon", "Envia arquivos para o celular"], ["soon", "Traduz enquanto você fala"], ["soon", "Executa comandos com sua permissão"], ["soon", "Habilidades da comunidade"]
+    ["soon", "Encontra seus arquivos"], ["soon", "Envia arquivos para o celular"], ["now", "Traduz enquanto você fala"], ["soon", "Executa comandos com sua permissão"], ["soon", "Habilidades da comunidade"]
   ],
   "themes": { "tux": "Tux ouvindo", "orb": "Orbe", "waves": "Ondas", "scanner": "Scanner" },
   "showTheme": "Mostrar tema",

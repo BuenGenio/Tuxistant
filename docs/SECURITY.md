@@ -82,6 +82,12 @@ Some apps need a paste, so Tuxistant borrows the clipboard and puts it back afte
 
 The wait is now 2 seconds, and that app gets the words. The wait is still fixed, so an app slower than that could still get the old clipboard.
 
+### The click that lands before you have seen the card
+
+A card ignores Allow for its first 0.6 seconds on screen, so a click already on its way to something else can't approve it. The wait started when the card's fade-in ended. With animations off, which is how GNOME Shell runs without 3D graphics, as in many virtual machines, the fade ends before anything is drawn. A busy shell then drew the card with Allow already working.
+
+This wasn't found by a review. It was found by installing Tuxistant on a clean system in a container, where one test failed every time. The wait now starts from a frame that has really been painted with the card in it, and the card tests run with animations both on and off.
+
 ## When the checks themselves failed
 
 ### The test result that proved nothing
@@ -89,6 +95,10 @@ The wait is now 2 seconds, and that app gets the words. The wait is still fixed,
 A check that breaks each safety guard on purpose reported 18 of 18 caught. Every test had actually died at import, so nothing had been tested.
 
 The check now refuses to run unless the same tests pass with nothing broken first.
+
+### The stand-in that was never used
+
+A test of "what if pip isn't installed" put a fake pip in front of the real one. The fake was missing a file that makes Python treat a folder as a package, so the real pip ran instead, failed for another reason, and the test passed. It was found when the installer's message changed and the test didn't notice.
 
 ### The fix that crashed the desktop
 

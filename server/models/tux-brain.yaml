@@ -1,0 +1,30 @@
+# Conversation/tool-calling LLM for the realtime pipeline.
+# Mirrors the gallery's qwen3-4b (dflash variant) config: Qwen3-4B Q4_K_M + DFlash draft model
+# for speculative decoding, model chat template (use_tokenizer_template) so tool calls stream
+# separately from spoken text. Adds a fixed context and full GPU offload.
+name: tux-brain
+backend: llama-cpp
+context_size: 8192
+gpu_layers: 99
+flash_attention: "on"
+draft_model: llama-cpp/models/Qwen3-4B-DFlash-GGUF/Qwen3-4B-DFlash.Q8_0.gguf
+known_usecases:
+  - chat
+parameters:
+  model: llama-cpp/models/Qwen3-4B-GGUF/Qwen3-4B-Q4_K_M.gguf
+  temperature: 0.6
+  top_p: 0.95
+  top_k: 20
+  min_p: 0
+  repeat_penalty: 1
+options:
+  - use_jinja:true
+  - spec_type:draft-dflash
+  - spec_n_max:15
+  - parallel:1   # single voice user; auto-tuning would otherwise pick 2 slots
+template:
+  use_tokenizer_template: true
+function:
+  automatic_tool_parsing_fallback: true
+  grammar:
+    disable: true

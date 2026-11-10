@@ -1,0 +1,42 @@
+# LocalAI with the realtime voice pipeline Tuxistant talks to. NVIDIA GPU, CUDA.
+# Image tag (cuda-12 / cuda-13) comes from .env, written by setup.sh from the driver version.
+services:
+  localai:
+    image: docker.io/localai/localai:${LOCALAI_TAG:-v4.12.1-gpu-nvidia-cuda-12}
+    container_name: local-ai
+    restart: unless-stopped
+    # v4.12.1 runs as root by default; run as you so ./models stays editable.
+    # setup.sh writes your ids to .env and chowns the named backends volume to match.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "8080:8080"          # HTTP API, WebSocket /v1/realtime, web UI (Talk page)
+      - "3478:3478/udp"      # WebRTC ICE (single fixed port)
+    environment:
+      LOCALAI_API_KEY: ${LOCALAI_API_KEY}
+      LOCALAI_WEBRTC_UDP_PORT: "3478"
+      LOCALAI_WEBRTC_NAT_1TO1_IPS: ${LAN_IP}
+      LOCALAI_SINGLE_ACTIVE_BACKEND: "false"   # VAD + STT + LLM + TTS must be resident together
+      DEBUG: "false"
+    volumes:
+      - ./models:/models
+      - localai-backends:/backends:nocopy   # no copy-up of the image dir (would reset owner to root)
+      - ./configuration:/configuration
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/readyz"]
+      start_period: 30m
+      interval: 1m
+      timeout: 10s
+      retries: 3
+
+volumes:
+  localai-backends:
+    name: localai-backends
+    external: true   # created + chowned by setup.sh

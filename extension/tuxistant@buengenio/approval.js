@@ -76,6 +76,7 @@ class Card {
         this._onAnswer = onAnswer;
         this._onExpired = onExpired;
         this._armId = 0;
+        this._paintedId = 0;
         this._tickId = 0;
         const admin = level !== 'click';  // something unknown gets the stronger warning
 
@@ -200,17 +201,32 @@ class Card {
             opacity: 255,
             duration: FADE_MS,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-            onComplete: () => {
-                this._armId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ARM_MS, () => {
-                    this._armId = 0;
-                    this._allow.reactive = true;
-                    return GLib.SOURCE_REMOVE;
-                });
-            },
+            onComplete: () => this._armOncePainted(),
         });
     }
 
+    // With animations off, as in a shell without 3D, the fade is over before anything is drawn. So
+    // the end of the fade is not the card being on screen, and a painted frame is.
+    _armOncePainted() {
+        this._cancelArm();
+        this._paintedId = global.stage.connect('after-paint', () => {
+            if (!this.actor.mapped)
+                return;
+            global.stage.disconnect(this._paintedId);
+            this._paintedId = 0;
+            this._armId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ARM_MS, () => {
+                this._armId = 0;
+                this._allow.reactive = true;
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+        this.actor.queue_redraw();
+    }
+
     _cancelArm() {
+        if (this._paintedId)
+            global.stage.disconnect(this._paintedId);
+        this._paintedId = 0;
         if (this._armId)
             GLib.source_remove(this._armId);
         this._armId = 0;

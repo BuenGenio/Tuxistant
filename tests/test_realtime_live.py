@@ -67,7 +67,7 @@ class Live(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(temp.cleanup)
         folder = Path(temp.name)
         self.config = Config(folder / "config.json")
-        self.config.values.update(server=os.environ.get("TUXISTANT_SERVER", "stormshadow:8080"),
+        self.config.values.update(server=os.environ.get("TUXISTANT_SERVER", "localhost:8080"),
                                   api_key=os.environ["TUXISTANT_API_KEY"])
         self.history = History(folder / "history.db")
         self.addCleanup(self.history.db.close)

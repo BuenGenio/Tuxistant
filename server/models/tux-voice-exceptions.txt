@@ -1,0 +1,6 @@
+# Words Kokoro (tux-voice) says wrong, and how to say them.
+#   word = phonemes
+# Phonemes use Kokoro's set (IPA-like; put ˈ just before the stressed vowel). Kokoro has no
+# dark ɫ, so l stands in. Matching is whole-word and ignores case. Saved edits apply from the next
+# sentence spoken: no restart. Applied by the patch in ../kokoro-exceptions.py.
+Хуйло = xʊjlˈO

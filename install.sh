@@ -93,11 +93,22 @@ install_config() {
     key=
 }
 
+# Before anything is copied: a half install that says it worked is worse than none.
 check_dependencies() {
+    [ -x "/usr/bin/python3" ] || die "needs Python 3 (/usr/bin/python3). Nothing was installed."
+    command -v glib-compile-schemas >/dev/null ||
+        die "needs glib-compile-schemas, which comes with GLib. Nothing was installed."
     # -P, as everywhere here: -c would look in the current folder first. Not -I: the modules can
     # be in the user's site folder.
-    /usr/bin/python3 -P -c 'import dbus_fast, websockets, yaml, gi' 2>/dev/null ||
-        warn "missing Python modules: the daemon needs dbus_fast, websockets, PyYAML and gi"
+    missing=$(/usr/bin/python3 -P -c '
+import importlib.util
+packages = {"dbus_fast": "python3-dbus-fast", "websockets": "python3-websockets",
+            "yaml": "python3-yaml", "gi": "python3-gi"}
+print(" ".join(p for module, p in packages.items() if importlib.util.find_spec(module) is None))') ||
+        die "could not check for the Python modules the daemon needs. Nothing was installed."
+    [ -z "$missing" ] || die "the daemon needs Python modules that are missing. On Ubuntu or Debian:
+    sudo apt install $missing
+Then run this again. Nothing was installed."
 }
 
 reload_user_manager() {
@@ -132,6 +143,10 @@ install_cloud_sdk() {
     wants_cloud_sdk || return 0
     if dry_run; then
         echo "Dry run: skipping the Claude SDK."
+        return
+    fi
+    if ! /usr/bin/python3 -P -m pip --version >/dev/null 2>&1; then
+        warn "the Claude SDK needs pip (on Ubuntu or Debian: sudo apt install python3-pip); then ./install.sh --cloud-sdk"
         return
     fi
     /usr/bin/python3 -P -m pip install --quiet --upgrade --target "$vendor" anthropic ||

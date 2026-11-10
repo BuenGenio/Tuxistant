@@ -7,7 +7,7 @@
   "appearance": "Appearance", "modes": { "auto": "Auto", "light": "Light", "dark": "Dark" },
   "caps": [
     ["now", "Spoken answers in about a second"], ["now", "Hold a key and talk"], ["now", "27 voices to choose from"], ["now", "Swap the look with themes"], ["now", "Runs on your own network"],
-    ["soon", "Finds your files"], ["soon", "Sends files to your phone"], ["soon", "Translates as you speak"], ["soon", "Runs commands, with your OK"], ["soon", "Skills from the community"]
+    ["soon", "Finds your files"], ["soon", "Sends files to your phone"], ["now", "Translates as you speak"], ["soon", "Runs commands, with your OK"], ["soon", "Skills from the community"]
   ],
   "themes": { "tux": "Listening Tux", "orb": "Orb", "waves": "Waves", "scanner": "Scanner" },
   "showTheme": "Show theme",

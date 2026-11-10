@@ -42,11 +42,12 @@ def write_themes(root):
                 {"kind": "orb", "size": 1024, "anchor": "bottom-right", "margin": 0})
 
 
-def start(out, themes, scenario, monitors="1600x900", scale=1):
+def start(out, themes, scenario, monitors="1600x900", scale=1, animations=True):
     return subprocess.Popen(
         [str(CARD), "solid-orb", str(out)],
         env={**os.environ, "TUX_EXTRA_THEMES": str(themes), "TUX_SCENARIO": scenario,
-             "TUX_MONITORS": monitors, "TUX_SCALE": str(scale), "TUX_TIMEOUT": "170"},
+             "TUX_MONITORS": monitors, "TUX_SCALE": str(scale), "TUX_TIMEOUT": "170",
+             "TUX_ANIMATIONS": "true" if animations else "false"},
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
@@ -83,12 +84,13 @@ class ShellRun(unittest.TestCase):
 @needs_shell
 class Card(ShellRun):
     """One run on 1600x900 that goes through everything. Alone, as it times clicks against a clock."""
+    ANIMATIONS = True
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
         cls.out = cls.root / "out"
-        run = start(cls.out, cls.themes, "verify")
+        run = start(cls.out, cls.themes, "verify", animations=cls.ANIMATIONS)
         cls.log, _ = run.communicate(timeout=200)
         cls.code = run.returncode
         cls.report = read_report(cls.out)
@@ -352,6 +354,13 @@ class Card(ShellRun):
         self.assertEqual(r["counts_reenabled"], before)
         self.assertEqual(r["answers_disable"], [])
         self.assertFalse(r["reenabled"]["showing"])
+
+
+@needs_shell
+class CardWithoutAnimations(Card):
+    """The same run as a shell without 3D gives it: a fade that ends before anything is drawn
+    once let Allow work the moment a busy shell drew the card."""
+    ANIMATIONS = False
 
 
 @needs_shell

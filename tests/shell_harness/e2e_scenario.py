@@ -784,7 +784,7 @@ async def step_settings(h: Harness):
     print(done.stderr[-2000:], flush=True)
     filled = json.loads(done.stdout.splitlines()[-1])
     print("  ", filled, flush=True)
-    h.check("settings: general shows the server", filled["server"] == "stormshadow:8080", filled)
+    h.check("settings: general shows the server", filled["server"] == Config().values["server"], filled)
     h.check("settings: voices populate", filled["voices"] >= 20 and filled["voice"] == ["af_nicole"], filled)
     h.check("settings: themes populate", set(filled["themes"]) == {"orb", "scanner", "tux", "waves"} and
             filled["theme"] == ["orb"] and not filled["problems"], filled)

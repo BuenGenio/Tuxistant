@@ -11,7 +11,7 @@ git init -q -b gh-pages
 git add -A
 git commit -q -m "Publish the site from $revision
 
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>"
 git push -q -f "$remote" gh-pages
 rm -rf .git
 echo "published $revision"

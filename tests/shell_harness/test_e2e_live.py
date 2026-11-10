@@ -2,7 +2,8 @@
 
 Skipped unless asked for, and it never reads or stores the key itself:
 
-    TUXISTANT_LIVE=1 TUXISTANT_API_KEY=... python3 tests/shell_harness/test_e2e_live.py
+    TUXISTANT_LIVE=1 TUXISTANT_SERVER=host:8080 TUXISTANT_API_KEY=... \
+        python3 tests/shell_harness/test_e2e_live.py
 """
 import json
 import os

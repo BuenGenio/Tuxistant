@@ -591,7 +591,7 @@ class Inner(unittest.TestCase):
 
     def test_02_general_shows_what_the_daemon_holds(self):
         page = self.win.general
-        self.assertEqual(page.server.get_text(), "stormshadow:8080")
+        self.assertEqual(page.server.get_text(), "localhost:8080")
         self.assertEqual(page.key_status.get_label(), "No key set")
         self.assertFalse(page.key_remove.get_visible())
         self.assertTrue(page.pipelines["tux-realtime"].get_active())
@@ -1398,12 +1398,14 @@ class Inner(unittest.TestCase):
     def test_25_a_daemon_older_than_this_app_is_no_crash(self):
         """Settings updates on disk at once. The daemon keeps its old code until it restarts."""
         page = self.win.general
-        new = ("phone_device", "translate_server", "cloud_enabled", "cloud_model", "cloud_key_set")
+        new = ("phone_device", "translate_server", "cloud_enabled", "cloud_model", "cloud_key_set",
+               "tapo_email", "tapo_password_set")
         current = dict(self.win.config)
         self.win.apply_config({key: value for key, value in current.items() if key not in new})
         self.assertFalse(page.cloud.get_active())
         self.assertEqual(page.cloud_model.get_text(), "claude-opus-5-5")
         self.assertEqual(page.phone.get_selected(), 0)
+        self.assertEqual(page.tapo_password_status.get_label(), "No password set")
         settle()
         self.assertEqual(saved(), [])
         self.win.apply_config(current)
@@ -1456,6 +1458,39 @@ class Inner(unittest.TestCase):
         wait(lambda: row.get_text() == "elsewhere:5000", "the outside change")
         control("Change", "translate_server", '""', signature="ss")
         wait(lambda: row.get_text() == "", "the reset")
+
+    def test_25_lights_account(self):
+        page = self.win.general
+        apply = apply_button(page.tapo_email)
+        self.assertEqual(page.tapo_password_status.get_label(), "No password set")
+        page.tapo_email.set_text("  tux@example.org ")
+        apply.emit("clicked")
+        wait(lambda: saved() == [["tapo_email", '"tux@example.org"']], "the email to save")
+        self.assertEqual(page.tapo_email.get_text(), "tux@example.org")
+        wait(lambda: self.win.config.get("tapo_email") == "tux@example.org", "the save to come back")
+        forget()
+        page.tapo_password.set_text(" pëngüin pass ")
+        apply_button(page.tapo_password).emit("clicked")
+        wait(lambda: saved() == [["tapo_password", '" p\\u00ebng\\u00fcin pass "']],
+             "the password to save as typed, spaces and all")
+        self.assertEqual(page.tapo_password.get_text(), "")
+        wait(lambda: self.win.config.get("tapo_password_set") is True, "tapo_password_set")
+        self.assertEqual(page.tapo_password_status.get_label(), "Password is set")
+        self.assertNotIn("tapo_password", self.win.config)
+        self.assertNotIn("ngüin", json.dumps(self.win.config, ensure_ascii=False))
+        self.assertNotIn("ng\\u00fcin", json.dumps(self.win.config))
+        self.assertEqual(json.loads(control("Stored", "tapo_password", signature="s")[0]),
+                         " pëngüin pass ")
+        forget()
+        page.tapo_password.set_text("   ")
+        apply_button(page.tapo_password).emit("clicked")
+        settle()
+        self.assertEqual(saved(), [], "a blank entry must not wipe the password")
+        page.tapo_password_remove.emit("clicked")
+        wait(lambda: saved() == [["tapo_password", '""']], "the password to be removed")
+        wait(lambda: self.win.config.get("tapo_password_set") is False, "tapo_password_set")
+        control("Change", "tapo_email", '""', signature="ss")
+        wait(lambda: page.tapo_email.get_text() == "", "the outside change")
 
     def test_27_clearing_history_asks_first(self):
         page = self.win.history
@@ -1521,7 +1556,7 @@ class Inner(unittest.TestCase):
     def test_26_screenshots(self):
         if not os.environ.get("TUX_SETTINGS_SHOTS"):
             self.skipTest("TUX_SETTINGS_SHOTS is not set")
-        for key, value in (("server", '"stormshadow:8080"'), ("voice", '"af_nicole"'),
+        for key, value in (("server", '"ai-box.local:8080"'), ("voice", '"af_nicole"'),
                            ("listen_timeout_s", "8"), ("theme", '"orb"')):
             control("Change", key, value, signature="ss")
         pages = ("general", "voice", "appearance", "skills", "history")

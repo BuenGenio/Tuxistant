@@ -1,0 +1,13 @@
+# Kokoro TTS for the realtime pipelines.
+# The gallery kokoro.yaml has no parameters.model; inside a realtime pipeline that resolves
+# to the models dir itself and fails LocalAI's trusted-root check ("path is outside of
+# trusted root"). Naming the model explicitly avoids it.
+name: tux-voice
+backend: kokoro
+known_usecases:
+  - tts
+parameters:
+  model: kokoro
+  voice: af_heart
+options:
+  - lang_code:a

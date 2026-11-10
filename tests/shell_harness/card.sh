@@ -11,6 +11,7 @@
 #   TUX_DRIVER        script in this folder to run in place of card_daemon.py
 #   TUX_MONITORS      virtual monitors, space separated, default 1600x900
 #   TUX_SCALE         integer UI scale, default 1
+#   TUX_ANIMATIONS    false to run with animations off, as a shell without 3D does
 #   TUX_EXTENSION     extension folder to test instead of extension/tuxistant@buengenio
 #   TUX_EXTRA_THEMES  folder of extra <id>/ themes, used as user themes in this run
 #   TUX_TIMEOUT       seconds for the whole run, default 150
@@ -101,7 +102,7 @@ color-shading-type='solid'
 primary-color='#3a4150'
 
 [org/gnome/desktop/interface]
-enable-animations=true
+enable-animations=${TUX_ANIMATIONS:-true}
 enable-hot-corners=false
 color-scheme='prefer-dark'
 scaling-factor=uint32 ${TUX_SCALE:-1}

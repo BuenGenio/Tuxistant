@@ -1,0 +1,6 @@
+.env
+configuration/
+data/
+reply.wav
+models/*
+!models/tux-*

@@ -2,7 +2,7 @@
 
 A voice assistant for the Linux desktop. Press a shortcut or hold Fn, talk, and Tux answers out loud while an animated blob reacts on screen and captions show what was heard and said.
 
-Speech recognition, the language model and speech synthesis run on a [LocalAI](https://localai.io) server of your own. Tuxistant is the desktop side: a GNOME Shell extension, a small daemon and a Settings app.
+Speech recognition, the language model and speech synthesis run on a [LocalAI](https://localai.io) server of your own, which [server/](server/README.md) sets up. Tuxistant is the desktop side: a GNOME Shell extension, a small daemon and a Settings app.
 
 <p align="center">
   <img src="docs/images/turn.gif" width="800" alt="Tux on a desktop. Words appear in a caption as they are heard, Tux thinks, then speaks while the caption shows the reply about the weather.">
@@ -12,18 +12,30 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 ## Requirements
 
 - GNOME Shell 50 on Wayland
-- Python 3.14 with `dbus_fast`, `websockets`, `PyYAML` and PyGObject (GTK 4, libadwaita 1.9 or newer)
+- Python 3.14 with `dbus_fast`, `websockets`, `PyYAML` and PyGObject (GTK 4, libadwaita 1.9 or newer). Ubuntu 26.04 has all of this except two modules, which the first install step adds
 - PipeWire with `pw-record` and `pw-cat`
 - `glib-compile-schemas`
-- A LocalAI server with a realtime pipeline (`tux-realtime` by default) and a voice model (`tux-voice`)
-- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, a LibreTranslate server for translation, and Piper voices on LocalAI to hear translations spoken
+- A LocalAI server with a realtime pipeline (`tux-realtime` by default) and a voice model (`tux-voice`). [server/](server/README.md) has a script that sets one up on a computer with an 8 GB NVIDIA GPU
+- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
 
 ## Install
+
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code:
+
+```sh
+sudo apt install git python3-dbus-fast python3-websockets
+git clone https://github.com/BuenGenio/Tuxistant.git
+cd Tuxistant
+```
+
+Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
 ```sh
 ./install.sh                  # everything, including hold-Fn-to-talk; the Fn helper uses sudo
 ./install.sh --no-fn-helper   # the same without hold-Fn-to-talk, so no sudo
 ```
+
+The first form asks whether to add the Claude SDK for Cloud, which is optional, so answer no unless you want it. Then it asks for your password to install the Fn helper.
 
 Then finish by hand, because a running Wayland session cannot load a new extension:
 
@@ -31,7 +43,9 @@ Then finish by hand, because a running Wayland session cannot load a new extensi
 2. Run `gnome-extensions enable tuxistant@buengenio`.
 3. Run `tuxistant doctor` to check that everything is in place, including that the extension is enabled.
 
-The installer puts a `tuxistant` command in `~/.local/bin`, the extension in `~/.local/share/gnome-shell/extensions`, a systemd user unit and a D-Bus activation file in `~/.local/share`, and creates `~/.config/tuxistant/config.json`. Set the server and API key in Settings under General. To have the installer fetch the key, set `TUXISTANT_KEY_COMMAND` to a command that prints it.
+On a new account `~/.local/bin` isn't on your `PATH` until you log back in. Until then the command is `~/.local/bin/tuxistant`.
+
+The installer puts a `tuxistant` command in `~/.local/bin`, the extension in `~/.local/share/gnome-shell/extensions`, a systemd user unit and a D-Bus activation file in `~/.local/share`, and creates `~/.config/tuxistant/config.json`. Set the server and API key in Settings under General. The server starts as `localhost:8080`, which is right when LocalAI runs on the same computer. To have the installer fetch the key, set `TUXISTANT_KEY_COMMAND` to a command that prints it.
 
 The `tuxistant` command runs from this checkout, so keep the folder where it is. Run `./install.sh` again after updating it. Running it twice is harmless and keeps your settings.
 
@@ -73,6 +87,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 | "Find my 2024 tax return" | Searches file names and contents, and reads out the best few. "Open the second one" works for a few minutes afterwards |
 | "Send it to my phone", "Where's my phone?" | Sends a file through GSConnect, rings the phone, or reads its battery. Sending asks first |
 | "Move everything in Downloads older than a year to the Trash" | Shows how many files and how much space, and waits for your click. Nothing is deleted outright |
+| "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account in Settings under General |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system |
 | "What does my todo file say?", "Install VLC" | Runs a command. Read-only commands run in a sandbox with no click, and anything else shows the exact command first |
@@ -84,9 +99,9 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 |---|---|
 | ![A card asking to move 3 files and 1 folder to the Trash, listing each one, with Deny and Allow buttons.](docs/images/card-trash.png) | ![A red card asking to run apt-get install as administrator, with Deny and Allow as administrator buttons.](docs/images/card-admin.png) |
 
-**Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names and command output from that task. File contents go only if you click to allow each one. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`.
+**Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names and command output from that task. File contents go only if you click to allow each one. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`, which needs `pip` (`python3-pip` on Ubuntu).
 
-**Settings** has pages for General (server, API key, listening, shortcut, phone, translation, cloud, instructions), Voice, Appearance, Skills and History.
+**Settings** has pages for General (server, API key, listening, shortcut, phone, translation, lights, cloud, instructions), Voice, Appearance, Skills and History.
 
 | General | Skills |
 |---|---|
@@ -111,7 +126,7 @@ The same things work from a terminal:
 | `tuxistant cancel` | Stop everything |
 | `tuxistant say <text>` | Speak some text |
 | `tuxistant history` | Show recent requests |
-| `tuxistant doctor` | Check the server, the API key, PipeWire, the Fn helper, that the extension is enabled, that the daemon can start, and that approval cards can show |
+| `tuxistant doctor` | Check the Python modules, the server, the API key, PipeWire, the Fn helper if it is installed, that the extension is enabled, that the daemon can start, and that approval cards can show |
 | `tuxistant settings` | Open Settings |
 | `tuxistant daemon` | Run the daemon in the foreground |
 
@@ -136,6 +151,7 @@ flowchart LR
 - **Themes** (`themes/`): a JSON file and a GLSL shader each. See [docs/THEMES.md](docs/THEMES.md).
 - **Skills** (`tuxistant/skills_builtin/`): the actions Tux can take. See [docs/SKILLS.md](docs/SKILLS.md).
 - **Fn helper** (`helper/`): a GNOME shortcut cannot be set to Fn alone, so a small separate service reads the key from the kernel.
+- **Server** (`server/`): a script and model configs that set up LocalAI for Tuxistant. See [server/README.md](server/README.md).
 
 [docs/CONTRACT.md](docs/CONTRACT.md) is the exact specification between these parts. [docs/ROADMAP.md](docs/ROADMAP.md) has where the project stands and what comes next.
 
@@ -233,12 +249,14 @@ All eight of these really happened in this project. Each one has a test or a cod
 python3 -m unittest discover -s tests -t .
 ```
 
+It takes about eight minutes. Beyond what Tuxistant itself needs, the tests use `gnome-shell`, `mutter`, PipeWire, `bubblewrap`, `git`, Pillow (`python3-pil`), `pip` and `shellcheck`. A test whose tool is missing is skipped, so read the skip count: without `bubblewrap`, or in a container that blocks user namespaces, over a hundred sandbox tests don't run.
+
 [docs/TESTING.md](docs/TESTING.md) covers the test layers and the live evaluations. No test needs a microphone, a speaker or your GNOME session. The installer tests run in a temporary prefix with `ssh`, `sudo` and `systemctl` replaced by stand-ins. The audio tests run through a private PipeWire graph that has only a null sink.
 
 With a LocalAI server to talk to, this also runs everything end to end in an isolated headless GNOME Shell: the real daemon, extension, Settings app and Fn helper, with scripted audio. Set `TUX_E2E_OUT` to a folder to keep its screenshots.
 
 ```sh
-TUXISTANT_LIVE=1 TUXISTANT_API_KEY=... python3 tests/shell_harness/test_e2e_live.py
+TUXISTANT_LIVE=1 TUXISTANT_SERVER=yourserver:8080 TUXISTANT_API_KEY=... python3 tests/shell_harness/test_e2e_live.py
 ```
 
 ## Licence

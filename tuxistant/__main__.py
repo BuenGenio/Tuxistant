@@ -1,6 +1,7 @@
 """Command line: tuxistant daemon | toggle | cancel | say <text> | history | doctor | settings."""
 import argparse
 import asyncio
+import importlib.util
 import json
 import os
 import shutil
@@ -10,12 +11,15 @@ import sys
 import time
 from pathlib import Path
 
-from . import BUS_NAME, BUS_PATH
+from . import BUS_NAME, BUS_PATH, __version__
 from .config import Config
 from .fnclient import SOCKET
-from .realtime import AuthError, RealtimeError, list_models
 
 EXTENSION = "tuxistant@buengenio"
+FN_HELPER = "/usr/local/lib/tuxistant/tuxistant-fn"
+# What the daemon imports, and the Debian and Ubuntu package each comes in.
+MODULES = {"dbus_fast": "python3-dbus-fast", "websockets": "python3-websockets",
+           "yaml": "python3-yaml", "gi": "python3-gi"}
 
 
 async def call(member: str, signature: str = "", body: tuple = ()) -> list:
@@ -94,8 +98,27 @@ def is_socket(path: str) -> bool:
         return False
 
 
+def missing_packages() -> list[str]:
+    return [package for module, package in MODULES.items()
+            if importlib.util.find_spec(module) is None]
+
+
+def fn_helper(socket: str) -> tuple[bool, str]:
+    """Holding Fn is optional, so no helper passes. One that is installed but not running fails."""
+    if is_socket(socket):
+        return True, socket
+    if Path(os.environ.get("TUXISTANT_FN_HELPER", FN_HELPER)).exists():
+        return False, f"installed, but nothing is listening on {socket}"
+    return True, "not installed, so holding Fn does nothing"
+
+
 def checks(config) -> list[tuple[bool, str, str]]:
     """(passed, what, detail) for each thing Tuxistant depends on."""
+    missing = missing_packages()
+    if missing:     # nothing else can be checked, or run, without them
+        return [(False, "Python modules present",
+                 "on Ubuntu or Debian: sudo apt install " + " ".join(missing))]
+    from .realtime import AuthError, RealtimeError, list_models
     server, pipeline, tts = config["server"], config["pipeline"], config["tts_model"]
     reachable, accepted, detail, models = True, False, "", []
     try:
@@ -106,19 +129,20 @@ def checks(config) -> list[tuple[bool, str, str]]:
     except RealtimeError as e:
         reachable = accepted = False
         detail = "not checked: " + str(e)
-    fn_socket = os.environ.get("TUXISTANT_FN_SOCKET", SOCKET)
+    fn_running, fn_detail = fn_helper(os.environ.get("TUXISTANT_FN_SOCKET", SOCKET))
     tools = [t for t in ("pw-record", "pw-cat") if not shutil.which(t)]
     cards, cards_detail = extension_can("CanAsk")
     typing, typing_detail = extension_can("CanType")
     speech_to_text = config["transcribe_model"]
     return [
+        (True, "Python modules present", ""),
         (reachable, "server reachable", server),
         (accepted, "API key accepted", detail),
         (pipeline in models, "pipeline present", pipeline),
         (tts in models, "voice model present", tts),
         (speech_to_text in models, "speech to text model present", speech_to_text),
         (not tools, "PipeWire tools present", "missing: " + ", ".join(tools) if tools else ""),
-        (is_socket(fn_socket), "Fn helper socket present", fn_socket),
+        (fn_running, "Fn helper running", fn_detail),
         (extension_installed(), "GNOME extension installed", EXTENSION),
         (extension_enabled(), "GNOME extension enabled", EXTENSION),
         (daemon_activatable(), "daemon can be started", BUS_NAME),
@@ -136,6 +160,7 @@ def doctor() -> int:
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="tuxistant", description="Voice assistant for Linux.")
+    parser.add_argument("--version", action="version", version=f"tuxistant {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("daemon", help="run the daemon")
     commands.add_parser("toggle", help="start listening, or cancel what is going on")
@@ -164,6 +189,10 @@ def main(argv=None) -> int:
             case "settings":
                 from .settings_app import main as settings
                 return settings()
+    except ImportError as e:
+        print(f"tuxistant: the Python module {e.name} is missing. Run tuxistant doctor.",
+              file=sys.stderr)
+        return 1
     except (OSError, ValueError) as e:      # no session bus, or nothing answering on it
         print(f"tuxistant: {e}", file=sys.stderr)
         return 1

@@ -2,7 +2,7 @@
 
 Where the project stands and what comes next. Keep this current: it is how the next person picks up the work.
 
-Last updated 2026-11-04.
+Last updated 2026-11-10.
 
 ## Where things stand
 
@@ -11,13 +11,17 @@ Steps 1 to 3 of the plan below are built. Steps 2 and 3 have passed their tests 
 | Part | State |
 |---|---|
 | Daemon, blob, captions, Fn hold, status icon, Settings, themes | Working on the real desktop |
-| Time, disk, weather, news | Working. Weather and news not yet tried by voice |
+| Time, disk, weather, news | Working on the real desktop, by voice |
 | Approval gate and card | Tested in an isolated real GNOME Shell. Not yet on the real desktop |
-| Files, phone, shell, system facts, translation | Tested with the real model. See "Check on the real desktop" |
+| Files, phone, shell, system facts | Tested with the real model. See "Check on the real desktop" |
+| Translation | Spoken translation works on the real desktop. Translating a selection has not been tried there |
+| Tapo lights | Working on the real desktop with an L530. The bulb sometimes went missing until the Tapo app woke it. Since 2026-11-10 bulbs are remembered and asked directly, which still has to prove itself over a few days |
 | Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
 | Multi-step planner, local model | Two live runs worked |
 | Multi-step planner, cloud | Tested against a stub only. Never called the real Claude API |
 | Website | On GitHub Pages. See [website/README.md](../website/README.md) |
+| Demo video | A 64 second draft from `tools/demo_video.py`: the real extension in an isolated shell, with scripted requests and synthesised voices, and it says so on screen. The owner accepted it on 2026-11-10. Not published anywhere yet |
+| Server kit | In `server/`, copied from the owner's working server with its host name and user id made general. That general copy has not yet set up a second machine |
 | Local skill install, code skill sandbox, community registry | Not started |
 
 The code is public under GPL-3.0.
@@ -80,16 +84,18 @@ Don't act on these until they answer.
 
 None of this can be proved from a test. After `./install.sh` and a logout:
 
-1. `tuxistant doctor` says approval cards are ready.
+1. **Passed 2026-11-10:** `tuxistant doctor` says approval cards are ready, and dictation too.
 2. A card appears, Deny and Allow both work, and the blob comes back for a card after an Fn hold was released.
 3. "Open my CV" opens it. `gio open` has only ever run from a test, not from inside `tuxistant.service`.
 4. "Where's my phone?" rings it, and sending a small file arrives. No real transfer or ring has ever been done.
 5. "Install VLC" or any `sudo` command shows a password prompt. `pkexec` from a systemd user service has never run for real.
-6. "Translate what I've selected into French" reads the selection, and a translation is spoken in its own voice in a whole voice turn.
+6. "Translate what I've selected into French" reads the selection. A translation spoken in its own voice in a whole voice turn passed on 2026-11-10.
 7. Locking the screen during a card cancels it. The logind lock path is untested.
-8. Weather and news by voice.
+8. **Passed 2026-11-10:** weather and news by voice.
 9. Cloud, once the owner adds a key: run `./install.sh --cloud-sdk`, then try one multi-step request.
 10. Dictation, with `tuxistant doctor` saying it's ready: tap Fn, then hold and speak, in a GTK app such as Text Editor, in a terminal, and in VS Code or Chromium, which should take the paste route. Check that the clipboard is unchanged afterwards, that a password box refuses, and that Ctrl+Super+D starts and stops it.
+
+11. **Passed 2026-11-10:** lights, with the TP-Link account in Settings: "Is the light on?", then "Turn off the light" and "Make it warm white".
 
 Move site claims from Soon to Now only after the matching check passes.
 
@@ -103,6 +109,7 @@ Move site claims from Soon to Now only after the matching check passes.
 - It chains `file.find` then `phone.send` itself and rarely picks `task.run`.
 - Its answers about the weather can pair days oddly, and "do I need a coat" varies.
 - It still refuses some plain facts, and always refuses "What's 15 percent of 80?". With no tools in front of it, it answered 66 of 66, so the tool list causes this, not its knowledge. A tool that asks the model again without the tool list might close the gap. Not tried yet.
+- Adding the two light tools cost plain facts: 43 of 50 answered without them, 35 to 40 of 50 with them (5 repeats, 2026-11-10). "When did World War Two end?" went from 5 of 5 to 0 of 5. Shorter wording and a single tool didn't help, as the refusals only moved to other questions. All 27 light requests route right.
 - About 1 fact in 80 comes back confidently wrong, such as Charlotte Brontë for Pride and Prejudice, and "What language do they speak in Brazil?" can reach the translate tool.
 
 **Dictation:**
@@ -139,16 +146,24 @@ Move site claims from Soon to Now only after the matching check passes.
 - Thousands of secret-named files directly in the home folder make every sandboxed command fail. It fails shut, but it does stop the sandbox.
 - The seccomp filter has only run for real on aarch64. On x86_64 it was checked with a BPF interpreter.
 - A process already running as you, outside the sandbox, can do whatever you can. Only the shell can answer a card, but card text is broadcast on the session bus.
+- The approval card's wait before Allow works now starts from a painted frame. That fix is in the extension, so the real desktop has it only after `./install.sh` and a login.
+- `./uninstall.sh` leaves the extension's name in GNOME's list of enabled extensions. It is harmless, and installing again finds it already enabled.
+- Nothing has run on x86-64 or on Fedora. The server kit is x86-64 only and the desktop has only run on aarch64.
 - Approval cards are click-only, with no keyboard path. During a popup menu or a polkit dialog a click may not reach the card, which then times out as a no.
 - Kokoro is English-only here. Ukrainian uses the lowest-quality Piper voice, as no better one exists in the gallery. Chinese Traditional has not been tried on the Mandarin voice.
 - BBC news is UK-centric and its source isn't configurable.
+- Whisper mishears some place names, so a weather request can ask for a town that doesn't exist. It says the town wasn't found.
+- A Tapo bulb whose address changes while it also ignores broadcasts stays lost until it answers one. Its old address is tried first, which costs up to 4 seconds.
 - A shader trial can't prove a theme safe. Waves is click-through, so its menu is the panel icon's.
 
 ## Before any public download
 
-- Remove the owner's defaults: `stormshadow` in `tuxistant/config.py` and the `stormshadow` examples in `tuxistant/settings_app.py`. Move any saved settings along with it, because `config.json` only stores what differs from the defaults.
+- **Done 2026-11-10:** the owner's defaults are gone. The server starts as `localhost:8080`, and the owner's own `config.json` now names their server. Any other machine of the owner's needs the server set in Settings.
+- **Done 2026-11-10:** `server/` sets up the LocalAI side, which the README used to ask for without saying how.
+- **Done 2026-11-10:** a rehearsal on a clean Ubuntu 26.04 in a container, following only the README. It found the README named no packages and no way to get the code, the installer said "installed" with modules missing, and `doctor` crashed. All fixed. With two packages added, the install, the extension in Ubuntu's own GNOME Shell 50.1, the daemon, Settings and the uninstall worked. It could not check a real login, the Fn helper running, audio, or any server.
+- Run `server/setup.sh` on a machine that isn't the owner's.
 - Give the default theme a shape and colours of its own.
-- Make the news source configurable.
-- Build a tarball, set `url` in `website/src/releases.json`, then run `website/deploy.sh`.
+- Make the news source configurable. Next: the owner chose sources you set in Settings.
+- **Done 2026-11-10:** `v0.1.0` is tagged as a preview, and the site's download button points at the tarball GitHub builds for the tag. [CHANGELOG.md](../CHANGELOG.md) has the text of the release page.
 - Have native speakers check the site's translations, including the Auto/Light/Dark words. Five languages now, 25 to 30 later.
 - Replace the favicon, which is still the old penguin.

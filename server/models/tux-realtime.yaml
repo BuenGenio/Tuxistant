@@ -1,0 +1,16 @@
+# Default voice pipeline: multilingual Whisper turbo + silence-based turn detection.
+#   ws://<server>:8080/v1/realtime?model=tux-realtime
+name: tux-realtime
+pipeline:
+  vad: silero-vad-ggml
+  transcription: whisper-large-turbo-q5_0
+  llm: tux-brain
+  tts: tux-voice
+  disable_thinking: true
+  max_history_items: 12
+  streaming:
+    llm: true
+    tts: true
+    clause_chunking: true
+  turn_detection:
+    type: server_vad

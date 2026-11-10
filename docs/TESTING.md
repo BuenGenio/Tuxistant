@@ -8,8 +8,8 @@
 | One module | `python3 -m unittest tests.test_files` | |
 | Real GNOME Shell, isolated | `tests/shell_harness/shot.sh <theme> <out.png>`, `tests/shell_harness/card.sh`, and `TUX_SCENARIO=dictation` or `dictation_real` for real typing into real windows | `gnome-shell`. Safe next to the desktop |
 | A shell you can use | `tools/try-nested.sh` | `mutter-dev-bin`. Uses your real config, mic and speakers |
-| End to end | `TUXISTANT_LIVE=1 TUXISTANT_API_KEY=... python3 tests/shell_harness/test_e2e_live.py` | LocalAI |
-| Live protocol | `TUXISTANT_LIVE=1 python3 -m unittest tests.test_realtime_live` | LocalAI |
+| End to end | `TUXISTANT_LIVE=1 TUXISTANT_SERVER=host:8080 TUXISTANT_API_KEY=... python3 tests/shell_harness/test_e2e_live.py` | LocalAI |
+| Live protocol | `TUXISTANT_LIVE=1 TUXISTANT_SERVER=host:8080 TUXISTANT_API_KEY=... python3 -m unittest tests.test_realtime_live` | LocalAI |
 | Which tool the model picks | `python3 tools/eval_routing.py` | LocalAI |
 | Whole requests | `python3 tools/eval_flows.py "a request"` | LocalAI |
 | Do the voices say the words | `python3 tools/check_voices.py` | LocalAI |
@@ -17,7 +17,7 @@
 
 ## After changing a tool
 
-Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run scored 113 of 120 with 17 tools, at about 0.4 s per request, and answered 26 of 30 facts.
+Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run (2026-11-10) scored 141 of 147 with 19 tools, at about 0.4 s per request, and answered 23 of 33 facts.
 
 Run it after changing the instructions too. It also asks plain facts and checks the reply, because "no tool" alone can't tell an answer from "I can't do that". That gap once hid Tux refusing 44 of 70 simple questions behind a good routing score.
 

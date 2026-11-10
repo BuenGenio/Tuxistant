@@ -47,7 +47,11 @@ PERMISSION_WORDS = {
 }
 HOME_SERVER = "home"        # a network permission naming the server this install talks to
 SHELL_ACTION = "shell.run"
-KEY_SET = {"api_key": "api_key_set", "cloud_api_key": "cloud_key_set"}  # keys never come back
+KEY_SET = {"api_key": "api_key_set", "cloud_api_key": "cloud_key_set",   # never come back
+           "tapo_password": "tapo_password_set"}
+KEY_WORDS = {"tapo_password": ("Password is set", "No password set")}
+LIGHTS_NOTE = ("The TP-Link account your Tapo lights are set up with. The password never "
+               "leaves this computer")
 AUTOMATIC = "Automatic"
 PHONE_NOTE = "Used when you don't name a device"
 NO_PHONES = "GSConnect isn't running or has no devices"
@@ -494,6 +498,7 @@ class GeneralPage(Adw.PreferencesPage):
         self.saved_instructions = ""
         self.saved_translate = ""
         self.saved_model = ""
+        self.saved_tapo_email = ""
         self.devices = None  # what ListPhones last said: None until it has answered
         self.phone_values = []
         self.phone_labels = []
@@ -506,6 +511,7 @@ class GeneralPage(Adw.PreferencesPage):
         self.add(self._weather_group())
         self.add(self._phone_group())
         self.add(self._translation_group())
+        self.add(self._lights_group())
         self.add(self._cloud_group())
         self.add(self._shortcuts_group())
         self.add(self._instructions_group())
@@ -580,6 +586,16 @@ class GeneralPage(Adw.PreferencesPage):
         self.translate.connect("apply", self.on_translate_apply)
         self.translate.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.translate)
+        return group
+
+    def _lights_group(self):
+        group = Adw.PreferencesGroup(title="Lights", description=LIGHTS_NOTE)
+        self.tapo_email = Adw.EntryRow(title="TP-Link email", show_apply_button=True)
+        self.tapo_email.connect("apply", self.on_tapo_email_apply)
+        group.add(self.tapo_email)
+        self.tapo_password, self.tapo_password_status, self.tapo_password_remove = self._key_row(
+            "TP-Link password", "tapo_password")
+        group.add(self.tapo_password)
         return group
 
     def _cloud_group(self):
@@ -682,6 +698,10 @@ class GeneralPage(Adw.PreferencesPage):
         if self.translate.get_text() == self.saved_translate:
             self.set_row_text(self.translate, translate)
         self.saved_translate = translate
+        email = config.get("tapo_email", "")
+        if self.tapo_email.get_text() == self.saved_tapo_email:
+            self.set_row_text(self.tapo_email, email)
+        self.saved_tapo_email = email
         model = config.get("cloud_model") or DEFAULTS["cloud_model"]
         if self.cloud_model.get_text() == self.saved_model:
             self.set_row_text(self.cloud_model, model)
@@ -712,9 +732,11 @@ class GeneralPage(Adw.PreferencesPage):
     def show_keys(self):
         for status, remove, name in (
                 (self.key_status, self.key_remove, "api_key"),
-                (self.cloud_key_status, self.cloud_key_remove, "cloud_api_key")):
+                (self.cloud_key_status, self.cloud_key_remove, "cloud_api_key"),
+                (self.tapo_password_status, self.tapo_password_remove, "tapo_password")):
             is_set = self.win.config.get(KEY_SET[name], False)
-            status.set_label("Key is set" if is_set else "No key set")
+            words = KEY_WORDS.get(name, ("Key is set", "No key set"))
+            status.set_label(words[0] if is_set else words[1])
             remove.set_visible(is_set)
 
     def show_devices(self, devices):
@@ -746,7 +768,7 @@ class GeneralPage(Adw.PreferencesPage):
         server = clean_server(row.get_text())
         if server is None:
             row.add_css_class("error")
-            self.win.toast("Enter a host name and port, like stormshadow:8080")
+            self.win.toast("Enter a host name and port, like myserver:8080")
             return
         self.set_row_text(row, server)
         if server != self.saved_server and self.win.config.get("api_key_set"):
@@ -765,11 +787,17 @@ class GeneralPage(Adw.PreferencesPage):
         server = clean_server(text) if text else ""
         if server is None:
             row.add_css_class("error")
-            self.win.toast("Enter a host name and port, like stormshadow:5000")
+            self.win.toast("Enter a host name and port, like myserver:5000")
             return
         self.set_row_text(row, server)
         self.saved_translate = server
         self.win.save("translate_server", server)
+
+    def on_tapo_email_apply(self, row):
+        email = row.get_text().strip()
+        self.set_row_text(row, email)
+        self.saved_tapo_email = email
+        self.win.save("tapo_email", email)
 
     def on_model_apply(self, row):
         model = row.get_text().strip() or DEFAULTS["cloud_model"]
@@ -778,9 +806,10 @@ class GeneralPage(Adw.PreferencesPage):
         self.win.save("cloud_model", model)
 
     def on_key_apply(self, row, name):
-        key = row.get_text().strip()
+        text = row.get_text()
+        key = text if name == "tapo_password" else text.strip()    # a password may end in a space
         row.set_text("")
-        if key:
+        if key.strip():
             self.set_key(name, key)
 
     def on_key_remove(self, _button, name):

@@ -35,6 +35,7 @@ def describe(error: Exception) -> str:
     if isinstance(error, FileNotFoundError) and error.filename:
         return f"{error.filename} is not installed"
     if isinstance(error, (RealtimeError, OSError)):
+        log.warning("turn failed: %s", error)   # the screen shows it too, but a terminal has no screen
         return str(error)
     log.error("turn failed", exc_info=error)
     return "Something went wrong. The log has the details"  # its text could hold anything

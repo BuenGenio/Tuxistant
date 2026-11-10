@@ -16,11 +16,14 @@ Built-in skills, in `tuxistant/skills_builtin/`:
 | Trash | `file.trash` | `files_write` | high |
 | Phone | `phone.ring`, `phone.battery` | none | low |
 | Phone send | `phone.send` | `files_read` | medium |
+| Lights | `lights.set`, `lights.status` | none | low |
 | Translate | `translate.text`, `translate.selection` | `network: [home]`, and `clipboard` for the selection | medium |
 | Shell | `shell.run` | `shell` | high |
 | Task | `task.run` | `shell` | high |
 
-A skill with a `home` network permission only talks to the server this install already uses. Settings lists each skill with its permissions and risk:
+A skill with a `home` network permission only talks to the server this install already uses.
+
+Lights controls Tapo bulbs such as the L530 on your own network, so it needs no card, the same as ringing your phone. It finds them with a broadcast, then remembers them in `lights.json` beside the config and asks them directly too, since a bulb saving power misses some broadcasts. It uses the TP-Link email and password from Settings. The password never leaves this computer: KLAP only sends proofs that it is known, and the bulb has to prove it knows it first. Only typed values reach a bulb (on or off, a number, a colour from a fixed list), so it can't carry anything private out. A bulb's name is whatever anyone typed into the Tapo app, so it is cut short and its control characters shown as escapes before the model sees it. Settings lists each skill with its permissions and risk:
 
 <img src="images/settings-skills.png" width="640" alt="The Skills page in Settings: each skill with what it can do, what it is allowed to do and its risk.">
 

@@ -5,8 +5,9 @@ and what Tux would say.
     python3 tools/eval_flows.py ["a request" ...]
 
 Every card is declined. That alone would not make this safe, as actions with no card really run:
-it once opened the user's CV on screen. So opening files and phone actions are cut off below, and
-any new action with no card that touches the desktop or a device must be cut off here too. What
+it once opened the user's CV on screen. So opening files, phone and light actions are cut off
+below, and any new action with no card that touches the desktop or a device must be cut off here
+too. What
 still runs: file search, reading system facts, sandboxed read-only commands, weather, news, and
 translation on your own server.
 """
@@ -20,18 +21,20 @@ import websockets
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tuxistant import files, phone  # noqa: E402
+from tuxistant import files, lights, phone  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
 
 
-def blocked(*_args):
+def blocked(*_args, **_kwargs):
     raise RuntimeError("Blocked by eval_flows")
 
 
 files._launch = lambda path: print(f"   (would open {path.name})") or True
 phone._activate = blocked
+lights.discover = blocked    # no broadcast, so no light is ever reached
+lights.Klap._post = blocked
 
 cfg = Config()
 KEY = cfg["api_key"]

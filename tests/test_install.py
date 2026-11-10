@@ -9,6 +9,7 @@ import os
 import pty
 import re
 import shutil
+import site
 import stat
 import subprocess
 import sys
@@ -75,6 +76,8 @@ class Prefix(unittest.TestCase):
             "XDG_BIN_HOME": str(self.bin), "DESTDIR": str(self.dest),
             "SHIM_LOG": str(self.shim_log), "SSH_REPLY": "",
             "TUXISTANT_INSTALL_DRYRUN": "1",
+            # HOME is a temp folder, and the daemon's modules may be in the real user's site folder.
+            "PYTHONUSERBASE": site.getuserbase(),
         }
 
     def run_script(self, name="install.sh", *args, project=None, stdin=subprocess.DEVNULL, **env):
@@ -228,6 +231,18 @@ class DryRun(Prefix):
     def test_unknown_option_changes_nothing(self):
         done = self.run_script("install.sh", "--nope")
         self.assertEqual(done.returncode, 2)
+        self.assertFalse(self.dest.exists())
+
+    def test_a_missing_module_stops_it_before_anything_is_copied(self):
+        # None in sys.modules is how Python records a module that can't be imported.
+        (self.tmp / "without").mkdir()
+        (self.tmp / "without/sitecustomize.py").write_text(
+            "import sys\nsys.modules['dbus_fast'] = sys.modules['websockets'] = None\n")
+        done = self.run_script("install.sh", "--no-fn-helper", PYTHONPATH=str(self.tmp / "without"))
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("sudo apt install python3-dbus-fast python3-websockets\n", done.stderr)
+        self.assertNotIn("python3-yaml", done.stderr, "only what is missing is named")
+        self.assertNotIn("is installed", done.stdout)
         self.assertFalse(self.dest.exists())
 
     def test_missing_extension_is_reported(self):
@@ -450,10 +465,12 @@ class CloudSdk(Prefix):
 
     def test_no_pip_at_all_is_a_warning_too(self):
         (self.tmp / "nopip/pip").mkdir(parents=True)
+        (self.tmp / "nopip/pip/__init__.py").write_text("")     # or the real pip is found first
         (self.tmp / "nopip/pip/__main__.py").write_text("raise SystemExit('no module named pip')\n")
         done = self.ok("install.sh", "--no-fn-helper", "--cloud-sdk",
                        PYTHONPATH=str(self.tmp / "nopip"))
-        self.assertIn("could not add the Claude SDK", done.stderr)
+        self.assertIn("needs pip", done.stderr)
+        self.assertIn("python3-pip", done.stderr)
         self.assertIn("gnome-extensions enable", done.stdout)
 
     @unittest.skipUnless(has_pip(), "pip is not installed")

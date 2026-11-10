@@ -1,0 +1,17 @@
+id: org.tuxistant.lights
+name: Lights
+description: Turns your Tapo smart lights on and off, dims them and changes their colour, on your own network
+version: 1.0.0
+permissions: {}
+actions:
+  lights.set:
+    description: Turn the user's lights or lamp on or off, dim or brighten them, or change their colour
+    params:
+      state: { type: string, enum: ["on", "off"], description: "on or off" }
+      brightness: { type: string, description: "A percentage like 40, or brighter or dimmer" }
+      color: { type: string, description: "A colour like blue, or a white like warm white or daylight" }
+      light: { type: string, description: "Only if the user named a light. Leave it out for all of them" }
+  lights.status:
+    description: Say whether the user's lights are on, and how bright and what colour they are
+    params:
+      light: { type: string, description: "Only if the user named a light. Leave it out for all of them" }

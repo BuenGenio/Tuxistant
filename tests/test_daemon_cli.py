@@ -21,7 +21,8 @@ class Doctor(unittest.TestCase):
         self.folder = Path(temp.name)
         patcher = mock.patch.dict(os.environ, {
             "XDG_DATA_HOME": str(self.folder / "data"), "XDG_DATA_DIRS": str(self.folder / "none"),
-            "TUXISTANT_FN_SOCKET": str(self.folder / "fn.sock")})
+            "TUXISTANT_FN_SOCKET": str(self.folder / "fn.sock"),
+            "TUXISTANT_FN_HELPER": str(self.folder / "tuxistant-fn")})
         patcher.start()
         self.addCleanup(patcher.stop)
         # The real gsettings would read the session of whoever runs the tests.
@@ -53,7 +54,7 @@ class Doctor(unittest.TestCase):
         self.assertTrue(results["pipeline present"])
         self.assertTrue(results["voice model present"])
         self.assertTrue(results["speech to text model present"])
-        self.assertFalse(results["Fn helper socket present"])
+        self.assertTrue(results["Fn helper running"], "holding Fn is optional")
         self.assertFalse(results["GNOME extension installed"])
 
     def test_bad_key_is_reachable_but_not_accepted(self):
@@ -81,7 +82,7 @@ class Doctor(unittest.TestCase):
             s.bind(str(self.folder / "fn.sock"))
             results = self.results(self.config(self.fake().port))
         self.assertTrue(results["GNOME extension installed"])
-        self.assertTrue(results["Fn helper socket present"])
+        self.assertTrue(results["Fn helper running"])
 
     def test_an_installed_extension_is_not_an_enabled_one(self):
         self.settings["enabled-extensions"] = "['other@example']"
@@ -104,9 +105,30 @@ class Doctor(unittest.TestCase):
         (services / "org.tuxistant.Daemon.service").write_text("")
         self.assertTrue(self.results(self.config(9))["daemon can be started"])
 
-    def test_a_plain_file_is_not_the_socket(self):
-        (self.folder / "fn.sock").write_text("")
-        self.assertFalse(self.results(self.config(9))["Fn helper socket present"])
+    def test_an_installed_helper_has_to_be_running(self):
+        (self.folder / "tuxistant-fn").write_text("")
+        self.assertFalse(self.results(self.config(9))["Fn helper running"])
+        (self.folder / "fn.sock").write_text("")     # a plain file is not the socket
+        self.assertFalse(self.results(self.config(9))["Fn helper running"])
+
+    def test_missing_modules_are_named_and_nothing_else_is_tried(self):
+        with mock.patch.dict(sys.modules, {"dbus_fast": None, "websockets": None}):
+            results = cli.checks(self.config(9))
+        self.assertEqual(results, [(False, "Python modules present", "on Ubuntu or Debian: "
+                                    "sudo apt install python3-dbus-fast python3-websockets")])
+
+    def test_a_command_that_needs_a_missing_module_says_so(self):
+        err = io.StringIO()
+        with mock.patch.object(cli, "call", side_effect=ModuleNotFoundError(name="dbus_fast")), \
+                contextlib.redirect_stderr(err):
+            self.assertEqual(cli.main(["toggle"]), 1)
+        self.assertIn("dbus_fast is missing", err.getvalue())
+
+    def test_version(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
+            cli.main(["--version"])
+        self.assertRegex(out.getvalue(), r"^tuxistant \d+\.\d+\.\d+\n$")
 
     def test_missing_pipewire_tools(self):
         with mock.patch.dict(os.environ, {"PATH": str(self.folder)}):
