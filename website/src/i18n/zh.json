@@ -37,6 +37,7 @@
   "versionsTitle": "版本", "colSystem": "系统", "colVersion": "版本号", "colStatus": "状态", "colNeeds": "运行要求",
   "preview": "预览版", "planned": "计划中", "linuxNeeds": "GNOME 50 和你自己的 LocalAI 服务器", "tbd": "待公布",
   "donateTitle": "帮助打造下一个版本", "donateText": "你的支持将用于开发 macOS 和 Windows 版本。",
-  "credit": "Tux 由 Larry Ewing 使用 The GIMP 绘制。",
-  "trademarks": "macOS 和 Windows 是其各自所有者的商标。"
+  "credit": "Tux 由 Larry Ewing 使用 The GIMP 绘制。Home Assistant 标志归 Home Assistant 所有，此处以单色显示，依据 CC BY-NC-SA 4.0 许可使用。",
+  "worksWith": "支持",
+  "trademarks": "Linux、GNOME、BBC、The Kyiv Independent、Google Calendar、Tapo、Open-Meteo、LibreTranslate、Home Assistant、Spotify、CNN、Windows 和 macOS 均为其各自所有者的商标，在此提及仅为说明 Tuxistant 现已支持或即将支持的对象。它们均未赞助或认可 Tuxistant。"
 }

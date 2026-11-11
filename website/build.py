@@ -24,6 +24,37 @@ DONATE = "https://buymeacoffee.com/buengenio"
 THEME_ORDER = ["tux", "orb", "waves", "scanner"]
 OS_ORDER = [("linux", "Linux"), ("macos", "macOS"), ("windows", "Windows")]
 MODES = ["auto", "light", "dark"]
+# The "Works with" ticker, in the order shown: name, mark, status. One line each, so a brand is
+# removed or moved by touching one line. A mark is a file in src/logos/ (SOURCES.md there says where
+# each came from and on what terms); None sets the name in text instead. Statuses follow the rule
+# for every claim on the site: now only once it has worked on a real machine.
+WORKS_WITH = [
+    ("Linux", "linux", "now"),
+    ("GNOME", "gnome", "now"),
+    ("BBC", "bbc", "now"),
+    ("The Kyiv Independent", "kyiv-independent", "now"),
+    ("Google Calendar", "google-calendar", "now"),
+    ("Tapo", "tapo", "now"),
+    ("Open-Meteo", None, "now"),
+    ("LibreTranslate", "libretranslate", "now"),
+    ("Home Assistant", "home-assistant", "soon"),
+    ("Spotify", "spotify", "soon"),
+    ("InteliMaris", "intelimaris", "soon"),
+    ("CNN", "cnn", "soon"),     # not a news source yet and its feeds are dead: the owner decides
+    ("Windows", "windows", "soon"),
+    ("macOS", "macos", "soon"),
+]
+# Each mark: the height it is drawn at in px, so wordmarks and symbols carry similar weight, and
+# whether it spells the name itself. A symbol gets its name set beside it, and so does a mark not
+# listed here, at 22 px.
+MARKS = {
+    "linux": (28, False), "gnome": (24, False), "google-calendar": (22, False),
+    "libretranslate": (24, False), "home-assistant": (23, False), "spotify": (22, False),
+    "intelimaris": (26, False), "windows": (20, False),
+    "bbc": (18, True), "kyiv-independent": (24, True), "tapo": (22, True), "cnn": (18, True),
+    "macos": (13, True),
+}
+OURS = {"InteliMaris"}      # the owner's own company; every other name is someone else's trademark
 MODE_ICONS = (
     '<svg class="i-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/>'
     '<path class="solid" d="M12 3a9 9 0 0 1 0 18z"/></svg>'
@@ -94,6 +125,41 @@ def panels_html(strings):
                       f'aria-labelledby="tab-{os_id}"{"" if os_id == "linux" else " hidden"}>'
                       + "".join(cards) + "</ul>")
     return "".join(tabs), "".join(panels)
+
+
+def mark_files():
+    """The marks in use, each as (viewBox, drawing) from its file in src/logos/."""
+    files = {}
+    for mark in dict.fromkeys(mark for _, mark, _ in WORKS_WITH if mark):
+        text = (SRC / "logos" / f"{mark}.svg").read_text()
+        files[mark] = (re.search(r'viewBox="([^"]+)"', text)[1],
+                       re.search(r"<svg[^>]*>(.*)</svg>", text, re.S)[1])
+    return files
+
+
+def ticker_html(strings):
+    """A label and two copies of one list. The second copy is what makes the loop seamless, so it
+    is hidden from assistive tech. Each mark is drawn once, in a sprite both copies point at."""
+    files = mark_files()
+    sprite = "".join(f'<symbol id="mark-{mark}" viewBox="{view}">{drawing}</symbol>'
+                     for mark, (view, drawing) in files.items())
+    items = []
+    for name, mark, status in WORKS_WITH:
+        picture, hidden = "", ""
+        if mark:
+            height, spells_name = MARKS.get(mark, (22, False))
+            width, tall = map(float, files[mark][0].split()[2:])
+            picture = (f'<svg class="mark" width="{height * width / tall:.4g}" height="{height}" '
+                       f'aria-hidden="true" focusable="false"><use href="#mark-{mark}"/></svg>')
+            hidden = " visually-hidden" if spells_name else ""
+        items.append(f'<li class="ticker-item is-{status}">{picture}'
+                     f'<span class="mark-name{hidden}">{esc(name)}</span>{tag(strings, status)}</li>')
+    items = "".join(items)
+    return (f'<svg class="marks" aria-hidden="true" focusable="false">{sprite}</svg>'
+            f'<p class="ticker-label" id="works-with">{esc(strings["worksWith"])}</p>'
+            '<div class="ticker-view">'
+            f'<ul class="ticker-list" aria-labelledby="works-with" tabindex="0">{items}</ul>'
+            f'<ul class="ticker-list" aria-hidden="true">{items}</ul></div>')
 
 
 def versions_html(strings, releases):
@@ -171,6 +237,7 @@ def page(code, strings, languages, releases, detect, policy):
       <p class="dl-meta"><span id="dl-meta-text"></span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
     </div>
   </section>
+  <div class="wrap"><div class="ticker">{ticker_html(strings)}</div></div>
   <section class="section wrap" aria-labelledby="examples-title">
     <h2 id="examples-title">{esc(strings['examplesTitle'])}</h2>
     <div class="tabs" role="tablist" aria-labelledby="examples-title">{tabs}</div>

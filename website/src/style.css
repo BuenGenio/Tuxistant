@@ -206,6 +206,55 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .dl-meta { margin: 6px 0 0; color: var(--muted); font-size: 0.88rem; }
 .dl-meta a { color: var(--text); }
 
+/* Works with: a slim strip. Two copies of one list sit side by side and each slides by its own
+   width plus the gap, so the second lands exactly where the first began. No script. */
+.ticker {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-block-start: 16px;
+  padding-block: 7px;
+  border-block: 1px solid var(--line);
+}
+.ticker:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
+.marks { position: absolute; width: 0; height: 0; }
+.ticker-label { flex: none; margin: 0; color: var(--muted); font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
+.ticker-view {
+  --gap: 30px;
+  --fade: 26px;
+  flex: 1;
+  display: flex;
+  gap: var(--gap);
+  min-width: 0;
+  overflow: hidden;
+  overflow: clip;     /* clip can't be scrolled, even by focus, and keeps the page from growing sideways */
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--fade), #000 calc(100% - var(--fade)), transparent);
+}
+.ticker-list {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: var(--gap);
+  min-width: 100%;    /* never narrower than the strip, or the loop would show a hole */
+  min-height: 28px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  animation: ticker 50s linear infinite;    /* about 45 px a second */
+}
+.ticker-list:focus-visible { outline: none; }   /* the strip shows the ring: the list is clipped */
+[dir="rtl"] .ticker-list { animation-name: ticker-rtl; }
+.ticker:hover .ticker-list,
+.ticker:focus-within .ticker-list { animation-play-state: paused; }
+@keyframes ticker { to { transform: translateX(calc(-100% - var(--gap))); } }
+@keyframes ticker-rtl { to { transform: translateX(calc(100% + var(--gap))); } }
+.ticker-item { display: flex; align-items: center; gap: 7px; font-size: 0.9rem; font-weight: 650; white-space: nowrap; }
+.mark { flex: none; display: block; fill: currentColor; }
+.is-soon .mark, .is-soon .mark-name { color: var(--muted); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
 /* Sections */
 .section { padding-block-start: 26px; }
 .tabs { display: flex; gap: 6px; margin-block: 10px; }
@@ -261,4 +310,9 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 
 @media (prefers-reduced-motion: reduce) {
   .site-header { transition: none; }
+  /* The ticker stands still: one copy, wrapped onto as many lines as it needs. */
+  .ticker { flex-direction: column; gap: 6px; }
+  .ticker-view { flex: none; max-width: 100%; overflow: visible; -webkit-mask-image: none; mask-image: none; }
+  .ticker-list { flex: 0 1 auto; flex-wrap: wrap; justify-content: center; gap: 8px 26px; min-width: 0; animation: none; }
+  .ticker-list[aria-hidden="true"] { display: none; }
 }

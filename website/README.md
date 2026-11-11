@@ -33,5 +33,6 @@ For a custom domain, set `SITE_URL` in `deploy.sh`, have `build.py` write a `CNA
 
 - **Text:** `src/i18n/<language>.json`. Adding a language means adding one file. Every claim is tagged `now` or `soon`, and a claim moves to `now` only once the feature has worked on a real machine.
 - **Versions and download links:** `src/releases.json`. A null `url` shows "coming soon".
+- **Works with:** the `WORKS_WITH` list in `build.py`, one line per brand: name, mark, and `now` or `soon`. Marks are files in `src/logos/`, and `src/logos/SOURCES.md` says where each came from and on what terms. A mark of `None` sets the name in text. Add a new name to the `trademarks` line in every language, or the tests fail. The ticker is CSS only, and stands still for people who ask for reduced motion.
 - **Themes:** `build.py` takes them from `../themes/`. They run in WebGL1 here and in Cogl on the desktop, so check a shader change in both. Band themes have an ink colour for light mode, in the footer of the shader in `src/app.js`.
 - **Layout rules:** H1 and H2 never wrap at any width, gaps stay tight, and the stage fits the viewport on a phone.

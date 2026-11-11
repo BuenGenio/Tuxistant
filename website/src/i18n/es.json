@@ -37,6 +37,7 @@
   "versionsTitle": "Versiones", "colSystem": "Sistema", "colVersion": "Versión", "colStatus": "Estado", "colNeeds": "Requisitos",
   "preview": "Vista previa", "planned": "Prevista", "linuxNeeds": "GNOME 50 y tu propio servidor LocalAI", "tbd": "Por anunciar",
   "donateTitle": "Ayuda a crear la próxima versión", "donateText": "Tu apoyo financia las versiones para macOS y Windows.",
-  "credit": "Tux fue dibujado por Larry Ewing con The GIMP.",
-  "trademarks": "macOS y Windows son marcas de sus respectivos dueños."
+  "credit": "Tux fue dibujado por Larry Ewing con The GIMP. El logotipo de Home Assistant es de Home Assistant, aquí en un solo color, bajo la licencia CC BY-NC-SA 4.0.",
+  "worksWith": "Funciona con",
+  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Home Assistant, Spotify, CNN, Windows y macOS son marcas de sus respectivos dueños y se nombran solo para decir con qué funciona o funcionará Tuxistant. Ninguno lo patrocina ni lo avala."
 }
