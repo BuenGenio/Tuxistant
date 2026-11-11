@@ -17,7 +17,7 @@ from .config import DATA_DIR, Config
 from .controller import Controller
 from .fnclient import FnClient
 from .history import History
-from .skills import Skills
+from .skillhost import SkillHost
 
 LEVEL_INTERVAL_S = 1 / 30
 LIST_THEMES_TIMEOUT_S = 25      # themes.TRIAL_BUDGET_S plus one trial
@@ -45,8 +45,10 @@ SHIELD_XML = f"""<node><interface name="{SHIELD_INTERFACE}">
 
 class Daemon(ServiceInterface):
     def __init__(self, config, history, skills, **audio):
+        """skills: a SkillHost, or a fixed Skills for tests."""
         super().__init__(BUS_NAME)
-        self.config, self.history, self.skills = config, history, skills
+        self.config, self.history = config, history
+        self.host = skills if callable(getattr(skills, "reload", None)) else None
         self.controller = Controller(config, history, skills, emit=self.send, **audio)
         self.last_level = 0.0
         self.children = set()
@@ -62,9 +64,7 @@ class Daemon(ServiceInterface):
     def drop_dictation(self):
         ctl = self.controller
         if ctl.dictation or ctl.deliveries:
-            task = asyncio.create_task(ctl.shell_gone())
-            self.children.add(task)
-            task.add_done_callback(self.children.discard)
+            self.keep(ctl.shell_gone())
 
     def guard(self, message: Message) -> Message | None:
         """Runs before dispatch. Matched by name alone: a call may leave out the interface and
@@ -93,15 +93,30 @@ class Daemon(ServiceInterface):
                                   path=BUS_PATH, interface=BUS_NAME, member=name,
                                   signature=signature, body=list(body)))
 
+    def keep(self, coroutine):
+        task = asyncio.create_task(coroutine)
+        self.children.add(task)
+        task.add_done_callback(self.children.discard)
+
+    def set_config(self, key: str, value):
+        self.config.set(key, value)
+        self.ConfigChanged(key)
+        if self.host:   # a skill given this setting hears the new value at once
+            self.keep(self.host.config_changed(key))
+
+    def reload_skills(self) -> str:
+        return json.dumps(self.host.reload() if self.host else {})
+
+    def skills_changed(self):
+        self.SkillsChanged()
+
     async def launch_settings(self):
         env = dict(os.environ)
         package_root = str(Path(__file__).resolve().parent.parent)
         env["PYTHONPATH"] = os.pathsep.join(filter(None, [package_root, env.get("PYTHONPATH")]))
         child = await asyncio.create_subprocess_exec(
             sys.executable, "-P", "-m", "tuxistant", "settings", env=env)
-        task = asyncio.create_task(child.wait())    # reaps it
-        self.children.add(task)
-        task.add_done_callback(self.children.discard)
+        self.keep(child.wait())     # reaps it
 
     @method()
     async def Toggle(self):
@@ -142,10 +157,9 @@ class Daemon(ServiceInterface):
     @method()
     def SetConfig(self, key: "s", json_value: "s"):
         try:
-            self.config.set(key, json.loads(json_value))
+            self.set_config(key, json.loads(json_value))
         except (KeyError, TypeError, ValueError) as e:
             raise DBusError(INVALID, str(e.args[0])) from None
-        self.ConfigChanged(key)
 
     @method()
     def ListVoices(self) -> "s":
@@ -178,7 +192,11 @@ class Daemon(ServiceInterface):
 
     @method()
     def ListSkills(self) -> "s":
-        return json.dumps(self.skills.listing())
+        return json.dumps(self.controller.skills.listing())
+
+    @method()
+    def ReloadSkills(self) -> "s":
+        return self.reload_skills()
 
     @method()
     async def ListPhones(self) -> "s":
@@ -265,6 +283,10 @@ class Daemon(ServiceInterface):
         pass
 
     @signal()
+    def SkillsChanged(self):
+        pass
+
+    @signal()
     def Approval(self, id, title, detail, level, seconds) -> "ssssi":
         return [id, title, detail, level, seconds]
 
@@ -323,8 +345,18 @@ async def watch_lock(bus, controller):
 async def run(mic_factory=Mic, speaker_factory=Speaker) -> int:
     config = Config()
     history = History(DATA_DIR / "history.db", config["history_limit"])
-    daemon = Daemon(config, history, Skills(config=config), mic_factory=mic_factory,
+    host = SkillHost(config)
+    daemon = Daemon(config, history, host, mic_factory=mic_factory,
                     speaker_factory=speaker_factory)
+    host.on_change = daemon.skills_changed
+    await host.start()      # before the name is ours, so the first ListSkills has them all
+    try:
+        return await _serve_until_stopped(daemon)
+    finally:
+        await host.stop()
+
+
+async def _serve_until_stopped(daemon) -> int:
     bus = await MessageBus().connect()
     if not await serve(bus, daemon):
         print("tuxistant: the daemon is already running", file=sys.stderr)
@@ -332,8 +364,9 @@ async def run(mic_factory=Mic, speaker_factory=Speaker) -> int:
         return 1
     controller = daemon.controller
     fn = asyncio.create_task(FnClient(
-        config, controller.hold_start, controller.hold_end, on_dictate_start=controller.dictate_start,
-        on_dictate_end=controller.dictate_end, on_dictate_cancel=controller.cancel).run())
+        daemon.config, controller.hold_start, controller.hold_end,
+        on_dictate_start=controller.dictate_start, on_dictate_end=controller.dictate_end,
+        on_dictate_cancel=controller.cancel).run())
     lock = asyncio.create_task(watch_lock(bus, controller))
     stop = asyncio.Event()
     for number in (signals.SIGINT, signals.SIGTERM):

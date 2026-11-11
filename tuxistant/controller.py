@@ -50,7 +50,8 @@ class Turn:
     def __init__(self, ctl, hold: bool):
         self.ctl, self.hold = ctl, hold
         self.inbox = asyncio.Queue()    # everything the turn reacts to, in order of arrival
-        self.rt = ctl.make_realtime(ctl.config, ctl.skills, self.inbox.put_nowait, hold=hold)
+        self.skills = ctl.skills    # one Skills for the whole turn: what it offers, it can run
+        self.rt = ctl.make_realtime(ctl.config, self.skills, self.inbox.put_nowait, hold=hold)
         self.rt.confirm, self.rt.selection = ctl.ask, ctl.selection
         if time.monotonic() - ctl.found_at < FOUND_MEMORY_S:
             self.rt.session.found = list(ctl.found)
@@ -356,10 +357,21 @@ class Turn:
         await self.rt.close(abort=self.aborted)
 
 
+class _Fixed:
+    """A Skills that never reloads, standing in for a SkillHost."""
+
+    def __init__(self, skills):
+        self.skills = skills
+
+    def current(self):
+        return self.skills
+
+
 class Controller:
     def __init__(self, config, history, skills, emit=None,
                  mic_factory=Mic, speaker_factory=Speaker, realtime_factory=Realtime):
-        self.config, self.history, self.skills = config, history, skills
+        self.config, self.history = config, history
+        self.host = skills if callable(getattr(skills, "current", None)) else _Fixed(skills)
         self.emit = emit or (lambda name, *args: None)
         self.make_mic, self.make_speaker = mic_factory, speaker_factory
         self.make_realtime = realtime_factory
@@ -377,6 +389,11 @@ class Controller:
         self.face = False       # an extension that can draw cards has said hello
         self.typist = False     # and one that can type
         self.found, self.found_at = [], 0.0     # file.find's latest results, across turns
+
+    @property
+    def skills(self):
+        """The skills as they are now. A reload swaps them, so a turn takes this once."""
+        return self.host.current()
 
     @property
     def active(self) -> bool:

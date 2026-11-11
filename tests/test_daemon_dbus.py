@@ -40,6 +40,7 @@ METHODS = {
     "GetState": ("", "s"), "GetConfig": ("", "s"), "SetConfig": ("ss", ""),
     "ListVoices": ("", "s"), "PreviewVoice": ("s", ""), "Say": ("s", ""),
     "ListThemes": ("", "s"), "PreviewTheme": ("s", ""), "ListSkills": ("", "s"),
+    "ReloadSkills": ("", "s"),
     "GetHistory": ("i", "s"), "ClearHistory": ("", ""), "OpenSettings": ("", ""),
     "ListPhones": ("", "s"), "ListCalendars": ("", "s"),
     "Hello": ("i", ""), "CanAsk": ("", "b"), "Answer": ("sb", ""),
@@ -48,6 +49,7 @@ METHODS = {
 SIGNALS = {
     "StateChanged": "s", "Presence": "b", "Level": "d", "Transcript": "sb", "Reply": "s",
     "Error": "s", "ConfigChanged": "s", "ThemePreview": "s", "HistoryChanged": "",
+    "SkillsChanged": "",
     "Approval": "ssssi", "ApprovalClosed": "s", "SelectionWanted": "s",
     "DictationStarted": "s", "TypeText": "ssb",
 }

@@ -180,7 +180,7 @@ flowchart LR
 
 ## Skills and security
 
-Skills are how Tux gets new abilities, and the plan includes skills people can share through a community registry. That registry hasn't been started. Today there is no way to install someone else's skill, because every action is built into Tuxistant, so a community skill can't reach your computer yet.
+Skills are how Tux gets new abilities, and the plan includes skills people can share through a community registry. That registry hasn't been started. You can write your own skills with code: they run in a sandbox and load while Tux is running ([docs/SKILLS.md](docs/SKILLS.md#code-skills)). There is no way yet to install someone else's from a registry.
 
 The plan starts from one assumption: a bad skill will eventually get past review. Review helps, but permissions and the sandbox have to be what protects you.
 
@@ -190,10 +190,10 @@ The plan starts from one assumption: a bad skill will eventually get past review
 | Every risky action goes through a card | Built |
 | Private data can't leave without a click | Built |
 | Read-only shell commands run in a sandbox | Built, for the shell skill only |
-| Each skill confined to its declared permissions at run time | **Planned** |
+| Each skill confined to its declared permissions at run time | Built for code skills, which may only ask for the network, and get all of it or none. Built-in skills run inside the daemon |
 | Signing, hash pinning, re-approving new permissions | **Planned** |
 | Publisher namespaces against lookalike names | **Planned** |
-| Sandbox for skills with their own code | **Planned** |
+| Sandbox for skills with their own code | Built. Not yet tried on the real desktop |
 
 Confining each skill at run time matters most, because that's what has to hold once a bad skill gets through. Shell access stays built in, and community skills will never be able to request it. [docs/ROADMAP.md](docs/ROADMAP.md#rules-for-shared-skills) has the rules for shared skills and the order of the work.
 

@@ -1,4 +1,5 @@
-"""Command line: tuxistant daemon | toggle | cancel | say <text> | history | doctor | settings."""
+"""Command line: tuxistant daemon | toggle | cancel | say <text> | history | skills reload | doctor
+| settings."""
 import argparse
 import asyncio
 import importlib.util
@@ -20,6 +21,7 @@ FN_HELPER = "/usr/local/lib/tuxistant/tuxistant-fn"
 # What the daemon imports, and the Debian and Ubuntu package each comes in.
 MODULES = {"dbus_fast": "python3-dbus-fast", "websockets": "python3-websockets",
            "yaml": "python3-yaml", "gi": "python3-gi"}
+SKILLS_LOAD = "skills load"
 
 
 async def call(member: str, signature: str = "", body: tuple = ()) -> list:
@@ -46,6 +48,15 @@ def show_history(limit: int) -> int:
         if row["reply"]:
             print(f"{'':28}{row['reply']}")
     return 0
+
+
+def reload_skills() -> int:
+    problems = json.loads(asyncio.run(call("ReloadSkills"))[0])
+    for where, problem in sorted(problems.items()):
+        print(f"{where}: {problem}")
+    if not problems:
+        print("The skills are loaded, with no problems.")
+    return 1 if problems else 0
 
 
 def extension_installed() -> bool:
@@ -112,6 +123,20 @@ def fn_helper(socket: str) -> tuple[bool, str]:
     return True, "not installed, so holding Fn does nothing"
 
 
+def sandbox_ready() -> tuple[bool, str]:
+    from . import skillbox
+    if skillbox.available():
+        return True, "bubblewrap"
+    return False, "skills with code of their own need bubblewrap: install the bubblewrap package"
+
+
+def skill_problems(config) -> dict[str, str]:
+    """Read from the files here, so it starts no skill and needs no daemon."""
+    from .skillhost import offline
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    return offline(config, user=data_home / "tuxistant" / "skills").problems
+
+
 def checks(config) -> list[tuple[bool, str, str]]:
     """(passed, what, detail) for each thing Tuxistant depends on."""
     missing = missing_packages()
@@ -134,6 +159,8 @@ def checks(config) -> list[tuple[bool, str, str]]:
     cards, cards_detail = extension_can("CanAsk")
     typing, typing_detail = extension_can("CanType")
     speech_to_text = config["transcribe_model"]
+    sandbox, sandbox_detail = sandbox_ready()
+    problems = skill_problems(config)
     return [
         (True, "Python modules present", ""),
         (reachable, "server reachable", server),
@@ -153,13 +180,19 @@ def checks(config) -> list[tuple[bool, str, str]]:
         (daemon_activatable(), "daemon can be started", BUS_NAME),
         (cards, "approval cards ready", cards_detail),
         (typing, "dictation ready", typing_detail),
+        (sandbox, "skill sandbox ready", sandbox_detail),
+        (not problems, SKILLS_LOAD, f"{len(problems)} with a problem" if problems else ""),
     ]
 
 
 def doctor() -> int:
-    results = checks(Config())
+    config = Config()
+    results = checks(config)
     for passed, what, detail in results:
         print(f"{'ok' if passed else 'FAIL':5} {what}{'  ' + detail if detail else ''}")
+        if not passed and what == SKILLS_LOAD:
+            for where, problem in sorted(skill_problems(config).items()):
+                print(f"{'':6}{where}: {problem}")
     return 0 if all(passed for passed, _, _ in results) else 1
 
 
@@ -173,6 +206,9 @@ def main(argv=None) -> int:
     commands.add_parser("say", help="speak some text").add_argument("text", nargs="+")
     commands.add_parser("history", help="show recent requests").add_argument(
         "--limit", type=int, default=20)
+    skills = commands.add_parser("skills", help="manage skills").add_subparsers(
+        dest="skills_command", required=True)
+    skills.add_parser("reload", help="load the skills again now and show any problems")
     commands.add_parser("doctor", help="check that everything is in place")
     commands.add_parser("settings", help="open the Settings window")
     args = parser.parse_args(argv)
@@ -189,6 +225,8 @@ def main(argv=None) -> int:
                 asyncio.run(call("Say", "s", (" ".join(args.text),)))
             case "history":
                 return show_history(args.limit)
+            case "skills":
+                return reload_skills()
             case "doctor":
                 return doctor()
             case "settings":

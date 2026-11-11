@@ -17,7 +17,17 @@ Please [report it privately](https://github.com/BuenGenio/Tuxistant/security/adv
 
 ## Community skills
 
-Community skills don't exist yet: the registry hasn't been started, and only built-in skills can run. The plan assumes a bad skill will eventually get past review, so permissions and the sandbox have to be what protects you. The [README](../README.md#skills-and-security) shows which protections are built and which are planned.
+There is no registry yet, so nobody can share a skill through Tuxistant. But a skill you add with code of its own now runs: copy a folder into `~/.local/share/tuxistant/skills/` and it loads while Tux is running. The plan assumes a bad skill will eventually get past review, so permissions and the sandbox have to be what protects you. The [README](../README.md#skills-and-security) shows which protections are built and which are planned, and [SKILLS.md](SKILLS.md#code-skills) has the details.
+
+What holds a code skill today:
+
+- **The sandbox.** Bubblewrap, shellgate's seccomp filter and its memory limit. No home folder, session bus, runtime folder or display. It runs from a copy of its folder made when it was checked, so code that was never checked can't start under an older manifest.
+- **Only the network.** A skill you add may ask for nothing but the network. The network is shared with this computer, so it reaches the internet and your local network, and the card says so. Landlock keeps it away from this computer's own services: no abstract sockets from outside the sandbox, TCP only to ports 53, 80 and 443, and no listening. UDP, and TCP on those three ports, are not held back.
+- **No secrets.** The one secret a skill can be given is the TP-Link login, and only the Lights that come with Tuxistant get it.
+- **No quiet upgrades.** What a skill was first allowed is noted. A new version that asks for more isn't used until you take the skill out and put it back, and then what it saved is cleared.
+- **Short, plain text.** Action descriptions, parameters and answers are cut short and their hidden characters shown, before the model or the history sees them.
+
+What doesn't hold yet: a skill can start as many processes as your account may, and keep a CPU core busy while it runs.
 
 ## A hostile model
 
@@ -145,6 +155,28 @@ For research, facts and mail, the voice model is told only that it's done, and t
 It is no longer asked to speak when the app has the answer. A review then found the same thing by another road. Through a multi-step task, the planning model saw "done", wrote an answer of its own, and the voice model was asked to say that. A step the app reads out now ends the task. The first fix had also dropped something: when the model answered an ordinary result with one of these tools, nobody ever said what the first result came to. That is still owed, and still asked for.
 
 A third review found four more edges of the same rule. A model that said what it owed in the same reply as its call was asked to speak again, and with nothing left to say it made up an answer. A task ended at the first such call, so the rest of that reply never ran, and whatever earlier steps did went unsaid. And when the model's own reply failed, the answer the app already had was thrown away with it. Words beside a call now count as spoken, every call of a reply runs, the app says in its own words that the other steps are done or that some failed, and a waiting answer is read out before the error.
+
+### The weather skill that could reach your phone
+
+A review gave a skill the network and had it connect to listeners the test made on this computer: a TCP port on 127.0.0.1 and an abstract socket. Both answered. The same way, it could have reached adb on 127.0.0.1:5037, which controls a connected phone, CUPS, and the display's own sockets, as the network permission shared this computer's network.
+
+Tuxistant now sets up Landlock inside the sandbox before the skill's code runs. The same probe gets "permission denied" for both.
+
+### The skill that asked for your TP-Link password
+
+Any skill you added could list `tapo_email` and `tapo_password` in its manifest and be handed them when it started, with nothing shown. Now only the Lights that come with Tuxistant may have them, and a skill you add that asks is refused with a reason.
+
+### The update that turned a harmless skill into one with the network
+
+A first version with no permissions loaded. A second, copied over it, asked for the network and the TP-Link password, and was used straight away. It kept the first version's saved data, so something read in one conversation could be sent out in a later one with no card. Now a version that asks for more is refused until you take the skill out and put it back, and its saved data is then cleared.
+
+### The answer that filled the model's memory
+
+A skill answered with 900,000 characters, starting with a text-direction override, an escape code and "Ignore previous instructions". It all reached the model and the history. Answers are now cleaned and cut: anything over 3,900 characters becomes an error, as a 4B model can't take more.
+
+### The broken update whose code ran anyway
+
+When a skill's new `skill.yaml` was broken, Tux said the last version that worked was still in use. It kept the old manifest, but the sandbox showed the live folder, so the next restart ran the new, unchecked code. Skills now run from a copy made when they were checked.
 
 ## When the checks themselves failed
 
