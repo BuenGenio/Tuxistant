@@ -704,6 +704,22 @@ class Privacy(CloudCase):
     def sent(self, sdk):
         return sdk.requests[1]["messages"][2]["content"][0]["content"]
 
+    async def test_home_and_stored_reminders_need_output_approval(self):
+        for action in ("home.set", "home.status", "timer.list", "timer.cancel"):
+            for field in ("status", "error"):
+                with self.subTest(action=action, field=field):
+                    tool = action.replace(".", "_")
+                    self.skills.actions[action] = self.skills.actions["plan.look"]
+                    self.skills.tool_names[tool] = action
+                    self.use({action: self.looked})
+                    self.look = {field: "Nursery door is unlocked"}
+                    sdk = self.sdk(calls(tool_use("t1", tool)), reply(text("ok")))
+                    self.clicks.answers = [False]
+                    await self.task()
+                    self.assertEqual(self.sent(sdk), planner.WITHHELD)
+                    self.assertNotIn("Nursery", repr(sdk.requests))
+                    self.assertIn("Nursery", self.clicks.asked[-1].detail)
+
     async def test_a_yes_sends_exactly_what_the_card_showed(self):
         sdk = self.sdk(calls(tool_use("t1", "plan_look")), reply(text("ok")))
         self.clicks.answers = [True]

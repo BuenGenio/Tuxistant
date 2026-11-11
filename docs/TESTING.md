@@ -13,6 +13,7 @@
 | Which tool the model picks | `python3 tools/eval_routing.py` | LocalAI |
 | Whole requests | `python3 tools/eval_flows.py "a request"` | LocalAI |
 | Whether facts are right, or made up | `python3 tools/eval_facts.py` | LocalAI, the internet and SearXNG. Takes about 15 minutes, so run it in the background |
+| A real Home Assistant | `TUX_HA_REAL=1 python3 -m unittest tests.test_homeassistant_real` | Docker and the `ghcr.io/home-assistant/home-assistant:stable` image, about 3.5 GB on disk. Starts its own container on 127.0.0.1, removes it afterwards |
 | Do the voices say the words | `python3 tools/check_voices.py` | LocalAI |
 | The pictures in the docs | `python3 tools/docs_images.py` | `gnome-shell`, `ffmpeg`, Pillow. Safe next to the desktop |
 
@@ -24,9 +25,33 @@
 
 `tests/test_mail.py` builds a made-up copy of Thunderbird's index with `tests/mail_index.py`, and fails if anything opens an index outside its temporary folder. `tools/eval_flows.py` points mail search at a made-up mailbox from the same file, with a landlord, a dentist, a sign-in code and a scam in it, so an evaluation never reads real mail or sends any of it to a model. Keep it that way: every mail in there is invented, and none may be copied from a real inbox. Its senders use `mailbox.example` in place of a real mailbox provider, so that no address could be a real person's.
 
+## Media
+
+The opt-in live protocol test permits only `time.now`; every unexpected tool is blocked before its handler runs.
+
+`tests/test_media.py` runs with the session bus address leading nowhere, the connection class swapped for one that fails the test, and a `PATH` that holds only a stand-in `wpctl`, so it can reach neither your players nor your volume. Its `PrivateBus` class starts stand-in players (`tests/media_fake_player.py`) on a bus from `dbus-run-session` and checks what each one was really sent. `tools/eval_flows.py` swaps in a made-up player and a made-up volume, and a test fails if it stops doing so. Nothing here has driven a real player or a real `wpctl`.
+
+## Timers and reminders
+
+`tuxistant/timers.py` has no default file: its three actions answer "Timers aren't available right now." and write nothing until a store is attached, and only the daemon attaches the real one. `tests/test_timers.py` uses stores in temporary folders and a clock that only a test moves, and sends its one notification to a stand-in on a bus from `dbus-run-session`. `tests/test_daemon_controller.py` runs the scheduler on the real controller with fake audio, and its notifications go to an object that only records them. `tests/test_daemon_dbus.py` runs the real `service.run` on a private bus with a stand-in screen shield and a stand-in notification service, and refuses to start unless the config and the timers file are in the temporary folders. It removes both afterwards, because the daemons of the `Process` tests share those folders and theirs is the real speaker: never leave a timer due there. `tools/eval_flows.py` attaches a store in a temporary folder and runs no scheduler, so nothing set in an evaluation is ever said, and a test fails if that changes. No real notification has been shown and the chime has never been heard.
+
+## Home Assistant
+
+`tests/test_homeassistant.py` uses a fake server on localhost and patches `socket` so that any test reaching another address or looking up a name fails. `tools/eval_flows.py` swaps in a made-up home, blocks the one function that opens a connection, and hands the skill a made-up address and token whatever Settings holds, so an evaluation can never switch a real light or say whether a real door is locked. A test fails if any of those three lines goes, or if the module gains a second way to connect. `tests/test_homeassistant_real.py` only runs when asked, against a container it starts and removes itself. It was changed when activating a scene got a card and has not been run since.
+
 ## After changing a tool
 
-Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run (2026-11-11) scored 216 of 219 with 25 tools, at about 1 s per request on a server busy with other work, and answered 28 of 33 facts. It counts every tool, including mail search, which is off until someone turns it on: without it the run before scored 192 of 198 with 24 tools, at about 0.5 s, and answered 31 of 33 facts. Those are facts on a turn from the shortcut, as a hold turn answers them before this model hears them. Three repeats move by a few from run to run, so don't read much into 2 or 3.
+Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. If the saved config names no model server, set `TUXISTANT_SERVER=host:port` for the run; the evaluation refuses an implicit localhost default before sending a key. The last run (2026-11-11) scored 216 of 219 with 25 tools, at about 1 s per request on a server busy with other work, and answered 28 of 33 facts. It counts every tool, including mail search, which is off until someone turns it on: without it the run before scored 192 of 198 with 24 tools, at about 0.5 s, and answered 31 of 33 facts. Those are facts on a turn from the shortcut, as a hold turn answers them before this model hears them. Three repeats move by a few from run to run, so don't read much into 2 or 3.
+
+The combined media, timer and Home Assistant wiring was evaluated on 2026-11-11. The default evaluation includes mail search and offers 30 tools; Home Assistant adds two when configured. The Home Assistant run uses a made-up Tapo account as well, so it measures both providers together. A Home Assistant-only setup hides the Tapo tools; without Home Assistant the original tool visibility is preserved.
+
+The final 30-tool run scored 365/393 tool choices and 29/42 plain-fact answers, with three repetitions. The 32-tool run scored 421/465 tool choices and 39/48 facts, also with three repetitions; it completed in two segments after a connection dropped. These evaluations execute no actions. Scores check the selected tool, not whether every generated argument is valid. The case lists now also include unsupported app launching, music selection, meeting cancellation and delayed device control, so their scores are not directly comparable with the earlier, shorter lists. Named lamps may use either configured provider. Unnamed light requests should stay with Tapo when both providers are set up.
+
+A separate sorter check classified all 73 tested media, timer and Home Assistant requests as OTHER, with no false facts. Nine whole-request checks used a made-up player, volume, timers file and home; every other tool was blocked. They covered playback, setting/listing/cancelling a timer, home state and declined unlock/scene cards. They did not speak through the real audio output or reach real devices.
+
+The final isolated suite reported 2,232 tests, passing with 164 skips. All changed code and test files matched that checkout. Seventeen deliberate regressions were caught in throwaway copies, after their tests first passed unbroken. The test fixes included preserving user-installed Python dependencies in the installer subprocess and pinning timer fixtures to UTC. No real desktop, device, audio, notification or user calendar was exercised. The Home Assistant Docker test and real-desktop checks remain unrun.
+
+Known misses include app launching and music selection reaching media controls, "Next" reaching the calendar, unsupported meeting cancellation, delayed device control becoming a spoken reminder, and inconsistent choices for some lighting and home requests. These are recorded as failures in the evaluation, not counted as supported operations.
 
 Run it after changing the instructions too. It also asks plain facts and checks the reply, because "no tool" alone can't tell an answer from "I can't do that". That gap once hid Tux refusing 44 of 70 simple questions behind a good routing score.
 

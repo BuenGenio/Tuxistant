@@ -14,8 +14,8 @@ from pathlib import Path
 
 import yaml
 
-from . import (calendars, files, knowledge, livedata, mail, phone, planner, research, shellgate,
-               system, translate, websearch)
+from . import (calendars, files, homeassistant, knowledge, livedata, mail, media, phone,
+               planner, research, shellgate, system, timers, translate, websearch)
 from .config import DEFAULTS
 from .gate import MAX_DETAIL_CHARS, Ask, Session, declined, shown
 
@@ -28,14 +28,15 @@ def risk_of(permissions: dict) -> str:
     if permissions.get("shell") or permissions.get("files_write"):
         return "high"
     if any(permissions.get(p) for p in ("network", "files_read", "clipboard", "calendar_read",
-                                        "calendar_write", "mail_read")):
+                                        "calendar_write", "mail_read", "home_read",
+                                        "home_control")):
         return "medium"
     return "low"
 
 
 def reads_private(permissions: dict) -> bool:
     return any(permissions.get(p) for p in ("files_read", "shell", "clipboard", "calendar_read",
-                                            "mail_read"))
+                                            "mail_read", "home_read"))
 
 
 def leaves_home(permissions: dict) -> bool:
@@ -68,13 +69,23 @@ REACHES = {"news.headlines": livedata.news_hosts}
 # Offered to the model only while its setting is on: every tool in the list costs the small model
 # some of its other answers, and this one is off until asked for. The handler checks again.
 SWITCHED = {"mail.search": "mail_search"}
+# Offered only once Settings holds what it needs, for the same reason: on a computer with no Home
+# Assistant the model's list is what it was without these. Each is asked with the config. The
+# action stays registered, and its handler says where to set things up if the model names it.
+def _tapo_offered(config):
+    return bool(str(config["tapo_email"] or "").strip()) or not homeassistant.configured(config)
+
+
+SET_UP = {"home.set": homeassistant.configured, "home.status": homeassistant.configured,
+          "lights.set": _tapo_offered, "lights.status": _tapo_offered}
 
 # A handler takes (args, config, session) and returns a dict, or an Ask. One defined with async
 # def runs on the event loop and may use the session's confirm, busy, selection and execute.
 HANDLERS = {"time.now": _time_now, "disk.usage": _disk_usage,
             "weather.forecast": _plain(livedata.weather),
             "news.headlines": _plain(livedata.headlines),
-            **calendars.HANDLERS, **files.HANDLERS, **mail.HANDLERS, **phone.HANDLERS,
+            **calendars.HANDLERS, **files.HANDLERS, **mail.HANDLERS, **media.HANDLERS,
+            **timers.HANDLERS, **homeassistant.HANDLERS, **phone.HANDLERS,
             **shellgate.HANDLERS, **system.HANDLERS, **translate.HANDLERS, **websearch.HANDLERS,
             **research.HANDLERS, **knowledge.HANDLERS, **planner.HANDLERS}
 
@@ -131,8 +142,13 @@ class Skills:
             "description": action["description"],
             "parameters": {"type": "object", "properties": action.get("params") or {},
                            "required": action.get("required") or []},
-        } for name, action in self.actions.items()
-            if name not in SWITCHED or self.config[SWITCHED[name]] is True]
+        } for name, action in self.actions.items() if self.offered(name)]
+
+    def offered(self, name: str) -> bool:
+        """Whether the model is told of this action. Settings lists its skill either way."""
+        if name in SWITCHED and self.config[SWITCHED[name]] is not True:
+            return False
+        return name not in SET_UP or SET_UP[name](self.config) is True
 
     def action_name(self, tool_name: str) -> str:
         return self.tool_names.get(tool_name, tool_name)

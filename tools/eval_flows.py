@@ -11,6 +11,11 @@ skills, the lights among them, are offered but never started: each call gets an 
 still runs: file search, reading system facts, sandboxed read-only commands, weather, news,
 translation on your own server, and web search and research, which reach real search engines and
 real pages. Mail search runs too, on a made-up mailbox: the real one is never opened.
+Media runs too, on a made-up player and a made-up volume: no real player is asked or told
+anything, and the real volume is neither read nor changed. Timers and reminders run too, on a
+store in a temporary folder: the real file is never opened, and nothing here runs the scheduler,
+so nothing set in an evaluation is ever said or shown. Home Assistant runs too, on a made-up
+home: no server is reached and the address and token in Settings are never used.
 """
 import asyncio
 import json
@@ -24,7 +29,9 @@ import websockets
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tests.mail_index import PROVIDER, SAMPLE, build  # noqa: E402
-from tuxistant import calendars, files, mail, phone  # noqa: E402
+from tuxistant import (calendars, files, homeassistant, mail, media, phone,  # noqa: E402
+                       timers)
+from tools.eval_config import evaluation_server
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.gate import APP_SAYS, Session  # noqa: E402
 from tuxistant.skillhost import offline  # noqa: E402
@@ -65,8 +72,123 @@ build(Path(MAILBOX.name), SAMPLE)
 mail.ROOTS = (MAILBOX.name,)
 mail.FREEMAIL |= {PROVIDER}    # the made-up mailbox provider its senders use
 
+
+class MadeUpPlayer:
+    """In place of the session bus: one player with a made-up song that does as it is told, so
+    an evaluation never pauses the owner's music or reads what they are listening to."""
+    status, song = "Playing", 1
+
+    async def call(self, _name, _path, _interface, member, _signature="", body=()):
+        if member == "ListNames":
+            return [[media.PREFIX + "eval"]]
+        if member == "NameHasOwner":
+            return [True]
+        if member == "GetAll" and body[0] == media.ROOT:
+            return [{"Identity": "Eval Player"}]
+        if member == "GetAll":
+            return [{"PlaybackStatus": self.status, "Metadata": {
+                "xesam:title": f"Song {self.song}", "xesam:artist": ["The Evals"]}}]
+        print(f"   (would send {member} to the player)")
+        if member == "PlayPause":
+            member = "Pause" if self.status == "Playing" else "Play"
+        self.song += (member == "Next") - (member == "Previous")
+        self.status = {"Play": "Playing", "Pause": "Paused", "Stop": "Stopped"}.get(
+            member, self.status)
+        return []
+
+    def close(self):
+        pass
+
+
+class MadeUpVolume:
+    """In place of wpctl: a volume that is only a number here."""
+    level, muted = 0.40, False
+
+    def __call__(self, command, _sink, value=None):
+        if command == "set-volume":
+            self.level = float(value)
+        if command == "set-mute":
+            self.muted = value == "1"
+        return f"Volume: {self.level:.2f}{' [MUTED]' if self.muted else ''}\n"
+
+
+PLAYER = MadeUpPlayer()
+
+
+async def made_up_bus():
+    return PLAYER
+
+
+# Both run with no card, so these two are all that keeps an evaluation off the real players and
+# the real volume. media.py has no other way to either, and tests/test_media.py checks that.
+media._connect = made_up_bus
+media._wpctl = MadeUpVolume()
+
+# Timers have no card either. With no store attached they refuse and write nothing, so this
+# line is not the safety: it is what lets them be evaluated, on a file that goes away.
+TIMERS = tempfile.TemporaryDirectory(prefix="tuxistant-eval-")
+timers.attach(timers.Store(Path(TIMERS.name) / "timers.json"))
+
+
+class NoHome:
+    """In place of the real Home Assistant: an evaluation must never switch a real light or say
+    whether the owner's door is locked. Service calls change this made-up house and nothing else."""
+    MOVES = {"turn_on": "on", "turn_off": "off", "open_cover": "open", "close_cover": "closed",
+             "lock": "locked", "unlock": "unlocked"}
+
+    def __init__(self):
+        self.states = {
+            "light.kitchen": ("on", {"friendly_name": "Kitchen light", "brightness": 153}),
+            "light.bedroom": ("off", {"friendly_name": "Bedroom lamp"}),
+            "lock.front_door": ("locked", {"friendly_name": "Front door"}),
+            "cover.garage_door": ("closed", {"friendly_name": "Garage door",
+                                             "device_class": "garage"}),
+            "scene.movie_time": ("unknown", {"friendly_name": "Movie time"}),
+            "climate.heating": ("heat", {"friendly_name": "Heating", "temperature": 20,
+                                         "current_temperature": 19, "min_temp": 7, "max_temp": 30}),
+            "sensor.bedroom_temperature": ("19.5", {"friendly_name": "Bedroom temperature",
+                                                    "device_class": "temperature",
+                                                    "unit_of_measurement": "°C"}),
+        }
+
+    def one(self, entity_id):
+        state, attributes = self.states[entity_id]
+        return {"entity_id": entity_id, "state": state, "attributes": attributes}
+
+    def call(self, _server, path, body=None, **_limits):
+        if path == "/api/states":
+            return [self.one(entity_id) for entity_id in self.states]
+        if path.startswith("/api/states/"):
+            return self.one(path.removeprefix("/api/states/"))
+        if path == "/api/config":
+            return {"unit_system": {"temperature": "°C"}}
+        if path == "/api/template":
+            return []
+        service = path.rpartition("/")[2]
+        print(f"   (would call {path.removeprefix('/api/services/')} in the home)")
+        for entity_id in body["entity_id"]:
+            state, attributes = self.states[entity_id]
+            if service == "set_temperature":
+                attributes["temperature"] = body["temperature"]
+            does = ("turn_off" if state == "on" else "turn_on") if service == "toggle" else service
+            self.states[entity_id] = (self.MOVES.get(does, state), attributes)
+        return []
+
+
+# A light, the heating and a lock being locked have no card for an evaluation to decline. The
+# first line alone keeps every request off the network, whatever else changes: the module has no
+# other way out, and tests/test_homeassistant.py checks that all three are still here.
+homeassistant._opener.open = blocked
+homeassistant._connect = lambda _config: homeassistant._Server(
+    "http://eval.invalid", "eval.invalid", "a made-up home", "eval")    # the token stays unread
+homeassistant._call = NoHome().call
+
 cfg = Config()
+evaluation_server(cfg)
 cfg.values["mail_search"] = True    # here only: nothing is saved
+# Its tools are offered only when it is set up, and they are to be evaluated whether the owner
+# has one or not. Made-up values, so the real address and token are not in what Skills is given.
+cfg.values["ha_server"], cfg.values["ha_token"] = "eval.invalid:8123", "eval"
 KEY = cfg["api_key"]
 skills = offline(cfg).current()     # no code skill runs, so no light is reached
 ASKS = sys.argv[1:] or [
@@ -94,6 +216,13 @@ ASKS = sys.argv[1:] or [
     "Was my application to renew my passport rejected?",
     "Check my email for the dentist appointment, then search the web for the dentist's reviews",
     "Install VLC",
+    "Pause the music", "What's playing?", "Skip this song", "Turn it up",
+    "Set the volume to 40 percent", "Mute",
+    "Set a pasta timer for 8 minutes", "Remind me at 5pm to call mum",
+    "Remind me tomorrow morning to take the bins out", "How long is left on the pasta?",
+    "Cancel my timers",
+    "Turn off the kitchen light", "Is the front door locked?", "Set the heating to 21",
+    "Unlock the front door", "Open the garage", "Activate movie time",
 ]
 
 async def turn(text):

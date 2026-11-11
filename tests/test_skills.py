@@ -17,6 +17,7 @@ class Risk(unittest.TestCase):
                 ({}, "low"), ({"shell": False}, "low"),
                 ({"network": True}, "medium"), ({"files_read": ["~"]}, "medium"),
                 ({"clipboard": True}, "medium"),
+                ({"home_read": True}, "medium"), ({"home_control": True}, "medium"),
                 ({"files_write": ["~"]}, "high"), ({"shell": True}, "high"),
                 ({"network": True, "shell": True}, "high")):
             with self.subTest(permissions):

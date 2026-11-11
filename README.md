@@ -16,7 +16,7 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 - PipeWire with `pw-record` and `pw-cat`
 - `glib-compile-schemas`
 - A LocalAI server with a realtime pipeline (`tux-realtime` by default) and a voice model (`tux-voice`). [server/](server/README.md) has a script that sets one up on a computer with an 8 GB NVIDIA GPU
-- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, Thunderbird for mail search, a SearXNG server for web search and research, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
+- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, Thunderbird for mail search, `wpctl`, which comes with WirePlumber, for the volume, a Home Assistant of your own for the smart home, a SearXNG server for web search and research, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
 
 ## Install
 
@@ -47,7 +47,7 @@ Then finish by hand, because a running Wayland session cannot load a new extensi
 
 On a new account `~/.local/bin` isn't on your `PATH` until you log back in. Until then the command is `~/.local/bin/tuxistant`.
 
-The installer puts a `tuxistant` command in `~/.local/bin`, the extension in `~/.local/share/gnome-shell/extensions`, a systemd user unit and a D-Bus activation file in `~/.local/share`, and creates `~/.config/tuxistant/config.json`. Set the server and API key in Settings under General. The server starts as `localhost:8080`, which is right when LocalAI runs on the same computer. To have the installer fetch the key, set `TUXISTANT_KEY_COMMAND` to a command that prints it.
+The installer puts a `tuxistant` command in `~/.local/bin`, the extension in `~/.local/share/gnome-shell/extensions`, a systemd user unit and a D-Bus activation file in `~/.local/share`, and creates `~/.config/tuxistant/config.json`. It sets the daemon to start when you log in. Set the server and API key in Settings under General. The server starts as `localhost:8080`, which is right when LocalAI runs on the same computer. To have the installer fetch the key, set `TUXISTANT_KEY_COMMAND` to a command that prints it.
 
 The `tuxistant` command runs from this folder, so keep it where it is. To update, run `git fetch --tags` and `git checkout` the newer tag, or unpack the newer download in its place, then run `./install.sh` again. Running it twice is harmless and keeps your settings.
 
@@ -63,7 +63,7 @@ To remove everything, including the Fn helper, run `./uninstall.sh`. Your settin
 
 During a turn you can also right-click the blob to switch theme, open Settings or stop. A band theme such as Waves lets clicks through to the windows below it, so use the panel icon there.
 
-Nothing listens or speaks while the screen is locked: a turn in progress stops, and the shortcut, Fn and `tuxistant say` do nothing until you unlock.
+Nothing listens or speaks while the screen is locked: a turn in progress stops, and the shortcut, Fn and `tuxistant say` do nothing until you unlock. A timer or reminder that comes due meanwhile leaves a notification, and Tux tells you what it was if you unlock within an hour for a timer, or a day for a reminder; after that only the notification remains. "Chime for timers" in Settings, which starts off, adds a short sound with no words: before the words on an unlocked screen, and by itself on a locked one.
 
 <p align="center">
   <img src="docs/images/panel-menu.png" width="350" alt="The panel menu: Talk, Theme, six recent requests and Settings.">
@@ -92,6 +92,9 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 | "What's on my calendar tomorrow?", "Add dentist on Friday at 3pm" | Reads your calendars, and adds an event once you click to allow it. It uses the calendars GNOME Calendar shows: add the account once in GNOME Settings under Online Accounts. So far reading has been tried on Google and adding on a local calendar. CalDAV and Microsoft, which also needs the `evolution-ews` package, have not been tried yet |
 | "When did I book the flights?", "What did my landlord say about the rent?" | Finds the answer in the mail Thunderbird keeps on this computer and says who it was from and when. Off until you turn on "Search my mail" in Settings |
 | "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account in Settings under General |
+| "Turn off the kitchen light", "Is the front door locked?", "Set the heating to 21" | Controls and reads your Home Assistant by the names you gave things there: lights, plugs, fans, heating, blinds, locks and scenes. Unlocking, opening, activating a scene and running a script wait for a click. Add the address and a long-lived access token in Settings under General. Until both are there, Tux doesn't offer it |
+| "Pause the music", "Skip this song", "Turn it up", "What's playing?" | Pauses, resumes and skips whatever is playing in Spotify, VLC, a browser or any other player that speaks MPRIS, tells you the song and who it is by, and sets the volume, never above 100 percent |
+| "Set a pasta timer for 8 minutes", "Remind me at 5pm to call mum", "How long is left on the pasta?" | Tux says it out loud when it is due and leaves a notification. Timers and reminders are kept through a restart. "Cancel the pasta timer" or "cancel my timers" removes them. Each is said once, with no snooze, and the computer has to be on with you logged in |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "How many chemical elements are there?", "What's 15 percent of 80?" | Looks it up instead of guessing: Wikipedia first, then web search, and it says so if neither clearly answers. Sums are worked out on this computer |
 | "Search the web for flights to Lisbon", "Research electric bikes" | Reads out the top results, or reads a few pages and tells you what they say, naming its sources. Needs SearXNG |
@@ -105,9 +108,9 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 |---|---|
 | ![A card asking to move 3 files and 1 folder to the Trash, listing each one, with Deny and Allow buttons.](docs/images/card-trash.png) | ![A red card asking to run apt-get install as administrator, with Deny and Allow as administrator buttons.](docs/images/card-admin.png) |
 
-**Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names and command output from that task. File contents go only if you click to allow each one. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`, which needs `pip` (`python3-pip` on Ubuntu).
+**Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names, command output, Home Assistant state and stored reminders returned during that task. File contents, home state and stored reminders go only if you click to allow each result. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`, which needs `pip` (`python3-pip` on Ubuntu).
 
-**Settings** has pages for General (server, API key, listening, weather, news, calendar, mail, shortcut, phone, translation and search, lights, cloud, instructions), Voice, Appearance, Skills and History.
+**Settings** has pages for General (server, API key, listening, weather, news, calendar, mail, timers, shortcut, phone, translation and search, lights, Home Assistant, cloud, instructions), Voice, Appearance, Skills and History.
 
 | General | Skills |
 |---|---|
@@ -151,7 +154,7 @@ flowchart LR
     helper -->|"Unix socket:<br/>down, up, other"| daemon
 ```
 
-- **Daemon** (`tuxistant/`): runs as a systemd user service and starts on demand through D-Bus. It owns the conversation, the microphone and speaker through PipeWire, skills, history and config. With the Fn helper installed it also starts at login, so that holding Fn works straight away.
+- **Daemon** (`tuxistant/`): runs as a systemd user service and starts on demand through D-Bus. It owns the conversation, the microphone and speaker through PipeWire, skills, history and config. It starts at login, so that holding Fn works straight away and a reminder set yesterday is said today.
 - **Extension** (`extension/`): everything on screen. It talks to the daemon over the session bus.
 - **Settings** (`tuxistant/settings_app.py`): a GTK 4 and libadwaita app that talks to the same daemon.
 - **Themes** (`themes/`): a JSON file and a GLSL shader each. See [docs/THEMES.md](docs/THEMES.md).
@@ -174,8 +177,10 @@ flowchart LR
 - Cloud is the one exception to all of that, and it is off unless you turn it on. Translation stays on your own server, and a request that is only a sum stays on this computer.
 - Calendar events are read on this computer and go only to your own server, as part of the conversation. Tuxistant never holds a calendar account's password: GNOME does, and an event you add goes to that calendar's account the way one added in GNOME Calendar would.
 - Mail search is off until you turn it on. It reads the search index Thunderbird keeps on this computer, and never changes it. What a mail says goes to your own server to be read and nowhere else, and Tuxistant holds no mail password. Junk and Trash are never read, and sign-in codes and passwords are hidden from a mail before it is.
-- Once a conversation has read your files, command output, selected text, calendar or mail, anything reaching past your own server needs a click.
+- Home Assistant is only talked to once you add its address and a long-lived access token in Settings. The token is as good as a key to the house. It lives in `~/.config/tuxistant/config.json`, readable only by you, is never sent over D-Bus to the extension or to Settings, and goes to that one address and nowhere else: no proxy, no redirect, and never over plain http to an address that isn't on a private network. Changing the address clears it. What you call a thing is matched on this computer, so your words never reach Home Assistant, only which thing and what to do. What it answers, such as whether a door is locked, goes to your own server as part of the conversation. With Cloud on, sending these results to Claude needs a separate approval card.
+- Once a conversation has read your files, command output, selected text, calendar, mail or the state of your home, anything reaching past your own server needs a click.
 - History stays on this machine in `~/.local/share/tuxistant/history.db`, readable only by you. You can clear it in Settings.
+- Timers and reminders stay on this machine in `~/.local/share/tuxistant/timers.json`, readable only by you. Clearing the history doesn't clear them. With Cloud on, sending stored reminder times and labels to Claude needs an approval card. A reminder is said aloud to whoever is in the room and shown in a notification, but never said on a locked screen.
 - The API key lives in `~/.config/tuxistant/config.json`, readable only by you. It is not sent over D-Bus to the extension or to Settings, and changing the server clears it, so that it only ever goes to the server it was given for. For TLS, enter the server as `https://host:port`.
 
 ## Skills and security

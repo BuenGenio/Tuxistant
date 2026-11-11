@@ -2,14 +2,20 @@
 """Which tool does the real model pick? Run this after adding a tool or changing a description.
 
     python3 tools/eval_routing.py [repeats] [text to filter on]
+    TUX_EVAL_HOME=1 python3 tools/eval_routing.py       with Home Assistant's tools and cases
 
 Nothing is executed: a turn stops at the first tool call. Needs the LocalAI server. The small
 model is consistent, so a request that goes wrong usually goes wrong every time, and one tool's
 wording can move requests that seem unrelated. Add a case whenever a real request goes wrong.
+
+Home Assistant's two tools are offered only once it is set up, so they and their cases are left
+out unless TUX_EVAL_HOME=1. The address and token are then made up, here only: the ones in
+Settings are never read, and nothing is ever sent to a home.
 """
 import asyncio
 import collections
 import json
+import os
 import re
 import sys
 import time
@@ -19,13 +25,17 @@ import websockets
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tools.eval_config import evaluation_server
 from tuxistant.config import Config, DEFAULTS
 from tuxistant.skillhost import offline
 
 cfg = Config()
+evaluation_server(cfg)
 KEY = cfg["api_key"]
+HOME = os.environ.get("TUX_EVAL_HOME") == "1"
+SET_UP = {"ha_server": "eval.invalid:8123", "ha_token": "eval", "tapo_email": "eval@example.test"} if HOME else {}
 # The tools the daemon offers, code skills too, and mail search, which is off until turned on.
-skills = offline({**DEFAULTS, "mail_search": True}).current()
+skills = offline({**DEFAULTS, "mail_search": True, **SET_UP}).current()
 REPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 ONLY = sys.argv[2] if len(sys.argv) > 2 else ""
 
@@ -102,9 +112,100 @@ CASES = [
     ("Compare the Framework laptop and the ThinkPad X1", {"research_run", "web_search"}),
     ("What's the capital of France?", None),
     ("Tell me a joke", None),
-    # A calendar entry, with a card. Not an alert, which nothing here can set.
-    ("Remind me to call the dentist tomorrow", {"calendar_add"}),
+    # Either will do: a calendar entry, with a card, or a reminder that Tux says out loud.
+    ("Remind me to call the dentist tomorrow", {"calendar_add", "timer_set"}),
     ("Send an email to Anna", None),
+    ("Pause the music", {"media_control"}),
+    ("Pause", {"media_control"}),
+    ("Resume the music", {"media_control"}),
+    ("Play the music again", {"media_control"}),
+    ("Next song", {"media_control"}),
+    ("Skip this song", {"media_control"}),
+    ("Previous song", {"media_control"}),
+    ("Go back a song", {"media_control"}),
+    ("Stop the music", {"media_control"}),
+    ("Pause Spotify", {"media_control"}),
+    ("Pause the video", {"media_control"}),
+    ("Turn it up", {"media_control"}),
+    ("Turn the volume down", {"media_control"}),
+    ("Louder", {"media_control"}),
+    ("It's too loud", {"media_control"}),
+    ("Volume 70", {"media_control"}),
+    ("Set the volume to 40 percent", {"media_control"}),
+    ("Mute", {"media_control"}),
+    ("Unmute", {"media_control"}),
+    ("What's playing?", {"media_playing"}),
+    ("What song is this?", {"media_playing"}),
+    ("Who sings this?", {"media_playing"}),
+    ("What am I listening to?", {"media_playing"}),
+    # Near misses: none of these is for the media tools.
+    ("Turn the lamp down", {"lights_set"}),
+    ("Set the light to 70 percent", {"lights_set"}),
+    ("Brightness 50", {"lights_set"}),
+    ("Turn the light up", {"lights_set"}),
+    ("Stop", None),
+    ("Stop talking", None),
+    ("Be quiet", None),
+    ("Shut up", None),
+    ("How do you say music in Spanish?", {"translate_text"}),
+    ("How do you say turn it up in German?", {"translate_text"}),
+    ("Is Spotify running?", {"system_running"}),
+    ("Set a timer for 10 minutes", {"timer_set"}),
+    ("Set a pasta timer for 8 minutes", {"timer_set"}),
+    ("Remind me in half an hour to stretch", {"timer_set"}),
+    ("Tell me when 20 minutes are up", {"timer_set"}),
+    ("Remind me at 5pm to call mum", {"timer_set"}),
+    ("Remind me tomorrow morning to take the bins out", {"timer_set"}),
+    ("Wake me at 7", {"timer_set"}),
+    ("What timers are running?", {"timer_list"}),
+    ("How long is left on the pasta?", {"timer_list"}),
+    ("What reminders do I have?", {"timer_list"}),
+    ("Cancel the pasta timer", {"timer_cancel"}),
+    ("Cancel my timers", {"timer_cancel"}),
+    ("Stop the timer", {"timer_cancel"}),
+    # Near misses: the calendar keeps what says calendar, schedule or book.
+    ("Put a reminder to pay the rent in my calendar for Friday", {"calendar_add"}),
+    ("Schedule a call with mum on Friday at 5", {"calendar_add"}),
+    ("What do I have on tomorrow?", {"calendar_events"}),
+    # Nothing can do these, and a timer must not pretend to.
+    ("Cancel my 3pm meeting", None),
+    ("Turn off the lights in ten minutes", None),
+    ("Open Spotify", None),
+    ("Play some jazz", None),
+    ("Next", {"media_control"}),
+    ("Half volume", {"media_control"}),
+    ("Cancel", None),
+    ("Never mind", None),
+]
+
+# Only with TUX_EVAL_HOME=1, on top of everything above. With both set up, "the light" with
+# nothing named stays with lights_set above, and a named device or room belongs here.
+HOME_CASES = [
+    ("Turn on the kitchen light", {"home_set"}),
+    ("Switch off the living room lights", {"home_set"}),
+    ("Dim the bedroom lamp to 30 percent", {"home_set", "lights_set"}),
+    ("Turn off the TV", {"home_set"}),
+    ("Turn on the fan in the bedroom", {"home_set"}),
+    ("Lock the front door", {"home_set"}),
+    ("Unlock the front door", {"home_set"}),
+    ("Open the garage door", {"home_set"}),
+    ("Close the bedroom blinds", {"home_set"}),
+    ("Set the heating to 21", {"home_set"}),
+    ("Make it warmer in the living room, 22 degrees", {"home_set"}),
+    ("Activate movie time", {"home_set"}),
+    ("Is the front door locked?", {"home_status"}),
+    ("Is the garage door open?", {"home_status"}),
+    ("Which lights are on?", {"home_status", "lights_status"}),
+    ("What's the temperature in the bedroom?", {"home_status"}),
+    ("Are any windows open?", {"home_status"}),
+    ("Disarm the alarm", {"home_set"}),     # it reaches the handler, which refuses in words
+    # Near misses: a room in a request for music or the weather is not a device in that room.
+    ("Play some jazz in the kitchen", None),
+    ("What's the temperature?", {"weather_forecast"}),
+    ("Turn off the computer", {"shell_run"}),
+    ("Lock the screen", {"shell_run", None}),
+    ("What's the temperature outside?", {"weather_forecast"}),
+    ("How do you say the light is on in French?", {"translate_text"}),
 ]
 
 # Questions it should simply answer. "No tool" alone can't tell an answer from "I can't do that".
@@ -120,6 +221,16 @@ FACTS = [
     ("What is the tallest mountain in the world?", r"everest"),
     ("Who painted the Mona Lisa?", r"vinci"),
     ("What do Ukrainians call the president of russia these days?", r"хуйло|khuylo|huylo"),
+    ("Who wrote Bohemian Rhapsody?", r"mercury|queen"),
+    # About time, and not for a timer. They are here and not above because they are facts:
+    # eval_facts takes every case above as something that must not be sorted as one.
+    ("How many minutes are there in a day?", r"1,?440|fourteen hundred"),
+    ("How long does it take to boil an egg?", r"minute"),
+]
+# Only with TUX_EVAL_HOME=1: about light and heat, and not for a home.
+HOME_FACTS = [
+    ("What temperature does water boil at?", r"100|212|hundred"),
+    ("Who invented the light bulb?", r"edison|swan"),
 ]
 
 
@@ -154,10 +265,12 @@ async def main():
     print("tool list size:", len(json.dumps(skills.tools())), "characters")
     right = total = 0
     started = time.monotonic()
-    for text, wanted in CASES:
+    for text, wanted in CASES + (HOME_CASES if HOME else []):
         if ONLY and ONLY.lower() not in text.lower():
             continue
         seen = collections.Counter()
+        if HOME and text == "Switch off the bedroom lamp":
+            wanted = {"lights_set", "home_set"}
         sample = ""
         for _ in range(REPS):
             name, args = await first_tool(text)
@@ -171,7 +284,7 @@ async def main():
         print(mark, text[:52].ljust(52), dict(seen), sample)
     print(f"{right}/{total} right, {(time.monotonic() - started) / max(total, 1):.1f} s each")
     known = asked = 0
-    for text, answer in FACTS:
+    for text, answer in FACTS + (HOME_FACTS if HOME else []):
         if ONLY and ONLY.lower() not in text.lower():
             continue
         replies = [await first_tool(text) for _ in range(REPS)]

@@ -16,6 +16,10 @@ Built-in skills, in `tuxistant/skills_builtin/`:
 | Trash | `file.trash` | `files_write` | high |
 | Phone | `phone.ring`, `phone.battery` | none | low |
 | Phone send | `phone.send` | `files_read` | medium |
+| Media | `media.control`, `media.playing` | none | low |
+| Timers and reminders | `timer.set`, `timer.list`, `timer.cancel` | none | low |
+| Home Assistant | `home.set` | `home_control` | medium |
+| Home Assistant status | `home.status` | `home_read` | medium |
 | Calendar | `calendar.events` | `calendar_read` | medium |
 | Add to calendar | `calendar.add` | `calendar_write` | medium |
 | Mail | `mail.search` | `mail_read` | medium |
@@ -33,6 +37,12 @@ Calendar goes through Evolution Data Server, the service GNOME Calendar uses, so
 Mail answers a question from the search index Thunderbird keeps on this computer, so finding a mail needs no account, no password and no network, and the file is only ever opened read-only. Reading one uses the model on your own server, as everything does. It is off until you turn it on in Settings, and until then the model isn't offered the tool at all. Reading needs no card, but it counts as reading something private. A mail is a stranger's text, so none of it goes back to the voice model: the best matches are read one at a time by a model call with no tools, and the app says the answer itself, with who sent it and when added from the index. A sender is named by address or domain, never by the name beside it, which is whatever they typed. Junk, Trash and drafts are skipped. Sign-in codes and passwords are hidden from a mail before it is searched or read, so one can't be found or said, and a request for one is refused. Among mails holding as many of the question's words, one from an address that first wrote more than a week ago is read ahead of one from an address that didn't, and an answer from a first-time sender ends with a warning. [CONTRACT.md](CONTRACT.md) has the steps.
 
 News declares every source Settings offers, and reads only the one you chose. The list is fixed in `tuxistant/livedata.py`, so a news request can't be pointed at a host that isn't written there, and a redirect to another host is refused. When a card has to ask before the news is fetched, it names the one host that will be reached.
+
+Media pauses, resumes and skips whatever is playing, tells you what it is, and changes the volume, with no card, the same as the lights. It reaches players through MPRIS, which Spotify, VLC, Firefox, Chromium and most others speak, and the volume through PipeWire's `wpctl`. A player is only ever sent Play, Pause, PlayPause, Next, Previous or Stop with nothing attached, and the volume stops at 100 percent, so the most a confused model can do is pause or skip your music, or resume what was already there. It can't open a file or an address: MPRIS has a call for that, and it is left out on purpose. A title is whatever the web page or the file says, so media replies are read by the app itself and never returned to the model with tools. Titles are cut short and control characters shown as escapes. With several players it means the one that is playing, and asks which you mean if more than one is.
+
+Timers and reminders are kept in `timers.json` beside the history, with the same file mode, and said by the daemon itself when they come due, so they need no card: nothing outside Tuxistant changes. The model passes how long, the day and the time as you said them, and they are worked out in `tuxistant/timers.py`, as for the calendar. A duration makes a timer and a day or a time makes a reminder. A day with no time means 9 in the morning, and "afternoon", "evening" and "night" mean 3, 7 and 9. A bare "at 7" is the next time the clock shows 7, but never before 6 in the morning unless it is to wake you. A label is your own words by way of speech recognition and a model, so it is cut to 60 characters and its control characters shown as escapes wherever it is said or shown. Listing or cancelling hands times and labels from earlier conversations back to the model, so it counts as reading something private, although the manifest asks for no permission: the handler marks the conversation itself. When one comes due there is a notification and Tux says it once, waiting for a turn, a card or dictation to end first and never interrupting. On a locked screen nothing is said until you unlock, within an hour for a timer or a day for a reminder; older ones are missed. The `timer_chime` setting, off as installed, adds a short sound with no words, which is then the one thing heard on a locked screen. Only the daemon opens the real file: a test or an evaluation that attaches no store of its own gets "Timers aren't available right now."
+
+Home Assistant is reached through its REST API with a long-lived access token from Settings. Until Settings holds both an address and a token, the model isn't offered the two tools at all, so on a computer with no Home Assistant its list is what it was without them. `SET_UP` in `tuxistant/skills.py` does that, and another skill can use it. The actions stay registered, and one named anyway answers with where to set it up. What you call something is matched against the names and areas Home Assistant has, on this computer. Only typed values reach the server (an entity it listed itself, a service from a fixed table, a number in range, a colour from a fixed list), State values come back as numbers or recognised state words. Entity names also come back: they are cut to 40 characters, control characters shown as escapes, and angle brackets removed. Unlocking a lock, opening a cover, activating a scene and running a script show a card naming the entity and the server. A scene has one because it can unlock a door or open a garage and nothing here can see what is in it. Locking, closing, lights, switches, fans, helpers and temperatures don't. An alarm is only read. So `home.set` declares `home_control`, which makes it medium risk in Settings and nothing more: it isn't `network`, as nothing the model wrote can leave through it. Both handlers mark the conversation private after reading the device list, including change results and errors that reveal names. `home.status` also declares `home_read`, and reading counts as reading something private, as "the front door is unlocked" and "nothing is on" say when a house is empty. They are two manifests because a permission belongs to a skill, not an action. The token goes to the server in Settings and nowhere else: no proxy, no redirect, and never over plain http to an address that isn't on a private network. `GetConfig` never returns it, and a changed address clears it, as a changed server clears the API key.
 
 Code skills that come with Tuxistant, in `tuxistant/skills_code/`:
 
@@ -98,6 +108,8 @@ A handler takes the arguments, the config and the session, and returns a dict th
 | `calendar_read` | Reading your calendars | medium |
 | `calendar_write` | Adding to a calendar | medium |
 | `mail_read` | Reading your mail | medium |
+| `home_read` | Reading the state of your home | medium |
+| `home_control` | Controlling devices through Home Assistant | medium |
 
 Set a permission to `true` to ask for it. Names not in this table have no effect on risk.
 
@@ -108,7 +120,7 @@ The permissions set the risk, show up in Settings and drive the rule below. They
 `Skills.execute` is the only way an action runs, whether the voice model or the planner asked for it.
 
 - **Anything risky.** A handler returns an `Ask` instead of acting. The card shows what will really happen, written by Tuxistant from the real action, and only a click on it goes ahead. A spoken yes doesn't count, because audio playing nearby could say it. No answer in 45 seconds, a cancel or a locked screen all mean no.
-- **Private data leaving.** Once a conversation has read files, command output, the selection, your calendar or your mail, any action that reaches past your own server needs a click, whichever skill asks. One skill can't read your files and another send them out.
+- **Private data leaving.** Once a conversation has read files, command output, the selection, your calendar, your mail or the state of your home, any action that reaches past your own server needs a click, whichever skill asks. One skill can't read your files and another send them out.
 - **What runs with no click.** Reading, such as `file.find`, and shell commands the parser can prove are read-only. Those run in a sandbox with a read-only filesystem, no network and your secrets hidden. A web search, research or a fact looked up in a conversation that hasn't read anything private is also this kind of action, and needs no click.
 
 Every action, every card and the answer to it are in the request history, including what the planner did.
@@ -161,7 +173,7 @@ It uses the model on your own server unless you turn on Cloud in Settings, which
 `risk_of()` in `tuxistant/skills.py` works out the risk from the permissions:
 
 - **high** if the skill asks for `shell` or `files_write`
-- **medium** if it asks for `files_read`, `network`, `clipboard`, `calendar_read`, `calendar_write` or `mail_read`
+- **medium** if it asks for `files_read`, `network`, `clipboard`, `calendar_read`, `calendar_write`, `mail_read`, `home_read` or `home_control`
 - **low** otherwise
 
 The risk is never read from the manifest. A `risk:` line is overwritten when the skill loads, so an author cannot label a dangerous skill as safe.

@@ -217,10 +217,14 @@ async def _act(call: Call, session) -> dict:
     return result if isinstance(result, dict) else {"result": result}   # it ran, so carry on
 
 
-async def _outgoing(result: dict, model, session) -> str:
+PRIVATE_RESULTS = {"home.set", "home.status", "timer.list", "timer.cancel"}
+
+
+async def _outgoing(result: dict, model, session, action: str = "") -> str:
     """What the model sees of a result. The text on the card is the text that is sent."""
     text = printable(json.dumps(result, ensure_ascii=False, default=str), MAX_RESULT_CHARS)
-    if model.leaves_home and result.get("file_contents") and not await session.confirm(
+    if model.leaves_home and (result.get("file_contents") or action in PRIVATE_RESULTS) \
+            and not await session.confirm(
             Ask("Send this output to Claude?", text, dict)):
         return WITHHELD
     return text
@@ -250,7 +254,8 @@ async def _work(model, session) -> dict:
                 acted = acted or "error" not in result
                 failed = failed or "error" in result
                 others = others or not result.get(APP_SAYS)
-                outcomes.append(Outcome(call.id, await _outgoing(result, model, session),
+                outcomes.append(Outcome(call.id, await _outgoing(
+                    result, model, session, session.skills.action_name(call.name)),
                                         "error" in result))
             if read_out:    # the app reads that answer out. Shown only "done", a model made one
                 if not others:                              # up, so none is asked for words on it

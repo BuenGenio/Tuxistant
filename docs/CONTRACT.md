@@ -32,8 +32,8 @@ Methods:
 | `DictateEnd` | `() -> ()` | Stop listening and type what was said |
 | `DictateToggle` | `() -> ()` | `DictateStart`, or `DictateEnd` if already dictating |
 | `GetState` | `() -> s` | Current state |
-| `GetConfig` | `() -> s` | `Config.public()` as JSON; never contains the API key |
-| `SetConfig` | `(s key, s json_value) -> ()` | Validated by `Config.set`; emits `ConfigChanged`. A new `server` clears `api_key`: a key only goes to the server it was given for |
+| `GetConfig` | `() -> s` | `Config.public()` as JSON; never contains the API key, the Cloud key, the TP-Link password or the Home Assistant token, only whether each is set |
+| `SetConfig` | `(s key, s json_value) -> ()` | Validated by `Config.set`; emits `ConfigChanged`. A new `server` clears `api_key`: a key only goes to the server it was given for. In the same way a new `ha_server` clears `ha_token` |
 | `ListVoices` | `() -> s` | `voices.catalog()` |
 | `PreviewVoice` | `(s voice) -> ()` | Speak a short sample in that voice, without changing config. Replies once it has been spoken; a failure is a D-Bus error |
 | `Say` | `(s text) -> ()` | Speak text in the configured voice |
@@ -75,7 +75,7 @@ Signals:
 
 ## Locked screen
 
-GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged` and `GetActive` of `org.gnome.ScreenSaver` on `org.gnome.Shell.ScreenShield`, `/org/gnome/ScreenSaver`. While the shield is up it cancels any job and ignores `Toggle`, `HoldStart`, `Say` and `PreviewVoice`, in the controller, so that holding Fn is covered too.
+GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged` and `GetActive` of `org.gnome.ScreenSaver` on `org.gnome.Shell.ScreenShield`, `/org/gnome/ScreenSaver`. While the shield is up it cancels any job and ignores `Toggle`, `HoldStart`, `Say` and `PreviewVoice`, in the controller, so that holding Fn is covered too. The timer scheduler waits for the initial lock check to finish. A failed or timed-out check keeps speech locked; an absent screen-shield service is treated as unlocked. A timer or reminder that comes due while the shield is up leaves its notification, and its words wait for the unlock, up to an hour for a timer or a day for a reminder: `Controller.say_when_free` refuses while the shield is up, as `say` does. With `timer_chime` on, which it isn't as installed, a chime with no words is played then through `Controller.sound`, the one thing that makes a sound on a locked screen.
 
 ## Approvals
 
@@ -110,7 +110,7 @@ sequenceDiagram
 
 Title and detail are written by daemon code from what will really happen, never from a manifest or from model text, and `printable()` turns control and bidi characters into visible escapes. A click is required: no voice "yes", as audio playing nearby could say it. `ask.run` must act on what the card showed, not on a fresh look at the world. What was asked and the answer are kept in the action's history record under `asked`.
 
-A handler that wants its result spoken in another language appends a `Speak(text, voice, model)` to `session.after`. The app says it after the model's reply, and the model never sees the text, because Kokoro would read it as English. An empty `voice` shows the text without speaking it. `research.run` and `knowledge.answer` use it too, so that sources and caveats are said as written and text from the web never reaches a model with tools.
+A handler that wants its result spoken in another language appends a `Speak(text, voice, model)` to `session.after`. The app says it after the model's reply, and the model never sees the text, because Kokoro would read it as English. An empty `voice` shows the text without speaking it. `media.control` and `media.playing` use it for every reply, including errors, so a browser media title never reaches the model with tools. `research.run` and `knowledge.answer` use it too, so that sources and caveats are said as written and text from the web never reaches a model with tools.
 
 `session.notice(Speak)` is the same, said at once with the action still running. `research.run` uses it, as it can be ten seconds before there's anything else to say, and so does `knowledge.answer` if 2 s go by. It gets 3 s to be turned into speech, and a notice that can't be said or played changes nothing.
 

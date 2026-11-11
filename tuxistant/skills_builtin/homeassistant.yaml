@@ -1,0 +1,16 @@
+id: org.tuxistant.home
+name: Home Assistant
+description: Controls the devices in your Home Assistant by name, such as lights, plugs, heating, blinds, locks and scenes
+version: 1.0.0
+permissions:
+  home_control: true
+actions:
+  home.set:
+    description: Control a named device or room in the user's smart home, like the kitchen light, the living room, the heating, the garage door, the front door lock or a scene. Turn it on or off, open or close it, lock or unlock it, or set a temperature
+    params:
+      name: { type: string, description: "What the user called it, like kitchen light, living room, heating or movie time" }
+      state: { type: string, enum: ["on", "off", "toggle", "open", "close", "lock", "unlock"], description: "What to do to it" }
+      brightness: { type: string, description: "Only for a light. A percentage like 40, or brighter or dimmer" }
+      color: { type: string, description: "Only for a light. A colour like blue, or a white like warm white" }
+      temperature: { type: number, description: "Only for heating or a thermostat. The degrees to set" }
+    required: [name]
