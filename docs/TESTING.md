@@ -18,7 +18,7 @@
 
 ## After changing a tool
 
-Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run scored 113 of 120 with 17 tools, at about 0.4 s per request, and answered 26 of 30 facts.
+Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run scored 130 of 141 with 20 tools, at about 0.4 s per request, and answered 25 of 30 facts. Those are facts on a turn from the shortcut, as a hold turn answers them before this model hears them. Three repeats move by a few from run to run, so don't read much into 2 or 3.
 
 Run it after changing the instructions too. It also asks plain facts and checks the reply, because "no tool" alone can't tell an answer from "I can't do that". That gap once hid Tux refusing 44 of 70 simple questions behind a good routing score.
 

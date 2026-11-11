@@ -91,7 +91,7 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 7. Locking the screen during a card cancels it. The logind lock path is untested.
 8. Weather and news by voice.
 9. Cloud, once the owner adds a key: run `./install.sh --cloud-sdk`, then try one multi-step request.
-10. Hold Fn and ask a fact, such as "How many chemical elements are there?". It should answer in about 2 seconds in the usual voice, and History should show `knowledge.answer`. Then something made up, such as "What is aubrium?", which should say it doesn't know.
+10. Hold Fn and ask a fact, such as "How many chemical elements are there?". It should answer in the usual voice within a few seconds, saying "Let me look into that." first if it takes more than 2, and History should show `knowledge.answer`. Then something made up, such as "What is aubrium?", which should say it doesn't know.
 11. Hold Fn and ask for something that isn't a fact, such as "What time is it?" and "Find my CV". Replies now come from words rather than audio, which has only run in tests and against the real server without a real microphone.
 12. "Research electric bikes" says "Let me look into that", then reads the answer with its sources. After reading a file in the same conversation, a search or a fact shows a card first.
 13. Dictation, with `tuxistant doctor` saying it's ready: tap Fn, then hold and speak, in a GTK app such as Text Editor, in a terminal, and in VS Code or Chromium, which should take the paste route. Check that the clipboard is unchanged afterwards, that a password box refuses, and that Ctrl+Super+D starts and stops it.
@@ -112,7 +112,8 @@ Move site claims from Soon to Now only after the matching check passes.
 **Facts:**
 
 - Only hold turns are sorted. A turn from the shortcut goes straight to the voice model, as the server replies by itself, so those can still be made up.
-- The sorter runs on every hold turn, which adds about 0.4 s to every request, and a stall can add up to 2 s.
+- The sorter runs on every hold turn, which adds about 0.3 s to every request, and a stall can add up to 2 s.
+- A fact takes 2 to 5 seconds from letting go, where other requests take under 2. Wikipedia is most of that, at 0.5 to 3.5 s.
 - A question goes to Wikipedia with no click, on the word of a 4B model. It called no private request a fact in testing, but it could, and then the words would leave.
 - Web search answers from snippets of other people's text, so a false page can make Tux say something false, out loud. It can't do anything.
 - It says what pages say, and doesn't know what's fiction. "The capital of Zubrowka" gets Lutz from a fan wiki, with no mention that it's from a film. "Aubrium" gets an Instagram tool of that name.

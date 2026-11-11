@@ -397,6 +397,13 @@ class Honest(Rig):
         self.assertIn(research.THIN, said)
         self.assertEqual(said.count("evil.example"), 1)
 
+    def test_one_owner_cant_crowd_out_the_others(self):
+        hits = [search_hit(n, url=f"http://{name}.evil.example/page")
+                for n, name in enumerate("abcdefg", 1)]
+        hits.append(search_hit(8, url="http://good.example/page"))
+        sites = [hit.site for hit in research._candidates(websearch._hits(hits))]
+        self.assertEqual(sites, ["a.evil.example", "good.example"])
+
     async def test_redirects_to_one_owner_are_one_source(self):
         self.web.names["evil.example"] = [PUBLIC]
         self.web.routes["/page"] = (302, {"Location": "http://evil.example/landed"}, "")

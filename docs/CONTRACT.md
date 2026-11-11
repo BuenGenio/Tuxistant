@@ -109,7 +109,7 @@ Title and detail are written by daemon code from what will really happen, never 
 
 A handler that wants its result spoken in another language appends a `Speak(text, voice, model)` to `session.after`. The app says it after the model's reply, and the model never sees the text, because Kokoro would read it as English. An empty `voice` shows the text without speaking it. `research.run` and `knowledge.answer` use it too, so that sources and caveats are said as written and text from the web never reaches a model with tools.
 
-`session.notice(Speak)` is the same, said at once with the action still running. `research.run` uses it, as it can be ten seconds before there's anything else to say.
+`session.notice(Speak)` is the same, said at once with the action still running. `research.run` uses it, as it can be ten seconds before there's anything else to say, and so does `knowledge.answer` if 2 s go by. It gets 3 s to be turned into speech, and a notice that can't be said or played changes nothing.
 
 ## Facts
 

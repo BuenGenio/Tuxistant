@@ -37,6 +37,7 @@ PAGES = 5               # at three pages of 500 characters it found half as much
 PAGE_CHARS = 1200
 LOOKUP_S = 5
 WEB_RESULTS = 6
+NOTICE_AFTER_S = 2      # Wikipedia alone takes from 0.5 to 3.5 s, and the blob may be gone already
 MAX_BYTES = 1 << 20
 MAX_QUESTION_CHARS = 200
 SORT_TOKENS = 12        # an empty thinking block takes four of these before it says a word
@@ -232,11 +233,9 @@ async def _grounded(question: str, results: str, config) -> str:
     return "" if UNSURE.search(said) else said
 
 
-async def _look_up(question: str, config, session) -> str:
+async def _look_up(question: str, config) -> str:
     reached = False
     for search in (_wikipedia, _web):
-        if search is _web:      # this is the slow one, and the blob may have gone already
-            session.notice(Speak(LOOKING, config["voice"]))
         try:
             results = await search(question, config)
         except (TimeoutError, RuntimeError):
@@ -254,7 +253,12 @@ async def answer(args: dict, config, session) -> dict:
         return {"error": NOT_CLEAR}
     said = calculate(question)
     if not said and config["fact_lookup"]:
-        said = await _look_up(question, config, session)
+        timer = asyncio.get_running_loop().call_later(NOTICE_AFTER_S, session.notice,
+                                                      Speak(LOOKING, config["voice"]))
+        try:
+            said = await _look_up(question, config)
+        finally:
+            timer.cancel()
     if not said:    # the user turned looking things up off, so this stays at home
         said = clean(await _brain(config, ASK, question, ANSWER_TOKENS, ANSWER_S), MAX_ANSWER_CHARS)
     return _say(said or DONT_KNOW, config, session)

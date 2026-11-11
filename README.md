@@ -208,6 +208,7 @@ flowchart LR
 | First build | Requirements, shell, security, daemon | 36 problems confirmed, some of them duplicates |
 | Skills, shell and approval cards | Attacker, integration | 22 problems reproduced, none rated critical, and 26 attacks and checks that held |
 | Dictation | Security | Numbers 5 and 6 below |
+| Web search, research and facts | Attacker, turn logic | 11 problems and 4 tests that proved nothing, all reproduced, and over 4,000 orderings of a turn that held. See [docs/SECURITY.md](docs/SECURITY.md) |
 
 All eight of these really happened in this project. Each one has a test or a code fix behind it, except number 7, which is written up in [docs/TESTING.md](docs/TESTING.md). [docs/SECURITY.md](docs/SECURITY.md) keeps the list as it grows.
 

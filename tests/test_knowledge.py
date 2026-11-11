@@ -3,6 +3,7 @@
 The model and the web are stubs that record what they were sent, because what matters is what they
 were offered. What the real model says is in tools/eval_facts.py.
 """
+import asyncio
 import io
 import json
 import sys
@@ -123,7 +124,7 @@ class Sums(unittest.TestCase):
         for question in ("How many times has Brazil won the World Cup?", "What is 5?",
                          "Who was president in 1914-1918?", "What year was 1984 published?",
                          "What's the capital of France?", "What's 7 plus the tip?",
-                         "Is 7 plus 8 fifteen?", "One two three", ""):
+                         "Is 7 plus 8 fifteen?", "One two three", "7 + 8 # and the tip", ""):
             self.assertIsNone(knowledge.calculate(question), question)
 
     def test_what_can_not_be_said_is_not_answered(self):
@@ -242,14 +243,33 @@ class Lookup(Base):
         self.assertEqual(web.searched, ["rarest element"])
         self.assertIn("Astatine is rare.", web.model[1][1]["messages"][1]["content"])
 
-    async def test_it_says_something_before_the_slow_part_and_only_then(self):
+    async def test_a_slow_answer_says_something_first(self):
         said = []
-        Web(self, says=["I don't know.", "Astatine."], hits=[RARE])
-        await knowledge.answer({"question": "What is it?"}, CONFIG, Session(notice=said.append))
+
+        async def slow(_question, _config):
+            await asyncio.sleep(0.05)
+            return "Astatine."
+
+        with mock.patch.object(knowledge, "_look_up", slow), \
+                mock.patch.object(knowledge, "NOTICE_AFTER_S", 0.01):
+            await knowledge.answer({"question": "What is it?"}, CONFIG, Session(notice=said.append))
         self.assertEqual([item.text for item in said], [research.LOOKING])
-        said.clear()
+        self.assertEqual(said[0].voice, CONFIG["voice"])
+
+    async def test_a_quick_answer_says_nothing_extra(self):
+        said = []
         Web(self)
-        await knowledge.answer({"question": "What is it?"}, CONFIG, Session(notice=said.append))
+        with mock.patch.object(knowledge, "NOTICE_AFTER_S", 0.02):
+            await knowledge.answer({"question": "What is it?"}, CONFIG, Session(notice=said.append))
+            await asyncio.sleep(0.05)
+        self.assertEqual(said, [])
+
+    async def test_a_sum_is_too_quick_to_need_it(self):
+        said = []
+        with mock.patch.object(knowledge, "NOTICE_AFTER_S", 0):
+            await knowledge.answer({"question": "What's 7 times 8?"}, CONFIG,
+                                   Session(notice=said.append))
+            await asyncio.sleep(0.01)
         self.assertEqual(said, [])
 
     async def test_web_search_gets_a_turn_when_wikipedia_finds_no_page(self):
