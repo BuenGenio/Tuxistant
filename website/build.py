@@ -32,15 +32,16 @@ WORKS_WITH = [
     ("Linux", "linux", "now"),
     ("GNOME", "gnome", "now"),
     ("BBC", "bbc", "now"),
-    ("The Kyiv Independent", "kyiv-independent", "now"),
-    ("Google Calendar", "google-calendar", "now"),
     ("Tapo", "tapo", "now"),
     ("Open-Meteo", None, "now"),
     ("LibreTranslate", "libretranslate", "now"),
+    # Built, but not yet asked for by voice on a real machine, which is what earns "now".
+    ("Google Calendar", "google-calendar", "soon"),
+    ("The Kyiv Independent", "kyiv-independent", "soon"),
     ("Home Assistant", "home-assistant", "soon"),
     ("Spotify", "spotify", "soon"),
     ("InteliMaris", "intelimaris", "soon"),
-    ("CNN", "cnn", "soon"),     # not a news source yet and its feeds are dead: the owner decides
+    ("CNN", "cnn", "soon"),     # not one of the news sources yet
     ("Windows", "windows", "soon"),
     ("macOS", "macos", "soon"),
 ]
@@ -54,7 +55,7 @@ MARKS = {
     "bbc": (18, True), "kyiv-independent": (24, True), "tapo": (22, True), "cnn": (18, True),
     "macos": (13, True),
 }
-OURS = {"InteliMaris"}      # the owner's own company; every other name is someone else's trademark
+OURS = {"InteliMaris"}      # shown with its maker's leave; every other name is a trademark we only name
 MODE_ICONS = (
     '<svg class="i-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/>'
     '<path class="solid" d="M12 3a9 9 0 0 1 0 18z"/></svg>'

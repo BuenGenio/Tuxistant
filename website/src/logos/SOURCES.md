@@ -25,7 +25,7 @@ tag on the file's page that day.
 | `libretranslate.svg` | LibreTranslate | Its own repository: `libretranslate/static/icon.svg`, https://github.com/LibreTranslate/LibreTranslate/blob/a23a9fbd7528d7f37dc2b88114f119e339cadc4d/libretranslate/static/icon.svg. The file keeps the source's three `transform`s as written | The repository is AGPL-3.0. Its `TRADEMARK.md` governs the logo. See "LibreTranslate" below | LibreTranslate (contact: UAV4GEO) |
 | `home-assistant.svg` | Home Assistant | Simple Icons `icons/homeassistant.svg`, which took it from the logo archive in https://github.com/home-assistant/assets | CC BY-NC-SA 4.0. See "Home Assistant" below | Home Assistant, a project of the Open Home Foundation |
 | `spotify.svg` | Spotify | Simple Icons `icons/spotify.svg` | CC0 path data. Commons tags the icon `PD-textlogo` | Spotify. Rules: https://developer.spotify.com/documentation/design |
-| `intelimaris.svg` | InteliMaris | The company's own design package: its round badge, light artwork | The owner's own mark | InteliMaris (the owner's company) |
+| `intelimaris.svg` | InteliMaris | InteliMaris's own design package: its round badge, light artwork | Used with InteliMaris's permission | InteliMaris |
 | `cnn.svg` | CNN | Simple Icons `icons/cnn.svg` | CC0 path data. Commons tags the logo `PD-textlogo` | Cable News Network |
 | `windows.svg` | Windows | Commons, `File:Windows_logo_-_2021.svg` | Public domain as plain shapes (`PD-textlogo`) | Microsoft |
 | `macos.svg` | macOS | Simple Icons `icons/macos.svg`, taken from Commons `File:MacOS_wordmark_(2017).svg` | CC0 path data. Commons tags the wordmark `PD-textlogo` | Apple |
