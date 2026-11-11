@@ -1,0 +1,13 @@
+# Named to sort last, beside web search: where a tool sits in the list moves what the small model picks.
+id: org.tuxistant.research
+name: Research
+description: Reads a few web pages about a question and tells you what they say, naming its sources
+version: 1.0.0
+permissions:
+  network: true
+actions:
+  research.run:
+    description: Read web pages and report back, only if the user says research or compare. Never for a simple question
+    params:
+      question: { type: string, description: "What to find out, in the user's words" }
+    required: [question]

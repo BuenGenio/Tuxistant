@@ -16,7 +16,7 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 - PipeWire with `pw-record` and `pw-cat`
 - `glib-compile-schemas`
 - A LocalAI server with a realtime pipeline (`tux-realtime` by default) and a voice model (`tux-voice`). [server/](server/README.md) has a script that sets one up on a computer with an 8 GB NVIDIA GPU
-- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
+- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, a SearXNG server for web search and research, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
 
 ## Install
 
@@ -92,6 +92,8 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 | "What's on my calendar tomorrow?", "Add dentist on Friday at 3pm" | Reads your calendars, and adds an event once you click to allow it. It uses the calendars GNOME Calendar shows: add the account once in GNOME Settings under Online Accounts. So far reading has been tried on Google and adding on a local calendar. CalDAV and Microsoft, which also needs the `evolution-ews` package, have not been tried yet |
 | "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account in Settings under General |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
+| "How many chemical elements are there?", "What's 15 percent of 80?" | Looks it up instead of guessing: Wikipedia first, then web search, and it says so if neither clearly answers. Sums are worked out on this computer |
+| "Search the web for flights to Lisbon", "Research electric bikes" | Reads out the top results, or reads a few pages and tells you what they say, naming its sources. Needs SearXNG |
 | "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system |
 | "What does my todo file say?", "Install VLC" | Runs a command. Read-only commands run in a sandbox with no click, and anything else shows the exact command first |
 | "Find my CV and send it to my phone" | Several steps in a row, with the same approval cards |
@@ -104,7 +106,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 **Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names and command output from that task. File contents go only if you click to allow each one. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`, which needs `pip` (`python3-pip` on Ubuntu).
 
-**Settings** has pages for General (server, API key, listening, weather, news, calendar, shortcut, phone, translation, lights, cloud, instructions), Voice, Appearance, Skills and History.
+**Settings** has pages for General (server, API key, listening, weather, news, calendar, shortcut, phone, translation and search, lights, cloud, instructions), Voice, Appearance, Skills and History.
 
 | General | Skills |
 |---|---|
@@ -164,7 +166,12 @@ flowchart LR
 - The microphone is on only during a turn or while you dictate, plus a short while after each reply if conversation mode is on. Audio goes to the server you configured and nowhere else.
 - What you dictate isn't kept: it goes to your server to become text, into your window, and into no log or history. No model sees it.
 - [docs/SECURITY.md](docs/SECURITY.md) has real attacks on Tuxistant and what stopped them.
-- Weather and news are the only skills that reach the internet, and only when you ask. A weather question sends the town name to Open-Meteo; a news question fetches a feed from the source you picked in Settings, which is BBC News until you change it. Both services see your IP address, and neither receives your voice or the conversation. Cloud is the one exception, and it is off unless you turn it on. Translation stays on your own server. Calendar events are read on this computer and go only to your own server, as part of the conversation. Tuxistant never holds a calendar account's password: GNOME does, and an event you add goes to that calendar's account the way one added in GNOME Calendar would.
+- Some skills reach the internet, and only for what you asked. None of these services receives your voice or the conversation, only the words below, and they can see your IP address or your server's:
+  - A weather question sends the town name to Open-Meteo, and a news question fetches a feed from the source you picked in Settings, which is BBC News until you change it.
+  - A question of general knowledge goes to Wikipedia as text, and on to the search engines behind your SearXNG server if Wikipedia has no answer. This happens with no click, and the model on your own server is what decides a request is one, so a private question it got wrong would go too. Turn off "Look up facts on Wikipedia" in Settings and nothing goes, but Tux then answers from memory and can be wrong.
+  - Web search and research send what you asked for to those search engines, and research opens a few of the pages from this computer.
+- Cloud is the one exception to all of that, and it is off unless you turn it on. Translation stays on your own server, and a request that is only a sum stays on this computer.
+- Calendar events are read on this computer and go only to your own server, as part of the conversation. Tuxistant never holds a calendar account's password: GNOME does, and an event you add goes to that calendar's account the way one added in GNOME Calendar would.
 - Once a conversation has read your files, command output or selected text, anything reaching past your own server needs a click.
 - History stays on this machine in `~/.local/share/tuxistant/history.db`, readable only by you. You can clear it in Settings.
 - The API key lives in `~/.config/tuxistant/config.json`, readable only by you. It is not sent over D-Bus to the extension or to Settings, and changing the server clears it, so that it only ever goes to the server it was given for. For TLS, enter the server as `https://host:port`.
@@ -221,6 +228,7 @@ flowchart LR
 | First build | Requirements, shell, security, daemon | 36 problems confirmed, some of them duplicates |
 | Skills, shell and approval cards | Attacker, integration | 22 problems reproduced, none rated critical, and 26 attacks and checks that held |
 | Dictation | Security | Numbers 5 and 6 below |
+| Web search, research and facts | Attacker, turn logic | 11 problems and 4 tests that proved nothing, all reproduced, and over 4,000 orderings of a turn that held. See [docs/SECURITY.md](docs/SECURITY.md) |
 
 All eight of these really happened in this project. Each one has a test or a code fix behind it, except number 7, which is written up in [docs/TESTING.md](docs/TESTING.md). [docs/SECURITY.md](docs/SECURITY.md) keeps the list as it grows.
 

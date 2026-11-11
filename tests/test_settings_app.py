@@ -89,7 +89,8 @@ class Logic(unittest.TestCase):
     def test_every_real_home_skill_says_so(self):
         from tuxistant.skills import Skills
         for skill in Skills().listing():
-            if "home" in (skill["permissions"].get("network") or []):
+            network = skill["permissions"].get("network")   # true means anywhere at all
+            if isinstance(network, list) and "home" in network:
                 self.assertIn("your own server", sa.permission_words(skill["permissions"]))
 
     def test_risk_label(self):
@@ -309,16 +310,16 @@ class Logic(unittest.TestCase):
         self.assertEqual(pick([pixel, twin], ""), {"": "Automatic", "Pixel": "Pixel"})
 
     def test_cloud_note_says_where_requests_really_go(self):
-        self.assertEqual(sa.cloud_note(False, False), "Requests stay on your own server")
-        self.assertEqual(sa.cloud_note(False, True), "Requests stay on your own server")
-        self.assertIn("stay on your own server", sa.cloud_note(True, False))
+        self.assertEqual(sa.cloud_note(False, False), "Nothing goes to Anthropic")
+        self.assertEqual(sa.cloud_note(False, True), "Nothing goes to Anthropic")
+        self.assertIn("nothing goes to Anthropic", sa.cloud_note(True, False))
         self.assertIn("Anthropic", sa.cloud_note(True, True))
 
     def test_the_cloud_dialog_says_exactly_what_leaves(self):
         for words in ("your spoken request", "file names and command output from that task",
                       "leave this computer", "Anthropic",
                       "File contents go only when you click to approve each one",
-                      "single-step requests send nothing at all"):
+                      "single-step requests send nothing to Anthropic"):
             self.assertIn(words, sa.CLOUD_BODY)
 
     def test_error_text(self):
@@ -720,6 +721,16 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["fn_hold_ms"] == 2500, "the values to come back")
         self.assertEqual(timeout.get_value(), 11)
         self.assertEqual(hold.get_value(), 2.5)
+
+    def test_06_z_fact_lookup_switch(self):
+        row = self.win.general.switches["fact_lookup"]
+        self.assertTrue(row.get_active())
+        row.set_active(False)
+        wait(lambda: saved() == [["fact_lookup", "false"]], "the switch to save")
+        wait(lambda: self.win.config["fact_lookup"] is False, "the change to come back")
+        self.assertFalse(row.get_active())
+        row.set_active(True)
+        wait(lambda: self.win.config["fact_lookup"] is True, "the switch to come back")
 
     def test_07_hold_rows_follow_the_switch(self):
         page = self.win.general
@@ -1159,14 +1170,14 @@ class Inner(unittest.TestCase):
     def test_25_cloud_asks_before_turning_on(self):
         page = self.win.general
         self.assertFalse(page.cloud.get_active())
-        self.assertEqual(page.cloud.get_subtitle(), "Requests stay on your own server")
+        self.assertEqual(page.cloud.get_subtitle(), "Nothing goes to Anthropic")
         page.cloud.set_active(True)
         dialog = self.win.get_visible_dialog()
         self.assertIsInstance(dialog, Adw.AlertDialog)
         self.assertEqual(dialog.get_body(), sa.CLOUD_BODY)
         self.assertEqual(dialog.get_close_response(), "cancel")
         self.assertEqual(dialog.get_default_response(), "cancel", "Enter must not agree")
-        self.assertEqual(page.cloud.get_subtitle(), "Requests stay on your own server",
+        self.assertEqual(page.cloud.get_subtitle(), "Nothing goes to Anthropic",
                          "nothing has changed yet")
         shot(self.win, "cloud-dialog")
         settle()
@@ -1186,7 +1197,7 @@ class Inner(unittest.TestCase):
         wait(lambda: saved() == [["cloud_enabled", "true"]], "the switch to save")
         wait(lambda: self.win.config["cloud_enabled"] is True, "the change to come back")
         self.assertTrue(page.cloud.get_active())
-        self.assertIn("stay on your own server", page.cloud.get_subtitle(), "there is no key yet")
+        self.assertIn("nothing goes to Anthropic", page.cloud.get_subtitle(), "there is no key yet")
         self.assertIsNone(self.win.get_visible_dialog(), "a reload must not ask again")
 
         forget()
@@ -1251,7 +1262,7 @@ class Inner(unittest.TestCase):
             wait(lambda: toast.called, "the toast")
         toast.assert_called_once_with("disk <full>")
         wait(lambda: not page.cloud.get_active(), "the switch to roll back")
-        self.assertEqual(page.cloud.get_subtitle(), "Requests stay on your own server")
+        self.assertEqual(page.cloud.get_subtitle(), "Nothing goes to Anthropic")
         settle()
         self.assertEqual(len(saved()), 1, "the rollback is not a save")
 
@@ -1260,7 +1271,7 @@ class Inner(unittest.TestCase):
         apply = apply_button(page.cloud_key)
         control("Change", "cloud_enabled", "true", signature="ss")
         wait(page.cloud.get_active, "the switch to follow")
-        self.assertIn("stay on your own server", page.cloud.get_subtitle())
+        self.assertIn("nothing goes to Anthropic", page.cloud.get_subtitle())
         self.assertEqual(page.cloud_key_status.get_label(), "No key set")
         page.cloud_key.set_text("  sk-cloud-sekret \n")
         apply.emit("clicked")
@@ -1286,7 +1297,7 @@ class Inner(unittest.TestCase):
         wait(lambda: saved() == [["cloud_api_key", '""']], "the key to be removed")
         wait(lambda: self.win.config.get("cloud_key_set") is False, "cloud_key_set to clear")
         self.assertEqual(page.cloud_key_status.get_label(), "No key set")
-        self.assertIn("stay on your own server", page.cloud.get_subtitle())
+        self.assertIn("nothing goes to Anthropic", page.cloud.get_subtitle())
         control("Change", "cloud_enabled", "false", signature="ss")
         wait(lambda: not page.cloud.get_active(), "the switch to follow")
 
@@ -1462,8 +1473,8 @@ class Inner(unittest.TestCase):
     def test_25_a_daemon_older_than_this_app_is_no_crash(self):
         """Settings updates on disk at once. The daemon keeps its old code until it restarts."""
         page = self.win.general
-        new = ("phone_device", "translate_server", "cloud_enabled", "cloud_model", "cloud_key_set",
-               "tapo_email", "tapo_password_set")
+        new = ("phone_device", "translate_server", "search_server", "fact_lookup", "cloud_enabled",
+               "cloud_model", "cloud_key_set", "tapo_email", "tapo_password_set")
         current = dict(self.win.config)
         self.win.apply_config({key: value for key, value in current.items() if key not in new})
         self.assertFalse(page.cloud.get_active())
@@ -1473,6 +1484,77 @@ class Inner(unittest.TestCase):
         settle()
         self.assertEqual(saved(), [])
         self.win.apply_config(current)
+
+    def test_25_a_key_the_daemon_lacks_leaves_its_row_alone(self):
+        """Falling back to empty or off would show what isn't so, and a save would write it."""
+        page = self.win.general
+        current = dict(self.win.config)
+        held = {"server": "kept:1234", "location": "Oslo", "pipeline": "tux-realtime-eou",
+                "instructions": "Be brief.", "dictation_enabled": False,
+                "conversation_mode": True, "listen_timeout_s": 33, "fn_hold_ms": 2500}
+        self.win.apply_config({**current, **held})
+        self.win.apply_config({key: value for key, value in current.items() if key not in held})
+        self.assertEqual(page.server.get_text(), "kept:1234")
+        self.assertEqual(page.location.get_text(), "Oslo")
+        self.assertTrue(page.pipelines["tux-realtime-eou"].get_active())
+        self.assertFalse(page.switches["dictation_enabled"].get_active())
+        self.assertTrue(page.switches["conversation_mode"].get_active())
+        self.assertEqual(page.spins["listen_timeout_s"][0].get_value(), 33)
+        self.assertEqual(page.spins["fn_hold_ms"][0].get_value(), 2.5)
+        self.assertEqual(page.instructions_text(), "Be brief.")
+        self.assertFalse(page.save_instructions.get_sensitive(), "no edit was made")
+        settle()
+        self.assertEqual(saved(), [])
+        self.win.apply_config(current)
+
+    def test_25_search_server(self):
+        page = self.win.general
+        row = page.search
+        self.assertEqual(row.get_text(), "", "empty means the same host, port 8888")
+        apply = apply_button(row)
+        settle(30)
+        self.assertFalse(apply.get_mapped(), "text from the daemon is not an edit")
+        with mock.patch.object(self.win, "toast") as toast:
+            row.grab_focus()
+            row.set_text("not a server")
+            wait(apply.get_mapped, "the apply button")
+            apply.emit("clicked")
+            settle()
+            self.assertTrue(row.has_css_class("error"))
+            toast.assert_called_once_with("Enter a host name and port, like myserver:8888")
+            self.assertEqual(saved(), [])
+        row.set_text("http://tuxbox:8888/")
+        self.assertFalse(row.has_css_class("error"))
+        apply.emit("clicked")
+        wait(lambda: saved() == [["search_server", '"tuxbox:8888"']], "the server to save")
+        self.assertEqual(row.get_text(), "tuxbox:8888")
+        wait(lambda: self.win.config["search_server"] == "tuxbox:8888", "the save to come back")
+        settle(30)
+        self.assertFalse(apply.get_mapped(), "the cleaned-up text is not an edit either")
+
+        control("FailNext", "SetConfig", "That is not a server address", signature="ss")
+        with mock.patch.object(self.win, "toast") as toast:
+            row.grab_focus()
+            row.set_text("other:8888")
+            wait(apply.get_mapped, "the apply button")
+            apply.emit("clicked")
+            wait(lambda: toast.called, "the toast")
+        toast.assert_called_once_with("That is not a server address")
+        wait(lambda: row.get_text() == "tuxbox:8888", "the row to show what the daemon holds")
+
+        forget()
+        row.grab_focus()
+        row.set_text("   ")
+        wait(apply.get_mapped, "the apply button")
+        apply.emit("clicked")
+        wait(lambda: saved() == [["search_server", '""']], "empty to save")
+        self.assertEqual(row.get_text(), "")
+        self.assertFalse(row.has_css_class("error"))
+        wait(lambda: self.win.config["search_server"] == "", "the change to come back")
+        control("Change", "search_server", '"elsewhere:8888"', signature="ss")
+        wait(lambda: row.get_text() == "elsewhere:8888", "the outside change")
+        control("Change", "search_server", '""', signature="ss")
+        wait(lambda: row.get_text() == "", "the reset")
 
     def test_25_translation_server(self):
         page = self.win.general

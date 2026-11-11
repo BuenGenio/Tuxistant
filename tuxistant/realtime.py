@@ -80,10 +80,12 @@ class Realtime:
 
     ("speech_started",) ("committed",) ("heard", text) ("action", record) ("audio", pcm)
     ("reply", text) ("done",) ("quiet",) ("failed", message) ("busy", seconds) ("speak", Speak)
+    ("notice", Speak)
 
     "done" fires once per request, after the last response: a response that only called tools
     does not count. "quiet" means nothing was committed, which is not an error. "busy" means an
-    action needs that long, so the silence is not the server's fault.
+    action needs that long, so the silence is not the server's fault. "notice" is for saying now,
+    while an action runs, where "speak" waits for the end.
 
     confirm and selection are the controller's, set by the turn. Left alone, every Ask is refused.
     """
@@ -101,7 +103,7 @@ class Realtime:
         self.selection = None
         self.record = None              # the action in progress
         self.session = Session(skills, self._confirm, lambda s: on_event(("busy", s)),
-                               self._selection, self._act)
+                               self._selection, self._act, lambda s: on_event(("notice", s)))
 
     async def _confirm(self, ask: Ask) -> bool:
         """Says yes only if the controller did, and keeps the answer in the history."""
@@ -192,9 +194,10 @@ class Realtime:
             self.pending += pcm
             del self.pending[:-MAX_PENDING_BYTES]
 
-    async def commit(self):
-        """Hold turn: the user let go, so ask for the reply."""
-        await self._send({"type": "input_audio_buffer.commit"})
+    async def say(self, text: str):
+        """Hold turn: what the user said, as words. A reply to it is just like a reply to audio."""
+        await self._send({"type": "conversation.item.create", "item": {
+            "type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}})
         await self._send({"type": "response.create"})
 
     async def close(self, abort=False):

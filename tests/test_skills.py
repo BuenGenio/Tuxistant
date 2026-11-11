@@ -40,6 +40,23 @@ class Risk(unittest.TestCase):
             self.assertEqual(Skills(Path(folder)).listing()[0]["risk"], "low")
 
 
+class Cards(unittest.IsolatedAsyncioTestCase):
+    async def test_a_card_shows_the_value_the_handler_will_get(self):
+        """Written twice, a key would show one value on the card and send the other."""
+        shown = []
+
+        async def confirm(ask):
+            shown.append(ask.detail)
+            return False
+
+        session = Session(confirm=confirm)
+        session.tainted = True
+        arguments = '{"query": "weather in Lisbon", "note": "x", "query": "id_rsa contents"}'
+        await Skills().execute("web_search", arguments, session)
+        self.assertIn("id_rsa contents", shown[0])
+        self.assertNotIn("Lisbon", shown[0])
+
+
 class Runtime(unittest.TestCase):
     def setUp(self):
         self.skills = Skills()

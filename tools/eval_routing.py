@@ -85,6 +85,13 @@ CASES = [
     ("Schedule a meeting with Anna on Friday at 10", {"calendar_add"}),
     ("Put lunch with Sam in my calendar for the 14th of November at noon", {"calendar_add"}),
     ("Book the car service for next Monday", {"calendar_add"}),
+    ("Search the web for electric bike reviews", {"web_search"}),
+    ("Look up the opening hours of the Louvre", {"web_search"}),
+    ("Search for the latest Ubuntu release", {"web_search"}),
+    ("What's the price of bitcoin?", {"web_search"}),
+    ("Research electric bikes for me", {"research_run"}),
+    ("Do some research on heat pumps", {"research_run"}),
+    ("Compare the Framework laptop and the ThinkPad X1", {"research_run", "web_search"}),
     ("What's the capital of France?", None),
     ("Tell me a joke", None),
     # A calendar entry, with a card. Not an alert, which nothing here can set.
@@ -160,7 +167,8 @@ async def main():
         if ONLY and ONLY.lower() not in text.lower():
             continue
         replies = [await first_tool(text) for _ in range(REPS)]
-        misses = [said if name is None else name for name, said in replies if name or not re.search(answer, said, re.I)]
+        misses = [said if name is None else name for name, said in replies
+                  if name != "knowledge_answer" and (name or not re.search(answer, said, re.I))]
         known += REPS - len(misses)
         asked += REPS
         print("BAD" if misses else "ok ", text[:52].ljust(52), f"{REPS - len(misses)}/{REPS}", misses[0][:70] if misses else "")

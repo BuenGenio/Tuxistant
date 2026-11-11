@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tests.test_daemon_fakes import CHUNK, Case, FakeSpeech, silence, tone  # noqa: E402
-from tuxistant import controller  # noqa: E402
+from tests.test_daemon_fakes import CHUNK, Case, FakeSpeaker, FakeSpeech, silence, tone  # noqa: E402
+from tuxistant import controller, skills  # noqa: E402
+from tuxistant.gate import Speak  # noqa: E402
+from tuxistant.realtime import Realtime, RealtimeError  # noqa: E402
 
 VOICE = tone(1.0)
 
@@ -215,6 +217,27 @@ class Tools(Case):
 
 
 class Hold(Case):
+    def setUp(self):
+        super().setUp()
+        self.heard = "what time is it"
+        self.sent = []      # the audio that went to speech to text
+        self.sorted = []    # what was checked for being a fact
+        self.a_fact = False
+
+        async def transcribe(_config, pcm):
+            self.sent.append(pcm)
+            return self.heard
+
+        async def is_fact(heard, _config):
+            self.sorted.append(heard)
+            return self.a_fact
+
+        for target, name, value in ((controller, "transcribe", transcribe),
+                                    (controller.knowledge, "is_fact", is_fact)):
+            patcher = mock.patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     async def holding(self, script, pcm=VOICE, **options):
         server = await self.server(script)
         rig = self.rig(server.port, mic_pcm=pcm, mic={"block": True}, **options)
@@ -226,8 +249,6 @@ class Hold(Case):
     @staticmethod
     async def answer(c):
         await c.expect("response.create")
-        await c.send("input_audio_buffer.committed", item_id="i")
-        await c.transcript("what time is it")
         await c.reply()
 
     async def test_hold_turn(self):
@@ -236,17 +257,34 @@ class Hold(Case):
         await rig.finished()
         self.assertEqual(server.sessions[0]["audio"]["input"], {"turn_detection": None})
         types = server.conn.types()
-        self.assertLess(types.index("input_audio_buffer.commit"), types.index("response.create"))
+        self.assertLess(types.index("conversation.item.create"), types.index("response.create"))
+        item = server.conn.log[types.index("conversation.item.create")]["item"]
+        self.assertEqual(item["content"], [{"type": "input_text", "text": "what time is it"}])
+        self.assertEqual(rig.of("Transcript"), [("what time is it", True)])
         self.assertEqual(rig.of("StateChanged"),
                          ["connecting", "listening", "thinking", "speaking", "idle"])
+        self.assertEqual(rig.history.recent()[0]["heard"], "what time is it")
         self.assertEqual(rig.history.recent()[0]["status"], "ok")
         self.assertEqual(rig.journal, ["mic.start", "mic.stop", "speaker.start", "speaker.drained"])
 
-    async def test_all_the_audio_is_sent_before_the_commit(self):
+    async def test_the_server_replies_to_any_commit_so_none_is_sent(self):
         server, rig = await self.holding(self.answer)
         await rig.ctl.hold_end()
         await rig.finished()
-        self.assertEqual(server.conn.audio_at_commit, len(VOICE))
+        self.assertNotIn("input_audio_buffer.commit", server.conn.types())
+        self.assertEqual(bytes(server.conn.audio), b"")
+
+    async def test_all_the_audio_is_heard(self):
+        _, rig = await self.holding(self.answer)
+        await rig.ctl.hold_end()
+        await rig.finished()
+        self.assertEqual(self.sent, [VOICE])
+
+    async def test_only_what_was_said_is_sorted(self):
+        _, rig = await self.holding(self.answer)
+        await rig.ctl.hold_end()
+        await rig.finished()
+        self.assertEqual(self.sorted, ["what time is it"])
 
     async def test_presence_goes_on_release_while_the_reply_still_speaks(self):
         _, rig = await self.holding(self.answer)
@@ -284,18 +322,198 @@ class Hold(Case):
         await rig.finished()
         self.assertEqual(server.conn.types(), ["session.update"])
 
-    async def test_input_not_committed_goes_quietly_to_idle(self):
+    async def test_no_words_go_quietly_to_idle(self):
+        self.heard = "[BLANK_AUDIO]"
+        server, rig = await self.holding(None)
+        await rig.ctl.hold_end()
+        await rig.finished()
+        self.assertEqual(rig.of("Error"), [])
+        self.assertEqual(rig.of("StateChanged"), ["connecting", "listening", "thinking", "idle"])
+        self.assertEqual(rig.history.recent(), [])
+        self.assertEqual(self.sorted, [])
+        self.assertNotIn("response.create", server.conn.types())
+
+    async def test_speech_to_text_failing_is_an_error(self):
+        async def fails(_config, _pcm):
+            raise RealtimeError("Cannot reach the server at home")
+
+        server, rig = await self.holding(None)
+        with mock.patch.object(controller, "ERROR_HOLD_S", 0.01), \
+                mock.patch.object(controller, "transcribe", fails):
+            await rig.ctl.hold_end()
+            await rig.finished()
+        self.assertEqual(rig.of("Error"), ["Cannot reach the server at home"])
+        self.assertNotIn("response.create", server.conn.types())
+
+    async def test_cancel_while_the_words_are_being_got(self):
+        started, stay = asyncio.Event(), asyncio.Event()
+
+        stopped = []
+
+        async def slow(_config, _pcm):
+            started.set()
+            try:
+                await stay.wait()
+            except asyncio.CancelledError:
+                stopped.append(True)
+                raise
+            return "what time is it"
+
+        server, rig = await self.holding(None)
+        with mock.patch.object(controller, "transcribe", slow):
+            await rig.ctl.hold_end()
+            await started.wait()
+            await rig.ctl.cancel()
+        self.assertEqual(stopped, [True])
+        self.assertEqual(rig.ctl.state, "idle")
+        self.assertNotIn("response.create", server.conn.types())
+        self.assertEqual(rig.of("Error"), [])
+
+    async def test_a_session_that_fails_does_not_lose_a_fact_on_its_way(self):
+        self.a_fact = True
+        go = asyncio.Event()
+
+        async def answer(_args, config, session):
+            await go.wait()
+            session.after.append(Speak("Paris.", config["voice"]))
+            return {"done": True}
+
+        server, rig = await self.holding(None)
+        with mock.patch.dict(skills.HANDLERS, {"knowledge.answer": answer}), \
+                mock.patch.object(controller, "speech", mock.AsyncMock(return_value=tone(0.1))):
+            await rig.ctl.hold_end()
+            await rig.state("thinking")
+            await asyncio.sleep(0.02)
+            await server.conn.ws.close()
+            await asyncio.sleep(0.05)
+            go.set()
+            await rig.finished()
+        self.assertEqual(rig.of("Error"), [])
+        self.assertEqual(rig.of("Reply"), ["Paris."])
+
+    async def test_a_fact_that_fails_itself_is_still_an_error_after_the_session_goes(self):
+        self.a_fact = True
+        go = asyncio.Event()
+
+        async def answer(_args, _config, _session):
+            await go.wait()
+            raise RealtimeError("Cannot reach the server at home")
+
+        server, rig = await self.holding(None)
+        with mock.patch.dict(skills.HANDLERS, {"knowledge.answer": answer}), \
+                mock.patch.object(controller, "ERROR_HOLD_S", 0.01):
+            await rig.ctl.hold_end()
+            await rig.state("thinking")
+            await asyncio.sleep(0.02)
+            await server.conn.ws.close()
+            await asyncio.sleep(0.05)
+            go.set()
+            await rig.finished()
+        self.assertEqual(rig.of("Error"), ["Cannot reach the server at home"])
+
+    async def test_words_that_get_no_reply_still_leave_a_row(self):
         async def script(c):
             await c.expect("response.create")
-            await c.send("error", error={"code": "input_not_committed", "message": "nothing"})
             await c.done("failed", status_details={"error": {"code": "input_not_committed"}})
 
         _, rig = await self.holding(script)
         await rig.ctl.hold_end()
         await rig.finished()
         self.assertEqual(rig.of("Error"), [])
-        self.assertEqual(rig.of("StateChanged"), ["connecting", "listening", "thinking", "idle"])
-        self.assertEqual(rig.history.recent(), [])
+        self.assertEqual(rig.history.recent()[0]["heard"], "what time is it")
+
+    async def test_a_server_that_opens_and_goes_silent_is_noticed_after_a_release(self):
+        server = await self.server(None, delay=0.1)
+        rig = self.rig(server.port, mic_pcm=VOICE, mic={"block": True, "pace": 0.0005})
+        with mock.patch.object(controller, "REPLY_TIMEOUT_S", 0.2), \
+                mock.patch.object(controller, "ERROR_HOLD_S", 0.01):
+            await rig.ctl.hold_start()
+            await asyncio.sleep(0.05)
+            await rig.ctl.hold_end()
+            await rig.finished()
+        self.assertEqual(rig.of("Error"), ["The server stopped responding"])
+
+    async def test_the_connection_limit_still_holds_after_the_words_are_in(self):
+        rig = self.rig(1, mic_pcm=VOICE, mic={"pace": 0})
+        with mock.patch.object(controller, "CONNECT_LIMIT_S", 0.3), \
+                mock.patch.object(controller, "ERROR_HOLD_S", 0.01), \
+                mock.patch.object(Realtime, "connect", lambda _self: asyncio.sleep(30)):
+            await rig.ctl.hold_start()
+            await asyncio.sleep(0.1)
+            await rig.ctl.hold_end()
+            await rig.finished()
+        self.assertEqual(self.sorted, ["what time is it"])
+        self.assertEqual(rig.of("Error"), ["The server stopped responding"])
+
+    async def asking_a_fact(self, handler, **options):
+        """A hold turn on a question of fact, with handler as knowledge.answer."""
+        self.a_fact = True
+        speech = mock.AsyncMock(return_value=tone(0.1))
+        for patcher in (mock.patch.dict(skills.HANDLERS, {"knowledge.answer": handler}),
+                        mock.patch.object(controller, "speech", speech)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        server, rig = await self.holding(None, **options)
+        await rig.ctl.hold_end()
+        await rig.finished()
+        return server, rig, speech
+
+    async def test_a_fact_never_reaches_the_voice_model(self):
+        self.heard = "What is the rarest element?"
+        asked = []
+
+        async def answer(args, config, session):
+            asked.append(args["question"])
+            session.after.append(Speak("Astatine.", config["voice"]))
+            return {"done": True}
+
+        server, rig, speech = await self.asking_a_fact(answer)
+        self.assertEqual(asked, ["What is the rarest element?"])
+        self.assertEqual(server.conn.types(), ["session.update"])
+        self.assertEqual(speech.await_args.args[1], "Astatine.")
+        self.assertEqual(rig.of("Reply"), ["Astatine."])
+        self.assertEqual(rig.of("Error"), [])
+        row = rig.history.recent()[0]
+        self.assertEqual((row["heard"], row["reply"], row["status"]),
+                         ("What is the rarest element?", "Astatine.", "ok"))
+        self.assertEqual([a["name"] for a in row["actions"]], ["knowledge.answer"])
+
+    async def test_an_answer_is_shown_even_after_the_blob_hid_on_release(self):
+        async def answer(_args, config, session):
+            session.after.append(Speak("Astatine.", config["voice"]))
+            return {"done": True}
+
+        _, rig, _ = await self.asking_a_fact(answer)
+        self.assertEqual(rig.of("Presence"), [True, False, True, False])
+
+    async def test_a_fact_that_goes_wrong_is_an_error_not_a_silence(self):
+        async def answer(_args, _config, _session):
+            raise RealtimeError("Cannot reach the server at home")
+
+        with mock.patch.object(controller, "ERROR_HOLD_S", 0.01):
+            _, rig, _ = await self.asking_a_fact(answer)
+        self.assertEqual(rig.of("Error"), ["Cannot reach the server at home"])
+        self.assertEqual(rig.history.recent()[0]["status"], "error")
+
+    async def test_a_fact_is_answered_without_waiting_for_the_session(self):
+        self.a_fact = True
+        wait = asyncio.Event()
+
+        async def answer(_args, config, session):
+            session.after.append(Speak("Paris.", config["voice"]))
+            wait.set()
+            return {"done": True}
+
+        server = await self.server(None, delay=5)
+        rig = self.rig(server.port, mic_pcm=VOICE, mic={"block": True, "pace": 0.0005})
+        with mock.patch.dict(skills.HANDLERS, {"knowledge.answer": answer}), \
+                mock.patch.object(controller, "speech", mock.AsyncMock(return_value=tone(0.1))):
+            await rig.ctl.hold_start()
+            await asyncio.sleep(0.08)
+            await rig.ctl.hold_end()
+            await rig.finished()
+        self.assertTrue(wait.is_set())
+        self.assertEqual(rig.of("Reply"), ["Paris."])
 
     async def test_release_before_the_session_is_ready(self):
         server = await self.server(self.answer, delay=0.15)
@@ -306,7 +524,7 @@ class Hold(Case):
         await rig.ctl.hold_end()
         await rig.state("thinking")
         await rig.finished()
-        self.assertEqual(server.conn.audio_at_commit, len(VOICE))
+        self.assertEqual(self.sent, [VOICE])
         self.assertEqual(rig.history.recent()[0]["status"], "ok")
 
     async def test_hold_end_without_a_hold_does_nothing(self):
@@ -323,8 +541,130 @@ class Hold(Case):
         with mock.patch.object(controller, "MAX_HOLD_S", 0.2):
             server, rig = await self.holding(self.answer)
             await rig.finished()
-        self.assertIn("input_audio_buffer.commit", server.conn.types())
+        self.assertIn("conversation.item.create", server.conn.types())
         await rig.ctl.hold_end()    # the late real release finds nothing to do
+
+    async def test_a_notice_is_said_while_the_action_runs(self):
+        said, finish = [], asyncio.Event()
+
+        async def speech(_config, text, _voice, _model=None):
+            said.append(text)
+            return tone(0.1)
+
+        async def research(_args, config, session):
+            session.notice(Speak("Let me look into that.", config["voice"]))
+            await finish.wait()
+            return {"done": True}
+
+        async def script(c):
+            await c.expect("response.create")
+            await c.tool_call("research_run", arguments='{"question": "x"}')
+            await c.done()
+            await c.expect("response.create", 2)
+            await c.reply("Done.")
+
+        with mock.patch.dict(skills.HANDLERS, {"research.run": research}), \
+                mock.patch.object(controller, "speech", speech):
+            _, rig = await self.holding(script)
+            await rig.ctl.hold_end()
+            async with asyncio.timeout(5):
+                while not said:
+                    await asyncio.sleep(0.002)
+            await rig.state("thinking")     # back to waiting, with the action still running
+            self.assertEqual(said, ["Let me look into that."])
+            self.assertTrue(rig.speakers[0].drained)
+            finish.set()
+            await rig.finished()
+        self.assertEqual(rig.of("Error"), [])
+
+    async def test_a_notice_that_cant_be_said_changes_nothing(self):
+        async def speech(_config, _text, _voice, _model=None):
+            raise RealtimeError("no voice")
+
+        async def research(_args, config, session):
+            session.notice(Speak("Let me look into that.", config["voice"]))
+            return {"done": True}
+
+        async def script(c):
+            await c.expect("response.create")
+            await c.tool_call("research_run", arguments='{"question": "x"}')
+            await c.done()
+            await c.expect("response.create", 2)
+            await c.reply("Done.")
+
+        with mock.patch.dict(skills.HANDLERS, {"research.run": research}), \
+                mock.patch.object(controller, "speech", speech):
+            _, rig = await self.holding(script)
+            await rig.ctl.hold_end()
+            await rig.finished()
+        self.assertEqual(rig.of("Error"), [])
+        self.assertEqual(rig.of("Reply"), ["Done."])
+
+    async def notice_then_answer(self, speech, **options):
+        """A fact whose action says something first, and then answers."""
+        self.a_fact = True
+
+        async def answer(_args, config, session):
+            session.notice(Speak("Let me look into that.", config["voice"]))
+            session.after.append(Speak("Paris.", ""))
+            return {"done": True}
+
+        with mock.patch.dict(skills.HANDLERS, {"knowledge.answer": answer}), \
+                mock.patch.object(controller, "speech", speech):
+            _, rig = await self.holding(None, **options)
+            await rig.ctl.hold_end()
+            await rig.finished()
+        return rig
+
+    async def test_the_speaker_of_a_notice_is_not_used_again(self):
+        async def replies(_config, _text, _voice, _model=None):
+            return tone(0.1)
+
+        self.a_fact = True
+
+        async def answer(_args, config, session):
+            session.notice(Speak("Let me look into that.", config["voice"]))
+            await asyncio.sleep(0.2)
+            session.after.append(Speak("Paris.", config["voice"]))
+            return {"done": True}
+
+        with mock.patch.dict(skills.HANDLERS, {"knowledge.answer": answer}), \
+                mock.patch.object(controller, "speech", replies):
+            _, rig = await self.holding(None)
+            await rig.ctl.hold_end()
+            await rig.finished()
+        self.assertEqual(len(rig.speakers), 2)
+        self.assertTrue(all(speaker.drained for speaker in rig.speakers))
+
+    async def test_a_speaker_that_fails_on_a_notice_does_not_lose_the_answer(self):
+        async def replies(_config, _text, _voice, _model=None):
+            return tone(0.1)
+
+        real = FakeSpeaker.drain
+
+        async def drain(speaker):
+            await real(speaker)
+            raise OSError("Nothing is playing the audio output")
+
+        with mock.patch.object(FakeSpeaker, "drain", drain):
+            rig = await self.notice_then_answer(replies)
+        self.assertEqual(rig.of("Error"), [])
+        self.assertEqual(rig.of("Reply"), ["Paris."])
+
+    async def test_a_voice_that_stalls_on_a_notice_does_not_stall_the_turn(self):
+        async def stalls(_config, _text, _voice, _model=None):
+            await asyncio.sleep(30)
+
+        with mock.patch.object(controller, "NOTICE_WAIT_S", 0.05):
+            rig = await self.notice_then_answer(stalls)
+        self.assertEqual(rig.of("Error"), [])
+        self.assertEqual(rig.of("Reply"), ["Paris."])
+
+    async def test_what_arrived_counts_even_if_the_deadline_has_gone(self):
+        turn = controller.Turn.__new__(controller.Turn)
+        turn.inbox = asyncio.Queue()
+        turn.inbox.put_nowait(("done",))
+        self.assertEqual(await turn._next(time.monotonic() - 5), ("done",))
 
     async def test_hold_start_barges_in_on_a_reply(self):
         server, rig = await self.holding(None, speaker={"gate": asyncio.Event()})
@@ -598,11 +938,15 @@ class Conversation(Case):
 
         server = await self.server(script)
         rig = self.rig(server.port, mic_pcm=VOICE, mic={"block": True}, conversation_mode=True)
-        await rig.ctl.hold_start()
-        await rig.state("listening")
-        await asyncio.sleep(0.15)
-        await rig.ctl.hold_end()
-        await rig.finished()
+        with mock.patch.object(controller, "transcribe", mock.AsyncMock(return_value="hello")), \
+                mock.patch.object(controller.knowledge, "is_fact",
+                                  mock.AsyncMock(return_value=False)):
+            await rig.ctl.hold_start()
+            await rig.state("listening")
+            await asyncio.sleep(0.15)
+            await rig.ctl.hold_end()
+            await rig.finished()
+        self.assertEqual(rig.of("Reply"), ["It is noon."])  # or it never got as far as the question
         self.assertEqual(rig.journal.count("mic.start"), 1)
         self.assertEqual(rig.ctl.state, "idle")
 

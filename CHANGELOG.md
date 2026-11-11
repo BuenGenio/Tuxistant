@@ -1,5 +1,10 @@
 # Changelog
 
+## Not yet released
+
+- **Facts from what's written down.** A question of general knowledge asked on an Fn hold is answered from Wikipedia, then from web search, and Tux says so when neither clearly answers, instead of making something up. Sums are worked out on this computer. "Look up facts on Wikipedia" in Settings turns the lookup off.
+- **Web search and research.** "Search the web for flights to Lisbon" reads out the top results, and "Research electric bikes" reads a few pages and tells you what they say, naming its sources. Both need a SearXNG server, which Settings can point at.
+
 ## 0.2.0
 
 What has been added since 0.1.0 and has worked on the owner's own desktop, not only in tests. The calendar, news and file code here is the code that ran there, inside a development build whose turn handling was newer. Work that is built but not yet proved that way, such as web search, mail search, media control, timers, Home Assistant and skills with their own code, comes in 0.3.
