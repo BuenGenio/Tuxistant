@@ -32,6 +32,8 @@ DEFAULTS = {
     "translate_server": "",       # LibreTranslate host:port; empty: the server's host, port 5000
     "tapo_email": "",             # the TP-Link account the Tapo lights belong to
     "tapo_password": "",          # only ever hashed, and only proofs of it reach a light
+    "search_server": "",          # SearXNG host:port; empty: the server's host, port 8888
+    "fact_lookup": True,          # questions of general knowledge are answered from Wikipedia
     "cloud_enabled": False,       # the one-time opt-in: multi-step requests may use a cloud model
     "cloud_api_key": "",
     "cloud_model": "claude-opus-5-5",
@@ -56,7 +58,7 @@ EDITABLE = {
     "dictation_enabled": bool,
     "location": str, "fahrenheit": bool, "news_source": str, "phone_device": str,
     "calendar_add_to": str,
-    "translate_server": str,
+    "translate_server": str, "search_server": str, "fact_lookup": bool,
     "tapo_email": str, "tapo_password": str,
     "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str,
 }
@@ -116,7 +118,7 @@ class Config:
             if len(value) > MAX_LOGIN_CHARS or not value.isprintable():
                 raise ValueError("That is not a valid email address" if key == "tapo_email"
                                  else "That is not a valid password")
-        if key == "translate_server" and value and clean_server(value) is None:
+        if key in ("translate_server", "search_server") and value and clean_server(value) is None:
             raise ValueError("That is not a server address")
         if key == "location":
             value = " ".join(value.split())[:MAX_LOCATION_CHARS]

@@ -2,6 +2,8 @@
 
 ## Not yet released
 
+- **Facts from what's written down.** A question of general knowledge asked on an Fn hold is answered from Wikipedia, then from web search, and Tux says so when neither clearly answers, instead of making something up. Sums are worked out on this computer. "Look up facts on Wikipedia" in Settings turns the lookup off.
+- **Web search and research.** "Search the web for flights to Lisbon" reads out the top results, and "Research electric bikes" reads a few pages and tells you what they say, naming its sources. Both need a SearXNG server, which Settings can point at.
 - **Calendar.** "What's on my calendar tomorrow?", "When's my next meeting?" and "Add dentist on Friday at 3pm". It works with any calendar that shows in GNOME Calendar, so a Google, CalDAV or Microsoft account is added once in GNOME Settings under Online Accounts and Tuxistant never holds its password. Adding shows a card with the title, date, times and calendar first. Settings chooses which calendar new events go to.
 - **News from a source you choose.** Settings has a list of nine: BBC News, The Guardian, NPR, CBC News, ABC News Australia, DW, France 24, Al Jazeera and The Kyiv Independent. A topic your source doesn't cover gets its top stories, and Tux says so. A redirect to any other host is refused.
 

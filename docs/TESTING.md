@@ -12,6 +12,7 @@
 | Live protocol | `TUXISTANT_LIVE=1 TUXISTANT_SERVER=host:8080 TUXISTANT_API_KEY=... python3 -m unittest tests.test_realtime_live` | LocalAI |
 | Which tool the model picks | `python3 tools/eval_routing.py` | LocalAI |
 | Whole requests | `python3 tools/eval_flows.py "a request"` | LocalAI |
+| Whether facts are right, or made up | `python3 tools/eval_facts.py` | LocalAI, the internet and SearXNG. Takes about 15 minutes, so run it in the background |
 | Do the voices say the words | `python3 tools/check_voices.py` | LocalAI |
 | The pictures in the docs | `python3 tools/docs_images.py` | `gnome-shell`, `ffmpeg`, Pillow. Safe next to the desktop |
 
@@ -21,13 +22,21 @@
 
 ## After changing a tool
 
-Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run (2026-11-11) scored 171 of 177 with 21 tools, at about 0.3 s per request, and answered 28 of 33 facts.
+Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run (2026-11-11) scored 192 of 198 with 24 tools, at about 0.5 s per request, and answered 31 of 33 facts. Those are facts on a turn from the shortcut, as a hold turn answers them before this model hears them. Three repeats move by a few from run to run, so don't read much into 2 or 3.
 
 Run it after changing the instructions too. It also asks plain facts and checks the reply, because "no tool" alone can't tell an answer from "I can't do that". That gap once hid Tux refusing 44 of 70 simple questions behind a good routing score.
 
 The model is consistent: a request that goes wrong usually goes wrong all three times. One tool's wording can also move requests that seem unrelated, so always run all of it. When a real request goes wrong, add it as a case.
 
 Then run `tools/eval_flows.py`, which follows whole requests through the real tools. It finds what routing can't, such as a reply Tux shouldn't say aloud, or a result that loses its caveat on the way to the model.
+
+Run `tools/eval_facts.py` after changing `tuxistant/knowledge.py` or anything the sorter sees. Two numbers matter: wrong answers, and other requests called a fact, as those go to Wikipedia with no click. Both must be 0. Its lists exist for reasons that each cost a wrong conclusion:
+
+- **Hard questions and rewordings.** A check that scored 43 of 46 on easy facts missed 32 of 116 once they were reworded.
+- **A list that was never tuned on.** The sorter's examples came from looking at its misses, so its score on those lists flatters it. Read the "never seen" line, and keep it unseen: if one of those goes wrong, move it up and write a new one.
+- **Failures counted apart from not knowing.** An early run scored search engine errors as "I don't know" and proved nothing.
+
+Search engines block a server that asks too fast, for hours. That is why it pauses between questions, and a search that fails here says nothing about the code. Check the engines one at a time before believing a bad score.
 
 ## Staying off the real desktop
 
@@ -50,7 +59,7 @@ Also:
 
 A passing test proves nothing until you've seen it fail. For anything security-related, break the code in a throwaway copy and confirm the test catches it.
 
-Run the same tests in that copy with nothing broken first, and stop if they fail. One run reported 18 of 18 mutants caught when every test was dying at import, because a temporary `HOME` hid `websockets` in the user's site-packages. Set `PYTHONUSERBASE` to the real `~/.local` when changing `HOME`.
+Run the same tests in that copy with nothing broken first, and stop if they fail. One run reported 18 of 18 mutants caught when every test was dying at import, because a temporary `HOME` hid `websockets` in the user's site-packages. Set `PYTHONUSERBASE` to the real `~/.local` when changing `HOME`, and `XDG_CONFIG_HOME` to the real `~/.config` when an eval needs the real config. A fresh worktree also needs `glib-compile-schemas extension/tuxistant@buengenio/schemas`.
 
 A test that something didn't happen has to wait until it could have happened. Dictation's delivery runs apart from the job, and tests that asserted "nothing was sent" straight after the job ended passed whatever the code did. Breaking the guards is what showed it.
 

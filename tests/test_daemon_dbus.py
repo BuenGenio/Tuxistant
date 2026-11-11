@@ -323,10 +323,15 @@ class Service(OnPrivateBus):
     async def test_hold_and_cancel_over_the_bus(self):
         async def script(c):
             await c.expect("response.create")
-            await c.committed("hello")
             await c.reply("Hi.")
 
         self.daemon.controller.make_mic = lambda: FakeMic(self.journal, tone(1.0), block=True)
+        with mock.patch.object(controller, "transcribe", mock.AsyncMock(return_value="hello")), \
+                mock.patch.object(controller.knowledge, "is_fact",
+                                  mock.AsyncMock(return_value=False)):
+            await self.hold_and_cancel(script)
+
+    async def hold_and_cancel(self, script):
         async with FakeServer(script, key="secret-key") as server:
             self.config.values["server"] = f"127.0.0.1:{server.port}"
             await self.iface.call_hold_start()

@@ -67,7 +67,7 @@ CLOUD_BODY = (
     "When a request needs several steps, your spoken request and the file names and command "
     "output from that task leave this computer and go to Anthropic.\n\n"
     "File contents go only when you click to approve each one.\n\n"
-    "Ordinary single-step requests send nothing at all."
+    "Ordinary single-step requests send nothing to Anthropic."
 )
 RAW_FIELDS = ("Command", "Arguments", "Result")     # shown as they are, so columns stay columns
 CSS = """
@@ -313,8 +313,8 @@ def cloud_note(enabled: bool, key_set: bool) -> str:
     if enabled and key_set:
         return "Requests with several steps go to Anthropic"
     if enabled:
-        return "No API key yet, so requests stay on your own server"
-    return "Requests stay on your own server"
+        return "No API key yet, so nothing goes to Anthropic"
+    return "Nothing goes to Anthropic"
 
 
 def extension_schema_dirs() -> list[Path]:
@@ -516,6 +516,7 @@ class GeneralPage(Adw.PreferencesPage):
         self.saved_location = ""
         self.saved_instructions = ""
         self.saved_translate = ""
+        self.saved_search = ""
         self.saved_model = ""
         self.saved_tapo_email = ""
         self.devices = None  # what ListPhones last said: None until it has answered
@@ -533,7 +534,7 @@ class GeneralPage(Adw.PreferencesPage):
         self.add(self._news_group())
         self.add(self._calendar_group())
         self.add(self._phone_group())
-        self.add(self._translation_group())
+        self.add(self._translation_and_search_group())
         self.add(self._lights_group())
         self.add(self._cloud_group())
         self.add(self._shortcuts_group())
@@ -619,14 +620,22 @@ class GeneralPage(Adw.PreferencesPage):
         group.add(self.phone)
         return group
 
-    def _translation_group(self):
+    def _translation_and_search_group(self):
         group = Adw.PreferencesGroup(
-            title="Translation",
-            description="Leave this empty to use the same host as the server, port 5000")
+            title="Translation and search",
+            description="Leave a server empty to use the main server's host: "
+                        "port 5000 for translation, 8888 for search")
         self.translate = Adw.EntryRow(title="LibreTranslate server", show_apply_button=True)
         self.translate.connect("apply", self.on_translate_apply)
         self.translate.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.translate)
+        self.search = Adw.EntryRow(title="SearXNG server", show_apply_button=True)
+        self.search.connect("apply", self.on_search_apply)
+        self.search.connect("changed", lambda row: row.remove_css_class("error"))
+        group.add(self.search)
+        group.add(self._switch("fact_lookup", "Look up facts on Wikipedia",
+                               "Questions of general knowledge are sent to Wikipedia, so answers "
+                               "aren't made up. Off, Tux answers from memory and can be wrong."))
         return group
 
     def _lights_group(self):
@@ -730,13 +739,15 @@ class GeneralPage(Adw.PreferencesPage):
     def sync(self, config):
         """Show what the daemon holds, leaving alone anything the user is halfway through."""
         self.syncing = True
+        # A daemon that hasn't restarted since an update may not send every key yet.
+        server = config.get("server", self.saved_server)
         if self.server.get_text() == self.saved_server:
-            self.set_row_text(self.server, config["server"])
-        self.saved_server = config["server"]
+            self.set_row_text(self.server, server)
+        self.saved_server = server
+        location = config.get("location", self.saved_location)
         if self.location.get_text() == self.saved_location:
-            self.set_row_text(self.location, config["location"])
-        self.saved_location = config["location"]
-        # .get: a daemon that hasn't restarted since an update doesn't send these yet.
+            self.set_row_text(self.location, location)
+        self.saved_location = location
         translate = config.get("translate_server", "")
         if self.translate.get_text() == self.saved_translate:
             self.set_row_text(self.translate, translate)
@@ -745,6 +756,10 @@ class GeneralPage(Adw.PreferencesPage):
         if self.tapo_email.get_text() == self.saved_tapo_email:
             self.set_row_text(self.tapo_email, email)
         self.saved_tapo_email = email
+        search = config.get("search_server", "")
+        if self.search.get_text() == self.saved_search:
+            self.set_row_text(self.search, search)
+        self.saved_search = search
         model = config.get("cloud_model") or DEFAULTS["cloud_model"]
         if self.cloud_model.get_text() == self.saved_model:
             self.set_row_text(self.cloud_model, model)
@@ -756,17 +771,19 @@ class GeneralPage(Adw.PreferencesPage):
         self.show_calendar()
         self.show_cloud()
         self.show_keys()
-        for name, check in self.pipelines.items():
-            check.set_active(name == config["pipeline"])
+        if "pipeline" in config:
+            for name, check in self.pipelines.items():
+                check.set_active(name == config["pipeline"])
         for key, row in self.switches.items():
-            if key not in self.win.timers:
+            if key in config and key not in self.win.timers:
                 row.set_active(bool(config[key]))
         for key, (row, scale) in self.spins.items():
-            if key not in self.win.timers:
+            if key in config and key not in self.win.timers:
                 row.set_value(config[key] / scale)
+        instructions = config.get("instructions", self.saved_instructions)
         if self.instructions_text() == self.saved_instructions:
-            self.instructions.get_buffer().set_text(config["instructions"])
-        self.saved_instructions = config["instructions"]
+            self.instructions.get_buffer().set_text(instructions)
+        self.saved_instructions = instructions
         self.on_instructions_changed()
         self.syncing = False
 
@@ -862,6 +879,17 @@ class GeneralPage(Adw.PreferencesPage):
         self.set_row_text(row, email)
         self.saved_tapo_email = email
         self.win.save("tapo_email", email)
+
+    def on_search_apply(self, row):
+        text = row.get_text().strip()
+        server = clean_server(text) if text else ""
+        if server is None:
+            row.add_css_class("error")
+            self.win.toast("Enter a host name and port, like myserver:8888")
+            return
+        self.set_row_text(row, server)
+        self.saved_search = server
+        self.win.save("search_server", server)
 
     def on_model_apply(self, row):
         model = row.get_text().strip() or DEFAULTS["cloud_model"]

@@ -14,7 +14,8 @@ from pathlib import Path
 
 import yaml
 
-from . import calendars, files, lights, livedata, phone, planner, shellgate, system, translate
+from . import (calendars, files, knowledge, lights, livedata, phone, planner, research, shellgate,
+               system, translate, websearch)
 from .config import DEFAULTS
 from .gate import Ask, Session, declined
 
@@ -70,8 +71,8 @@ HANDLERS = {"time.now": _time_now, "disk.usage": _disk_usage,
             "weather.forecast": _plain(livedata.weather),
             "news.headlines": _plain(livedata.headlines),
             **calendars.HANDLERS, **files.HANDLERS, **lights.HANDLERS, **phone.HANDLERS,
-            **shellgate.HANDLERS,
-            **system.HANDLERS, **translate.HANDLERS, **planner.HANDLERS}
+            **shellgate.HANDLERS, **system.HANDLERS, **translate.HANDLERS,
+            **websearch.HANDLERS, **research.HANDLERS, **knowledge.HANDLERS, **planner.HANDLERS}
 
 
 class Skills:
@@ -126,10 +127,13 @@ class Skills:
                 if name in REACHES and hosts is not True:   # never more than was declared
                     hosts = [h for h in REACHES[name](self.config) if h in hosts] or hosts
                 where = "the internet" if hosts is True else ", ".join(map(str, hosts))
+                # As parsed, which is what the handler gets. Written twice, a key shows one value
+                # here and sends the other.
+                shown = json.dumps(json.loads(arguments or "{}"), ensure_ascii=False)
                 if not await session.confirm(Ask(
                         f"Let {action['skill']} reach {where}?",
                         "This conversation has already read something private from this "
-                        f"computer.\nAction: {name}\nArguments: {arguments}", dict)):
+                        f"computer.\nAction: {name}\nArguments: {shown}", dict)):
                     return name, declined()
             if inspect.iscoroutinefunction(HANDLERS.get(name)):
                 args = json.loads(arguments or "{}")
