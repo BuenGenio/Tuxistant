@@ -19,7 +19,7 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus, WebSocketExce
 
 from .audio import BYTES_PER_S, RATE
 from .config import valid_key
-from .gate import APPROVAL_WAIT_S, Ask, Session
+from .gate import APP_SAYS, APPROVAL_WAIT_S, Ask, Session
 
 SETUP_TIMEOUT_S = 30        # a cold pipeline takes about 6 s to say session.created
 HTTP_TIMEOUT_S = 60
@@ -98,6 +98,8 @@ class Realtime:
         self.pending = bytearray()      # audio captured before the session could take it
         self.seen_calls = set()
         self.called = False             # the response in progress ran a tool
+        self.to_report = False          # a result of this reply is for the model to put into words
+        self.owed = False               # and so is one of an earlier reply, until it speaks
         self.rounds = 0
         self.confirm = None
         self.selection = None
@@ -242,6 +244,7 @@ class Realtime:
         elif kind in ("response.output_audio.delta", "response.audio.delta"):
             self.on_event(("audio", base64.b64decode(event["delta"])))
         elif kind in ("response.output_audio_transcript.done", "response.audio_transcript.done"):
+            self.owed = False       # it has spoken, whatever else this reply holds
             self.on_event(("reply", event["transcript"]))
         elif kind == "response.done":
             await self._response_done(event["response"])
@@ -256,6 +259,7 @@ class Realtime:
         self.seen_calls.add(call_id)
         self.called = True
         _, result = await self._act(name, arguments)
+        self.to_report = self.to_report or not (isinstance(result, dict) and result.get(APP_SAYS))
         await self._send({"type": "conversation.item.create", "item": {
             "type": "function_call_output", "call_id": call_id, "output": json.dumps(result)}})
 
@@ -278,21 +282,28 @@ class Realtime:
     async def _response_done(self, response: dict):
         status = response.get("status")
         error = (response.get("status_details") or {}).get("error") or {}
+        owed, self.to_report = self.to_report or self.owed, False
         if error.get("code") == NOT_COMMITTED:
+            self.owed = False
             self.on_event(("quiet",))
         elif status == "failed":
+            self.owed = False
             self.on_event(("failed", _message(error)))
-        elif self.called and status == "completed":
+        elif self.called and status == "completed" and owed:
             # Tool outputs are in, so this was not the end of the request. Asking once here,
-            # not per call, keeps two calls in one response from starting two responses.
-            self.called = False
+            # not per call, keeps two calls in one response from starting two responses. What is
+            # owed stays owed until the model has spoken: its next reply may be another tool.
+            self.called, self.owed = False, True
             self.rounds += 1
             if self.rounds >= MAX_TOOL_ROUNDS:
+                self.owed = False
                 self.on_event(("failed", "The assistant kept calling tools without answering"))
             else:
                 await self._send({"type": "response.create"})
         else:
-            self.called = False
+            # The request ends here: the model spoke, or the app says all of it itself (see
+            # APP_SAYS), or the response was cut short. Nothing is owed after it.
+            self.called = self.owed = False
             self.rounds = 0
             self.on_event(("done",))
 

@@ -19,6 +19,7 @@ Built-in skills, in `tuxistant/skills_builtin/`:
 | Lights | `lights.set`, `lights.status` | none | low |
 | Calendar | `calendar.events` | `calendar_read` | medium |
 | Add to calendar | `calendar.add` | `calendar_write` | medium |
+| Mail | `mail.search` | `mail_read` | medium |
 | Translate | `translate.text`, `translate.selection` | `network: [home]`, and `clipboard` for the selection | medium |
 | General knowledge | `knowledge.answer` | `network` | medium |
 | Web search | `web.search` | `network` | medium |
@@ -29,6 +30,8 @@ Built-in skills, in `tuxistant/skills_builtin/`:
 A skill with a `home` network permission only talks to the server this install already uses.
 
 Calendar goes through Evolution Data Server, the service GNOME Calendar uses, so Google, CalDAV and Microsoft accounts are added once in GNOME's Online Accounts and Tuxistant holds no password or token for them. Reading needs no card, but it counts as reading something private, so afterwards nothing leaves your own server without a click. Adding always shows a card with the title, the full date, the times and the calendar. The model passes the day and time as you said them, and the dates are worked out in `tuxistant/calendars.py`, because a small model invents dates. An event's title is whatever the person who sent the invitation typed, so it is cut short and its control characters shown as escapes before the model sees it.
+
+Mail answers a question from the search index Thunderbird keeps on this computer, so finding a mail needs no account, no password and no network, and the file is only ever opened read-only. Reading one uses the model on your own server, as everything does. It is off until you turn it on in Settings, and until then the model isn't offered the tool at all. Reading needs no card, but it counts as reading something private. A mail is a stranger's text, so none of it goes back to the voice model: the best matches are read one at a time by a model call with no tools, and the app says the answer itself, with who sent it and when added from the index. A sender is named by address or domain, never by the name beside it, which is whatever they typed. Junk, Trash and drafts are skipped. Sign-in codes and passwords are hidden from a mail before it is searched or read, so one can't be found or said, and a request for one is refused. Among mails holding as many of the question's words, one from an address that first wrote more than a week ago is read ahead of one from an address that didn't, and an answer from a first-time sender ends with a warning. [CONTRACT.md](CONTRACT.md) has the steps.
 
 News declares every source Settings offers, and reads only the one you chose. The list is fixed in `tuxistant/livedata.py`, so a news request can't be pointed at a host that isn't written there, and a redirect to another host is refused. When a card has to ask before the news is fetched, it names the one host that will be reached.
 
@@ -87,6 +90,9 @@ A handler takes the arguments, the config and the session, and returns a dict th
 | `files_read` | Reading files | medium |
 | `network` | Reaching the network | medium |
 | `clipboard` | Using the clipboard | medium |
+| `calendar_read` | Reading your calendars | medium |
+| `calendar_write` | Adding to a calendar | medium |
+| `mail_read` | Reading your mail | medium |
 
 Set a permission to `true` to ask for it. Names not in this table have no effect on risk.
 
@@ -97,7 +103,7 @@ The permissions set the risk, show up in Settings and drive the rule below. They
 `Skills.execute` is the only way an action runs, whether the voice model or the planner asked for it.
 
 - **Anything risky.** A handler returns an `Ask` instead of acting. The card shows what will really happen, written by Tuxistant from the real action, and only a click on it goes ahead. A spoken yes doesn't count, because audio playing nearby could say it. No answer in 45 seconds, a cancel or a locked screen all mean no.
-- **Private data leaving.** Once a conversation has read files, command output or the selection, any action that reaches past your own server needs a click, whichever skill asks. One skill can't read your files and another send them out.
+- **Private data leaving.** Once a conversation has read files, command output, the selection, your calendar or your mail, any action that reaches past your own server needs a click, whichever skill asks. One skill can't read your files and another send them out.
 - **What runs with no click.** Reading, such as `file.find`, and shell commands the parser can prove are read-only. Those run in a sandbox with a read-only filesystem, no network and your secrets hidden. A web search, research or a fact looked up in a conversation that hasn't read anything private is also this kind of action, and needs no click.
 
 Every action, every card and the answer to it are in the request history, including what the planner did.
@@ -131,7 +137,7 @@ Searches go through SearXNG on your own server, set by `search_server`. Left emp
 3. The local model summarises each page, in a call that offers no tools.
 4. The local model combines the summaries into two or three sentences, again with no tools.
 5. Daemon code adds the sources, taken from the page addresses, and says so if a page failed, if there is only one source or if time ran out.
-6. The app reads that out itself, as it does a translation. The voice model is told only that it's done. Given the text, it reworded it and dropped the sources and caveats almost every time, so a thin answer sounded certain.
+6. The app reads that out itself, as it does a translation. The voice model is told only that it's done, and isn't asked to speak after it. Given the text, it reworded it and dropped the sources and caveats almost every time, so a thin answer sounded certain. Given nothing and asked to speak, it sometimes made up an answer of its own just before the real one: a date, in 2 of 8 tries at "When did I apply to renew my passport?".
 
 The whole thing stops at 45 seconds and answers with what it has. It always uses the local model, even with Cloud turned on. As the voice model never sees the answer, it can't take questions about it afterwards.
 
@@ -150,7 +156,7 @@ It uses the model on your own server unless you turn on Cloud in Settings, which
 `risk_of()` in `tuxistant/skills.py` works out the risk from the permissions:
 
 - **high** if the skill asks for `shell` or `files_write`
-- **medium** if it asks for `files_read`, `network` or `clipboard`
+- **medium** if it asks for `files_read`, `network`, `clipboard`, `calendar_read`, `calendar_write` or `mail_read`
 - **low** otherwise
 
 The risk is never read from the manifest. A `risk:` line is overwritten when the skill loads, so an author cannot label a dangerous skill as safe.

@@ -16,7 +16,7 @@ import secrets
 import time
 
 from . import realtime, webfetch, websearch
-from .gate import Speak
+from .gate import APP_SAYS, Speak
 from .planner import LOCAL_MODEL
 from .realtime import RealtimeError
 from .webfetch import PageError, clean
@@ -40,10 +40,9 @@ NO_THINK = "/no_think"
 
 NOT_CLEAR = "I didn't catch what to look into."
 LOOKING = "Let me look into that."      # it can be ten seconds before there's anything else to say
-# The model gets this and no answer. Told less, it says it can't find anything, just before the
-# app reads out what it found. These words had it say only this, every time it was tried.
-TOLD = {"done": True, "the_app_reads_the_answer_aloud_next": True,
-        "say_only": "Here's what I found."}
+# The model gets this and no answer, and isn't asked to speak after it: see APP_SAYS. It stays in
+# the conversation, so the words are for a later turn. Told less, it said it couldn't find anything.
+TOLD = {"done": True, APP_SAYS: True, "say_only": "Here's what I found."}
 NOTHING_FOUND = "I searched the web but found nothing on that."
 NOTHING_USEFUL = "I read what I could find, but none of it answered that."
 ALL_FAILED = "I found pages on this but couldn't open any of them."

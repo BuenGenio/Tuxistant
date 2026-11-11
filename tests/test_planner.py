@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 from tuxistant import planner, realtime  # noqa: E402
 from tuxistant import skills as skills_module  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
-from tuxistant.gate import MAX_DETAIL_CHARS, Ask, Session, printable  # noqa: E402
+from tuxistant.gate import APP_SAYS, MAX_DETAIL_CHARS, Ask, Session, Speak, printable  # noqa: E402
 from tuxistant.realtime import AuthError, Realtime, RealtimeError  # noqa: E402
 from tuxistant.skills import BUILTIN, Skills  # noqa: E402
 
@@ -240,6 +240,53 @@ class Local(Case):
         self.clicks.answers = [True]
         self.assertEqual(await self.task(), {"answer": "Sent.", "steps": 2})
         self.assertEqual(ran, [1])
+
+    async def test_a_step_the_app_reads_out_ends_the_task_with_no_words_of_a_models(self):
+        """Shown only "done", the planner's model wrote an answer of its own, the voice model
+        was asked to say it, and the app then read out the real one."""
+        def answered(_args, _config, session):
+            session.after.append(Speak("Astatine.", "voice"))
+            return {"done": True, APP_SAYS: True}
+        self.use({"plan.look": answered})
+        server = self.server(asks(("plan_look", "{}"), ("plan_look", "{}")),
+                             said("The rarest element is francium."))
+        result = await self.task()
+        self.assertEqual(result, {"done": True, APP_SAYS: True, "steps": 1})
+        self.assertEqual(len(server.bodies), 1)
+        self.assertEqual([item.text for item in self.last_session.take_after()], ["Astatine."])
+
+    def reads_out(self):
+        def answered(_args, _config, session):
+            session.after.append(Speak("Astatine.", "voice"))
+            return {"done": True, APP_SAYS: True}
+        self.use({"plan.look": answered, "plan.send": lambda *_: self.ran.append("sent") or {"ok": 1}})
+
+    async def test_a_different_question_in_the_same_reply_is_answered_too(self):
+        self.reads_out()
+        self.server(asks(("plan_look", "{}"), ("plan_look", '{"what": "other"}')))
+        self.assertEqual((await self.task())[APP_SAYS], True)
+        self.assertEqual(len(self.last_session.take_after()), 2)
+
+    async def test_a_call_after_one_the_app_reads_out_still_runs(self):
+        """The task used to end at the first such call, and the rest of the reply never ran."""
+        self.reads_out()
+        server = self.server(asks(("plan_look", "{}"), ("plan_send", "{}")), said("Made up."))
+        self.assertEqual(await self.task(), {"answer": planner.REST_DONE, "steps": 1})
+        self.assertEqual(self.ran, ["sent"])
+        self.assertEqual(len(server.bodies), 1)
+        self.assertEqual([item.text for item in self.last_session.take_after()], ["Astatine."])
+
+    async def test_what_an_earlier_step_did_is_not_passed_over_in_silence(self):
+        self.reads_out()
+        self.server(asks(("plan_send", "{}")), asks(("plan_look", "{}")), said("Made up."))
+        self.assertEqual(await self.task(), {"answer": planner.REST_DONE, "steps": 2})
+
+    async def test_another_step_that_failed_is_said_beside_the_apps_answer(self):
+        self.reads_out()
+        self.use({"plan.send": lambda *_: {"error": "The phone is off."}})
+        self.server(asks(("plan_send", "{}"), ("plan_look", "{}")), said("Made up."))
+        self.assertEqual(await self.task(), {"answer": planner.PART_FAILED, "steps": 1})
+        self.assertEqual(len(self.last_session.take_after()), 1)
 
     async def test_the_taint_gate_still_applies_inside_a_task(self):
         self.server(asks(("plan_leak", "{}")), said("Leaked."))

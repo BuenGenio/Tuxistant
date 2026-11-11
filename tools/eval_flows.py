@@ -9,11 +9,12 @@ it once opened the user's CV on screen. So opening files, phone and light action
 below, and any new action with no card that touches the desktop or a device must be cut off here
 too. What still runs: file search, reading system facts, sandboxed read-only commands, weather,
 news, translation on your own server, and web search and research, which reach real search engines
-and real pages.
+and real pages. Mail search runs too, on a made-up mailbox: the real one is never opened.
 """
 import asyncio
 import json
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -21,9 +22,10 @@ import websockets
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tuxistant import calendars, files, lights, phone  # noqa: E402
+from tests.mail_index import PROVIDER, SAMPLE, build  # noqa: E402
+from tuxistant import calendars, files, lights, mail, phone  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
-from tuxistant.gate import Session  # noqa: E402
+from tuxistant.gate import APP_SAYS, Session  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
 
 
@@ -58,7 +60,14 @@ class NoCalendars:
 calendars.Eds = blocked
 calendars._backend = NoCalendars
 
+# In place of the real mail, which must never end up in a log or on the way to a model from here.
+MAILBOX = tempfile.TemporaryDirectory()
+build(Path(MAILBOX.name), SAMPLE)
+mail.ROOTS = (MAILBOX.name,)
+mail.FREEMAIL |= {PROVIDER}    # the made-up mailbox provider its senders use
+
 cfg = Config()
+cfg.values["mail_search"] = True    # here only: nothing is saved
 KEY = cfg["api_key"]
 skills = Skills(config=cfg)
 ASKS = sys.argv[1:] or [
@@ -80,6 +89,11 @@ ASKS = sys.argv[1:] or [
     "Delete my old log files",
     "What's on my calendar tomorrow?",
     "Add dentist on Friday at 3pm to my calendar",
+    "When did I apply to renew my passport?",
+    "What did my landlord say about the rent?",
+    "Did the bank email me about my new card?",
+    "Was my application to renew my passport rejected?",
+    "Check my email for the dentist appointment, then search the web for the dentist's reviews",
     "Install VLC",
 ]
 
@@ -96,7 +110,7 @@ async def turn(text):
         await ws.send(json.dumps({"type": "session.update", "session": {"type": "realtime", "instructions": cfg["instructions"], "tools": skills.tools()}}))
         await ws.send(json.dumps({"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}}))
         await ws.send(json.dumps({"type": "response.create", "response": {"output_modalities": ["text"]}}))
-        reply, called, rounds = "", False, 0
+        reply, called, report, rounds = "", False, False, 0
         while True:
             e = json.loads(await asyncio.wait_for(ws.recv(), 120))
             kind = e["type"]
@@ -104,14 +118,15 @@ async def turn(text):
                 _, result = await skills.execute(e["name"], e["arguments"], session)
                 calls.append(f'{e["name"]}({e["arguments"][:80]}) -> {json.dumps(result, ensure_ascii=False)[:150]}')
                 called = True
+                report = report or not result.get(APP_SAYS)     # as Realtime._run_tool has it
                 await ws.send(json.dumps({"type": "conversation.item.create", "item": {"type": "function_call_output", "call_id": e["call_id"], "output": json.dumps(result)}}))
             elif kind.endswith("transcript.done") or kind == "response.output_text.done":
                 reply = e.get("transcript") or e.get("text") or reply
             elif kind == "error":
                 return calls, cards, session, "ERROR " + json.dumps(e.get("error"))[:120], time.monotonic() - started
             elif kind == "response.done":
-                if called and rounds < 5:
-                    called, rounds = False, rounds + 1
+                if called and report and rounds < 5:
+                    called, report, rounds = False, False, rounds + 1
                     await ws.send(json.dumps({"type": "response.create", "response": {"output_modalities": ["text"]}}))
                 else:
                     return calls, cards, session, reply, time.monotonic() - started

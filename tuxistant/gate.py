@@ -15,6 +15,9 @@ MAX_DETAIL_CHARS = 4000
 MAX_NAME_CHARS = 300
 LEVELS = ("click", "admin")
 DECLINED = "OK, I've left that alone."     # the model tends to repeat this word for word
+# In a result, this means the app reads the answer out itself. The voice model is then not asked
+# to speak: holding the question and no answer, it made up a date in 2 of 8 tries at one question.
+APP_SAYS = "the_app_reads_the_answer_aloud_next"
 
 Confirm = Callable[["Ask"], Awaitable[bool]]
 

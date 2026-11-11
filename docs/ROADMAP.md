@@ -16,6 +16,7 @@ Steps 1 to 3 of the plan below are built, and most of step 4. Steps 2 to 4 have 
 | Files, phone, shell, system facts | Tested with the real model. See "Check on the real desktop" |
 | Translation | Spoken translation works on the real desktop. Translating a selection has not been tried there |
 | Calendar | Reads and adds events through Evolution Data Server. Tested against a real, private Evolution Data Server in two time zones, and reading was tried on the owner's ten Google calendars. Adding has not run on a real account, and CalDAV and Microsoft accounts have not been tried at all |
+| Mail search | Answers from the search index Thunderbird keeps, behind a switch that starts off. Tested against a made-up index, and with the real model on a made-up mailbox. Tried from a terminal on the owner's real mail on 2026-11-11, where it found and read the right mail in 1 to 3 seconds. It has not run by voice |
 | Tapo lights | Working on the real desktop with an L530. The bulb sometimes went missing until the Tapo app woke it. Since 2026-11-10 bulbs are remembered and asked directly, which still has to prove itself over a few days |
 | Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
 | Facts, web search, research | Tested against the real server, Wikipedia and SearXNG. Not yet by voice on the real desktop |
@@ -35,7 +36,7 @@ The owner approved this order.
 1. **Done:** daemon, skill runtime, blob, status icon, Settings.
 2. **Done, pending real-desktop checks:** typed skills, then the shell gate, with translation as the first real skill, and the planner with an opt-in cloud model.
 3. **Done, pending real-desktop checks: dictation.** Tap Fn, then hold and speak, and the words are typed where the cursor is. No model is involved, so it needs no card. See "Dictation" in [CONTRACT.md](CONTRACT.md).
-4. **Under way: more built-in skills.** Calendar is built. General web search, research, and facts answered from Wikipedia are done, pending real-desktop checks. Journal is next.
+4. **Under way: more built-in skills.** Calendar is built. General web search, research, facts answered from Wikipedia, and mail search for Thunderbird are done, pending real-desktop checks. Still to come: journal, and mail for people who don't use Thunderbird, through GNOME's Online Accounts.
 5. **Local install of your own skills.** Recipe skills: YAML only, using built-in daemon actions (D-Bus, HTTP, open app), with no code of their own. They load from a user folder. Non-built-in skills must be refused `shell`.
 6. **Code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared. Local only at first, with a clear warning.
 7. **Community registry.** A reviewed Git repo first, like Flathub: skills arrive as pull requests, and a static index is built from them onto the same GitHub Pages site. Signing means the host doesn't have to be trusted, so no server is needed. Logins, ratings or uploads would need one, as a small API beside the site rather than instead of it.
@@ -102,6 +103,7 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 13. Dictation, with `tuxistant doctor` saying it's ready: tap Fn, then hold and speak, in a GTK app such as Text Editor, in a terminal, and in VS Code or Chromium, which should take the paste route. Check that the clipboard is unchanged afterwards, that a password box refuses, and that Ctrl+Super+D starts and stops it.
 14. **Passed 2026-11-10:** lights, with the TP-Link account in Settings: "Is the light on?", then "Turn off the light" and "Make it warm white".
 15. Calendar: "What's on my calendar tomorrow?" by voice, then "Add a test event on Friday at 3pm", allow the card, and see it appear in GNOME Calendar and on the account. Pick a calendar in Settings first. Adding has only ever written to a private test calendar.
+16. Mail search, with Thunderbird set up: turn on "Search my mail" in Settings and ask about a mail you remember, such as when something was booked or what someone said. It should answer within a few seconds and say who it was from and when. Ask for a sign-in code, which it should refuse. Ask about a mail you know holds a code, such as what a sign-in mail from your bank said, and the code should come out as "hidden". After an answer from mail, ask for a web search in the same conversation, which should show a card. `tuxistant doctor` says whether it found any mail.
 
 Move site claims from Soon to Now only after the matching check passes.
 
@@ -129,6 +131,27 @@ Move site claims from Soon to Now only after the matching check passes.
 - Wikipedia is the English one. A question in another language may find less.
 - Follow-up questions aren't understood: each hold is a new conversation, and "Who wrote it?" means nothing to a search.
 - The voice model never sees an answer the app read out, so it can't take questions about it.
+
+**Mail search:**
+
+- It reads Thunderbird's index and nothing else, so it knows what Thunderbird knew when it last ran, and a mail Thunderbird hasn't downloaded has no text to search. Other mail programs aren't read at all.
+- The index is Thunderbird's own, and its layout could change with a new version. Then mail search says it couldn't read it, until this is updated.
+- It matches words, not meanings. "When did I pay the plumber?" won't find a mail that only says "invoice settled", and a question in one language won't find a mail in another.
+- A phrase such as "last week" is not understood: newer mail is preferred, and that is all.
+- When nothing in the mailbox is about the question, the three nearest mails are still shown to the model before it says so. That takes about 4 seconds, and those mails go to your own server like any other.
+- On the owner's index of 130,000 mails the search itself took 0.5 to 2.5 seconds, before the model reads anything.
+- Who a mail is from is the address the mail gives. Nothing here checks a signature, so a forged address that reached the inbox is believed, and an address that has written for more than a week counts as known however it began. A company that writes from a new address each time gets the first-time warning each time, and so does a sender line that isn't a plain name and address, or whose address is at a domain not written in ASCII.
+- When a sender first wrote is worked out from the mails Thunderbird indexed just after their first one. Of 239 senders on the owner's index, 238 came out the same as by that mail's own date, and one long-standing sender was taken as new. So the warning can be wrong now and then, mostly by being said when it needn't be. The day that is said is the one the mail gives.
+- A mail can still make Tux say something false, out loud. It can't make it do anything. The warning for a first-time sender is the only sign.
+- Sign-in codes and passwords are hidden by the words around them and by their shape. One that fits neither would be read out, such as a password given as "the usual one plus 42", or a code more than 160 characters after the word for it. The other way round, too much is hidden: a promo code, a booking reference, an order number in a mail that also says something expires. The answer then has a gap, read out as "hidden". Of the newest 2,000 mails on the owner's index, 253 had something hidden.
+- Asking for "the code the bank sent" without saying sign-in, verification, password or PIN is not refused outright. The search runs, the mail may be found, and the code in it is hidden.
+- Only the best three mails are read. If three from known senders hold as many of the words, a first-time sender's mail that would have answered is never reached.
+- The small words of languages other than English, Russian and Ukrainian are searched for like any other, so a German or French question finds more noise.
+- Junk and Trash are known by Thunderbird's own mark or by name. A junk folder Thunderbird hasn't marked, named in a language the list doesn't have, would be read.
+- An answer in another language is shown, not spoken.
+- With it switched on, the tool list is one longer. Two runs with it answered 27 and 28 of 33 plain facts on shortcut turns, and one without it answered 31, so it may cost a few. Hold turns aren't affected, and neither is anyone who leaves it off.
+- "When is my dentist appointment?" can go to the calendar instead, which is a fair reading of it. Saying "email" settles it.
+- In a multi-step task that both asks a question the app answers and does something else, the something else is summed up as "The other steps are done.", not in the model's words.
 
 **Web search:**
 

@@ -100,6 +100,52 @@ A research answer names its sources, read from the page address where a page can
 
 Sources are now named from where the page ended up, counted by who owns them, and cut from the front.
 
+### The mail that answered for the passport office
+
+Mail search reads the mails that best match a question and says what the first useful one says. A stranger's mail with every word of the question in its subject, sent that morning, came out on top, ahead of the real one from a sender of long standing. Asked "When did I apply to renew my passport?", Tux said the application had been rejected, and to phone a number and pay a fee. The mail's own attempt to call a tool went nowhere, as the model that reads mail has none.
+
+Among mails holding as many of the question's words, senders who had already written at least a week before are now read first, so the real mail answers. When only the stranger's mail fits, what it says is followed by "I haven't seen mail from that sender before, so treat it with care." A sender is named by the address, never by the name beside it.
+
+Only the six best mails had their senders looked up, so a second review sent six of the stranger's mails and the real one was never considered. Up to thirty of the best are looked at now.
+
+The first version of that check believed the date on each mail, which its sender writes. A stranger's second mail, dated five years back, made them an old acquaintance. When a mail came was then judged by the mails Thunderbird indexed around it, leaving out the sender's own.
+
+A third review found the lookups shared the search's four seconds, so after a slow search every sender came out as new and the real mail lost its place. The rule had also grown special cases, each with an edge of its own. It is now one line: a sender is known if their first mail came at least a week ago, and it came no later than the middle date of the 21 mails from other people indexed just after it. The lookups have their own two seconds, and a sender not looked up in time gets the warning.
+
+This isn't fully closed: nothing checks that an address is genuine, a patient sender becomes a known one, and a dozen forged mails from different addresses, sent straight after the first, could still shift the date.
+
+### The trusted address typed into the name
+
+A sender is named by address, never by the name beside it, because the name is whatever the sender typed. A review typed an address there: `"no-reply@notify.passports.example" <help@evil.example>`. The code took the first address it saw, so the stranger's mail was said to be from the passport office, with its years of history and no warning.
+
+The first fix read the sender line with the standard library's parser, and a second review bent the line further. A second address the parser couldn't read left the trusted one standing alone. A line of five hundred nested brackets ran the parser out of stack, and every search that passed that mail failed.
+
+The line is no longer parsed as mail at all. The address is what stands in the one pair of angle brackets at its end, or the whole line if it is nothing but an address. Anything else is "an unknown sender", and gets the warning. History is kept by the exact address, as a domain is shared by every customer of a help desk and every user of a mailbox provider.
+
+### The mail that borrowed an ID
+
+A mail filed in two folders was known as one mail by its Message-ID, and was the user's own if either copy was in Sent. A Message-ID is whatever a sender writes, and anyone the user ever wrote to has the ID of that mail. A stranger's mail sent under it was read out as "an email you sent", with no warning, and the real one was dropped as its copy. The same trick under a known sender's ID took that mail's place.
+
+The ID is no longer looked at. One mail is one sender, subject and text, so the only mail that can pass for one the user sent is that mail, word for word.
+
+### Twenty questions for a sign-in code
+
+Mails with sign-in codes are never read. But when one was the only match, the reply was "the only mail I found holds sign-in codes", and otherwise "I couldn't find any mail about that". A model that has been turned can ask anything, so the review asked for "expires 48", then "expires 482", and had the code 482913 after 139 questions, without one mail being read.
+
+A sign-in mail now leaves no trace: it takes no place in a search, and the reply is the same as if it weren't there. The same review found most real sign-in mails weren't recognised, such as "your one-time password is", a code written "482 913", and every one not in English.
+
+Widened, the list then held back ordinary mail: a hotel booking for its confirmation code, an order for its promo code, a receipt for a one-time payment. The user was told there was no such mail. And it still missed "your password for the portal is", and a code in a mail that a footer made long. A narrower list, looking for the secret itself, came out of a third review the same way: some real sign-in mail read out, and some ordinary mail still held back.
+
+Holding back the whole mail was the wrong tool, as every miss was total either way. The mail is now read and the secret hidden: what stands where a code or a password would is replaced before the mail is searched, so the twenty questions find nothing, and before a model sees it, so there is nothing to say. Hiding can afford to be greedy, as too much costs a number in an answer and not the answer. It is still a list of words and shapes, and docs/ROADMAP.md says what gets past it.
+
+### The answer nobody wrote
+
+For research, facts and mail, the voice model is told only that it's done, and the app reads the answer out. Asked to speak after that, with the question in front of it and no answer, the model made one up: a date, in 2 of 8 tries at one question, said just before the real one.
+
+It is no longer asked to speak when the app has the answer. A review then found the same thing by another road. Through a multi-step task, the planning model saw "done", wrote an answer of its own, and the voice model was asked to say that. A step the app reads out now ends the task. The first fix had also dropped something: when the model answered an ordinary result with one of these tools, nobody ever said what the first result came to. That is still owed, and still asked for.
+
+A third review found four more edges of the same rule. A model that said what it owed in the same reply as its call was asked to speak again, and with nothing left to say it made up an answer. A task ended at the first such call, so the rest of that reply never ran, and whatever earlier steps did went unsaid. And when the model's own reply failed, the answer the app already had was thrown away with it. Words beside a call now count as spoken, every call of a reply runs, the app says in its own words that the other steps are done or that some failed, and a waiting answer is read out before the error.
+
 ## When the checks themselves failed
 
 ### The test result that proved nothing

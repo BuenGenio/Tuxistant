@@ -20,9 +20,13 @@
 
 `tests/test_calendars.py` uses a stand-in, and fails if anything reaches for the real calendars. `tests/test_calendars_eds.py` starts a real Evolution Data Server under `dbus-run-session` with a temporary home, so it has one empty local calendar and no accounts, and drives the skill against it in two time zones. Its driver refuses to run if it finds any other calendar or any event. `tools/eval_flows.py` swaps in a made-up calendar, so an evaluation never reads the owner's week or adds to it.
 
+## The mail
+
+`tests/test_mail.py` builds a made-up copy of Thunderbird's index with `tests/mail_index.py`, and fails if anything opens an index outside its temporary folder. `tools/eval_flows.py` points mail search at a made-up mailbox from the same file, with a landlord, a dentist, a sign-in code and a scam in it, so an evaluation never reads real mail or sends any of it to a model. Keep it that way: every mail in there is invented, and none may be copied from a real inbox. Its senders use `mailbox.example` in place of a real mailbox provider, so that no address could be a real person's.
+
 ## After changing a tool
 
-Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run (2026-11-11) scored 192 of 198 with 24 tools, at about 0.5 s per request, and answered 31 of 33 facts. Those are facts on a turn from the shortcut, as a hold turn answers them before this model hears them. Three repeats move by a few from run to run, so don't read much into 2 or 3.
+Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run (2026-11-11) scored 216 of 219 with 25 tools, at about 1 s per request on a server busy with other work, and answered 28 of 33 facts. It counts every tool, including mail search, which is off until someone turns it on: without it the run before scored 192 of 198 with 24 tools, at about 0.5 s, and answered 31 of 33 facts. Those are facts on a turn from the shortcut, as a hold turn answers them before this model hears them. Three repeats move by a few from run to run, so don't read much into 2 or 3.
 
 Run it after changing the instructions too. It also asks plain facts and checks the reply, because "no tool" alone can't tell an answer from "I can't do that". That gap once hid Tux refusing 44 of 70 simple questions behind a good routing score.
 

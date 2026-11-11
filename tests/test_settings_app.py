@@ -289,6 +289,7 @@ class Logic(unittest.TestCase):
 
     def test_calendar_permissions_read_as_words(self):
         self.assertEqual(sa.permission_words({"calendar_read": True}), "Can read your calendars")
+        self.assertEqual(sa.permission_words({"mail_read": True}), "Can read your mail")
         self.assertEqual(sa.permission_words({"calendar_write": True}), "Can add events to a calendar")
 
     def test_a_saved_phone_is_kept_when_nothing_lists_it(self):
@@ -731,6 +732,15 @@ class Inner(unittest.TestCase):
         self.assertFalse(row.get_active())
         row.set_active(True)
         wait(lambda: self.win.config["fact_lookup"] is True, "the switch to come back")
+
+    def test_06_zz_mail_search_is_off_until_switched_on(self):
+        row = self.win.general.switches["mail_search"]
+        self.assertFalse(row.get_active())
+        row.set_active(True)
+        wait(lambda: saved() == [["mail_search", "true"]], "the switch to save")
+        wait(lambda: self.win.config["mail_search"] is True, "the change to come back")
+        row.set_active(False)
+        wait(lambda: self.win.config["mail_search"] is False, "the switch to come back")
 
     def test_07_hold_rows_follow_the_switch(self):
         page = self.win.general
@@ -1474,7 +1484,7 @@ class Inner(unittest.TestCase):
         """Settings updates on disk at once. The daemon keeps its old code until it restarts."""
         page = self.win.general
         new = ("phone_device", "translate_server", "search_server", "fact_lookup", "cloud_enabled",
-               "cloud_model", "cloud_key_set", "tapo_email", "tapo_password_set")
+               "cloud_model", "cloud_key_set", "tapo_email", "tapo_password_set", "mail_search")
         current = dict(self.win.config)
         self.win.apply_config({key: value for key, value in current.items() if key not in new})
         self.assertFalse(page.cloud.get_active())

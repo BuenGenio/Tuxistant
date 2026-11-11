@@ -12,8 +12,9 @@ import websockets
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_daemon_fakes import Case, CountingSkills, FakeSpeech, tone, wav  # noqa: E402
-from tuxistant import realtime  # noqa: E402
+from tuxistant import realtime, skills  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
+from tuxistant.gate import APP_SAYS, Speak  # noqa: E402
 from tuxistant.realtime import AuthError, Realtime, RealtimeError, list_models, sentences, speech  # noqa: E402
 
 
@@ -208,6 +209,194 @@ class Turns(ClientCase):
         await self.next("done")
         self.assertEqual(self.skills.ran, ["time_now", "disk_usage"])
         self.assertEqual(server.conn.types().count("conversation.item.create"), 2)
+        self.assertEqual(server.conn.types().count("response.create"), 1)
+
+    def app_answers(self):
+        """research.run, as an action whose answer the app reads out itself."""
+        async def answer(_args, _config, session):
+            session.after.append(Speak("Astatine.", "voice"))
+            return {"done": True, APP_SAYS: True}
+
+        patcher = mock.patch.dict(skills.HANDLERS, {"research.run": answer})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def test_when_the_app_reads_the_answer_the_model_isnt_asked_to_speak(self):
+        """Holding the question and no answer, it made one up, just before the real one."""
+        self.app_answers()
+
+        async def script(c):
+            await c.tool_call("research_run", "a", '{"question": "the rarest element"}')
+            await c.done()
+            await c.expect("conversation.item.create")
+            await asyncio.sleep(0.1)
+
+        server, _ = await self.turn(script)
+        self.assertEqual(await self.next("speak"), ("speak", Speak("Astatine.", "voice")))
+        self.assertEqual(await self.next("done"), ("done",))
+        await asyncio.sleep(0.15)
+        self.assertEqual(server.conn.types().count("response.create"), 0)
+
+    async def test_it_is_asked_when_another_result_in_the_same_reply_needs_saying(self):
+        self.app_answers()
+
+        async def script(c):
+            await c.tool_call("research_run", "a", '{"question": "the rarest element"}')
+            await c.tool_call(call_id="b")
+            await c.done()
+            await c.expect("response.create")
+            await c.reply()
+
+        server, _ = await self.turn(script)
+        await self.next("done")
+        self.assertEqual(server.conn.types().count("response.create"), 1)
+
+    async def test_the_next_tool_reply_is_asked_for_as_usual(self):
+        self.app_answers()
+
+        async def script(c):
+            await c.tool_call("research_run", "a", '{"question": "the rarest element"}')
+            await c.done()
+            await c.expect("conversation.item.create")
+            await c.tool_call(call_id="b")
+            await c.done()
+            await c.expect("response.create")
+            await c.reply()
+
+        server, _ = await self.turn(script)
+        await self.next("done")
+        await self.next("done")
+        self.assertEqual(server.conn.types().count("response.create"), 1)
+
+    async def test_what_an_earlier_reply_left_unsaid_is_still_asked_for(self):
+        """The model answered an ordinary result with another tool, whose answer the app reads.
+        Ending there, nobody ever said what the first one came to."""
+        self.app_answers()
+
+        async def script(c):
+            await c.tool_call("disk_usage", "a", '{"path": "/no/such/disk"}')
+            await c.done()
+            await c.expect("response.create")
+            await c.tool_call("research_run", "b", '{"question": "the rarest element"}')
+            await c.done()
+            await c.expect("response.create", 2)
+            await c.reply("That disk isn't there.")
+
+        server, _ = await self.turn(script)
+        self.assertEqual(await self.next("reply"), ("reply", "That disk isn't there."))
+        await self.next("done")
+        self.assertEqual(server.conn.types().count("response.create"), 2)
+
+    async def test_an_ordinary_result_before_an_app_read_one_in_the_same_reply_is_asked_for(self):
+        self.app_answers()
+
+        async def script(c):
+            await c.tool_call(call_id="a")
+            await c.tool_call("research_run", "b", '{"question": "the rarest element"}')
+            await c.done()
+            await c.expect("response.create")
+            await c.reply()
+
+        server, _ = await self.turn(script)
+        await self.next("done")
+        self.assertEqual(server.conn.types().count("response.create"), 1)
+
+    async def test_once_the_model_has_spoken_nothing_is_owed_to_the_next_answer(self):
+        """In conversation mode the connection lives on. An ordinary tool and its spoken reply,
+        then a question the app answers: the model is asked once, not twice."""
+        self.app_answers()
+
+        async def script(c):
+            await c.tool_call(call_id="a")
+            await c.done()
+            await c.expect("response.create")
+            await c.reply()
+            await c.tool_call("research_run", "b", '{"question": "the rarest element"}')
+            await c.done()
+            await c.expect("conversation.item.create", 2)
+            await asyncio.sleep(0.1)
+
+        server, _ = await self.turn(script)
+        await self.next("done")
+        await self.next("speak")
+        await self.next("done")
+        await asyncio.sleep(0.15)
+        self.assertEqual(server.conn.types().count("response.create"), 1)
+
+    async def spoken_with_a_call(self, c):
+        await c.send("response.output_audio_transcript.done", transcript="Let me look.")
+        await c.tool_call("research_run", "b", '{"question": "the rarest element"}')
+        await c.done()
+        await c.expect("conversation.item.create", 2)
+        await asyncio.sleep(0.1)
+
+    async def test_a_reply_that_speaks_and_asks_the_app_isnt_asked_to_speak_again(self):
+        """It had said what the earlier result came to, and was asked once more all the same:
+        with nothing left to say it made up an answer to the question the app was reading."""
+        self.app_answers()
+
+        async def script(c):
+            await c.tool_call(call_id="a")
+            await c.done()
+            await c.expect("response.create")
+            await self.spoken_with_a_call(c)
+
+        server, _ = await self.turn(script)
+        self.assertEqual(await self.next("reply"), ("reply", "Let me look."))
+        await self.next("done")
+        await asyncio.sleep(0.15)
+        self.assertEqual(server.conn.types().count("response.create"), 1)
+
+    async def test_words_beside_an_ordinary_call_dont_stand_in_for_its_result(self):
+        async def script(c):
+            await c.send("response.output_audio_transcript.done", transcript="Let me look.")
+            await c.tool_call(call_id="a")
+            await c.done()
+            await c.expect("response.create")
+            await c.reply()
+
+        server, _ = await self.turn(script)
+        await self.next("done")
+        self.assertEqual(server.conn.types().count("response.create"), 1)
+
+    async def test_a_reply_that_was_cut_short_leaves_nothing_owed_either(self):
+        self.app_answers()
+        for status in ("cancelled", "incomplete"):
+            with self.subTest(status):
+                async def script(c):
+                    await c.tool_call(call_id="a")
+                    await c.done(status=status)
+                    await c.expect("conversation.item.create")
+                    await c.tool_call("research_run", "b", '{"question": "the rarest element"}')
+                    await c.done()
+                    await c.expect("conversation.item.create", 2)
+                    await asyncio.sleep(0.1)
+
+                server, _ = await self.turn(script)
+                await self.next("done")
+                await self.next("speak")
+                await self.next("done")
+                await asyncio.sleep(0.15)
+                self.assertEqual(server.conn.types().count("response.create"), 0)
+
+    async def test_nor_does_one_cut_short_after_it_was_asked_to_speak(self):
+        self.app_answers()
+
+        async def script(c):
+            await c.tool_call(call_id="a")
+            await c.done()
+            await c.expect("response.create")
+            await c.done(status="cancelled")
+            await c.tool_call("research_run", "b", '{"question": "the rarest element"}')
+            await c.done()
+            await c.expect("conversation.item.create", 2)
+            await asyncio.sleep(0.1)
+
+        server, _ = await self.turn(script)
+        await self.next("done")
+        await self.next("speak")
+        await self.next("done")
+        await asyncio.sleep(0.15)
         self.assertEqual(server.conn.types().count("response.create"), 1)
 
     async def test_a_model_stuck_calling_tools_is_stopped(self):

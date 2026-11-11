@@ -46,6 +46,7 @@ PERMISSION_WORDS = {
     "network": "use the network",
     "clipboard": "use the clipboard",
     "calendar_read": "read your calendars",
+    "mail_read": "read your mail",
     "calendar_write": "add events to a calendar",
 }
 HOME_SERVER = "home"        # a network permission naming the server this install talks to
@@ -55,6 +56,8 @@ KEY_SET = {"api_key": "api_key_set", "cloud_api_key": "cloud_key_set",   # never
 KEY_WORDS = {"tapo_password": ("Password is set", "No password set")}
 LIGHTS_NOTE = ("The TP-Link account your Tapo lights are set up with. The password never "
                "leaves this computer")
+MAIL_NOTE = ("Answers come from the mail Thunderbird keeps on this computer. What a mail says "
+             "goes to your own server to be read, and nowhere else")
 AUTOMATIC = "Automatic"
 PHONE_NOTE = "Used when you don't name a device"
 CALENDARS_TIMEOUT_MS = 30000    # the daemon connects to each calendar to see if it can be changed
@@ -533,6 +536,7 @@ class GeneralPage(Adw.PreferencesPage):
         self.add(self._weather_group())
         self.add(self._news_group())
         self.add(self._calendar_group())
+        self.add(self._mail_group())
         self.add(self._phone_group())
         self.add(self._translation_and_search_group())
         self.add(self._lights_group())
@@ -611,6 +615,12 @@ class GeneralPage(Adw.PreferencesPage):
         self.calendar = Adw.ComboRow(title="Add events to", use_markup=False)
         self.calendar.connect("notify::selected", self.on_calendar)
         group.add(self.calendar)
+        return group
+
+    def _mail_group(self):
+        group = Adw.PreferencesGroup(title="Mail", description=MAIL_NOTE)
+        group.add(self._switch("mail_search", "Search my mail",
+                               "Junk and Trash are never read, and sign-in codes are hidden"))
         return group
 
     def _phone_group(self):

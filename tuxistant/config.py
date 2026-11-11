@@ -34,6 +34,7 @@ DEFAULTS = {
     "tapo_password": "",          # only ever hashed, and only proofs of it reach a light
     "search_server": "",          # SearXNG host:port; empty: the server's host, port 8888
     "fact_lookup": True,          # questions of general knowledge are answered from Wikipedia
+    "mail_search": False,         # the one-time opt-in: answers may come from Thunderbird's mail
     "cloud_enabled": False,       # the one-time opt-in: multi-step requests may use a cloud model
     "cloud_api_key": "",
     "cloud_model": "claude-opus-5-5",
@@ -58,7 +59,7 @@ EDITABLE = {
     "dictation_enabled": bool,
     "location": str, "fahrenheit": bool, "news_source": str, "phone_device": str,
     "calendar_add_to": str,
-    "translate_server": str, "search_server": str, "fact_lookup": bool,
+    "translate_server": str, "search_server": str, "fact_lookup": bool, "mail_search": bool,
     "tapo_email": str, "tapo_password": str,
     "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str,
 }

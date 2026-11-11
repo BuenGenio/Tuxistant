@@ -391,6 +391,31 @@ class Hold(Case):
         self.assertEqual(rig.of("Error"), [])
         self.assertEqual(rig.of("Reply"), ["Paris."])
 
+    async def test_a_reply_that_fails_does_not_lose_what_the_app_was_to_read_out(self):
+        """The app had its answer, the model's own reply then failed, and the answer went with
+        it: the user heard only the error."""
+        async def answer(_args, config, session):
+            session.after.append(Speak("Astatine.", config["voice"]))
+            return {"done": True}
+
+        async def script(c):
+            await c.expect("response.create")
+            await c.tool_call("research_run", "a", '{"question": "the rarest element"}')
+            await c.done()
+            await c.expect("response.create", 2)
+            await c.done("failed", status_details={"error": {"message": "Out of memory"}})
+
+        speech = mock.AsyncMock(return_value=tone(0.1))
+        server, rig = await self.holding(script)
+        with mock.patch.dict(skills.HANDLERS, {"research.run": answer}), \
+                mock.patch.object(controller, "speech", speech), \
+                mock.patch.object(controller, "ERROR_HOLD_S", 0.01):
+            await rig.ctl.hold_end()
+            await rig.finished()
+        self.assertEqual(rig.of("Reply"), ["Astatine."])
+        self.assertEqual(speech.await_args.args[1], "Astatine.")
+        self.assertEqual(len(rig.of("Error")), 1)
+
     async def test_a_fact_that_fails_itself_is_still_an_error_after_the_session_goes(self):
         self.a_fact = True
         go = asyncio.Event()
