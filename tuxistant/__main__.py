@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import BUS_NAME, BUS_PATH, __version__
+from . import BUS_NAME, BUS_PATH, __version__, calendars
 from .config import Config
 from .fnclient import SOCKET
 
@@ -143,6 +143,9 @@ def checks(config) -> list[tuple[bool, str, str]]:
         (speech_to_text in models, "speech to text model present", speech_to_text),
         (not tools, "PipeWire tools present", "missing: " + ", ".join(tools) if tools else ""),
         (fn_running, "Fn helper running", fn_detail),
+        # Optional, like the helper: without the bindings only the calendar is missing.
+        (True, "calendar available", "" if calendars.available() else
+         "not installed: the calendar needs evolution-data-server and gir1.2-ecal-2.0"),
         (extension_installed(), "GNOME extension installed", EXTENSION),
         (extension_enabled(), "GNOME extension enabled", EXTENSION),
         (daemon_activatable(), "daemon can be started", BUS_NAME),

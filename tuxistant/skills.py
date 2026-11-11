@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from . import files, lights, livedata, phone, planner, shellgate, system, translate
+from . import calendars, files, lights, livedata, phone, planner, shellgate, system, translate
 from .config import DEFAULTS
 from .gate import Ask, Session, declined
 
@@ -26,13 +26,14 @@ HOME = "home"   # a network permission naming the server this install already ta
 def risk_of(permissions: dict) -> str:
     if permissions.get("shell") or permissions.get("files_write"):
         return "high"
-    if permissions.get("network") or permissions.get("files_read") or permissions.get("clipboard"):
+    if any(permissions.get(p) for p in ("network", "files_read", "clipboard", "calendar_read",
+                                        "calendar_write")):
         return "medium"
     return "low"
 
 
 def reads_private(permissions: dict) -> bool:
-    return any(permissions.get(p) for p in ("files_read", "shell", "clipboard"))
+    return any(permissions.get(p) for p in ("files_read", "shell", "clipboard", "calendar_read"))
 
 
 def leaves_home(permissions: dict) -> bool:
@@ -59,12 +60,17 @@ def _plain(handler):
     return lambda args, config, _session: handler(args, config)
 
 
+# Which of a skill's declared hosts one call will reach, where a setting decides it. The card
+# shown after private data was read names these, not every host the skill could have reached.
+REACHES = {"news.headlines": livedata.news_hosts}
+
 # A handler takes (args, config, session) and returns a dict, or an Ask. One defined with async
 # def runs on the event loop and may use the session's confirm, busy, selection and execute.
 HANDLERS = {"time.now": _time_now, "disk.usage": _disk_usage,
             "weather.forecast": _plain(livedata.weather),
             "news.headlines": _plain(livedata.headlines),
-            **files.HANDLERS, **lights.HANDLERS, **phone.HANDLERS, **shellgate.HANDLERS,
+            **calendars.HANDLERS, **files.HANDLERS, **lights.HANDLERS, **phone.HANDLERS,
+            **shellgate.HANDLERS,
             **system.HANDLERS, **translate.HANDLERS, **planner.HANDLERS}
 
 
@@ -117,6 +123,8 @@ class Skills:
         try:
             if session.tainted and leaves_home(permissions):
                 hosts = permissions["network"]
+                if name in REACHES and hosts is not True:   # never more than was declared
+                    hosts = [h for h in REACHES[name](self.config) if h in hosts] or hosts
                 where = "the internet" if hosts is True else ", ".join(map(str, hosts))
                 if not await session.confirm(Ask(
                         f"Let {action['skill']} reach {where}?",

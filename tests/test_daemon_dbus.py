@@ -41,7 +41,8 @@ METHODS = {
     "ListVoices": ("", "s"), "PreviewVoice": ("s", ""), "Say": ("s", ""),
     "ListThemes": ("", "s"), "PreviewTheme": ("s", ""), "ListSkills": ("", "s"),
     "GetHistory": ("i", "s"), "ClearHistory": ("", ""), "OpenSettings": ("", ""),
-    "ListPhones": ("", "s"), "Hello": ("i", ""), "CanAsk": ("", "b"), "Answer": ("sb", ""),
+    "ListPhones": ("", "s"), "ListCalendars": ("", "s"),
+    "Hello": ("i", ""), "CanAsk": ("", "b"), "Answer": ("sb", ""),
     "SelectionText": ("ss", ""),
 }
 SIGNALS = {

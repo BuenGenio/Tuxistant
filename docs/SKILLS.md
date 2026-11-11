@@ -17,11 +17,17 @@ Built-in skills, in `tuxistant/skills_builtin/`:
 | Phone | `phone.ring`, `phone.battery` | none | low |
 | Phone send | `phone.send` | `files_read` | medium |
 | Lights | `lights.set`, `lights.status` | none | low |
+| Calendar | `calendar.events` | `calendar_read` | medium |
+| Add to calendar | `calendar.add` | `calendar_write` | medium |
 | Translate | `translate.text`, `translate.selection` | `network: [home]`, and `clipboard` for the selection | medium |
 | Shell | `shell.run` | `shell` | high |
 | Task | `task.run` | `shell` | high |
 
 A skill with a `home` network permission only talks to the server this install already uses.
+
+Calendar goes through Evolution Data Server, the service GNOME Calendar uses, so Google, CalDAV and Microsoft accounts are added once in GNOME's Online Accounts and Tuxistant holds no password or token for them. Reading needs no card, but it counts as reading something private, so afterwards nothing leaves your own server without a click. Adding always shows a card with the title, the full date, the times and the calendar. The model passes the day and time as you said them, and the dates are worked out in `tuxistant/calendars.py`, because a small model invents dates. An event's title is whatever the person who sent the invitation typed, so it is cut short and its control characters shown as escapes before the model sees it.
+
+News declares every source Settings offers, and reads only the one you chose. The list is fixed in `tuxistant/livedata.py`, so a news request can't be pointed at a host that isn't written there, and a redirect to another host is refused. When a card has to ask before the news is fetched, it names the one host that will be reached.
 
 Lights controls Tapo bulbs such as the L530 on your own network, so it needs no card, the same as ringing your phone. It finds them with a broadcast, then remembers them in `lights.json` beside the config and asks them directly too, since a bulb saving power misses some broadcasts. It uses the TP-Link email and password from Settings. The password never leaves this computer: KLAP only sends proofs that it is known, and the bulb has to prove it knows it first. Only typed values reach a bulb (on or off, a number, a colour from a fixed list), so it can't carry anything private out. A bulb's name is whatever anyone typed into the Tapo app, so it is cut short and its control characters shown as escapes before the model sees it. Settings lists each skill with its permissions and risk:
 

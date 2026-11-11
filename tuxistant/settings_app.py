@@ -19,6 +19,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 from . import BUS_NAME, BUS_PATH, themes  # noqa: E402
 from .config import DEFAULTS, clean_server  # noqa: E402
 from .gate import MAX_TITLE_CHARS, printable  # noqa: E402
+from .livedata import DEFAULT_SOURCE, SOURCES  # noqa: E402
 
 APP_ID = "org.tuxistant.Settings"
 EXTENSION_UUID = "tuxistant@buengenio"
@@ -44,6 +45,8 @@ PERMISSION_WORDS = {
     "files_read": "read files",
     "network": "use the network",
     "clipboard": "use the clipboard",
+    "calendar_read": "read your calendars",
+    "calendar_write": "add events to a calendar",
 }
 HOME_SERVER = "home"        # a network permission naming the server this install talks to
 SHELL_ACTION = "shell.run"
@@ -54,6 +57,10 @@ LIGHTS_NOTE = ("The TP-Link account your Tapo lights are set up with. The passwo
                "leaves this computer")
 AUTOMATIC = "Automatic"
 PHONE_NOTE = "Used when you don't name a device"
+CALENDARS_TIMEOUT_MS = 30000    # the daemon connects to each calendar to see if it can be changed
+CALENDAR_NOTE = "Where new events go when you don't name a calendar"
+NO_CALENDARS = "No calendar here can be changed. Add an account in GNOME Settings, Online Accounts"
+GONE_CALENDAR = "Not available: a calendar that is no longer here"
 NO_PHONES = "GSConnect isn't running or has no devices"
 CLOUD_HEADING = "Send complex requests to Anthropic?"
 CLOUD_BODY = (
@@ -289,6 +296,18 @@ def phone_choices(devices: list[dict] | None, saved: str) -> dict[str, str]:
     return choices
 
 
+def calendar_choices(calendars: list[dict] | None, saved: str) -> dict[str, str]:
+    """{id: label} for the row. Automatic is the system's own default calendar. As with phones, a
+    saved calendar that isn't listed stays a choice, so the next save doesn't lose it."""
+    choices = {"": AUTOMATIC}
+    for calendar in calendars or []:
+        account = calendar.get("account") or ""
+        choices[calendar["id"]] = f"{calendar['name']} ({account})" if account else calendar["name"]
+    if saved not in choices:
+        choices[saved] = "…" if calendars is None else GONE_CALENDAR
+    return choices
+
+
 def cloud_note(enabled: bool, key_set: bool) -> str:
     """Says where requests really go, which takes both the switch and a key."""
     if enabled and key_set:
@@ -500,6 +519,8 @@ class GeneralPage(Adw.PreferencesPage):
         self.saved_model = ""
         self.saved_tapo_email = ""
         self.devices = None  # what ListPhones last said: None until it has answered
+        self.calendars = None   # the same for ListCalendars
+        self.calendar_labels, self.calendar_values = [], []
         self.phone_values = []
         self.phone_labels = []
         self.switches = {}
@@ -509,6 +530,8 @@ class GeneralPage(Adw.PreferencesPage):
         self.add(self._pipeline_group())
         self.add(self._listening_group())
         self.add(self._weather_group())
+        self.add(self._news_group())
+        self.add(self._calendar_group())
         self.add(self._phone_group())
         self.add(self._translation_group())
         self.add(self._lights_group())
@@ -569,6 +592,24 @@ class GeneralPage(Adw.PreferencesPage):
         group.add(self.location)
         group.add(self._switch("fahrenheit", "Use Fahrenheit",
                                "Temperatures in Fahrenheit and wind in miles per hour"))
+        return group
+
+    def _news_group(self):
+        group = Adw.PreferencesGroup(
+            title="News", description="The source you choose sees your IP address when you ask")
+        self.news = Adw.ComboRow(title="Source", use_markup=False)
+        self.news.set_model(Gtk.StringList.new([name for name, _base, _feeds in SOURCES.values()]))
+        self.news.connect("notify::selected", self.on_news)
+        group.add(self.news)
+        return group
+
+    def _calendar_group(self):
+        group = Adw.PreferencesGroup(
+            title="Calendar",
+            description="Calendars come from the accounts in GNOME Settings, under Online Accounts")
+        self.calendar = Adw.ComboRow(title="Add events to", use_markup=False)
+        self.calendar.connect("notify::selected", self.on_calendar)
+        group.add(self.calendar)
         return group
 
     def _phone_group(self):
@@ -683,6 +724,8 @@ class GeneralPage(Adw.PreferencesPage):
         # Not worth an outage page: GSConnect can be slow, or the daemon older than this app.
         self.win.daemon.fetch("ListPhones", self.show_devices, timeout=PHONES_TIMEOUT_MS,
                               fail=lambda _error: self.show_devices([]))
+        self.win.daemon.fetch("ListCalendars", self.show_calendars, timeout=CALENDARS_TIMEOUT_MS,
+                              fail=lambda _error: self.show_calendars([]))
 
     def sync(self, config):
         """Show what the daemon holds, leaving alone anything the user is halfway through."""
@@ -706,7 +749,11 @@ class GeneralPage(Adw.PreferencesPage):
         if self.cloud_model.get_text() == self.saved_model:
             self.set_row_text(self.cloud_model, model)
         self.saved_model = model
+        # .get, as above, and a source this Settings doesn't know shows as the default.
+        source = config.get("news_source", DEFAULT_SOURCE)
+        self.news.set_selected(list(SOURCES).index(source if source in SOURCES else DEFAULT_SOURCE))
         self.show_phone()
+        self.show_calendar()
         self.show_cloud()
         self.show_keys()
         for name, check in self.pipelines.items():
@@ -755,6 +802,23 @@ class GeneralPage(Adw.PreferencesPage):
         self.phone_labels, self.phone_values = labels, list(choices)
         self.phone.set_selected(self.phone_values.index(saved))
         self.phone.set_subtitle(NO_PHONES if self.devices == [] else PHONE_NOTE)
+
+    def show_calendars(self, calendars):
+        self.calendars = calendars
+        self.syncing = True
+        self.show_calendar()
+        self.syncing = False
+
+    def show_calendar(self):
+        """Only with syncing set, as for the phone row."""
+        saved = self.win.config.get("calendar_add_to", "")
+        choices = calendar_choices(self.calendars, saved)
+        labels = [shown(label) for label in choices.values()]
+        if labels != self.calendar_labels:
+            self.calendar.set_model(Gtk.StringList.new(labels))
+        self.calendar_labels, self.calendar_values = labels, list(choices)
+        self.calendar.set_selected(self.calendar_values.index(saved))
+        self.calendar.set_subtitle(NO_CALENDARS if self.calendars == [] else CALENDAR_NOTE)
 
     def show_cloud(self):
         """The switch follows the config: after Cancel, or a reload behind an open dialog."""
@@ -820,6 +884,18 @@ class GeneralPage(Adw.PreferencesPage):
         self.show_keys()
         self.show_cloud()
         self.win.save(name, key)
+
+    def on_news(self, row, _param):
+        if not self.syncing:
+            value = list(SOURCES)[row.get_selected()]
+            self.win.config["news_source"] = value
+            self.win.save("news_source", value)
+
+    def on_calendar(self, row, _param):
+        if not self.syncing:
+            value = self.calendar_values[row.get_selected()]
+            self.win.config["calendar_add_to"] = value
+            self.win.save("calendar_add_to", value)
 
     def on_phone(self, row, _param):
         if not self.syncing:

@@ -34,6 +34,7 @@ SETTINGS = "global.get_window_actors().map(a => a.meta_window).filter(w => w.tit
 CONFIG = {"server": "ai-box.local:8080", "api_key_set": True, "location": "Lisbon",
           "phone_device": "Pixel", "translate_server": ""}
 PHONES = [{"id": "1", "name": "Pixel", "type": "phone", "connected": True, "paired": True}]
+CALENDARS = [{"id": "1", "name": "Family", "account": "me@example.org"}]
 TURNS = [
     ("What's the weather?", "It's nineteen degrees and sunny in Lisbon, with a light breeze.", []),
     ("Find my 2024 tax return", "I found three. The best match is tax-return-2024.pdf in Documents.",
@@ -79,6 +80,10 @@ class Daemon(card_daemon.Daemon):
     @dbus_method()
     def ListPhones(self) -> "s":
         return json.dumps(PHONES)
+
+    @dbus_method()
+    def ListCalendars(self) -> "s":
+        return json.dumps(CALENDARS)
 
     @dbus_method()
     def GetHistory(self, limit: "i") -> "s":

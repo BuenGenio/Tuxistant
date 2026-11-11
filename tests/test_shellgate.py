@@ -1286,8 +1286,14 @@ class RealTrash(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name).resolve()
-        patcher = mock.patch.dict(os.environ, {"HOME": str(self.root),
+        # Without GIO_USE_VFS the desktop's metadata service is told about this folder, and writes
+        # a journal into it after the test has deleted it, or while it does.
+        patcher = mock.patch.dict(os.environ, {"HOME": str(self.root), "GIO_USE_VFS": "local",
                                                "XDG_DATA_HOME": str(self.root / "share")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # gio is only given the variables on this list, so the one above has to be let through.
+        patcher = mock.patch.object(shellgate, "HOST_ENV", (*shellgate.HOST_ENV, "GIO_USE_VFS"))
         patcher.start()
         self.addCleanup(patcher.stop)
 

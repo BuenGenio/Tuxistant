@@ -272,6 +272,24 @@ class Logic(unittest.TestCase):
         self.assertEqual(pick([], ""), {"": "Automatic"})
         self.assertEqual(pick(None, ""), {"": "Automatic"})
 
+    def test_calendar_choices(self):
+        family = {"id": "c1", "name": "Family", "account": "me@example.org"}
+        local = {"id": "c2", "name": "Personal", "account": ""}
+        pick = sa.calendar_choices
+        self.assertEqual(pick([family, local], ""), {
+            "": "Automatic", "c1": "Family (me@example.org)", "c2": "Personal"})
+        self.assertEqual(pick([family], "c1"), {"": "Automatic", "c1": "Family (me@example.org)"})
+        self.assertEqual(pick([family], "gone"), {
+            "": "Automatic", "c1": "Family (me@example.org)", "gone": sa.GONE_CALENDAR},
+            "a saved calendar that left is still a choice, so the next save doesn't lose it")
+        self.assertEqual(pick(None, "c1"), {"": "Automatic", "c1": "…"},
+                         "nothing is known to be missing before the daemon answers")
+        self.assertEqual(pick([], ""), {"": "Automatic"})
+
+    def test_calendar_permissions_read_as_words(self):
+        self.assertEqual(sa.permission_words({"calendar_read": True}), "Can read your calendars")
+        self.assertEqual(sa.permission_words({"calendar_write": True}), "Can add events to a calendar")
+
     def test_a_saved_phone_is_kept_when_nothing_lists_it(self):
         pixel = {"id": "a1", "name": "Pixel", "type": "phone", "connected": True}
         pick = sa.phone_choices
@@ -1322,6 +1340,50 @@ class Inner(unittest.TestCase):
         page.phone.set_selected(0)
         wait(lambda: saved() == [["phone_device", '""']], "Automatic to save as empty")
         wait(lambda: self.win.config["phone_device"] == "", "the change to come back")
+
+    def test_25_calendar_lists_what_can_be_changed_and_saves_the_choice(self):
+        page = self.win.general
+        wait(lambda: page.calendars is not None, "the calendar list")
+        self.assertEqual(page.calendar_labels,
+                         ["Automatic", "Family (me@example.org)", "Personal (On This Computer)"])
+        self.assertEqual(page.calendar.get_selected(), 0)
+        self.assertEqual(page.calendar.get_subtitle(), sa.CALENDAR_NOTE)
+        forget()
+        settle()
+        self.assertEqual(saved(), [], "listing calendars must not write anything back")
+        page.calendar.set_selected(1)
+        wait(lambda: saved() == [["calendar_add_to", '"cal-family"']], "the calendar to save")
+        wait(lambda: self.win.config["calendar_add_to"] == "cal-family", "the change to come back")
+        self.assertEqual(page.calendar.get_selected(), 1)
+        forget()
+        control("Change", "calendar_add_to", '"a-calendar-that-left"', signature="ss")
+        wait(lambda: page.calendar_labels[-1] == sa.GONE_CALENDAR, "the missing calendar to show")
+        self.assertEqual(page.calendar.get_selected(), 3)
+        settle()
+        self.assertEqual(saved(), [], "a change from the daemon is not sent back to it")
+        control("Change", "calendar_add_to", '""', signature="ss")
+        wait(lambda: page.calendar.get_selected() == 0, "the reset")
+
+    def test_25_news_lists_the_sources_and_saves_the_choice(self):
+        page = self.win.general
+        sources = list(sa.SOURCES)
+        model = page.news.get_model()
+        self.assertEqual([model.get_string(i) for i in range(model.get_n_items())],
+                         [name for name, _base, _feeds in sa.SOURCES.values()])
+        self.assertEqual(page.news.get_selected(), sources.index("bbc"))
+        forget()
+        settle()
+        self.assertEqual(saved(), [], "showing the sources must not write anything back")
+        page.news.set_selected(sources.index("npr"))
+        wait(lambda: saved() == [["news_source", '"npr"']], "the source to save")
+        wait(lambda: self.win.config["news_source"] == "npr", "the change to come back")
+        forget()
+        control("Change", "news_source", '"dw"', signature="ss")
+        wait(lambda: page.news.get_selected() == sources.index("dw"), "another client's choice")
+        settle()
+        self.assertEqual(saved(), [], "a change from the daemon is not sent back to it")
+        control("Change", "news_source", '"bbc"', signature="ss")
+        wait(lambda: page.news.get_selected() == sources.index("bbc"), "the reset")
 
     def test_25_phone_a_saved_device_survives_not_being_listed(self):
         page = self.win.general

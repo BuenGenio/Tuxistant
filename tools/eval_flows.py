@@ -21,7 +21,7 @@ import websockets
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tuxistant import files, lights, phone  # noqa: E402
+from tuxistant import calendars, files, lights, phone  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
@@ -35,6 +35,28 @@ files._launch = lambda path: print(f"   (would open {path.name})") or True
 phone._activate = blocked
 lights.discover = blocked    # no broadcast, so no light is ever reached
 lights.Klap._post = blocked
+
+
+class NoCalendars:
+    """In place of the real calendars: reading them would put the owner's week into a log, and
+    adding has a card, which is declined here, but must not be able to write even so."""
+
+    def calendars(self):
+        return [{"id": "eval", "name": "Eval", "account": "", "shown": True, "default": True}]
+
+    def writable(self, _uid):
+        return True
+
+    def events(self, _uid, first, _last):
+        noon = first.replace(hour=12, minute=0)
+        return [{"title": "Lunch with Sam", "all_day": False, "start": noon,
+                 "end": noon.replace(hour=13)}]
+
+    add = blocked
+
+
+calendars.Eds = blocked
+calendars._backend = NoCalendars
 
 cfg = Config()
 KEY = cfg["api_key"]
@@ -52,6 +74,8 @@ ASKS = sys.argv[1:] or [
     "Translate where is the train station into Ukrainian",
     "How do you say thank you very much in Spanish?",
     "Delete my old log files",
+    "What's on my calendar tomorrow?",
+    "Add dentist on Friday at 3pm to my calendar",
     "Install VLC",
 ]
 

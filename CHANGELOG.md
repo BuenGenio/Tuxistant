@@ -1,5 +1,10 @@
 # Changelog
 
+## Not yet released
+
+- **Calendar.** "What's on my calendar tomorrow?", "When's my next meeting?" and "Add dentist on Friday at 3pm". It works with any calendar that shows in GNOME Calendar, so a Google, CalDAV or Microsoft account is added once in GNOME Settings under Online Accounts and Tuxistant never holds its password. Adding shows a card with the title, date, times and calendar first. Settings chooses which calendar new events go to.
+- **News from a source you choose.** Settings has a list of nine: BBC News, The Guardian, NPR, CBC News, ABC News Australia, DW, France 24, Al Jazeera and The Kyiv Independent. A topic your source doesn't cover gets its top stories, and Tux says so. A redirect to any other host is refused.
+
 ## 0.1.0, a preview
 
 The first tagged release. It is a preview: everything here is built and tested, but some of it has only run in tests and in an isolated GNOME Shell, not yet on a desktop in daily use. [docs/ROADMAP.md](docs/ROADMAP.md) says which parts those are, under "Where things stand".

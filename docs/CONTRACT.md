@@ -41,6 +41,7 @@ Methods:
 | `PreviewTheme` | `(s id) -> ()` | Emit `ThemePreview` |
 | `ListSkills` | `() -> s` | `Skills.listing()` |
 | `ListPhones` | `() -> s` | `phone.devices()`: `[{"id", "name", "type", "connected", "paired"}]`, empty without GSConnect |
+| `ListCalendars` | `() -> s` | `calendars.writable()`: `[{"id", "name", "account"}]` for each calendar an event can be added to, empty without Evolution Data Server. It connects to each calendar, so allow 30 seconds |
 | `Hello` | `(i level) -> ()` | From the extension when the daemon comes online: `level` is 1 if it can draw approval cards, 2 if it can also type dictated text. 0 on the way out, which also stops dictation |
 | `CanAsk` | `() -> b` | Whether an extension has said level 1. Without one, `Controller.ask` refuses at once and the user hears why |
 | `CanType` | `() -> b` | Whether an extension has said level 2. Without one, dictation says why and never opens the microphone |

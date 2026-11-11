@@ -11,7 +11,7 @@ from dbus_fast import DBusError, Message, MessageType, NameFlag, RequestNameRepl
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, method, signal
 
-from . import BUS_NAME, BUS_PATH, phone, themes, voices
+from . import BUS_NAME, BUS_PATH, calendars, phone, themes, voices
 from .audio import Mic, Speaker
 from .config import DATA_DIR, Config
 from .controller import Controller
@@ -183,6 +183,10 @@ class Daemon(ServiceInterface):
     @method()
     async def ListPhones(self) -> "s":
         return json.dumps(await asyncio.to_thread(phone.devices))
+
+    @method()
+    async def ListCalendars(self) -> "s":
+        return json.dumps(await asyncio.to_thread(calendars.writable))
 
     @method()
     def Hello(self, level: "i"):

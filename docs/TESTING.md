@@ -15,9 +15,13 @@
 | Do the voices say the words | `python3 tools/check_voices.py` | LocalAI |
 | The pictures in the docs | `python3 tools/docs_images.py` | `gnome-shell`, `ffmpeg`, Pillow. Safe next to the desktop |
 
+## The calendar
+
+`tests/test_calendars.py` uses a stand-in, and fails if anything reaches for the real calendars. `tests/test_calendars_eds.py` starts a real Evolution Data Server under `dbus-run-session` with a temporary home, so it has one empty local calendar and no accounts, and drives the skill against it in two time zones. Its driver refuses to run if it finds any other calendar or any event. `tools/eval_flows.py` swaps in a made-up calendar, so an evaluation never reads the owner's week or adds to it.
+
 ## After changing a tool
 
-Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run (2026-11-10) scored 141 of 147 with 19 tools, at about 0.4 s per request, and answered 23 of 33 facts.
+Unit tests can't tell you what a 4B model will do, so run `tools/eval_routing.py` after adding a tool or changing a description. It runs each request three times and executes nothing. The last run (2026-11-11) scored 171 of 177 with 21 tools, at about 0.3 s per request, and answered 28 of 33 facts.
 
 Run it after changing the instructions too. It also asks plain facts and checks the reply, because "no tool" alone can't tell an answer from "I can't do that". That gap once hid Tux refusing 44 of 70 simple questions behind a good routing score.
 

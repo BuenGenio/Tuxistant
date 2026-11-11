@@ -1,0 +1,16 @@
+id: org.tuxistant.calendar_add
+name: Add to calendar
+description: Adds an event to one of your calendars, once you have clicked to agree
+version: 1.0.0
+permissions:
+  calendar_write: true
+actions:
+  calendar.add:
+    description: Add an event to the user's calendar. Use it when they ask to add, schedule, book or put something in their calendar. The user sees it and has to click to agree
+    params:
+      title: { type: string, description: "What the event is, in a few words" }
+      day: { type: string, description: "The day as the user said it, like today, tomorrow, Friday or 14 November" }
+      time: { type: string, description: "The start time as the user said it, like 3pm or 15:30. Leave it out for an all-day event" }
+      duration: { type: integer, description: "How many minutes it lasts, only if the user said. Leave it out for one hour" }
+      calendar: { type: string, description: "Only if the user named a calendar" }
+    required: [title, day]

@@ -15,6 +15,7 @@ Steps 1 to 3 of the plan below are built. Steps 2 and 3 have passed their tests 
 | Approval gate and card | Tested in an isolated real GNOME Shell. Not yet on the real desktop |
 | Files, phone, shell, system facts | Tested with the real model. See "Check on the real desktop" |
 | Translation | Spoken translation works on the real desktop. Translating a selection has not been tried there |
+| Calendar | Reads and adds events through Evolution Data Server. Tested against a real, private Evolution Data Server in two time zones, and reading was tried on the owner's ten Google calendars. Adding has not run on a real account, and CalDAV and Microsoft accounts have not been tried at all |
 | Tapo lights | Working on the real desktop with an L530. The bulb sometimes went missing until the Tapo app woke it. Since 2026-11-10 bulbs are remembered and asked directly, which still has to prove itself over a few days |
 | Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
 | Multi-step planner, local model | Two live runs worked |
@@ -33,7 +34,7 @@ The owner approved this order.
 1. **Done:** daemon, skill runtime, blob, status icon, Settings.
 2. **Done, pending real-desktop checks:** typed skills, then the shell gate, with translation as the first real skill, and the planner with an opt-in cloud model.
 3. **Done, pending real-desktop checks: dictation.** Tap Fn, then hold and speak, and the words are typed where the cursor is. No model is involved, so it needs no card. See "Dictation" in [CONTRACT.md](CONTRACT.md).
-4. **Next: more built-in skills:** general web search, research, and calendar and journal.
+4. **Under way: more built-in skills.** Calendar is built. General web search, research and journal are next.
 5. **Local install of your own skills.** Recipe skills: YAML only, using built-in daemon actions (D-Bus, HTTP, open app), with no code of their own. They load from a user folder. Non-built-in skills must be refused `shell`.
 6. **Code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared. Local only at first, with a clear warning.
 7. **Community registry.** A reviewed Git repo first, like Flathub: skills arrive as pull requests, and a static index is built from them onto the same GitHub Pages site. Signing means the host doesn't have to be trusted, so no server is needed. Logins, ratings or uploads would need one, as a small API beside the site rather than instead of it.
@@ -96,6 +97,7 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 10. Dictation, with `tuxistant doctor` saying it's ready: tap Fn, then hold and speak, in a GTK app such as Text Editor, in a terminal, and in VS Code or Chromium, which should take the paste route. Check that the clipboard is unchanged afterwards, that a password box refuses, and that Ctrl+Super+D starts and stops it.
 
 11. **Passed 2026-11-10:** lights, with the TP-Link account in Settings: "Is the light on?", then "Turn off the light" and "Make it warm white".
+12. Calendar: "What's on my calendar tomorrow?" by voice, then "Add a test event on Friday at 3pm", allow the card, and see it appear in GNOME Calendar and on the account. Pick a calendar in Settings first. Adding has only ever written to a private test calendar.
 
 Move site claims from Soon to Now only after the matching check passes.
 
@@ -151,7 +153,11 @@ Move site claims from Soon to Now only after the matching check passes.
 - Nothing has run on x86-64 or on Fedora. The server kit is x86-64 only and the desktop has only run on aarch64.
 - Approval cards are click-only, with no keyboard path. During a popup menu or a polkit dialog a click may not reach the card, which then times out as a no.
 - Kokoro is English-only here. Ukrainian uses the lowest-quality Piper voice, as no better one exists in the gallery. Chinese Traditional has not been tried on the Mandarin voice.
-- BBC news is UK-centric and its source isn't configurable.
+- The calendar can read and add, and nothing else: no changing, moving or deleting an event, no invitations, no locations and no alerts. "Remind me to call the dentist tomorrow" becomes an all-day calendar entry, with a card, not an alert.
+- The model sometimes leaves out how long an event lasts, so the card offers an hour. The card shows the times before anything is saved.
+- Microsoft calendars need the `evolution-ews` package, which adds them to Evolution Data Server. That route is untested, as is any CalDAV server other than Google's.
+- A time with no am or pm from 1 to 6 is taken as the afternoon. "At 7" is the morning.
+- News comes from a list of nine sources in Settings, all in English, as the voice reads other languages with English sounds. A feed of your own can't be added: the list is fixed so that a news request can only reach hosts named in the code, and a free address would need the permission display and the cards to show a host the user chose.
 - Whisper mishears some place names, so a weather request can ask for a town that doesn't exist. It says the town wasn't found.
 - A Tapo bulb whose address changes while it also ignores broadcasts stays lost until it answers one. Its old address is tried first, which costs up to 4 seconds.
 - A shader trial can't prove a theme safe. Waves is click-through, so its menu is the panel icon's.
@@ -162,8 +168,9 @@ Move site claims from Soon to Now only after the matching check passes.
 - **Done 2026-11-10:** `server/` sets up the LocalAI side, which the README used to ask for without saying how.
 - **Done 2026-11-10:** a rehearsal on a clean Ubuntu 26.04 in a container, following only the README. It found the README named no packages and no way to get the code, the installer said "installed" with modules missing, and `doctor` crashed. All fixed. With two packages added, the install, the extension in Ubuntu's own GNOME Shell 50.1, the daemon, Settings and the uninstall worked. It could not check a real login, the Fn helper running, audio, or any server.
 - Run `server/setup.sh` on a machine that isn't the owner's.
+- When there is a deb or an rpm: the daemon's Python modules are dependencies, and the optional skills' needs are recommendations, so they come by default and can be left out. For the calendar that is `evolution-data-server`, `gir1.2-ecal-2.0` and `gir1.2-edataserver-1.2` on Debian and Ubuntu, and `evolution-data-server` alone on Fedora, which ships the bindings inside it. For lights it is `python3-cryptography`, and for the sandbox `bubblewrap`.
 - Give the default theme a shape and colours of its own.
-- Make the news source configurable. Next: the owner chose sources you set in Settings.
+- **Done 2026-11-10, after 0.1.0:** the news source is a choice in Settings.
 - **Done 2026-11-10:** `v0.1.0` is tagged as a preview, and the site's download button points at the tarball GitHub builds for the tag. [CHANGELOG.md](../CHANGELOG.md) has the text of the release page.
 - Have native speakers check the site's translations, including the Auto/Light/Dark words. Five languages now, 25 to 30 later.
 - Replace the favicon, which is still the old penguin.

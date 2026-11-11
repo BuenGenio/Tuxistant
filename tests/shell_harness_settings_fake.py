@@ -53,6 +53,8 @@ EXTRA_SKILLS = [
 ]
 
 
+CALENDARS = [{"id": "cal-family", "name": "Family", "account": "me@example.org"},
+             {"id": "cal-local", "name": "Personal", "account": "On This Computer"}]
 PHONES = [
     {"id": "a1b2", "name": "Pixel <8> & co", "type": "phone", "connected": True},
     {"id": "c3d4", "name": "Galaxy Tab", "type": "tablet", "connected": False},
@@ -68,6 +70,7 @@ class Daemon(ServiceInterface):
         self.failures = {}
         self.delays = {}
         self.phones = PHONES
+        self.calendars = CALENDARS
         if not self.history.recent(1):
             self.seed_history()
 
@@ -134,6 +137,11 @@ class Daemon(ServiceInterface):
     async def ListPhones(self) -> "s":
         await self.enter("ListPhones")
         return json.dumps(self.phones)
+
+    @dbus_method()
+    async def ListCalendars(self) -> "s":
+        await self.enter("ListCalendars")
+        return json.dumps(self.calendars)
 
     @dbus_method()
     async def GetHistory(self, limit: "i") -> "s":

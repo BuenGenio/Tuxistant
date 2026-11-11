@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.parse
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -45,8 +46,8 @@ class FakeWeb:
         return urllib.parse.parse_qs(urllib.parse.urlparse(self.urls[index]).query)
 
 
-def config(location="", fahrenheit=False):
-    return {"location": location, "fahrenheit": fahrenheit}
+def config(location="", fahrenheit=False, news_source="bbc"):
+    return {"location": location, "fahrenheit": fahrenheit, "news_source": news_source}
 
 
 class Weather(unittest.TestCase):
@@ -221,10 +222,64 @@ class Headlines(unittest.TestCase):
         self.assertEqual(fetch.call_args.args[0], "https://feeds.bbci.co.uk/news/rss.xml")
         self.assertIn("gardening", result["note"])
 
+    def test_the_chosen_source_is_the_one_read(self):
+        with mock.patch.object(livedata, "fetch", return_value=self.feed("A")) as fetch:
+            result = livedata.headlines({"topic": "sport"}, config(news_source="npr"))
+        self.assertEqual(fetch.call_args.args[0], "https://feeds.npr.org/1055/rss.xml")
+        self.assertEqual(result["source"], "NPR")
+
+    def test_a_topic_the_source_lacks_gives_its_top_stories_and_says_so(self):
+        with mock.patch.object(livedata, "fetch", return_value=self.feed("A")) as fetch:
+            result = livedata.headlines({"topic": "uk"}, config(news_source="aljazeera"))
+        self.assertEqual(fetch.call_args.args[0], "https://www.aljazeera.com/xml/rss/all.xml")
+        self.assertEqual(result["topic"], "top")
+        self.assertEqual(result["note"], "Al Jazeera has no uk feed, so these are the top stories.")
+
+    def test_a_source_this_version_lacks_falls_back_to_the_default(self):
+        with mock.patch.object(livedata, "fetch", return_value=self.feed("A")) as fetch:
+            result = livedata.headlines({}, config(news_source="a-feed-from-the-future"))
+        self.assertEqual(fetch.call_args.args[0], "https://feeds.bbci.co.uk/news/rss.xml")
+        self.assertEqual(result["source"], "BBC News")
+
+    def test_every_source_is_https_has_top_stories_and_only_known_topics(self):
+        topics = set(Skills().actions["news.headlines"]["params"]["topic"]["enum"])
+        for source, (name, base, feeds) in livedata.SOURCES.items():
+            with self.subTest(source):
+                self.assertTrue(name and base.startswith("https://") and base.endswith("/"))
+                self.assertIn("top", feeds)
+                self.assertLessEqual(set(feeds), topics)
+        self.assertIn(livedata.DEFAULT_SOURCE, livedata.SOURCES)
+
 
 class Fetch(unittest.TestCase):
     def open_with(self, **kwargs):
-        return mock.patch("urllib.request.urlopen", **kwargs)
+        return mock.patch.object(livedata.OPENER, "open", **kwargs)
+
+    def redirect(self, location):
+        handler = livedata._SameHost()
+        request = urllib.request.Request("https://www.theguardian.com/business/rss")
+        return handler.redirect_request(request, None, 301, "Moved", {}, location)
+
+    def test_a_redirect_within_the_host_is_followed(self):
+        followed = self.redirect("https://www.theguardian.com/uk/business/rss")
+        self.assertEqual(followed.full_url, "https://www.theguardian.com/uk/business/rss")
+
+    def test_a_redirect_to_another_host_or_off_https_is_refused(self):
+        for location in ("https://evil.example/feed", "http://www.theguardian.com/uk/business/rss",
+                         "https://www.theguardian.com.evil.example/x", "http://127.0.0.1:8080/"):
+            with self.subTest(location), self.assertRaises(urllib.error.HTTPError) as refused:
+                self.redirect(location)
+            refused.exception.close()
+
+    def test_a_refused_redirect_is_only_the_spoken_message(self):
+        error = urllib.error.HTTPError("https://evil.example/", 301, "redirect", {}, None)
+        self.addCleanup(error.close)
+        with self.open_with(side_effect=error), self.assertRaises(RuntimeError) as caught:
+            livedata.fetch("https://feeds.npr.org/1001/rss.xml", "Not reachable")
+        self.assertEqual(str(caught.exception), "Not reachable")
+
+    def test_fetch_goes_through_the_guarded_opener(self):
+        self.assertTrue(any(isinstance(h, livedata._SameHost) for h in livedata.OPENER.handlers))
 
     def test_unreachable_service_gives_only_the_spoken_message(self):
         error = urllib.error.URLError("Name or service not known: api.open-meteo.com")
@@ -267,7 +322,7 @@ class Wiring(unittest.TestCase):
         declared = (skills.skills["org.tuxistant.weather"]["permissions"]["network"]
                     + skills.skills["org.tuxistant.news"]["permissions"]["network"])
         used = {urllib.parse.urlparse(url).hostname
-                for url in (livedata.GEOCODER, livedata.FORECAST, livedata.FEEDS)}
+                for url in (livedata.GEOCODER, livedata.FORECAST, *livedata.feed_urls())}
         self.assertEqual(set(declared), used)
 
     def test_the_tool_reads_the_live_setting(self):
@@ -283,10 +338,52 @@ class Wiring(unittest.TestCase):
         self.assertIn("now", result)
 
     def test_a_failed_service_reaches_the_model_as_words(self):
-        with mock.patch("urllib.request.urlopen", side_effect=OSError("boom")):
+        with mock.patch.object(livedata.OPENER, "open", side_effect=OSError("boom")):
             skills = Skills()
             _, result = asyncio.run(skills.execute("news_headlines", "{}", Session(skills)))
         self.assertEqual(result, {"error": "The news service can't be reached right now"})
+
+
+class NewsSetting(unittest.TestCase):
+    def test_only_a_listed_source_is_accepted(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = Config(Path(folder) / "config.json")
+            self.assertEqual(settings["news_source"], "bbc")
+            settings.set("news_source", "kyivindependent")
+            self.assertEqual(Config(Path(folder) / "config.json")["news_source"], "kyivindependent")
+            for bad in ("https://evil.example/feed", "", "BBC"):
+                with self.subTest(bad), self.assertRaisesRegex(ValueError, "news sources"):
+                    settings.set("news_source", bad)
+
+    def test_a_card_names_only_the_source_it_will_reach(self):
+        asked = []
+
+        async def click(ask):
+            asked.append(ask)
+            return False
+
+        with tempfile.TemporaryDirectory() as folder:
+            settings = Config(Path(folder) / "config.json")
+            skills = Skills(config=settings)
+            settings.set("news_source", "npr")
+            session = Session(skills, click)
+            session.tainted = True      # something private was read earlier in the conversation
+            with mock.patch.object(livedata, "fetch") as fetch:
+                _, result = asyncio.run(skills.execute("news_headlines", "{}", session))
+        self.assertEqual(asked[0].title, "Let org.tuxistant.news reach feeds.npr.org?")
+        self.assertTrue(result["declined"])
+        fetch.assert_not_called()
+
+    def test_the_tool_reads_the_chosen_source(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = Config(Path(folder) / "config.json")
+            skills = Skills(config=settings)
+            settings.set("news_source", "cbc")
+            feed = b"<rss><channel><item><title>A</title></item></channel></rss>"
+            with mock.patch.object(livedata, "fetch", return_value=feed) as fetch:
+                _, result = asyncio.run(skills.execute("news_headlines", "{}", Session(skills)))
+        self.assertEqual(fetch.call_args.args[0], "https://www.cbc.ca/webfeed/rss/rss-topstories")
+        self.assertEqual(result["source"], "CBC News")
 
 
 class LocationSetting(unittest.TestCase):

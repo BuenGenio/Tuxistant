@@ -16,7 +16,7 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 - PipeWire with `pw-record` and `pw-cat`
 - `glib-compile-schemas`
 - A LocalAI server with a realtime pipeline (`tux-realtime` by default) and a voice model (`tux-voice`). [server/](server/README.md) has a script that sets one up on a computer with an 8 GB NVIDIA GPU
-- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
+- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
 
 ## Install
 
@@ -83,10 +83,11 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 | Ask | What happens |
 |---|---|
-| "What's the weather?" or "What's the news?" | Reads it live. Set your home town in Settings for weather |
+| "What's the weather?" or "What's the news?" | Reads it live. In Settings, set your home town for weather and pick where the news comes from |
 | "Find my 2024 tax return" | Searches file names and contents, and reads out the best few. "Open the second one" works for a few minutes afterwards |
 | "Send it to my phone", "Where's my phone?" | Sends a file through GSConnect, rings the phone, or reads its battery. Sending asks first |
 | "Move everything in Downloads older than a year to the Trash" | Shows how many files and how much space, and waits for your click. Nothing is deleted outright |
+| "What's on my calendar tomorrow?", "Add dentist on Friday at 3pm" | Reads your calendars, and adds an event once you click to allow it. Any calendar that shows in GNOME Calendar works: add a Google, CalDAV or Microsoft account in GNOME Settings under Online Accounts |
 | "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account in Settings under General |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system |
@@ -101,7 +102,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 **Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names and command output from that task. File contents go only if you click to allow each one. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`, which needs `pip` (`python3-pip` on Ubuntu).
 
-**Settings** has pages for General (server, API key, listening, shortcut, phone, translation, lights, cloud, instructions), Voice, Appearance, Skills and History.
+**Settings** has pages for General (server, API key, listening, weather, news, calendar, shortcut, phone, translation, lights, cloud, instructions), Voice, Appearance, Skills and History.
 
 | General | Skills |
 |---|---|
@@ -126,7 +127,7 @@ The same things work from a terminal:
 | `tuxistant cancel` | Stop everything |
 | `tuxistant say <text>` | Speak some text |
 | `tuxistant history` | Show recent requests |
-| `tuxistant doctor` | Check the Python modules, the server, the API key, PipeWire, the Fn helper if it is installed, that the extension is enabled, that the daemon can start, and that approval cards can show |
+| `tuxistant doctor` | Check the Python modules, the server, the API key, PipeWire, the Fn helper if it is installed, whether the calendar can be used, that the extension is enabled, that the daemon can start, and that approval cards can show |
 | `tuxistant settings` | Open Settings |
 | `tuxistant daemon` | Run the daemon in the foreground |
 
@@ -161,7 +162,7 @@ flowchart LR
 - The microphone is on only during a turn or while you dictate, plus a short while after each reply if conversation mode is on. Audio goes to the server you configured and nowhere else.
 - What you dictate isn't kept: it goes to your server to become text, into your window, and into no log or history. No model sees it.
 - [docs/SECURITY.md](docs/SECURITY.md) has real attacks on Tuxistant and what stopped them.
-- Weather and news are the only skills that reach the internet, and only when you ask. A weather question sends the town name to Open-Meteo; a news question fetches a BBC News feed. Both services see your IP address, and neither receives your voice or the conversation. Cloud is the one exception, and it is off unless you turn it on. Translation stays on your own server.
+- Weather and news are the only skills that reach the internet, and only when you ask. A weather question sends the town name to Open-Meteo; a news question fetches a feed from the source you picked in Settings, which is BBC News until you change it. Both services see your IP address, and neither receives your voice or the conversation. Cloud is the one exception, and it is off unless you turn it on. Translation stays on your own server. Calendar events are read on this computer and go only to your own server, as part of the conversation. Tuxistant never holds a calendar account's password: GNOME does, and an event you add goes to that calendar's account the way one added in GNOME Calendar would.
 - Once a conversation has read your files, command output or selected text, anything reaching past your own server needs a click.
 - History stays on this machine in `~/.local/share/tuxistant/history.db`, readable only by you. You can clear it in Settings.
 - The API key lives in `~/.config/tuxistant/config.json`, readable only by you. It is not sent over D-Bus to the extension or to Settings, and changing the server clears it, so that it only ever goes to the server it was given for. For TLS, enter the server as `https://host:port`.

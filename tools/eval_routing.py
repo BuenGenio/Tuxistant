@@ -76,9 +76,20 @@ CASES = [
     ("Set the light to warm white", {"lights_set"}),
     ("Is the light on?", {"lights_status"}),
     ("What colour is the lamp?", {"lights_status"}),
+    ("What's on my calendar today?", {"calendar_events"}),
+    ("Do I have any meetings tomorrow?", {"calendar_events"}),
+    ("When is my next appointment?", {"calendar_events"}),
+    ("Am I free on Friday?", {"calendar_events"}),
+    ("What's my schedule for this week?", {"calendar_events"}),
+    ("Add dentist tomorrow at 3pm to my calendar", {"calendar_add"}),
+    ("Schedule a meeting with Anna on Friday at 10", {"calendar_add"}),
+    ("Put lunch with Sam in my calendar for the 14th of November at noon", {"calendar_add"}),
+    ("Book the car service for next Monday", {"calendar_add"}),
     ("What's the capital of France?", None),
     ("Tell me a joke", None),
-    ("Remind me to call the dentist tomorrow", None),
+    # A calendar entry, with a card. Not an alert, which nothing here can set.
+    ("Remind me to call the dentist tomorrow", {"calendar_add"}),
+    ("Send an email to Anna", None),
 ]
 
 # Questions it should simply answer. "No tool" alone can't tell an answer from "I can't do that".

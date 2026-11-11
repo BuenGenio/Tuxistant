@@ -1,9 +1,11 @@
 id: org.tuxistant.news
 name: News
-description: Latest headlines from BBC News
-version: 1.0.0
+description: Latest headlines from the news source chosen in Settings
+version: 1.1.0
 permissions:
-  network: [feeds.bbci.co.uk]
+  # Every source Settings offers. Only the chosen one is contacted.
+  network: [feeds.bbci.co.uk, www.theguardian.com, feeds.npr.org, www.cbc.ca, www.abc.net.au,
+            rss.dw.com, www.france24.com, www.aljazeera.com, kyivindependent.com]
 actions:
   news.headlines:
     description: Get the latest news headlines. Use it for any question about the news or what is happening in the world

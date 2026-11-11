@@ -1,0 +1,11 @@
+id: org.tuxistant.calendar
+name: Calendar
+description: Reads what is on your calendars, from the accounts in GNOME's Online Accounts
+version: 1.0.0
+permissions:
+  calendar_read: true
+actions:
+  calendar.events:
+    description: Read what is on the user's calendar. Use it for any question about their schedule, appointments, meetings, events or whether they are free
+    params:
+      day: { type: string, description: "The day or period as the user said it, like today, tomorrow, Friday, weekend, this week, next week or 14 November. Use next for their next event" }
