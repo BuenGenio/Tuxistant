@@ -23,6 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tuxistant import knowledge  # noqa: E402
+from tools.eval_config import evaluation_server
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 
@@ -125,8 +126,10 @@ async def asked(question: str, config) -> str:
 def routed_requests() -> list[str]:
     """Everything in the routing eval, which are real requests for tools."""
     tree = ast.parse((ROOT / "tools/eval_routing.py").read_text())
-    cases = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
-                 and any(getattr(target, "id", "") == "CASES" for target in node.targets))
+    named = ("CASES", "HOME_CASES")
+    lists = [ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+             and any(getattr(target, "id", "") in named for target in node.targets)]
+    cases = [case for listed in lists for case in listed]
     return [request for request, _ in cases if request != "What's the capital of France?"]
 
 
@@ -211,6 +214,7 @@ async def main():
     options.add_argument("--sort-only", action="store_true")
     args = options.parse_args()
     config = Config()
+    evaluation_server(config)
     config.values["fact_lookup"] = True
     good = await sorter(config, args.reps)
     if not args.sort_only:

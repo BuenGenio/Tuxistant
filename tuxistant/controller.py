@@ -561,6 +561,24 @@ class Controller:
                 self._run(lambda: self._say(text, voice or self.config["voice"])))
             return self.job
 
+    async def say_when_free(self, text: str, lead: bytes = b"") -> asyncio.Task | None:
+        """For a timer or a reminder. Unlike say(), it never stops a turn, a card or dictation
+        to speak: None means not now, and the caller asks again. lead is a sound for before
+        the words."""
+        async with self.lock:
+            if self.locked or self.active:
+                return None
+            self.job = asyncio.create_task(
+                self._run(lambda: self._say(text, self.config["voice"], lead)))
+            return self.job
+
+    async def sound(self, pcm: bytes) -> None:
+        """Plays a sound that has no words, such as a timer's chime. It is the one thing heard
+        on a locked screen: it tells nobody anything, nothing listens, and it ends by itself."""
+        async with self.lock:
+            if not self.active:
+                self.job = asyncio.create_task(self._run(lambda: self._sound(pcm)))
+
     def _start_turn(self, hold: bool):
         self.turn = Turn(self, hold)
         self.job = asyncio.create_task(self._run(self.turn.run))
@@ -595,14 +613,25 @@ class Controller:
             self.set_state("idle")
             self.set_presence(False)
 
-    async def _say(self, text: str, voice: str):
+    async def _say(self, text: str, voice: str, lead: bytes = b""):
         self.set_presence(True)
         self.set_state("thinking")
         speaker = None
         try:
             self.emit("Reply", text)
+            if lead:    # heard at once, and even if the server can't be reached for the words
+                speaker = self.new_speaker()
+                await speaker.start()
+                self.set_state("speaking")
+                speaker.write(lead)
             for sentence in sentences(text):
-                pcm = await speech(self.config, sentence, voice)
+                try:
+                    pcm = await speech(self.config, sentence, voice)
+                except RealtimeError:
+                    if lead and speaker:
+                        await speaker.drain()
+                        speaker = None
+                    raise
                 if speaker is None:
                     speaker = self.new_speaker()
                     await speaker.start()
@@ -611,6 +640,17 @@ class Controller:
             if speaker:
                 await speaker.drain()
                 speaker = None
+        finally:
+            if speaker:
+                await speaker.stop()
+
+    async def _sound(self, pcm: bytes):
+        speaker = self.make_speaker(on_level=lambda _value: None)    # no blob to move
+        try:
+            await speaker.start()
+            speaker.write(pcm)
+            await speaker.drain()
+            speaker = None
         finally:
             if speaker:
                 await speaker.stop()

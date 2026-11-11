@@ -86,6 +86,14 @@ class Logic(unittest.TestCase):
         self.assertEqual(words({"files_read": ["home"]}), "Can read files (home)",
                          "only the network names a server")
 
+    def test_home_assistant_permissions_are_said_in_words(self):
+        from tuxistant.skills import Skills
+        said = {skill["name"]: sa.permission_words(skill["permissions"])
+                for skill in Skills().listing() if skill["id"].startswith("org.tuxistant.home")}
+        self.assertEqual(said, {
+            "Home Assistant": "Can control devices through Home Assistant",
+            "Home Assistant status": "Can read the state of your home"})
+
     def test_every_real_home_skill_says_so(self):
         from tuxistant.skills import Skills
         for skill in Skills().listing():
@@ -741,6 +749,15 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["mail_search"] is True, "the change to come back")
         row.set_active(False)
         wait(lambda: self.win.config["mail_search"] is False, "the switch to come back")
+
+    def test_06_zzz_the_timer_chime_is_off_until_switched_on(self):
+        row = self.win.general.switches["timer_chime"]
+        self.assertFalse(row.get_active(), "nothing sounds on a locked screen unless asked for")
+        row.set_active(True)
+        wait(lambda: saved() == [["timer_chime", "true"]], "the switch to save")
+        wait(lambda: self.win.config["timer_chime"] is True, "the change to come back")
+        row.set_active(False)
+        wait(lambda: self.win.config["timer_chime"] is False, "the switch to come back")
 
     def test_07_hold_rows_follow_the_switch(self):
         page = self.win.general
@@ -1484,13 +1501,16 @@ class Inner(unittest.TestCase):
         """Settings updates on disk at once. The daemon keeps its old code until it restarts."""
         page = self.win.general
         new = ("phone_device", "translate_server", "search_server", "fact_lookup", "cloud_enabled",
-               "cloud_model", "cloud_key_set", "tapo_email", "tapo_password_set", "mail_search")
+               "cloud_model", "cloud_key_set", "tapo_email", "tapo_password_set", "mail_search",
+               "timer_chime", "ha_server", "ha_token_set")
         current = dict(self.win.config)
         self.win.apply_config({key: value for key, value in current.items() if key not in new})
         self.assertFalse(page.cloud.get_active())
         self.assertEqual(page.cloud_model.get_text(), "claude-opus-5-5")
         self.assertEqual(page.phone.get_selected(), 0)
         self.assertEqual(page.tapo_password_status.get_label(), "No password set")
+        self.assertEqual((page.home.get_text(), page.home_token_status.get_label()),
+                         ("", "No token set"))
         settle()
         self.assertEqual(saved(), [])
         self.win.apply_config(current)
@@ -1647,6 +1667,63 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config.get("tapo_password_set") is False, "tapo_password_set")
         control("Change", "tapo_email", '""', signature="ss")
         wait(lambda: page.tapo_email.get_text() == "", "the outside change")
+
+    def test_25_z_home_assistant_address_and_token(self):
+        page = self.win.general
+        apply, token = apply_button(page.home), "eyJ.long-lived.token"
+        self.assertEqual(page.home_token_status.get_label(), "No token set")
+        self.assertFalse(page.home_token_remove.get_visible())
+        with mock.patch.object(self.win, "toast") as toast:
+            page.home.set_text("ws://ha.lan:8123")
+            apply.emit("clicked")
+            wait(lambda: toast.called, "the toast")
+        toast.assert_called_once_with("Enter an address like homeassistant.local:8123")
+        self.assertTrue(page.home.has_css_class("error"))
+        settle()
+        self.assertEqual(saved(), [], "what is not an address is not sent")
+        page.home.set_text(" http://ha.lan/ ")
+        self.assertFalse(page.home.has_css_class("error"))
+        apply.emit("clicked")
+        wait(lambda: saved() == [["ha_server", '"ha.lan:8123"']], "the address to save")
+        self.assertEqual(page.home.get_text(), "ha.lan:8123")
+        wait(lambda: self.win.config.get("ha_server") == "ha.lan:8123", "the save to come back")
+        forget()
+        page.home_token.set_text(f"  {token} ")
+        apply_button(page.home_token).emit("clicked")
+        wait(lambda: saved() == [["ha_token", json.dumps(token)]], "the token to save")
+        self.assertEqual(page.home_token.get_text(), "")
+        wait(lambda: self.win.config.get("ha_token_set") is True, "ha_token_set")
+        self.assertEqual(page.home_token_status.get_label(), "Token is set")
+        self.assertTrue(page.home_token_remove.get_visible())
+        self.assertNotIn("ha_token", self.win.config)
+        self.assertNotIn("long-lived", json.dumps(self.win.config))
+        self.assertEqual(json.loads(control("Stored", "ha_token", signature="s")[0]), token)
+        forget()
+        with mock.patch.object(self.win, "toast") as toast:
+            page.home.set_text("other.lan:8123")
+            apply.emit("clicked")
+            wait(lambda: toast.called, "the toast")
+        toast.assert_called_once_with("A new address needs its own token: enter it below")
+        self.assertEqual(page.home_token_status.get_label(), "No token set", "shown at once")
+        wait(lambda: saved() == [["ha_server", '"other.lan:8123"']], "the new address to save")
+        wait(lambda: self.win.config.get("ha_server") == "other.lan:8123", "the save to come back")
+        self.assertIs(self.win.config.get("ha_token_set"), False)
+        self.assertEqual(json.loads(control("Stored", "ha_token", signature="s")[0]), "",
+                         "the daemon dropped the token with the address it was given for")
+        forget()
+        page.home_token.set_text(token)
+        apply_button(page.home_token).emit("clicked")
+        wait(lambda: saved() == [["ha_token", json.dumps(token)]], "the token to save again")
+        forget()
+        page.home_token.set_text("   ")
+        apply_button(page.home_token).emit("clicked")
+        settle()
+        self.assertEqual(saved(), [], "a blank entry must not wipe the token")
+        page.home_token_remove.emit("clicked")
+        wait(lambda: saved() == [["ha_token", '""']], "the token to be removed")
+        wait(lambda: self.win.config.get("ha_token_set") is False, "ha_token_set")
+        control("Change", "ha_server", '""', signature="ss")
+        wait(lambda: page.home.get_text() == "", "the outside change")
 
     def test_27_clearing_history_asks_first(self):
         page = self.win.history

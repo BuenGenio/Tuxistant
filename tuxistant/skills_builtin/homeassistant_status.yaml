@@ -1,0 +1,12 @@
+id: org.tuxistant.home_status
+name: Home Assistant status
+description: Tells you the state of things in your Home Assistant, such as whether a door is locked, which lights are on and how warm a room is
+version: 1.0.0
+permissions:
+  home_read: true
+actions:
+  home.status:
+    description: Check the user's smart home, like whether a door is locked or the garage is open, which lights are on, or the temperature in a room
+    params:
+      name: { type: string, description: "The device or room asked about, like front door or bedroom. Leave it out for all of a kind" }
+      kind: { type: string, description: "The kind of thing, like lights, locks, doors, windows or temperature" }

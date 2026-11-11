@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -24,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tests.test_daemon_fakes import CHUNK, FakeServer, FakeSpeech, FakeSpeaker, FakeMic, tone  # noqa: E402
 from tests.test_daemon_fakes import CountingSkills  # noqa: E402
-from tuxistant import BUS_NAME, BUS_PATH, controller, service, themes  # noqa: E402
+from tuxistant import BUS_NAME, BUS_PATH, controller, service, themes, timers  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.gate import Ask  # noqa: E402
 from tuxistant.history import History  # noqa: E402
@@ -67,7 +68,7 @@ class RunsOnPrivateBus(unittest.TestCase):
                 ["dbus-run-session", "--", sys.executable, "-m", "unittest",
                  "tests.test_daemon_dbus.Service", "tests.test_daemon_dbus.Process",
                  "tests.test_daemon_dbus.Lock", "tests.test_daemon_dbus.OnlyTheShellClicks",
-                 "tests.test_daemon_dbus.OnlyTheShellTypes"],
+                 "tests.test_daemon_dbus.OnlyTheShellTypes", "tests.test_daemon_dbus.Timers"],
                 cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr[-4000:])
         self.assertIn("OK", done.stderr)
@@ -159,6 +160,22 @@ class Service(OnPrivateBus):
         values = json.loads(text)
         self.assertNotIn("api_key", values)
         self.assertIs(values["api_key_set"], True)
+
+    async def test_get_config_never_has_the_home_assistant_token(self):
+        token = "eyJ-a-long-lived-token"
+        await self.iface.call_set_config("ha_server", '"ha.lan:8123"')
+        await self.iface.call_set_config("ha_token", json.dumps(token))
+        text = await self.iface.call_get_config()
+        self.assertNotIn(token, text)
+        self.assertNotIn("ha_token", {key for key in json.loads(text) if key != "ha_token_set"})
+        self.assertIs(json.loads(text)["ha_token_set"], True)
+        for bad in ("two words", "a\nb"):
+            with self.subTest(bad), self.assertRaises(DBusError) as refused:
+                await self.iface.call_set_config("ha_token", json.dumps(bad))
+            self.assertNotIn(bad, refused.exception.text)
+        await self.iface.call_set_config("ha_server", '"127.0.0.1:4444"')
+        self.assertEqual(self.config["ha_token"], "", "a new address does not inherit it")
+        self.assertIs(json.loads(await self.iface.call_get_config())["ha_token_set"], False)
 
     async def test_set_config(self):
         await self.iface.call_set_config("voice", '"bm_lewis"')
@@ -694,6 +711,125 @@ class OnlyTheShellClicks(OnPrivateBus):
         while self.daemon.shell_owner:
             await asyncio.sleep(0.01)
         self.assertFalse(self.daemon.controller.face)
+
+
+class FakeDesktop(ServiceInterface):
+    """What takes a notification, in place of GNOME Shell."""
+
+    def __init__(self):
+        super().__init__("org.freedesktop.Notifications")
+        self.shown = []
+
+    @method()
+    def Notify(self, app: "s", replaces: "u", icon: "s", summary: "s", body: "s",
+               actions: "as", hints: "a{sv}", expires: "i") -> "u":
+        self.shown.append(summary)
+        return 1
+
+
+@unittest.skipUnless(os.environ.get(PRIVATE), "needs dbus-run-session")
+class Timers(OnPrivateBus):
+    """The real run(), in this process so that its speaker can be a fake: a daemon that starts
+    on a locked screen with a reminder that came due while it was away."""
+
+    async def asyncSetUp(self):
+        config, self.file = Config(), service.DATA_DIR / "timers.json"
+        real = (Path.home() / ".config", Path.home() / ".local/share")
+        for path, home in ((config.path, "XDG_CONFIG_HOME"), (self.file, "XDG_DATA_HOME")):
+            given = Path(os.environ[home])
+            if path.parent != given / "tuxistant" or given.resolve() in real or path.exists():
+                raise RuntimeError("refusing to run on the real config or the real timers")
+        self.http = FakeSpeech()
+        self.addCleanup(self.http.close)
+        # Both are taken away again: the daemons of the Process tests share these folders, and
+        # theirs is the real speaker.
+        self.addCleanup(lambda: [path.unlink(missing_ok=True) for path in (
+            config.path, self.file, *self.file.parent.glob("timers.json.*"))])
+        config.values.update(server=f"127.0.0.1:{self.http.port}", api_key="good")
+        config.save()
+        self.config = config
+        now = time.time()
+        timers.Store(self.file).add("reminder", "call mum", now - 7200, now - 9000)
+        self.shield, self.desktop = FakeShield(active=True), FakeDesktop()
+        for name, path, thing in (
+                (service.SHIELD_NAME, service.SHIELD_PATH, self.shield),
+                ("org.freedesktop.Notifications", "/org/freedesktop/Notifications", self.desktop)):
+            bus = await MessageBus().connect()
+            self.addCleanup(bus.disconnect)
+            bus.export(path, thing)
+            await bus.request_name(name)
+        self.speakers, self.said = [], []
+        for patcher in (mock.patch.object(service, "START_GRACE_S", 0.05),
+                        mock.patch.object(timers, "RETRY_S", 0.02)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def new_speaker(self, on_level):
+        self.speakers.append(FakeSpeaker([], on_level))
+        return self.speakers[-1]
+
+    async def start(self):
+        self.running = asyncio.create_task(service.run(speaker_factory=self.new_speaker))
+        self.addAsyncCleanup(self.stop)
+        client = await MessageBus().connect()
+        self.addCleanup(client.disconnect)
+        async with asyncio.timeout(10):
+            while True:
+                try:
+                    introspection = await client.introspect(BUS_NAME, BUS_PATH)
+                    break
+                except DBusError:
+                    await asyncio.sleep(0.02)
+        iface = client.get_proxy_object(BUS_NAME, BUS_PATH, introspection).get_interface(BUS_NAME)
+        iface.on_reply(self.said.append)
+        await client.introspect(BUS_NAME, BUS_PATH)     # by its answer the match rule is in place
+
+    async def stop(self):
+        if signal.getsignal(signal.SIGTERM) is signal.SIG_DFL:     # run() never got that far
+            self.running.cancel()
+        elif not self.running.done():
+            os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait({self.running}, timeout=10)
+
+    async def until(self, condition, timeout=10):
+        async with asyncio.timeout(timeout):
+            while not condition():
+                await asyncio.sleep(0.01)
+
+    def saved(self) -> list:
+        return [(row["label"], row["state"]) for row in json.loads(self.file.read_text())["items"]]
+
+    async def test_as_installed_it_says_nothing_until_the_unlock(self):
+        await self.start()
+        await self.until(lambda: self.desktop.shown)
+        await asyncio.sleep(0.3)        # a dozen retries' worth
+        self.assertEqual(self.desktop.shown, ["Reminder: call mum"], "the trace, at once")
+        self.assertEqual((self.said, self.speakers, self.http.requests), ([], [], []),
+                         "nothing is said, played or sent to be spoken on a locked screen")
+        self.assertEqual(self.saved(), [("call mum", "pending")])
+        self.shield.ActiveChanged(False)
+        await self.until(lambda: self.saved() == [("call mum", "done")])
+        await self.until(lambda: self.said)
+        self.assertRegex(self.said[0], r"^You missed a reminder .* at .*: call mum\.$")
+        self.assertEqual(len(self.speakers), 1)
+        self.assertEqual(self.desktop.shown, ["Reminder: call mum"], "one notification, not two")
+        await self.stop()
+        self.assertEqual(self.running.result(), 0)
+        self.assertIsNone(timers._attached, "the model's three actions lose the store again")
+
+    async def test_with_the_chime_on_the_locked_screen_hears_that_and_no_words(self):
+        self.config.values["timer_chime"] = True
+        self.config.save()
+        await self.start()
+        await self.until(lambda: self.speakers and self.speakers[0].drained)
+        await asyncio.sleep(0.3)
+        self.assertEqual([bytes(s.written) for s in self.speakers], [timers.chime()], "once")
+        self.assertEqual((self.said, self.http.requests), ([], []))
+        self.shield.ActiveChanged(False)
+        await self.until(lambda: self.said)
+        await self.until(lambda: self.saved() == [("call mum", "done")])
+        self.assertNotEqual(bytes(self.speakers[1].written)[:len(timers.chime())], timers.chime(),
+                            "said late, it has no chime")
 
 
 if __name__ == "__main__":

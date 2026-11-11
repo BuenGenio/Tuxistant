@@ -1,6 +1,7 @@
 """One test or more for each failure the code review reproduced, through the real classes."""
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import stat
@@ -18,7 +19,7 @@ import websockets
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_daemon_audio import NEVER_READS, Tools  # noqa: E402
 from tests.test_daemon_fakes import CHUNK, Case, CountingSkills, FakeSpeech, tone  # noqa: E402
-from tuxistant import audio, controller, realtime, skills  # noqa: E402
+from tuxistant import audio, controller, homeassistant, realtime, skills  # noqa: E402
 from tuxistant.config import Config, clean_server  # noqa: E402
 from tuxistant.fnclient import FnClient  # noqa: E402
 from tuxistant.gate import Ask, Speak  # noqa: E402
@@ -498,6 +499,43 @@ class KeyStaysWithTheServer(Case):
         with self.assertRaisesRegex(RealtimeError, "HTTP 302"):
             list_models(self.config(redirecting.port))
         self.assertEqual(other.seen, [])
+
+    def home(self, server):
+        homeassistant._cache.clear()
+        return {"ha_server": server, "ha_token": SECRET}
+
+    def test_the_home_assistant_token_ignores_http_proxies(self):
+        proxy, target = self.listener(), self.listener()
+        with mock.patch.dict(os.environ, {"http_proxy": f"http://127.0.0.1:{proxy.port}",
+                                          "HTTP_PROXY": f"http://127.0.0.1:{proxy.port}",
+                                          "no_proxy": "", "NO_PROXY": ""}):
+            with self.assertRaisesRegex(ConnectionError, "not the way Home Assistant does"):
+                homeassistant.status({"name": "hall"}, self.home(f"127.0.0.1:{target.port}"))
+        self.assertEqual(proxy.seen, [])
+        self.assertEqual(target.seen, [("/api/states", f"Bearer {SECRET}")])
+
+    def test_the_home_assistant_token_follows_no_redirect(self):
+        other = self.listener()
+        redirecting = self.listener(302, f"http://127.0.0.2:{other.port}/api/states")
+        for act in (homeassistant.status, homeassistant.set_state):
+            with self.assertRaises(Exception) as refused:
+                act({"name": "hall", "state": "on"}, self.home(f"127.0.0.1:{redirecting.port}"))
+            self.assertEqual(str(refused.exception), homeassistant.REDIRECTED)
+        self.assertEqual(other.seen, [])
+
+    def test_the_home_assistant_token_never_goes_over_plain_http_to_the_internet(self):
+        with mock.patch.object(homeassistant._opener, "open",
+                               side_effect=AssertionError("a request was made")):
+            for server in ("8.8.8.8:8123", "[2606:4700::1111]:8123"):
+                with self.assertRaisesRegex(ValueError, "plain http to an address on the"):
+                    homeassistant.status({"name": "hall"}, self.home(server))
+
+    def test_a_new_home_assistant_address_does_not_inherit_the_token(self):
+        config = Config(self.folder / "config.json")
+        config.values.update(ha_server="ha.lan:8123", ha_token=SECRET)
+        config.set("ha_server", "127.0.0.1:4444")
+        self.assertEqual((config["ha_server"], config["ha_token"]), ("127.0.0.1:4444", ""))
+        self.assertNotIn(SECRET, json.dumps(config.public()))
 
     async def test_speech_redirects_are_refused(self):
         other = self.listener()

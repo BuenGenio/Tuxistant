@@ -113,6 +113,10 @@ Then run this again. Nothing was installed."
 
 reload_user_manager() {
     dry_run || systemctl --user daemon-reload || warn "systemctl --user daemon-reload failed"
+    # Started at login, with or without the Fn helper: holding Fn reaches the daemon only if it
+    # is already running, and a reminder can't be said by a daemon that nothing has started.
+    dry_run || systemctl --user enable tuxistant.service ||
+        warn "could not enable tuxistant.service"
 }
 
 cloud_sdk_works() {
@@ -165,8 +169,6 @@ install_fn_helper() {
     sudo systemctl daemon-reload
     sudo systemctl enable tuxistant-fn.service
     sudo systemctl restart tuxistant-fn.service
-    # Holding Fn reaches the daemon only if it is already running, so start it at login.
-    systemctl --user enable tuxistant.service || warn "could not enable tuxistant.service"
 }
 
 fn_helper=1

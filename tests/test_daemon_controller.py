@@ -9,11 +9,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_daemon_fakes import CHUNK, Case, FakeSpeaker, FakeSpeech, silence, tone  # noqa: E402
-from tuxistant import controller, skills  # noqa: E402
-from tuxistant.gate import Speak  # noqa: E402
+from tuxistant import controller, service, skills, timers  # noqa: E402
+from tuxistant.gate import Ask, Session, Speak  # noqa: E402
 from tuxistant.realtime import Realtime, RealtimeError  # noqa: E402
 
 VOICE = tone(1.0)
+LEAD = tone(0.05, amplitude=3000)   # a sound for before the words, as a timer's chime is
 
 
 async def vad_turn(c, text="what time is it", reply="It is noon."):
@@ -1038,6 +1039,374 @@ class Say(Case):
         await rig.ctl.say("Hello.")
         await rig.finished()
         self.assertEqual(rig.history.recent(), [])
+
+
+class WhenFree(Case):
+    """say_when_free and sound, which a timer or a reminder speaks through. Unlike say, neither
+    may ever stop what is going on."""
+
+    def fake(self, **options):
+        http = FakeSpeech(**options)
+        self.addCleanup(http.close)
+        return http
+
+    async def refused(self, rig):
+        """Asks for both, and checks that the job in hand is still the one running."""
+        job = rig.ctl.job
+        self.assertIsNone(await rig.ctl.say_when_free("Your pasta timer is done.", LEAD))
+        await rig.ctl.sound(LEAD)
+        await asyncio.sleep(0.05)
+        self.assertIs(rig.ctl.job, job)
+        self.assertFalse(job.done(), "what was going on was stopped")
+        self.assertNotIn("Your pasta timer is done.", rig.of("Reply"))
+
+    async def test_idle_it_speaks_with_the_lead_before_the_words(self):
+        http = self.fake()
+        rig = self.rig(http.port, voice="bm_george")
+        job = await rig.ctl.say_when_free("Your pasta timer is done.", LEAD)
+        self.assertIs(job, rig.ctl.job)
+        self.assertIsNone(await job, "the job's result is what went wrong")
+        [speaker] = rig.speakers
+        self.assertEqual(bytes(speaker.written), LEAD + tone(0.1))
+        self.assertTrue(speaker.drained)
+        self.assertEqual([(r["input"], r["voice"]) for r in http.requests],
+                         [("Your pasta timer is done.", "bm_george")])
+        self.assertEqual(rig.of("StateChanged"), ["thinking", "speaking", "idle"])
+        self.assertEqual(rig.of("Presence"), [True, False])
+        self.assertEqual(rig.of("Reply"), ["Your pasta timer is done."])
+        self.assertEqual(rig.history.recent(), [])
+
+    async def test_with_no_lead_it_is_the_words_alone(self):
+        http = self.fake()
+        rig = self.rig(http.port)
+        await (await rig.ctl.say_when_free("Reminder: call mum."))
+        self.assertEqual(bytes(rig.speakers[0].written), tone(0.1))
+        self.assertEqual(rig.of("StateChanged"), ["thinking", "speaking", "idle"])
+
+    async def test_while_tux_speaks_it_says_not_now_and_cuts_nothing_off(self):
+        http = self.fake()
+        gate = asyncio.Event()
+        rig = self.rig(http.port, speaker={"gate": gate})
+        await rig.ctl.say("A long answer that is still being spoken.")
+        await rig.state("speaking")
+        await self.refused(rig)
+        self.assertFalse(rig.speakers[0].stopped)
+        gate.set()
+        await rig.finished()
+        self.assertTrue(rig.speakers[0].drained, "the answer ran to its end")
+        self.assertEqual(len(rig.speakers), 1, "and no sound was laid over it")
+        self.assertEqual([r["input"] for r in http.requests],
+                         ["A long answer that is still being spoken."])
+
+    async def test_while_tux_listens_it_says_not_now_and_the_turn_goes_on(self):
+        server = await self.server()
+        rig = self.rig(server.port, mic_pcm=tone(0.2), mic={"block": True}, listen_timeout_s=30)
+        await rig.ctl.toggle()
+        await rig.state("listening")
+        await self.refused(rig)
+        self.assertEqual(rig.ctl.state, "listening")
+        self.assertEqual((rig.journal, rig.speakers), (["mic.start"], []))
+
+    async def test_while_a_card_is_up_it_says_not_now_and_the_card_stays(self):
+        async def script(c):
+            await c.heard_audio(CHUNK)
+            await c.committed("do the thing")
+            await c.tool_call()
+
+        server = await self.server(script)
+        rig = self.rig(server.port, mic_pcm=VOICE)
+        with mock.patch.dict(skills.HANDLERS, {"time.now": lambda *_: Ask("Do it?", "d", dict)}):
+            await rig.ctl.toggle()
+            async with asyncio.timeout(5):
+                while not rig.of("Approval"):
+                    await asyncio.sleep(0.002)
+            await self.refused(rig)
+            self.assertEqual(rig.of("ApprovalClosed"), [], "the card was answered for the user")
+            self.assertFalse(rig.ctl.approval[1].done())
+            await rig.ctl.cancel()
+        self.assertEqual(rig.speakers, [])
+
+    async def test_while_dictating_it_says_not_now_and_no_words_are_lost(self):
+        rig = self.rig(self.fake().port, mic_pcm=VOICE, mic={"block": True})
+        await rig.ctl.dictate_start()
+        await rig.state("listening")
+        go = rig.ctl.dictation
+        await self.refused(rig)
+        self.assertIs(rig.ctl.dictation, go)
+        self.assertEqual((rig.journal, rig.speakers), (["mic.start"], []))
+
+    async def test_locked_no_words_are_said_and_a_sound_shows_nothing(self):
+        http = self.fake()
+        rig = self.rig(http.port)
+        await rig.ctl.set_locked(True)
+        self.assertIsNone(await rig.ctl.say_when_free("Reminder: call the clinic.", LEAD))
+        self.assertEqual((rig.speakers, rig.signals), ([], []))
+        await rig.ctl.sound(LEAD)
+        await rig.finished()
+        [speaker] = rig.speakers
+        self.assertEqual(bytes(speaker.written), LEAD)
+        self.assertTrue(speaker.drained)
+        self.assertEqual(rig.signals, [], "no blob, no caption and no level on a locked screen")
+        self.assertIsNone(await rig.ctl.say("anything"), "say still refuses when locked")
+        self.assertEqual(http.requests, [], "nothing was sent to be spoken")
+
+    async def test_a_key_press_stops_an_announcement_and_a_cancel_stops_a_sound(self):
+        rig = self.rig(self.fake().port, speaker={"gate": asyncio.Event()})
+        await rig.ctl.say_when_free("Your pasta timer is done.", LEAD)
+        await rig.state("speaking")
+        await rig.ctl.toggle()      # the user wants Tux quiet: that always wins
+        self.assertTrue(rig.speakers[0].stopped)
+        self.assertEqual(rig.ctl.state, "idle")
+        await rig.ctl.sound(LEAD)
+        await asyncio.sleep(0.05)
+        await rig.ctl.cancel()
+        self.assertTrue(rig.speakers[1].stopped)
+
+    async def test_with_the_server_down_the_lead_was_played_and_the_error_shows_once(self):
+        rig = self.rig(free_port())     # nothing listens there
+        with mock.patch.object(controller, "ERROR_HOLD_S", 0.01):
+            job = await rig.ctl.say_when_free("Your pasta timer is done.", LEAD)
+            self.assertIn("Cannot reach", await job)
+        self.assertEqual(bytes(rig.speakers[0].written), LEAD)
+        self.assertTrue(rig.speakers[0].drained, "a server failure must not discard the chime")
+        self.assertEqual(len(rig.of("Error")), 1)
+        self.assertEqual(rig.ctl.state, "idle")
+
+
+class Notes:
+    """Where timers.notify would send a notification. Nothing is on the other end."""
+
+    def __init__(self):
+        self.sent = []
+
+    async def call(self, message):
+        self.sent.append(message.body[3])
+
+
+class TimersComeDue(Case):
+    """timers.py on the real controller, put together as service.run does it: service.tick, an
+    Announcer and a store in the temp folder. Nothing here attaches that store for the model."""
+
+    def setUp(self):
+        super().setUp()
+        self.tts = FakeSpeech()
+        self.addCleanup(self.tts.close)
+        # A test adds its item the moment the rig exists, which looks like one that came due
+        # while the daemon was away. The two tests about that wait set their own.
+        for patcher in (mock.patch.object(service, "START_GRACE_S", 0),
+                        mock.patch.object(timers, "RETRY_S", 0.02)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def wired(self, lock=None, overdue=(), **options):
+        rig = self.rig(self.tts.port, **options)
+        self.notes, ctl = Notes(), rig.ctl
+        self.store = timers.Store(self.folder / "data" / "timers.json")
+        for label, ago in overdue:      # as if set before the daemon last stopped
+            self.store.add("reminder", label, time.time() - ago, time.time() - ago - 600)
+        self.crier = timers.Announcer(
+            say=ctl.say_when_free, sound=ctl.sound,
+            notify=lambda item: timers.notify(self.notes, item),
+            locked=lambda: ctl.locked, chimes=lambda: rig.config["timer_chime"])
+        known = asyncio.create_task(lock(ctl) if lock else asyncio.sleep(0))  # watch_lock's place
+        self.ticking = asyncio.create_task(service.tick(self.store, self.crier, known))
+        self.addAsyncCleanup(asyncio.gather, self.ticking, known, return_exceptions=True)
+        self.addCleanup(known.cancel)
+        self.addCleanup(self.ticking.cancel)
+        return rig
+
+    async def until(self, condition, timeout=5):
+        async with asyncio.timeout(timeout):
+            while not condition():
+                await asyncio.sleep(0.005)
+
+    def due_now(self, label="pasta", kind="timer"):
+        now = timers.epoch()
+        return self.store.add(kind, label, now, now - 480)
+
+    async def test_a_failed_lock_query_keeps_speech_locked(self):
+        bus = mock.Mock()
+        shield = bus.get_proxy_object.return_value.get_interface.return_value
+        shield.call_get_active = mock.AsyncMock(side_effect=ConnectionError("test failure"))
+        ctl = mock.Mock(set_locked=mock.AsyncMock())
+        with self.assertLogs(service.log, level="WARNING"):
+            await service.watch_lock(bus, ctl)
+        ctl.set_locked.assert_awaited_once_with(True)
+
+    async def test_scheduler_failure_is_logged(self):
+        task = asyncio.get_running_loop().create_future()
+        task.set_exception(RuntimeError("test scheduler failure"))
+        with self.assertLogs(service.log, level="ERROR") as logged:
+            service._timers_stopped(task)
+        self.assertIn("test scheduler failure", " ".join(logged.output))
+
+    async def test_no_announcement_before_a_slow_lock_check_finishes(self):
+        ready = asyncio.Event()
+        async def slow_lock(controller):
+            await ready.wait()
+            await controller.set_locked(True)
+        with mock.patch.object(service, "LOCK_KNOWN_S", 0.01, create=True):
+            rig = self.wired(lock=slow_lock)
+            self.due_now()
+            await asyncio.sleep(0.08)
+            self.assertTrue(self.store.pending())
+            self.assertFalse(rig.ctl.active)
+            ready.set()
+            await asyncio.sleep(0.08)
+            self.assertTrue(rig.ctl.locked)
+            self.assertFalse(rig.ctl.active)
+
+    async def test_as_installed_it_is_noted_and_said_with_no_chime(self):
+        rig = self.wired()
+        self.assertIs(rig.config["timer_chime"], False, "the chime is the owner's to turn on")
+        self.due_now()
+        await self.until(lambda: not self.store.pending())
+        self.assertEqual(self.notes.sent, ["Pasta timer is done"])
+        self.assertEqual(rig.of("Reply"), ["Your pasta timer is done."])
+        self.assertEqual(rig.of("StateChanged"), ["thinking", "speaking", "idle"])
+        self.assertEqual(rig.of("Presence"), [True, False], "the blob shows for it")
+        self.assertEqual(bytes(rig.speakers[0].written), tone(0.1), "the words alone")
+        self.assertEqual(self.store.kept()[0].state, "done")
+        self.assertEqual(rig.history.recent(), [])
+
+    async def test_with_the_chime_on_it_leads_the_words(self):
+        rig = self.wired(timer_chime=True)
+        self.due_now()
+        await self.until(lambda: not self.store.pending())
+        [speaker] = rig.speakers
+        self.assertEqual(bytes(speaker.written), timers.chime() + tone(0.1))
+        self.assertEqual(self.tts.requests[0]["input"], "Your pasta timer is done.")
+
+    async def test_as_installed_a_locked_screen_stays_silent_and_the_words_come_at_the_unlock(self):
+        rig = self.wired()
+        await rig.ctl.set_locked(True)
+        made = self.due_now()
+        await self.until(lambda: self.notes.sent)
+        await asyncio.sleep(0.2)        # several retries' worth
+        self.assertEqual(self.notes.sent, ["Pasta timer is done"], "the trace is there at once")
+        self.assertEqual((rig.speakers, rig.signals, self.tts.requests), ([], [], []),
+                         "nothing is heard, shown or sent to be spoken on a locked screen")
+        self.assertEqual(len(self.store.pending()), 1, "still owed its words")
+        with mock.patch.object(timers, "epoch", lambda: made.due + 300), \
+                mock.patch.object(self.crier, "now", lambda: made.due + 300):
+            await rig.ctl.set_locked(False)
+            await self.until(lambda: not self.store.pending())
+        self.assertEqual(rig.of("Reply"), ["Your pasta timer finished 5 minutes ago."])
+        self.assertEqual(len(self.notes.sent), 1, "one notification, not two")
+
+    async def test_with_the_chime_on_a_locked_screen_hears_it_once_and_no_words(self):
+        rig = self.wired(timer_chime=True)
+        await rig.ctl.set_locked(True)
+        made = self.due_now()
+        await self.until(lambda: rig.speakers and rig.speakers[0].drained)
+        await asyncio.sleep(0.2)
+        self.assertEqual([bytes(s.written) for s in rig.speakers], [timers.chime()], "once")
+        self.assertEqual((rig.signals, self.tts.requests), ([], []), "no words and no blob")
+        self.assertIsNone(await rig.ctl.say("anything"), "say still refuses when locked")
+        with mock.patch.object(timers, "epoch", lambda: made.due + 300), \
+                mock.patch.object(self.crier, "now", lambda: made.due + 300):
+            await rig.ctl.set_locked(False)
+            await self.until(lambda: not self.store.pending())
+        self.assertEqual(rig.of("Reply"), ["Your pasta timer finished 5 minutes ago."])
+        self.assertEqual(bytes(rig.speakers[1].written), tone(0.1), "no chime before late words")
+
+    async def test_while_tux_is_speaking_it_waits_and_cuts_nothing_off(self):
+        gate = asyncio.Event()
+        rig = self.wired(speaker={"gate": gate})
+        await rig.ctl.say("A long answer that is still being spoken.")
+        await rig.state("speaking")
+        self.due_now()
+        await self.until(lambda: self.notes.sent)
+        await asyncio.sleep(0.2)
+        self.assertEqual(rig.of("Reply"), ["A long answer that is still being spoken."])
+        self.assertFalse(rig.speakers[0].stopped, "the answer was not interrupted")
+        self.assertEqual(len(self.store.pending()), 1)
+        gate.set()
+        await self.until(lambda: not self.store.pending())
+        self.assertEqual(rig.of("Reply"), ["A long answer that is still being spoken.",
+                                           "Your pasta timer is done."])
+        self.assertTrue(rig.speakers[0].drained, "the answer ran to its end")
+
+    async def test_while_tux_is_listening_it_waits_and_the_turn_goes_on(self):
+        server = await self.server()
+        rig = self.wired(mic={"block": True}, mic_pcm=tone(0.2), listen_timeout_s=30)
+        rig.config.values["server"] = f"127.0.0.1:{server.port}"
+        await rig.ctl.toggle()
+        await rig.state("listening")
+        turn = rig.ctl.job
+        self.due_now()
+        await self.until(lambda: self.notes.sent)
+        await asyncio.sleep(0.2)
+        self.assertEqual(rig.ctl.state, "listening")
+        self.assertIs(rig.ctl.job, turn)
+        self.assertFalse(turn.done(), "the turn was not stopped")
+        self.assertEqual(rig.of("Reply"), [])
+        rig.config.values["server"] = f"127.0.0.1:{self.tts.port}"    # where speech is faked
+        await rig.ctl.cancel()      # the user ends the turn
+        await self.until(lambda: not self.store.pending())
+        self.assertEqual(rig.of("Reply"), ["Your pasta timer is done."])
+
+    async def test_cut_short_by_a_key_press_it_still_counts_as_said(self):
+        rig = self.wired(speaker={"gate": asyncio.Event()})
+        self.due_now()
+        await rig.state("speaking")
+        await rig.ctl.toggle()
+        self.assertTrue(rig.speakers[0].stopped)
+        await self.until(lambda: not self.store.pending())
+        self.assertEqual(self.store.kept()[0].state, "done")
+        await asyncio.sleep(0.1)
+        self.assertEqual(len(rig.of("Reply")), 1, "and it is not said again")
+
+    async def test_with_the_server_down_the_error_shows_once_and_it_is_not_repeated(self):
+        rig = self.wired()
+        rig.config.values["server"] = f"127.0.0.1:{free_port()}"    # nothing listens there
+        with mock.patch.object(controller, "ERROR_HOLD_S", 0.01):
+            self.due_now()
+            await self.until(lambda: not self.store.pending())
+            await asyncio.sleep(0.2)
+        self.assertEqual(len(rig.of("Error")), 1, "not every two seconds")
+        self.assertEqual(self.notes.sent, ["Pasta timer is done"])
+        self.assertEqual(self.store.kept()[0].state, "missed")
+
+    async def test_started_on_a_locked_screen_with_one_overdue_it_waits_to_know(self):
+        learned = asyncio.Event()
+
+        async def slow_lock(ctl):       # the shell takes a moment to say the screen is locked
+            await learned.wait()
+            await ctl.set_locked(True)
+
+        with mock.patch.object(service, "START_GRACE_S", 0.05):
+            rig = self.wired(lock=slow_lock, overdue=[("call mum", 7200)])
+            await asyncio.sleep(0.2)
+            self.assertEqual((self.notes.sent, rig.speakers, rig.signals), ([], [], []))
+            learned.set()
+            await self.until(lambda: self.notes.sent)
+            await asyncio.sleep(0.2)
+            self.assertEqual((rig.of("Reply"), rig.speakers), ([], []), "locked: no words")
+            await rig.ctl.set_locked(False)
+            await self.until(lambda: not self.store.pending())
+        [said] = rig.of("Reply")
+        self.assertRegex(said, r"^You missed a reminder .* at .*: call mum\.$")
+
+    async def test_what_was_overdue_at_the_start_waits_for_the_desktop_to_come_up(self):
+        with mock.patch.object(service, "START_GRACE_S", 0.3):
+            rig = self.wired(overdue=[("call mum", 600)])
+            await asyncio.sleep(0.15)
+            self.assertEqual((self.notes.sent, rig.of("Reply")), ([], []), "not at once")
+            await self.until(lambda: not self.store.pending())
+        self.assertEqual(len(rig.of("Reply")), 1)
+
+    async def test_set_by_the_model_it_is_said_when_its_time_comes(self):
+        rig = self.wired()
+        timers.attach(self.store)
+        self.addCleanup(timers.attach, None)
+        asked = '{"duration": "1 second", "label": "tea"}'
+        self.assertEqual(await rig.skills.execute("timer_set", asked, Session(rig.skills)),
+                         ("timer.set", {"set": "Tea timer set for 1 second."}))
+        self.assertEqual(rig.of("Reply"), [])
+        await self.until(lambda: not self.store.pending())
+        self.assertEqual(rig.of("Reply"), ["Your tea timer is done."])
+        self.assertEqual(self.notes.sent, ["Tea timer is done"])
 
 
 if __name__ == "__main__":

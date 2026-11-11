@@ -55,9 +55,14 @@ class CountingSkills(Skills):
         super().__init__()
         self.ran = []
 
+    async def execute(self, tool_name, arguments, session):
+        if self.action_name(tool_name) != "time.now":
+            return self.action_name(tool_name), {"error": "Only the clock runs in this test."}
+        return await super().execute(tool_name, arguments, session)
+
     def run(self, tool_name, arguments, session=None):
         self.ran.append((tool_name, time.monotonic()))
-        return super().run(tool_name, arguments)
+        return super().run(tool_name, arguments, session)
 
 
 @unittest.skipUnless(os.environ.get("TUXISTANT_LIVE"), "live server test")

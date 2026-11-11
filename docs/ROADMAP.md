@@ -18,6 +18,9 @@ Steps 1 to 3 of the plan below are built, and most of step 4. Steps 2 to 4 have 
 | Calendar | Reads and adds events through Evolution Data Server. Tested against a real, private Evolution Data Server in two time zones, and reading was tried on the owner's ten Google calendars. Adding has not run on a real account, and CalDAV and Microsoft accounts have not been tried at all |
 | Mail search | Answers from the search index Thunderbird keeps, behind a switch that starts off. Tested against a made-up index, and with the real model on a made-up mailbox. Tried from a terminal on the owner's real mail on 2026-11-11, where it found and read the right mail in 1 to 3 seconds. It has not run by voice |
 | Tapo lights | Working on the real desktop with an L530. The bulb sometimes went missing until the Tapo app woke it. Since 2026-11-10 bulbs are remembered and asked directly, which still has to prove itself over a few days |
+| Media control | Pauses, resumes and skips players through MPRIS, says what is playing, and sets the volume through `wpctl`. Tested against stand-in players, some of them on a private bus, and a stand-in `wpctl`. No real player has been told anything and no real `wpctl` has been run. Routing has been measured with the current tools; see [TESTING.md](TESTING.md) for results and limits |
+| Timers and reminders | Wired into the daemon on 2026-11-11: `timer.set`, `timer.list` and `timer.cancel`, kept in `timers.json`, said through the controller without ever interrupting, with a notification. Tested with a clock that only tests move, on the real controller with fake audio, and through the real `service.run` on a private bus with a stand-in screen shield. Not yet in the real daemon, by voice or on the real desktop: no real notification has been shown and the chime has never been heard. Routing has been measured with the current tools; see [TESTING.md](TESTING.md) for results and limits |
+| Home Assistant | Wired in on 2026-11-11, and offered to the model only once an address and a token are in Settings. Controls and reads lights, switches, fans, scenes, scripts, heating, covers, locks and media players by name. Tested against a fake server on localhost. Its author also ran it against a real Home Assistant 2026.11 in Docker with its demo devices, before a scene got its card: that test file is updated and has not been run since. Not yet on a real home, or by voice. Routing has been measured with the current tools; see [TESTING.md](TESTING.md) for results and limits |
 | Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
 | Facts, web search, research | Tested against the real server, Wikipedia and SearXNG. Not yet by voice on the real desktop |
 | Multi-step planner, local model | Two live runs worked |
@@ -84,6 +87,14 @@ Don't act on these until they answer.
 - The consent dialog shows every time Cloud goes from off to on, not literally once. A single-time prompt needs a new config key.
 - `file.open` refuses HTML, SVG, archives and disk images as well as anything that runs code.
 - Translations of more than 2000 characters are refused, not cut.
+- Timers: the chime is off as installed (`timer_chime`), so that nothing sounds on a locked screen unless you ask for it. The same switch decides whether a chime comes before the words on an unlocked screen. Two switches would need a second key.
+- Timers: no card for any of the three actions, even in a conversation that has already read something private. A model talked into it by a hostile file can therefore set a reminder whose words Tux says later, as "Reminder: ...". A card for `timer.set` in such a conversation would close that, at the cost of a click for "find my tax return and remind me tomorrow to send it".
+- Timers: listing or cancelling counts as reading something private because the handler says so, not the manifest, so the Skills page shows no permission for it. The other way is a second manifest with a new `reminders_read` permission.
+- Home Assistant: activating a scene shows a card, like running a script, because a scene can unlock a door or open a garage and the skill can't see what is in one. "Movie time" every evening therefore costs a click. Switches and helpers have no card, though they can be wired to anything. `ASKS` in `tuxistant/homeassistant.py`, one entry.
+- Home Assistant: reading the state of the house counts as reading something private (`home_read` in `reads_private`). The cost is that after "Is the front door locked?", weather, news or a web search in the same conversation shows a card. Both Home Assistant handlers also mark the conversation after reading the device list, including when a change or a failed match reveals names.
+- Home Assistant: its two tools are left off the model's list until both an address and a token are set, so an install without one is as it was. With both Home Assistant and Tapo set up the list is two longer; with Home Assistant alone its tools replace the Tapo tools. The combined lists have been measured; results and remaining misses are in [TESTING.md](TESTING.md).
+- Home Assistant: Settings has no Test button and `tuxistant doctor` has no line for it, so the first sign of a wrong address or token is what Tux says when asked. `homeassistant.check` exists for both and is not called from anywhere.
+- The installer now enables the user unit for everyone, not only with the Fn helper, so the daemon starts at every login. `install.sh`, one line.
 
 ## Check on the real desktop
 
@@ -107,6 +118,9 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 16. Mail search, with Thunderbird set up: turn on "Search my mail" in Settings and ask about a mail you remember, such as when something was booked or what someone said. It should answer within a few seconds and say who it was from and when. Ask for a sign-in code, which it should refuse. Ask about a mail you know holds a code, such as what a sign-in mail from your bank said, and the code should come out as "hidden". After an answer from mail, ask for a web search in the same conversation, which should show a card. `tuxistant doctor` says whether it found any mail.
 17. Lights again, now that they run sandboxed: the same three requests. This checks that the broadcast, the direct asks and `lights.json` all work from inside bubblewrap, under Landlock.
 18. Copy a small skill into `~/.local/share/tuxistant/skills/`, ask for it, edit it, ask again, then delete it, all without a restart. `tuxistant doctor` should show `skill sandbox ready`.
+19. Media, with music playing in Spotify or a video in a browser: "What's playing?", "Pause the music", "Resume the music", "Skip this song", then "Turn it down", "Volume 40", "Mute" and "Unmute". Watch the volume slider: it must follow and never pass 100 percent. Start a second player and say "Pause the music": it should ask which. On an Fn hold, "Who sings this?" should show `media.playing` in History, not `knowledge.answer`. No real player and no real `wpctl` has ever been driven: every test uses stand-ins.
+20. Timers. "Set a timer for one minute": a minute later "Your 1 minute timer is done", the caption, and a notification that stays in the list. "Set a pasta timer for two minutes", then lock the screen: no sound and no words while locked, the lock screen lists a notification without its text, and on unlock "Your pasta timer finished ... ago". "Remind me in one minute to stretch", then hold Fn and keep talking past the minute: nothing cuts in, and it is said after you let go. Restart the daemon with one pending and it still comes. Log out and in with a reminder due meanwhile: it is said late, about 15 seconds after login. Suspend through a timer: it is said within half a minute of waking. Switch on "Chime for timers" in Settings and do the first two again: a chime before the words, and on the locked screen the chime alone. On an Fn hold, "How long is left on the pasta?" should show `timer.list` in History, not `knowledge.answer`. After `./install.sh --no-fn-helper` and a login, `systemctl --user is-enabled tuxistant` should say enabled. None of this has run in the real daemon.
+21. Home Assistant, with the address and a long-lived access token in Settings, address first. The token row should say "Token is set" and never show it. Then by voice "Is the front door locked?", "Turn off the kitchen light" with the room being one of yours, "Set the heating to 20", and "Unlock the front door": a card names the lock, its entity id and your server, Deny leaves it locked, Allow unlocks it. Activate a scene: a card too. After the question about the door, ask for the weather in the same conversation: a card. Then "Turn on the light" and see that the Tapo lamp still answers. On an Fn hold, "Is the front door locked?" should show `home.status` in History, not `knowledge.answer`. Change the address in Settings and see the token go. None of this has run on a real home.
 
 Move site claims from Soon to Now only after the matching check passes.
 
@@ -156,6 +170,64 @@ Move site claims from Soon to Now only after the matching check passes.
 - "When is my dentist appointment?" can go to the calendar instead, which is a fair reading of it. Saying "email" settles it.
 - In a multi-step task that both asks a question the app answers and does something else, the something else is summed up as "The other steps are done.", not in the model's words.
 
+**Media:**
+
+- No real player has been told anything and no real `wpctl` has been run, to read the volume or to change it. What `wpctl` takes and prints was read from its help and from the binary here (WirePlumber 0.5.13). How long a real player needs to show a change is a guess: Tux waits up to 1.5 s and then says what it sees.
+- "Open Spotify" and "Play Spotify" arrive as a bare play with no name, so they start whatever was left paused, such as a video in a browser. Media control can't open an app.
+- Other requests the model gets wrong: "Next" alone goes to the calendar, "Resume" alone gets "I can't resume anything", "Unpause" comes as unmute, "Half volume" comes as volume down, which is a step down unless the model put 50 beside it, and "Pause the music and turn the volume down" does one of the two. "Next song" and "Resume the music" are right.
+- Tux can't tell you the volume without changing it.
+- After "Mute", Tux's own voice is muted too, so the answer is only seen in the caption.
+- Only the default output is touched, and it is never set above 100 percent. Not a second output, not one app's own volume, and never the microphone.
+- "Down by 20" and "down to 20" reach the handler as the same thing. It takes whichever moves the volume less, so one of the two is always a little off.
+- "Stop the music" pauses, so it can be resumed.
+- With two players playing and nothing to say which started last, Tux asks which you mean. Only playerctld knows the order, and it isn't on a GNOME desktop by default. Its interface was read from its source and tried against a stand-in, never the real thing. Two windows of one app playing the same title count as one.
+- A player that doesn't speak MPRIS can't be seen: mpv without its plugin, or Firefox with media keys switched off. A phone's players that GSConnect mirrors onto the bus are players like any other.
+- A title with right-to-left marks or joined emoji is read out with its escapes in it.
+- Media replies, including player names in errors, are read by the app itself. They never enter the model context.
+- The two tools were measured with the real model on 2026-11-11 on an earlier list of 21: the same 171 of 177 requests routed right with and without them, and 29 and 31 of 33 plain facts were answered. The current 30-tool and 32-tool configurations have also been evaluated; see [TESTING.md](TESTING.md). A sorter check on 73 new requests, including "Who sings this?", returned no false facts.
+
+**Timers and reminders:**
+
+- None of it has run in the real daemon, by voice or on the real desktop. No real notification has been shown and the chime has never been heard. That GNOME lists the notification on the lock screen with a count and no text, lights the display and plays no sound there is from reading Shell 50.1's code, not from seeing it.
+- Routing and plain facts have been measured with all three timer tools; see [TESTING.md](TESTING.md). The sorter check included "How long is left on the pasta?" and returned no false facts among the 73 new requests tested. Unsupported scheduling and cancellation requests can still choose a tool; the tool list is not an intent guarantee.
+- The computer has to be on and you logged in. A timer can't wake a suspended laptop, and nothing is said while logged out. What came due meanwhile is said late: a timer up to an hour after, a reminder up to a day after. Older ones only get a quiet notification.
+- On a locked screen there is a notification and no sound, and the words come if you unlock within an hour for a timer, or a day for a reminder. After that only the notification remains. GNOME locks after five idle minutes by default, so a ten-minute kitchen timer usually ends in silence unless "Chime for timers" is on.
+- A timer waits for a turn, a card or dictation to end before it is said, which can be minutes for a long dictation. The notification is on time.
+- It is said once. Nothing rings until dismissed, and there is no snooze. Anything that stops Tux speaking, such as the shortcut or locking the screen, cuts it short, and it still counts as said.
+- The words need the server. With the server off there is the notification and one error. A chime, if it is on, finishes even if fetching the words fails. Failed speech is recorded as missed, and is not retried every two seconds.
+- No repeating reminders, no changing one, and "in a month" isn't understood: days and weeks are.
+- A timer follows the system clock, so a clock that is corrected while one runs moves it. After a change of time zone a reminder keeps its moment, not its clock time.
+- "Wake me at 7" is 7 in the morning only if the model passes "7am" or says it is to wake you. Otherwise a bare "at 7" is the next time the clock shows 7, so said mid-morning it is 7 in the evening. The reply always names the time.
+- "Remind me to call the dentist tomorrow" may become a reminder at 9 in the morning or a calendar entry with a card, whichever tool the model picks.
+- With one timer set and nothing named, "stop" or "cancel" may reach `timer.cancel` and cancel it. It says which one it cancelled.
+- A reminder's label is said aloud to whoever is in the room, and shown in a notification.
+- Listing or cancelling marks the conversation as having read something private, so weather, news or a web search later in the same conversation asks for a click. Each Fn hold is a new conversation.
+- At most 50 pending. `timers.json` is plain text, readable only by you, and clearing the history doesn't clear it.
+- Two unnamed timers of the same length can't be told apart by voice: "cancel the 10 minute timer" lists both and cancels neither, and "all" cancels both.
+- Do Not Disturb hides the banner. Tux still speaks.
+- Nothing lists timers on screen: the panel menu and Settings don't show them, and there is no D-Bus call for it yet.
+- A daemon that crashes or is stopped mid-sentence says the reminder again at its next start.
+
+**Home Assistant:**
+
+- It has never run against a real home or by voice, and which tool the model picks was never measured: not for a named light against the Tapo skill's "the light", and not what two more tools cost the other requests and the plain facts. `TUX_EVAL_HOME=1 python3 tools/eval_routing.py` has the cases. Nor has whether a hold turn sorts "Is the front door locked?" as a fact, which would send it to Wikipedia and not to the house.
+- With both this and Tapo lights set up, "turn on the light" should stay with the Tapo skill and a named light or a room come here. Nothing makes up for the model choosing the other one. Sent to the wrong tool, a named light is not found, with one exception: with a single Tapo bulb, the Tapo skill takes any name to mean that bulb, so "turn on the kitchen light" sent there switches it.
+- Areas come from Home Assistant's template engine, which only an administrator's token may use. With another user's token, things are found by name only. Floors and labels are not used.
+- A switch or a helper runs with no card, and Home Assistant lets them do anything: a switch can be the relay on a garage door, and a helper can trigger an automation that unlocks one. Only locks, covers, scenes and scripts are recognised as needing a click.
+- Opening any cover needs a click, a blind as much as a garage door, as device classes are too often missing to tell them apart. So does every scene, however harmless.
+- No fan speed, cover position or stop, media playback or volume, heating mode, or a range for a thermostat that holds one. A thermostat holding a range refuses a single temperature.
+- An alarm panel is read and never armed or disarmed. People, device trackers, cameras and anything else not listed are neither read nor changed.
+- A state that isn't a number or one lowercase word is not read out, which leaves out timestamps such as the next sunrise, and menus whose options are written as prose.
+- More than twelve things at once are read from one list a few seconds old, and from a fresh one after a change. A thing added in Home Assistant can take a minute to be found while another thing matches the same words.
+- Plain http is only used on a private address, and goes to the first one the name has, IPv4 first. A server that answers only on another of its addresses is not reached, and one on the internet needs https.
+- With https the certificate must be one this computer trusts. A self-signed one is refused, and there is no setting to accept it.
+- Replies over 16 MB for the list of everything, or 1 MB for anything else, are refused.
+- Names are matched in English: "light", "lamp", "door" and the other kind words are English.
+- Asking about the house marks the conversation as having read something private, so weather, news or a web search later in the same conversation asks for a click. Each Fn hold is a new conversation.
+- The address has to be saved before the token: a new address clears the token, and Settings says so.
+- Nothing checks the address and token when they are entered. A wrong one is only found when you ask for something.
+- The colour and brightness words are a copy of the Tapo skill's, in `tuxistant/colours.py`, so that this skill stands without it. A test fails if the two drift apart while both are here.
+
 **Web search:**
 
 - A page address can't reach your network or your servers, but it can reach this computer's own public address, which it could only use to send a blind request.
@@ -200,7 +272,7 @@ Move site claims from Soon to Now only after the matching check passes.
 - Nothing has run on x86-64 or on Fedora. The server kit is x86-64 only and the desktop has only run on aarch64.
 - Approval cards are click-only, with no keyboard path. During a popup menu or a polkit dialog a click may not reach the card, which then times out as a no.
 - Kokoro is English-only here. Ukrainian uses the lowest-quality Piper voice, as no better one exists in the gallery. Chinese Traditional has not been tried on the Mandarin voice.
-- The calendar can read and add, and nothing else: no changing, moving or deleting an event, no invitations, no locations and no alerts. "Remind me to call the dentist tomorrow" becomes an all-day calendar entry, with a card, not an alert.
+- The calendar can read and add, and nothing else: no changing, moving or deleting an event, no invitations, no locations and no alerts. "Remind me to call the dentist tomorrow" may become an all-day calendar entry with a card, or a spoken reminder at 9am; see the timer limits above.
 - The model sometimes leaves out how long an event lasts, so the card offers an hour. The card shows the times before anything is saved.
 - Microsoft calendars need the `evolution-ews` package, which adds them to Evolution Data Server. That route is untested, as is any CalDAV server other than Google's.
 - A time with no am or pm from 1 to 6 is taken as the afternoon. "At 7" is the morning.

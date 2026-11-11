@@ -1,6 +1,7 @@
 """The D-Bus face of the daemon. See "D-Bus" in docs/CONTRACT.md."""
 import asyncio
 import json
+import logging
 import os
 import signal as signals
 import sys
@@ -11,13 +12,16 @@ from dbus_fast import DBusError, Message, MessageType, NameFlag, RequestNameRepl
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import ServiceInterface, method, signal
 
-from . import BUS_NAME, BUS_PATH, calendars, phone, themes, voices
+from . import BUS_NAME, BUS_PATH, calendars, phone, themes, timers, voices
 from .audio import Mic, Speaker
 from .config import DATA_DIR, Config
 from .controller import Controller
 from .fnclient import FnClient
 from .history import History
 from .skillhost import SkillHost
+
+log = logging.getLogger(__name__)
+LOCK_QUERY_S = 5
 
 LEVEL_INTERVAL_S = 1 / 30
 LIST_THEMES_TIMEOUT_S = 25      # themes.TRIAL_BUDGET_S plus one trial
@@ -41,6 +45,7 @@ SHIELD_XML = f"""<node><interface name="{SHIELD_INTERFACE}">
 <method name="GetActive"><arg type="b" direction="out"/></method>
 <signal name="ActiveChanged"><arg type="b"/></signal>
 </interface></node>"""
+START_GRACE_S = 15      # at login the sound server and the shell are still coming up
 
 
 class Daemon(ServiceInterface):
@@ -337,9 +342,33 @@ async def watch_lock(bus, controller):
         SHIELD_INTERFACE)
     shield.on_active_changed(controller.set_locked)
     try:
-        await controller.set_locked(await shield.call_get_active())
-    except DBusError:
-        pass
+        async with asyncio.timeout(LOCK_QUERY_S):
+            await controller.set_locked(await shield.call_get_active())
+    except DBusError as error:
+        absent = error.type in ("org.freedesktop.DBus.Error.ServiceUnknown",
+                                "org.freedesktop.DBus.Error.NameHasNoOwner")
+        await controller.set_locked(not absent)
+        if not absent:
+            log.warning("Cannot read the screen lock; keeping speech locked", exc_info=True)
+    except Exception:
+        await controller.set_locked(True)
+        log.warning("Cannot read the screen lock; keeping speech locked", exc_info=True)
+
+
+async def tick(store, crier, lock_known) -> None:
+    """Runs the timers. Not before it is known whether the screen is locked: a daemon that
+    starts on a locked screen with a reminder overdue would otherwise say it aloud. And what
+    came due while the daemon was away waits a little longer, so that at login there is
+    something to play it and something to show its notification."""
+    await lock_known
+    if store.due(time.time()):
+        await asyncio.sleep(START_GRACE_S)
+    await timers.run(store, crier.announce, note=crier.note)
+
+
+def _timers_stopped(task):
+    if not task.cancelled() and (error := task.exception()) is not None:
+        log.error("The timer scheduler stopped", exc_info=(type(error), error, error.__traceback__))
 
 
 async def run(mic_factory=Mic, speaker_factory=Speaker) -> int:
@@ -363,19 +392,29 @@ async def _serve_until_stopped(daemon) -> int:
         bus.disconnect()
         return 1
     controller = daemon.controller
+    # After serve: a second daemon has returned by now, and never touches the first one's file.
+    store = timers.Store(DATA_DIR / "timers.json")
+    timers.attach(store)
+    crier = timers.Announcer(
+        say=controller.say_when_free, sound=controller.sound,
+        notify=lambda item: timers.notify(bus, item),
+        locked=lambda: controller.locked, chimes=lambda: config["timer_chime"])
     fn = asyncio.create_task(FnClient(
         daemon.config, controller.hold_start, controller.hold_end,
         on_dictate_start=controller.dictate_start, on_dictate_end=controller.dictate_end,
         on_dictate_cancel=controller.cancel).run())
     lock = asyncio.create_task(watch_lock(bus, controller))
+    ticking = asyncio.create_task(tick(store, crier, lock))
+    ticking.add_done_callback(_timers_stopped)
     stop = asyncio.Event()
     for number in (signals.SIGINT, signals.SIGTERM):
         asyncio.get_running_loop().add_signal_handler(number, stop.set)
     waits = {asyncio.create_task(stop.wait()), asyncio.create_task(bus.wait_for_disconnect())}
     await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
-    for task in (fn, lock, *waits):
+    for task in (ticking, fn, lock, *waits):
         task.cancel()
     await controller.cancel()
-    await asyncio.gather(fn, lock, *waits, return_exceptions=True)
+    await asyncio.gather(ticking, fn, lock, *waits, return_exceptions=True)
+    timers.attach(None)
     bus.disconnect()
     return 0

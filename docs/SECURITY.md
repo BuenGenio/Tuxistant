@@ -178,6 +178,26 @@ A skill answered with 900,000 characters, starting with a text-direction overrid
 
 When a skill's new `skill.yaml` was broken, Tux said the last version that worked was still in use. It kept the old manifest, but the sandbox showed the live folder, so the next restart ran the new, unchecked code. Skills now run from a copy made when they were checked.
 
+## Media, reminders and Home Assistant wiring
+
+Browser media metadata can contain instructions written by a page. The media handlers now queue their replies for the app to speak and return only `APP_SAYS` to the model. This covers player names in errors as well as track titles and successful controls.
+
+Home Assistant change results and failed matches can reveal device names and states, even when no change happens. Both handlers mark the conversation private after reading the device list, before returning or raising an error. Listing or cancelling reminders also marks stored times private, including reminders with no label.
+
+The plain HTTP address check rejects IPv6 6to4 and Teredo addresses: Python can classify these as private even when they encode a public IPv4 destination. The token must not travel to those destinations in plaintext.
+
+The timer scheduler waits for the startup lock check to finish. A five-second timeout previously let an overdue reminder speak before a slow screen shield had answered. Tests use a delayed stand-in shield and fake audio.
+
+Each of these five guards has a regression test checked against a deliberately broken copy: the unbroken test passed first, then removing its guard made it fail. No real player, home device, notification or audio was used.
+
+The follow-up review also found that an "alarm" request could match an alarm siren switch. Generic alarm control now refuses before matching devices. Device names lose angle brackets as well as escaping control characters, so they cannot carry chat-template delimiters.
+
+The opt-in live protocol test now permits only the clock, and evaluation scripts refuse to send a key to an implicit localhost default. Media cut-off tests pin the stand-ins themselves, not just the assignment names. These guards and the Home Assistant-only tool list were also checked by removing each fix in a throwaway copy; all six tests caught their mutation after first passing unbroken.
+
+Cloud tasks now ask before forwarding Home Assistant or stored timer results, including errors that reveal names. Tests exercise all four actions against a fake cloud SDK and verify that declining sends only a withheld notice.
+
+The lifecycle review found that a fast speech-server failure could discard the timer chime and mark unsaid words as done. The chime now drains on a speech failure, and the record says missed. Corrupt timer files with huge integers or deeply nested JSON are recovered without preventing startup. Failed lock queries keep speech locked and scheduler failures are logged. Five deliberate breaks of these fixes were caught; the deep-JSON fixture was increased until it exercised Python's recursion failure rather than merely parsing a nested list.
+
 ## When the checks themselves failed
 
 ### The test result that proved nothing

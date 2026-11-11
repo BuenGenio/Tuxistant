@@ -1,0 +1,23 @@
+id: org.tuxistant.timers
+name: Timers and reminders
+description: Sets timers and reminders, and says them out loud when they are due
+version: 1.0.0
+permissions: {}
+actions:
+  timer.set:
+    description: Set a timer, or a reminder that Tux says out loud when it is due. Use it for durations, wake me, or spoken reminders. If the user asks to put a reminder in their calendar, use calendar_add instead. This only speaks a reminder; it cannot schedule device actions such as turning lights off later
+    params:
+      duration: { type: string, description: "For a timer or remind me in: how long, as the user said it, like 10 minutes, 90 seconds or an hour and a half" }
+      time: { type: string, description: "For remind me at or wake me at: the clock time as the user said it, like 5pm or 7am" }
+      day: { type: string, description: "Only if the user named a day, like tomorrow, tomorrow morning or Friday" }
+      label: { type: string, description: "A timer's name, like pasta. Only if the user gave one" }
+      about: { type: string, description: "What to remind the user of, like call mum or wake up" }
+  timer.list:
+    description: Say which timers and reminders are set and how long is left on them. Use it for what timers are running, how long is left, or what reminders do I have
+    params:
+      label: { type: string, description: "Only if the user named one, like pasta, timers or reminders" }
+  timer.cancel:
+    description: Cancel or stop a spoken timer or reminder set by Tux. Cannot cancel calendar meetings or events
+    params:
+      label: { type: string, description: "Which one, like pasta or the 10 minute timer. Leave it out if the user named none" }
+      all: { type: boolean, description: "true only if the user said all of them" }

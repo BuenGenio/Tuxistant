@@ -341,10 +341,12 @@ class RealBranch(Prefix):
         self.assertNotIn("Traceback", done.stderr)
         self.assertNotIn(FAKE_KEY, done.stdout + done.stderr)
 
-    def test_user_install_only_reloads_the_user_manager(self):
+    def test_user_install_only_reloads_the_user_manager_and_starts_the_daemon_at_login(self):
+        """With no Fn helper too: a reminder set yesterday needs a daemon running today."""
         self.real("install.sh", "--no-fn-helper", SSH_REPLY=FAKE_KEY)
         self.assertEqual([c for c in self.calls() if not c.startswith("ssh ")],
-                         ["systemctl --user daemon-reload"])
+                         ["systemctl --user daemon-reload",
+                          "systemctl --user enable tuxistant.service"])
 
     def test_fn_helper_enables_and_restarts_through_sudo(self):
         self.real("install.sh", "--fn-helper", SSH_REPLY=FAKE_KEY)
@@ -353,7 +355,7 @@ class RealBranch(Prefix):
         self.assertLess(calls.index("sudo systemctl enable tuxistant-fn.service"),
                         calls.index("sudo systemctl restart tuxistant-fn.service"))
         self.assertIn("sudo systemctl daemon-reload", calls)
-        self.assertIn("systemctl --user enable tuxistant.service", calls)
+        self.assertEqual(calls.count("systemctl --user enable tuxistant.service"), 1)
         self.assertTrue(any(c.startswith("sudo install") and "tuxistant-fn" in c for c in calls))
 
     def test_never_runs_gnome_extensions_or_a_login_step(self):
@@ -509,7 +511,8 @@ class RealTree(Prefix):
         self.assertIn(f"'{ROOT}'", self.wrapper.read_text())
         ran = subprocess.run([str(self.wrapper), "--help"], capture_output=True, text=True,
                              timeout=30, cwd=self.tmp,  # the real HOME finds pip --user modules
-                             env={"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"]})
+                             env={"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"],
+                                  "PYTHONUSERBASE": site.getuserbase()})
         self.assertEqual(ran.returncode, 0, ran.stderr)
         self.assertIn("daemon", ran.stdout)  # the subcommand tuxistant.service runs
 

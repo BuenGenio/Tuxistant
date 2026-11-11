@@ -16,7 +16,7 @@ gi.require_version("Adw", "1")
 gi.require_version("Gtk", "4.0")
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
-from . import BUS_NAME, BUS_PATH, themes  # noqa: E402
+from . import BUS_NAME, BUS_PATH, homeassistant, themes  # noqa: E402
 from .config import DEFAULTS, clean_server  # noqa: E402
 from .gate import MAX_TITLE_CHARS, printable  # noqa: E402
 from .livedata import DEFAULT_SOURCE, SOURCES  # noqa: E402
@@ -48,14 +48,20 @@ PERMISSION_WORDS = {
     "calendar_read": "read your calendars",
     "mail_read": "read your mail",
     "calendar_write": "add events to a calendar",
+    "home_control": "control devices through Home Assistant",
+    "home_read": "read the state of your home",
 }
 HOME_SERVER = "home"        # a network permission naming the server this install talks to
 SHELL_ACTION = "shell.run"
 KEY_SET = {"api_key": "api_key_set", "cloud_api_key": "cloud_key_set",   # never come back
-           "tapo_password": "tapo_password_set"}
-KEY_WORDS = {"tapo_password": ("Password is set", "No password set")}
+           "tapo_password": "tapo_password_set", "ha_token": "ha_token_set"}
+KEY_WORDS = {"tapo_password": ("Password is set", "No password set"),
+             "ha_token": ("Token is set", "No token set")}
 LIGHTS_NOTE = ("The TP-Link account your Tapo lights are set up with. The password never "
                "leaves this computer")
+HOME_NOTE = ("Make a long-lived access token on your profile page in Home Assistant, under "
+             "Security. Enter the address first: a new address needs its own token. Plain "
+             "http is only used on your own network")
 MAIL_NOTE = ("Answers come from the mail Thunderbird keeps on this computer. What a mail says "
              "goes to your own server to be read, and nowhere else")
 AUTOMATIC = "Automatic"
@@ -522,6 +528,7 @@ class GeneralPage(Adw.PreferencesPage):
         self.saved_search = ""
         self.saved_model = ""
         self.saved_tapo_email = ""
+        self.saved_home = ""
         self.devices = None  # what ListPhones last said: None until it has answered
         self.calendars = None   # the same for ListCalendars
         self.calendar_labels, self.calendar_values = [], []
@@ -537,9 +544,11 @@ class GeneralPage(Adw.PreferencesPage):
         self.add(self._news_group())
         self.add(self._calendar_group())
         self.add(self._mail_group())
+        self.add(self._timers_group())
         self.add(self._phone_group())
         self.add(self._translation_and_search_group())
         self.add(self._lights_group())
+        self.add(self._home_group())
         self.add(self._cloud_group())
         self.add(self._shortcuts_group())
         self.add(self._instructions_group())
@@ -623,6 +632,14 @@ class GeneralPage(Adw.PreferencesPage):
                                "Junk and Trash are never read, and sign-in codes are hidden"))
         return group
 
+    def _timers_group(self):
+        group = Adw.PreferencesGroup(title="Timers and reminders")
+        group.add(self._switch("timer_chime", "Chime for timers",
+                               "A short sound before the words when a timer or reminder comes "
+                               "due. On a locked screen it is the only sound: the words wait "
+                               "until you unlock"))
+        return group
+
     def _phone_group(self):
         group = Adw.PreferencesGroup(title="Phone")
         self.phone = Adw.ComboRow(title="Default device", use_markup=False)
@@ -656,6 +673,17 @@ class GeneralPage(Adw.PreferencesPage):
         self.tapo_password, self.tapo_password_status, self.tapo_password_remove = self._key_row(
             "TP-Link password", "tapo_password")
         group.add(self.tapo_password)
+        return group
+
+    def _home_group(self):
+        group = Adw.PreferencesGroup(title="Home Assistant", description=HOME_NOTE)
+        self.home = Adw.EntryRow(title="Address", show_apply_button=True)
+        self.home.connect("apply", self.on_home_apply)
+        self.home.connect("changed", lambda row: row.remove_css_class("error"))
+        group.add(self.home)
+        self.home_token, self.home_token_status, self.home_token_remove = self._key_row(
+            "Long-lived access token", "ha_token")
+        group.add(self.home_token)
         return group
 
     def _cloud_group(self):
@@ -766,6 +794,10 @@ class GeneralPage(Adw.PreferencesPage):
         if self.tapo_email.get_text() == self.saved_tapo_email:
             self.set_row_text(self.tapo_email, email)
         self.saved_tapo_email = email
+        home = config.get("ha_server", "")
+        if self.home.get_text() == self.saved_home:
+            self.set_row_text(self.home, home)
+        self.saved_home = home
         search = config.get("search_server", "")
         if self.search.get_text() == self.saved_search:
             self.set_row_text(self.search, search)
@@ -807,7 +839,8 @@ class GeneralPage(Adw.PreferencesPage):
         for status, remove, name in (
                 (self.key_status, self.key_remove, "api_key"),
                 (self.cloud_key_status, self.cloud_key_remove, "cloud_api_key"),
-                (self.tapo_password_status, self.tapo_password_remove, "tapo_password")):
+                (self.tapo_password_status, self.tapo_password_remove, "tapo_password"),
+                (self.home_token_status, self.home_token_remove, "ha_token")):
             is_set = self.win.config.get(KEY_SET[name], False)
             words = KEY_WORDS.get(name, ("Key is set", "No key set"))
             status.set_label(words[0] if is_set else words[1])
@@ -889,6 +922,22 @@ class GeneralPage(Adw.PreferencesPage):
         self.set_row_text(row, email)
         self.saved_tapo_email = email
         self.win.save("tapo_email", email)
+
+    def on_home_apply(self, row):
+        text = row.get_text().strip()
+        server = homeassistant.clean_server(text) if text else ""
+        if server is None:
+            row.add_css_class("error")
+            self.win.toast("Enter an address like homeassistant.local:8123")
+            return
+        self.set_row_text(row, server)
+        if server != self.saved_home and self.win.config.get("ha_token_set"):
+            # The daemon drops the token with the address it was given for. Show that now.
+            self.win.toast("A new address needs its own token: enter it below")
+            self.win.config["ha_token_set"] = False
+            self.show_keys()
+        self.saved_home = server
+        self.win.save("ha_server", server)
 
     def on_search_apply(self, row):
         text = row.get_text().strip()
