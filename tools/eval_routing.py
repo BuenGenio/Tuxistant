@@ -20,11 +20,12 @@ import websockets
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tuxistant.config import Config, DEFAULTS
-from tuxistant.skills import Skills
+from tuxistant.skillhost import offline
 
 cfg = Config()
 KEY = cfg["api_key"]
-skills = Skills(config={**DEFAULTS, "mail_search": True})   # every tool, including the one that's off
+# The tools the daemon offers, code skills too, and mail search, which is off until turned on.
+skills = offline({**DEFAULTS, "mail_search": True}).current()
 REPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 ONLY = sys.argv[2] if len(sys.argv) > 2 else ""
 

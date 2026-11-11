@@ -16,7 +16,6 @@ Built-in skills, in `tuxistant/skills_builtin/`:
 | Trash | `file.trash` | `files_write` | high |
 | Phone | `phone.ring`, `phone.battery` | none | low |
 | Phone send | `phone.send` | `files_read` | medium |
-| Lights | `lights.set`, `lights.status` | none | low |
 | Calendar | `calendar.events` | `calendar_read` | medium |
 | Add to calendar | `calendar.add` | `calendar_write` | medium |
 | Mail | `mail.search` | `mail_read` | medium |
@@ -35,15 +34,21 @@ Mail answers a question from the search index Thunderbird keeps on this computer
 
 News declares every source Settings offers, and reads only the one you chose. The list is fixed in `tuxistant/livedata.py`, so a news request can't be pointed at a host that isn't written there, and a redirect to another host is refused. When a card has to ask before the news is fetched, it names the one host that will be reached.
 
-Lights controls Tapo bulbs such as the L530 on your own network, so it needs no card, the same as ringing your phone. It finds them with a broadcast, then remembers them in `lights.json` beside the config and asks them directly too, since a bulb saving power misses some broadcasts. It uses the TP-Link email and password from Settings. The password never leaves this computer: KLAP only sends proofs that it is known, and the bulb has to prove it knows it first. Only typed values reach a bulb (on or off, a number, a colour from a fixed list), so it can't carry anything private out. A bulb's name is whatever anyone typed into the Tapo app, so it is cut short and its control characters shown as escapes before the model sees it. Settings lists each skill with its permissions and risk:
+Code skills that come with Tuxistant, in `tuxistant/skills_code/`:
+
+| Skill | Actions | Permissions | Risk |
+|---|---|---|---|
+| Lights | `lights.set`, `lights.status` | `network` | medium |
+
+Lights controls Tapo bulbs such as the L530 on your own network. It is a code skill, so it runs in the sandbox below with the network and nothing else. It needs no card, the same as ringing your phone, unless the conversation has already read something private: then the rule under "What needs a click" applies, as it has the network. It finds the bulbs with a broadcast, then remembers them in `lights.json` in its own sandbox folder and asks them directly too, since a bulb saving power misses some broadcasts. It uses the TP-Link email and password from Settings. The password never leaves this computer: KLAP only sends proofs that it is known, and the bulb has to prove it knows it first. Only typed values reach a bulb (on or off, a number, a colour from a fixed list), so it can't carry anything private out. A bulb's name is whatever anyone typed into the Tapo app, so it is cut short and its control characters shown as escapes before the model sees it. Settings lists each skill with its permissions and risk:
 
 <img src="images/settings-skills.png" width="640" alt="The Skills page in Settings: each skill with what it can do, what it is allowed to do and its risk.">
 
-Every action needs a Python handler registered in `HANDLERS` in `tuxistant/skills.py`. A manifest alone is not enough: an action without a handler returns an error for the model to report. That means skills can currently only be added by changing Tuxistant itself. There is no folder for user skills yet.
+A built-in skill is a YAML manifest whose actions have Python handlers in `HANDLERS` in `tuxistant/skills.py`. A code skill brings its own program and runs in a sandbox, like Lights. You can add your own code skills in `~/.local/share/tuxistant/skills/`, and they load while Tux is running. See "Code skills" below.
 
 ## Manifest format
 
-A skill is one YAML file. This is the shape of a skill that needs the network:
+A built-in skill is one YAML file. This is the shape of a skill that needs the network:
 
 ```yaml
 id: org.example.tides
@@ -96,7 +101,7 @@ A handler takes the arguments, the config and the session, and returns a dict th
 
 Set a permission to `true` to ask for it. Names not in this table have no effect on risk.
 
-The permissions set the risk, show up in Settings and drive the rule below. They don't yet confine a handler, because the only handlers are the built-in ones. Confinement comes with the skill types below.
+The permissions set the risk, show up in Settings and drive the rule below. They don't confine a built-in handler, which runs inside the daemon. A code skill is confined: it gets the network only if it asks for it, and it may ask for nothing else.
 
 ## What needs a click
 
@@ -161,11 +166,84 @@ It uses the model on your own server unless you turn on Cloud in Settings, which
 
 The risk is never read from the manifest. A `risk:` line is overwritten when the skill loads, so an author cannot label a dangerous skill as safe.
 
+## Code skills
+
+A code skill is a folder with a `skill.yaml` and a program. Tux runs the program as its own process in a sandbox and talks to it over MCP, one JSON message per line on stdin and stdout. Your own go in `~/.local/share/tuxistant/skills/`, one folder each:
+
+```text
+~/.local/share/tuxistant/skills/moon/
+  skill.yaml
+  main.py
+```
+
+```yaml
+id: org.example.moon
+name: Moon
+description: Tells you the phase of the moon
+version: 1.0.0
+run: [python3, main.py]
+permissions: { network: true }
+timeout_s: 15
+actions:
+  moon.phase:
+    description: Say what phase the moon is in tonight
+    params:
+      place: { type: string, description: "City name" }
+```
+
+The fields are the ones above, plus these:
+
+| Field | Meaning |
+|---|---|
+| `run` | The command, as a list. It starts with `python3`, `node` or a file in the folder. Paths with `..` or starting with `/` are refused |
+| `permissions` | Only `network`, set to `true`. A list of hosts counts as the whole network, as the sandbox can't tell hosts apart |
+| `config` | Settings the skill is given. Only `tapo_email` and `tapo_password` exist, and only the Lights that come with Tuxistant may have them. A skill you add that lists one is refused. Never an API key |
+| `timeout_s` | Seconds a call may take, from 1 to 60. 15 if left out |
+
+`main.py` uses `skillkit`, which the sandbox provides:
+
+```python
+from skillkit import Skill
+
+skill = Skill("org.example.moon")
+
+
+@skill.action("moon.phase")
+def phase(args: dict, config: dict) -> dict:
+    if not args.get("place"):
+        raise ValueError("Say which city.")     # Tux says this out loud
+    return {"phase": "full"}
+
+
+skill.run()
+```
+
+A handler returns a dict. If it raises, its message is spoken, so write a plain sentence. Print to stderr if you need to: stdout carries the protocol.
+
+**What it can't do.** A skill you add can't ask for `shell`, `files_read`, `files_write` or `clipboard`. It can't use an id starting `org.tuxistant.`, or an action name another skill already has, so it can't stand in for a built-in action. Each of these refuses the skill with a reason, and the others still load.
+
+Each action's description, and every text in its `params`, is at most 200 characters with nothing hidden in it, such as control or direction-changing characters. The model reads them all on every turn.
+
+**The sandbox.** Bubblewrap, with shellgate's seccomp filter and memory limit. The skill sees `/usr`, a few files from `/etc`, a checked copy of its folder read-only at `/skill`, a folder of its own at `/state` for anything it keeps, and `/tmp`. It sees no home folder, no session bus, no display and no runtime folder, and it has no network unless it asked. Each call still goes through `Skills.execute`, so once a conversation has read something private, a skill with the network needs a click.
+
+**What the network permission reaches.** The skill shares this computer's network, so it can reach the internet and your local network, where Lights finds its bulbs. The card says so: "reach the internet and your local network". Services meant only for this computer listen there too, such as adb on 127.0.0.1 (which reaches your phone), CUPS and the display's sockets. Landlock keeps the skill away from them: it can't connect to an abstract socket from outside its sandbox, it can open TCP connections only to ports 53, 80 and 443, and it can't listen for TCP. This needs Linux 6.12 or newer; on an older kernel a skill with the network doesn't start. What still gets through: UDP to any port, and TCP to ports 53, 80 and 443, reach this computer's own services too, not only other computers.
+
+**What it answers.** A result goes to the model and the history, so it is cleaned on the way: hidden characters show as escapes, an `error` is cut to 300 characters, and an answer longer than 3,900 characters, or nested more than 8 deep, becomes an error.
+
+**What it was allowed stays what it is allowed.** The first version of a skill you add gets the permissions it asks for, and Tux keeps a note of them in `~/.local/share/tuxistant/skill-grants.json`. A later version that asks for more, such as the network, is not used: the last version that worked carries on, or the skill stays off, and the problem says why. To allow it, take the skill's folder out of the skills folder, wait for Tux to notice, and put the new one back. What the skill saved in `/state` is then cleared, so data an older version kept can't leave through a permission it never had. Skills that come with Tuxistant change with Tuxistant, so this doesn't apply to them.
+
+**Not limited yet.** A skill can start as many processes as your account may, and use a whole CPU core while it runs. Its process stops 5 minutes after its last call, or 15 for the skills that come with Tuxistant.
+
+**Live reload.** Tux watches the skill folders. Add, change or remove a skill and the next request uses the new version, with no restart. A changed file restarts only that skill's process: calls already running finish first, and a request that started before the change is told to ask again. If the new version is broken, the last one that worked stays in use. That version runs from a copy Tux made when it was checked, in `~/.local/share/tuxistant/skill-code/`, so a restart after an idle stop or a crash runs the checked code, not what is in the folder now. Editor swap files, byte code and hidden folders such as `.git` are not part of a skill's code: changing them restarts nothing, and they aren't copied. `tuxistant skills reload` loads them again now and prints any problems, and `tuxistant doctor` lists them too.
+
+**What still needs a restart.** Built-in skills are Python inside the daemon. Their YAML reloads live, but a change to their code, or a new built-in action, needs `systemctl --user restart tuxistant`. A change to `skillkit.py` reaches a skill the next time its process starts. Only a skill's top folder is watched, so a change deeper down, such as `lib/x.py`, is picked up at the next change to its top folder or a `tuxistant skills reload`.
+
 ## Planned
 
 None of this exists yet.
 
 - **Recipe skills.** Declarative steps with no code of their own. These are the ones meant to be shared, because what they do can be read from the manifest.
-- **Code skills.** Skills with their own code, run in a sandbox and kept local to the machine. They are not for sharing.
-- **Enforcement.** The daemon confining each skill to its declared permissions at run time.
-- **A folder for user skills**, once the sandbox is there to hold them.
+- **Network by host.** A code skill that names hosts gets the whole network today. Holding it to those hosts needs a proxy in front of the sandbox.
+- **Process and CPU limits.** A cgroup for each skill, with a limit on its tasks and its CPU time.
+- **Approving on a card.** A skill that asks for more than it had should show a card, rather than need taking out and putting back.
+- **Sharing.** Code skills stay local to the machine. They are not for sharing.

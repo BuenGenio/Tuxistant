@@ -8,7 +8,8 @@ TP-Link account, and the bulb proves it first: a device that only pretends to be
 nothing about the password. After that each request is AES-encrypted with keys from the handshake.
 
 Only typed values reach a light: on or off, a number, a colour from a fixed list. So the skill
-can't carry anything private off this computer, and needs no network permission.
+can't carry anything private off this computer. It runs as its own sandboxed process with only
+the network, which is why it imports nothing from tuxistant: the folder is all it gets.
 """
 import base64
 import colorsys
@@ -21,8 +22,9 @@ import secrets
 import socket
 import threading
 import time
+import unicodedata
+from pathlib import Path
 
-from .gate import shown
 
 try:
     from cryptography.hazmat.primitives import padding
@@ -35,7 +37,8 @@ DISCOVERY_QUERY = bytes.fromhex("020000010000000000000000463cb5d3")
 DISCOVERY_S = 1.5
 DISCOVERY_SENDS = 3         # spread over the wait: UDP gets lost, and a dozing bulb misses some
 BROADCAST = "255.255.255.255"
-REMEMBERED = "lights.json"  # beside the config, so a restart doesn't depend on a broadcast
+REMEMBERED = "lights.json"  # so a restart doesn't depend on a broadcast
+STATE_DIR: Path | None = None   # where to keep it: the sandbox's /state, set by main.py
 FOUND_FOR_S = 600           # after this, broadcast again in case a light moved or was added
 TIMEOUT_S = 4
 SESSION_MARGIN_S = 1200     # the bulb's clock drifts, so a session is dropped well before it ends
@@ -69,6 +72,29 @@ ON = {"on", "true", "yes", "1", "turn on", "switch on"}
 OFF = {"off", "false", "no", "0", "turn off", "switch off"}
 ALL = {"", "light", "lights", "the light", "the lights", "all", "all lights", "all the lights",
        "every light", "lamp", "bulb", "my light", "my lights", "none", "null", "default"}
+
+
+def shown(text, limit: int) -> str:
+    """Text from a bulb or the model, made safe to speak or show. Control and bidirectional
+    characters could fake or reorder words, so they show as escapes, and a cut is marked.
+    The same rule as tuxistant.gate.shown, kept here because the sandbox has only this folder."""
+    out = []
+    for char in str(text).replace("\n", "\\n").replace("\t", "\\t"):
+        if unicodedata.category(char) in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"):
+            out.append(f"\\u{ord(char):04x}")
+        else:
+            out.append(char)
+    text = "".join(out)
+    return text if len(text) <= limit else f"{text[:limit]}… ({len(text) - limit} more characters)"
+
+
+def _setting(config, key: str) -> str:
+    """A config value from the daemon's Config or the dict a skill process is sent."""
+    try:
+        value = config[key]
+    except (KeyError, TypeError):
+        return ""
+    return value if isinstance(value, str) else ""
 
 
 def _sha256(data: bytes) -> bytes:
@@ -218,9 +244,9 @@ def discover(wait: float = DISCOVERY_S, targets=(BROADCAST,)) -> dict[str, dict]
     return found
 
 
-def _remembered_path(config):
-    path = getattr(config, "path", None)    # tests pass a plain dict, so they never write here
-    return path.parent / REMEMBERED if path else None
+def _remembered_path(_config):
+    """The sandbox's own folder, which main.py sets. Tests leave it unset, so they never write."""
+    return STATE_DIR / REMEMBERED if STATE_DIR else None
 
 
 def _bulb_ok(host, bulb) -> bool:
@@ -294,7 +320,7 @@ def _session(bulb: dict, auth: bytes) -> Klap:
 def _login(config) -> bytes:
     if Cipher is None:
         raise ValueError(NO_CRYPTO)
-    email, password = config["tapo_email"].strip(), config["tapo_password"]
+    email, password = _setting(config, "tapo_email").strip(), _setting(config, "tapo_password")
     if not email or not password:
         raise ValueError(NO_LOGIN)
     return auth_hash(email, password)

@@ -25,7 +25,8 @@ Steps 1 to 3 of the plan below are built, and most of step 4. Steps 2 to 4 have 
 | Website | On GitHub Pages. See [website/README.md](../website/README.md) |
 | Demo video | A 64 second draft from `tools/demo_video.py`: the real extension in an isolated shell, with scripted requests and synthesised voices, and it says so on screen. The owner accepted it on 2026-11-10. Not published anywhere yet |
 | Server kit | In `server/`, copied from the owner's working server with its host name and user id made general. That general copy has not yet set up a second machine |
-| Local skill install, code skill sandbox, community registry | Not started |
+| Local code skills and their sandbox | Built and tested: your own skills load, change and go while the daemon runs, each in bubblewrap. Lights now runs this way. Not yet tried on the real desktop |
+| Recipe skills, community registry | Not started |
 
 The code is public under GPL-3.0.
 
@@ -38,7 +39,7 @@ The owner approved this order.
 3. **Done, pending real-desktop checks: dictation.** Tap Fn, then hold and speak, and the words are typed where the cursor is. No model is involved, so it needs no card. See "Dictation" in [CONTRACT.md](CONTRACT.md).
 4. **Under way: more built-in skills.** Calendar is built. General web search, research, facts answered from Wikipedia, and mail search for Thunderbird are done, pending real-desktop checks. Still to come: journal, and mail for people who don't use Thunderbird, through GNOME's Online Accounts.
 5. **Local install of your own skills.** Recipe skills: YAML only, using built-in daemon actions (D-Bus, HTTP, open app), with no code of their own. They load from a user folder. Non-built-in skills must be refused `shell`.
-6. **Code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared. Local only at first, with a clear warning.
+6. **Built, pending real-desktop checks: code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared, and loads, changes and unloads while the daemon runs. See "Code skills" in [SKILLS.md](SKILLS.md). Local only. The only warning so far is a line on the card, "It is a skill you added.", shown when the taint rule asks.
 7. **Community registry.** A reviewed Git repo first, like Flathub: skills arrive as pull requests, and a static index is built from them onto the same GitHub Pages site. Signing means the host doesn't have to be trusted, so no server is needed. Logins, ratings or uploads would need one, as a small API beside the site rather than instead of it.
 
 ### Rules for shared skills
@@ -104,6 +105,8 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 14. **Passed 2026-11-10:** lights, with the TP-Link account in Settings: "Is the light on?", then "Turn off the light" and "Make it warm white".
 15. Calendar: "What's on my calendar tomorrow?" by voice, then "Add a test event on Friday at 3pm", allow the card, and see it appear in GNOME Calendar and on the account. Pick a calendar in Settings first. Adding has only ever written to a private test calendar.
 16. Mail search, with Thunderbird set up: turn on "Search my mail" in Settings and ask about a mail you remember, such as when something was booked or what someone said. It should answer within a few seconds and say who it was from and when. Ask for a sign-in code, which it should refuse. Ask about a mail you know holds a code, such as what a sign-in mail from your bank said, and the code should come out as "hidden". After an answer from mail, ask for a web search in the same conversation, which should show a card. `tuxistant doctor` says whether it found any mail.
+17. Lights again, now that they run sandboxed: the same three requests. This checks that the broadcast, the direct asks and `lights.json` all work from inside bubblewrap, under Landlock.
+18. Copy a small skill into `~/.local/share/tuxistant/skills/`, ask for it, edit it, ask again, then delete it, all without a restart. `tuxistant doctor` should show `skill sandbox ready`.
 
 Move site claims from Soon to Now only after the matching check passes.
 

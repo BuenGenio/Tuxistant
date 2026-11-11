@@ -151,6 +151,35 @@ class Doctor(unittest.TestCase):
             cli.doctor()
         self.assertNotIn("hunter2", out.getvalue())
 
+    def test_the_skill_sandbox_is_checked(self):
+        from tuxistant import skillbox
+        for available in (True, False):
+            with self.subTest(available), mock.patch.object(skillbox, "available",
+                                                            return_value=available):
+                self.assertEqual(self.results(self.config(9))["skill sandbox ready"], available)
+
+    def test_skill_problems_are_listed(self):
+        config = self.config(9)
+        self.assertEqual(cli.skill_problems(config), {})
+        self.assertTrue(self.results(config)[cli.SKILLS_LOAD])
+        broken = self.folder / "data/tuxistant/skills/broken"
+        broken.mkdir(parents=True)
+        (broken / "skill.yaml").write_text("id: org.example.broken\nname: Broken\n"
+                                           "description: d\nrun: [python3, main.py]\n"
+                                           "permissions: { shell: true }\n"
+                                           "actions: { broken.go: { description: d } }\n")
+        problems = cli.skill_problems(config)
+        self.assertEqual(list(problems), [str(broken)])
+        self.assertIn("shell", problems[str(broken)])
+        self.assertFalse(self.results(config)[cli.SKILLS_LOAD])
+        out = io.StringIO()
+        failing = [(False, cli.SKILLS_LOAD, "1 with a problem")]
+        with mock.patch.object(cli, "checks", return_value=failing), \
+                mock.patch.object(cli, "Config", return_value=config), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(cli.doctor(), 1)
+        self.assertIn(f"{broken}: It asks for shell", out.getvalue())
+
 
 class Commands(unittest.TestCase):
     def test_say_joins_its_words(self):

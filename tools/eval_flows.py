@@ -5,11 +5,12 @@ and what Tux would say.
     python3 tools/eval_flows.py ["a request" ...]
 
 Every card is declined. That alone would not make this safe, as actions with no card really run:
-it once opened the user's CV on screen. So opening files, phone and light actions are cut off
-below, and any new action with no card that touches the desktop or a device must be cut off here
-too. What still runs: file search, reading system facts, sandboxed read-only commands, weather,
-news, translation on your own server, and web search and research, which reach real search engines
-and real pages. Mail search runs too, on a made-up mailbox: the real one is never opened.
+it once opened the user's CV on screen. So opening files and phone actions are cut off below, and
+any new action with no card that touches the desktop or a device must be cut off here too. Code
+skills, the lights among them, are offered but never started: each call gets an error back. What
+still runs: file search, reading system facts, sandboxed read-only commands, weather, news,
+translation on your own server, and web search and research, which reach real search engines and
+real pages. Mail search runs too, on a made-up mailbox: the real one is never opened.
 """
 import asyncio
 import json
@@ -23,10 +24,10 @@ import websockets
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tests.mail_index import PROVIDER, SAMPLE, build  # noqa: E402
-from tuxistant import calendars, files, lights, mail, phone  # noqa: E402
+from tuxistant import calendars, files, mail, phone  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.gate import APP_SAYS, Session  # noqa: E402
-from tuxistant.skills import Skills  # noqa: E402
+from tuxistant.skillhost import offline  # noqa: E402
 
 
 def blocked(*_args, **_kwargs):
@@ -35,8 +36,6 @@ def blocked(*_args, **_kwargs):
 
 files._launch = lambda path: print(f"   (would open {path.name})") or True
 phone._activate = blocked
-lights.discover = blocked    # no broadcast, so no light is ever reached
-lights.Klap._post = blocked
 
 
 class NoCalendars:
@@ -69,7 +68,7 @@ mail.FREEMAIL |= {PROVIDER}    # the made-up mailbox provider its senders use
 cfg = Config()
 cfg.values["mail_search"] = True    # here only: nothing is saved
 KEY = cfg["api_key"]
-skills = Skills(config=cfg)
+skills = offline(cfg).current()     # no code skill runs, so no light is reached
 ASKS = sys.argv[1:] or [
     "Find my tax return for 2024 and send it to my phone",
     "Find my CV and send it to my phone",

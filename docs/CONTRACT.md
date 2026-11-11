@@ -39,7 +39,8 @@ Methods:
 | `Say` | `(s text) -> ()` | Speak text in the configured voice |
 | `ListThemes` | `() -> s` | `{"themes": [...], "problems": [...]}` from `themes.discover()`. Can take seconds: allow 30 |
 | `PreviewTheme` | `(s id) -> ()` | Emit `ThemePreview` |
-| `ListSkills` | `() -> s` | `Skills.listing()` |
+| `ListSkills` | `() -> s` | `Skills.listing()` of the skills loaded now. Each entry has `source`: `built-in`, `bundled` (a code skill that ships with Tuxistant) or `yours` |
+| `ReloadSkills` | `() -> s` | Read the skills again now, as the folder watcher does on its own. Returns `{path: problem}` as JSON, `{}` if all loaded. A skill that fails keeps its last version that worked. Emits `SkillsChanged` |
 | `ListPhones` | `() -> s` | `phone.devices()`: `[{"id", "name", "type", "connected", "paired"}]`, empty without GSConnect |
 | `ListCalendars` | `() -> s` | `calendars.writable()`: `[{"id", "name", "account"}]` for each calendar an event can be added to, empty without Evolution Data Server. It connects to each calendar, so allow 30 seconds |
 | `Hello` | `(i level) -> ()` | From the extension when the daemon comes online: `level` is 1 if it can draw approval cards, 2 if it can also type dictated text. 0 on the way out, which also stops dictation |
@@ -65,6 +66,7 @@ Signals:
 | `ConfigChanged` | `s key` | A setting changed |
 | `ThemePreview` | `s id` | Show this theme for about 4 s, cycling through states |
 | `HistoryChanged` | none | History was added to or cleared |
+| `SkillsChanged` | none | A reload swapped in new skills. The next turn uses them; a turn already going keeps the ones it started with |
 | `Approval` | `s id, s title, s detail, s level, i seconds` | Show the approval card. `level` is `click` or `admin` (runs as root). No answer within `seconds` is a no |
 | `ApprovalClosed` | `s id` | Take the card down: answered, timed out or cancelled |
 | `SelectionWanted` | `s id` | Send the selected text, or else the clipboard text, to `SelectionText` |
@@ -147,6 +149,16 @@ A VAD turn can't be sorted, as the server replies by itself when it hears you st
 8. The app says it, then "That's from an email from" a domain, or the whole address at a mailbox provider such as Gmail, "on" a day, and a warning if that sender hadn't written before. Only the address in the one pair of angle brackets at the end of the sender line counts, or the whole line if it is nothing but an address. The name beside it is never used, even when it holds an address, and a line that could be read two ways is "an unknown sender". The voice model is told what it's told after research: that it's done. Nothing from the mail reaches it, and it isn't asked to speak.
 
 The search has 4 seconds, the sender lookups 2 more and the whole action 20, and it says "Let me check your mail." after 2. An answer that isn't in English is shown and not spoken, as the voice would read it as nonsense, and its source is said instead.
+
+## Live skills
+
+`tuxistant/skillhost.py`. `SkillHost` reads the skills in this order: `tuxistant/skills_builtin/*.yaml` (Python handlers in `HANDLERS`), `tuxistant/skills_code/<name>/skill.yaml` (bundled code skills), then `$XDG_DATA_HOME/tuxistant/skills/<name>/skill.yaml` (yours). It watches those folders and, after each change, builds a new `Skills` from what passed its checks and swaps it in. `Skills` objects are never changed, and each `Turn` takes `host.current()` once, so the tools a turn offered are the tools it can run.
+
+- Each skill is checked on its own. One that fails is reported under its path (`ReloadSkills`) and keeps its last version that worked, if there is one. A folder that goes away unloads its skill.
+- The first to claim an id, an action or a tool name keeps it. A code skill can't use a built-in id or action, and only bundled skills may use ids starting `org.tuxistant.`.
+- Code skills may ask only for `network`, and get all of it or none, since the sandbox can't tell hosts apart. A list of hosts is shown as `network: true`. They get only the settings in `SKILL_CONFIG_KEYS` that their manifest names, never the API keys, and hear new values when those change.
+- A code action is an async handler in that `Skills`' own handler table. It goes through `Skills.execute` like any other, taint rule included, and the card is written from the skill id, action name and arguments.
+- Changed code (any file in the folder but byte code) means a new process for that skill. The old one finishes the calls it has and stops; a turn still holding the old `Skills` is told to ask again. Changing a built-in manifest reloads live, but a new built-in handler needs a daemon restart.
 
 ## Dictation
 

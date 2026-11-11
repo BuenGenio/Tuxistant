@@ -2,7 +2,11 @@ id: org.tuxistant.lights
 name: Lights
 description: Turns your Tapo smart lights on and off, dims them and changes their colour, on your own network
 version: 1.0.0
-permissions: {}
+run: [python3, main.py]
+permissions: { network: true }
+config: [tapo_email, tapo_password]
+# Two discovery broadcasts and a few seconds for each light that doesn't answer.
+timeout_s: 30
 actions:
   lights.set:
     description: Turn the user's lights or lamp on or off, dim or brighten them, or change their colour
