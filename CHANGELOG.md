@@ -2,6 +2,7 @@
 
 ## Not yet released
 
+- **Mail search.** "When did I book the flights?" or "What did my landlord say about the rent?" is answered from the mail Thunderbird keeps on this computer, with who sent it and when. It is off until you turn on "Search my mail" in Settings. Mail goes nowhere but your own server. Junk and Trash are never read, sign-in codes and passwords are hidden from the rest, and an answer from a sender who is new to you comes with a warning.
 - **Facts from what's written down.** A question of general knowledge asked on an Fn hold is answered from Wikipedia, then from web search, and Tux says so when neither clearly answers, instead of making something up. Sums are worked out on this computer. "Look up facts on Wikipedia" in Settings turns the lookup off.
 - **Web search and research.** "Search the web for flights to Lisbon" reads out the top results, and "Research electric bikes" reads a few pages and tells you what they say, naming its sources. Both need a SearXNG server, which Settings can point at.
 

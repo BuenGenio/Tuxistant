@@ -1,0 +1,13 @@
+# None of a mail's text goes back to the model that picks tools: see tuxistant/mail.py.
+id: org.tuxistant.mail
+name: Mail
+description: Answers questions from the mail Thunderbird keeps on this computer. Off until you turn it on in Settings
+version: 1.0.0
+permissions:
+  mail_read: true
+actions:
+  mail.search:
+    description: Look in the user's email for an answer. Use it for what someone wrote or sent them, and for things they applied for, booked, ordered or paid for and when. It can't send email
+    params:
+      question: { type: string, description: "The question, in the user's words" }
+    required: [question]

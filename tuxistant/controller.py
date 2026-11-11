@@ -165,6 +165,9 @@ class Turn:
                         self._record("ok")
                     return False
                 case "failed" if not self.answering:
+                    if self.after:  # what the app already found is not lost with the reply
+                        await self._close_mic()
+                        await self._speak_after()
                     raise RealtimeError(args[0])
                 case "timeout":
                     if ctl.state != "listening":

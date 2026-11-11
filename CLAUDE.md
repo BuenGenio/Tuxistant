@@ -20,13 +20,13 @@ Tuxistant is a voice assistant for the Linux desktop: a Python daemon, a GNOME S
 
 - **Commit, push, deploy, change DNS or publish a download only when asked.** The owner decides each one, and a push here is published to the world.
 - **Never print, log or store an API key.** The LocalAI key is in `~/.config/tuxistant/config.json` (mode 0600). Load it with `tuxistant.config.Config`. Don't go looking for an Anthropic key.
-- **Nothing in a test or evaluation may reach the real desktop, phone, clipboard, Trash or files.** See "Staying off the real desktop" in docs/TESTING.md. This has gone wrong three times.
+- **Nothing in a test or evaluation may reach the real desktop, phone, clipboard, Trash, files or mail.** See "Staying off the real desktop" in docs/TESTING.md. This has gone wrong three times.
 - **Never restart the real GNOME Shell or try to reload the extension in it.** A running Wayland session can't load changed extension code. Use the isolated harness.
 - **Don't send anything to a device or add anything to the owner's calendar** unless asked for that exact thing.
 - **Every risky action goes through `Skills.execute` and an `Ask`.** Never add a way round it, including for the planner. Card text comes from daemon code looking at the real action, never from a manifest or the model.
 - **Shell access stays built in.** Community skills must never be able to request it.
 - **Dictation stays on the user's own key press.** No tool, skill or model may start it or give it text, and what it types must never hold a line break. That is why it needs no card, so keep it that way.
-- **Text from the web never reaches a model with tools,** apart from `web.search`, which marks it `untrusted_web_text`. Facts and research are read out by the app for this reason. Anything that isn't sorted as a fact must fall through to the normal route, as a private request called a fact goes to Wikipedia with no click.
+- **Text from the web or from a mail never reaches a model with tools,** apart from `web.search`, which marks it `untrusted_web_text`. Facts, research and answers from mail are read out by the app for this reason. Anything that isn't sorted as a fact must fall through to the normal route, as a private request called a fact goes to Wikipedia with no click.
 
 ## How the code is written
 

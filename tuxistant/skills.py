@@ -14,8 +14,8 @@ from pathlib import Path
 
 import yaml
 
-from . import (calendars, files, knowledge, lights, livedata, phone, planner, research, shellgate,
-               system, translate, websearch)
+from . import (calendars, files, knowledge, lights, livedata, mail, phone, planner, research,
+               shellgate, system, translate, websearch)
 from .config import DEFAULTS
 from .gate import Ask, Session, declined
 
@@ -28,13 +28,14 @@ def risk_of(permissions: dict) -> str:
     if permissions.get("shell") or permissions.get("files_write"):
         return "high"
     if any(permissions.get(p) for p in ("network", "files_read", "clipboard", "calendar_read",
-                                        "calendar_write")):
+                                        "calendar_write", "mail_read")):
         return "medium"
     return "low"
 
 
 def reads_private(permissions: dict) -> bool:
-    return any(permissions.get(p) for p in ("files_read", "shell", "clipboard", "calendar_read"))
+    return any(permissions.get(p) for p in ("files_read", "shell", "clipboard", "calendar_read",
+                                            "mail_read"))
 
 
 def leaves_home(permissions: dict) -> bool:
@@ -64,14 +65,17 @@ def _plain(handler):
 # Which of a skill's declared hosts one call will reach, where a setting decides it. The card
 # shown after private data was read names these, not every host the skill could have reached.
 REACHES = {"news.headlines": livedata.news_hosts}
+# Offered to the model only while its setting is on: every tool in the list costs the small model
+# some of its other answers, and this one is off until asked for. The handler checks again.
+SWITCHED = {"mail.search": "mail_search"}
 
 # A handler takes (args, config, session) and returns a dict, or an Ask. One defined with async
 # def runs on the event loop and may use the session's confirm, busy, selection and execute.
 HANDLERS = {"time.now": _time_now, "disk.usage": _disk_usage,
             "weather.forecast": _plain(livedata.weather),
             "news.headlines": _plain(livedata.headlines),
-            **calendars.HANDLERS, **files.HANDLERS, **lights.HANDLERS, **phone.HANDLERS,
-            **shellgate.HANDLERS, **system.HANDLERS, **translate.HANDLERS,
+            **calendars.HANDLERS, **files.HANDLERS, **lights.HANDLERS, **mail.HANDLERS,
+            **phone.HANDLERS, **shellgate.HANDLERS, **system.HANDLERS, **translate.HANDLERS,
             **websearch.HANDLERS, **research.HANDLERS, **knowledge.HANDLERS, **planner.HANDLERS}
 
 
@@ -97,7 +101,8 @@ class Skills:
             "description": action["description"],
             "parameters": {"type": "object", "properties": action.get("params") or {},
                            "required": action.get("required") or []},
-        } for name, action in self.actions.items()]
+        } for name, action in self.actions.items()
+            if name not in SWITCHED or self.config[SWITCHED[name]] is True]
 
     def action_name(self, tool_name: str) -> str:
         return self.tool_names.get(tool_name, tool_name)

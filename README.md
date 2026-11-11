@@ -16,7 +16,7 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 - PipeWire with `pw-record` and `pw-cat`
 - `glib-compile-schemas`
 - A LocalAI server with a realtime pipeline (`tux-realtime` by default) and a voice model (`tux-voice`). [server/](server/README.md) has a script that sets one up on a computer with an 8 GB NVIDIA GPU
-- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, a SearXNG server for web search and research, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
+- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, Thunderbird for mail search, a SearXNG server for web search and research, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
 
 ## Install
 
@@ -90,6 +90,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 | "Send it to my phone", "Where's my phone?" | Sends a file through GSConnect, rings the phone, or reads its battery. Sending asks first |
 | "Move everything in Downloads older than a year to the Trash" | Shows how many files and how much space, and waits for your click. Nothing is deleted outright |
 | "What's on my calendar tomorrow?", "Add dentist on Friday at 3pm" | Reads your calendars, and adds an event once you click to allow it. It uses the calendars GNOME Calendar shows: add the account once in GNOME Settings under Online Accounts. So far reading has been tried on Google and adding on a local calendar. CalDAV and Microsoft, which also needs the `evolution-ews` package, have not been tried yet |
+| "When did I book the flights?", "What did my landlord say about the rent?" | Finds the answer in the mail Thunderbird keeps on this computer and says who it was from and when. Off until you turn on "Search my mail" in Settings |
 | "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account in Settings under General |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "How many chemical elements are there?", "What's 15 percent of 80?" | Looks it up instead of guessing: Wikipedia first, then web search, and it says so if neither clearly answers. Sums are worked out on this computer |
@@ -106,7 +107,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 **Cloud.** Complex requests stay on your own server unless you turn on Cloud in Settings, which is off by default and needs your own Anthropic API key. With it on, Claude sees your request plus file names and command output from that task. File contents go only if you click to allow each one. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`, which needs `pip` (`python3-pip` on Ubuntu).
 
-**Settings** has pages for General (server, API key, listening, weather, news, calendar, shortcut, phone, translation and search, lights, cloud, instructions), Voice, Appearance, Skills and History.
+**Settings** has pages for General (server, API key, listening, weather, news, calendar, mail, shortcut, phone, translation and search, lights, cloud, instructions), Voice, Appearance, Skills and History.
 
 | General | Skills |
 |---|---|
@@ -131,7 +132,7 @@ The same things work from a terminal:
 | `tuxistant cancel` | Stop everything |
 | `tuxistant say <text>` | Speak some text |
 | `tuxistant history` | Show recent requests |
-| `tuxistant doctor` | Check the Python modules, the server, the API key, PipeWire, the Fn helper if it is installed, whether the calendar can be used, that the extension is enabled, that the daemon can start, and that approval cards can show |
+| `tuxistant doctor` | Check the Python modules, the server, the API key, PipeWire, the Fn helper if it is installed, whether the calendar can be used and any mail was found, that the extension is enabled, that the daemon can start, and that approval cards can show |
 | `tuxistant settings` | Open Settings |
 | `tuxistant daemon` | Run the daemon in the foreground |
 
@@ -172,7 +173,8 @@ flowchart LR
   - Web search and research send what you asked for to those search engines, and research opens a few of the pages from this computer.
 - Cloud is the one exception to all of that, and it is off unless you turn it on. Translation stays on your own server, and a request that is only a sum stays on this computer.
 - Calendar events are read on this computer and go only to your own server, as part of the conversation. Tuxistant never holds a calendar account's password: GNOME does, and an event you add goes to that calendar's account the way one added in GNOME Calendar would.
-- Once a conversation has read your files, command output or selected text, anything reaching past your own server needs a click.
+- Mail search is off until you turn it on. It reads the search index Thunderbird keeps on this computer, and never changes it. What a mail says goes to your own server to be read and nowhere else, and Tuxistant holds no mail password. Junk and Trash are never read, and sign-in codes and passwords are hidden from a mail before it is.
+- Once a conversation has read your files, command output, selected text, calendar or mail, anything reaching past your own server needs a click.
 - History stays on this machine in `~/.local/share/tuxistant/history.db`, readable only by you. You can clear it in Settings.
 - The API key lives in `~/.config/tuxistant/config.json`, readable only by you. It is not sent over D-Bus to the extension or to Settings, and changing the server clears it, so that it only ever goes to the server it was given for. For TLS, enter the server as `https://host:port`.
 

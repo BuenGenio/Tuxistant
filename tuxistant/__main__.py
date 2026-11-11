@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import BUS_NAME, BUS_PATH, __version__, calendars
+from . import BUS_NAME, BUS_PATH, __version__, calendars, mail
 from .config import Config
 from .fnclient import SOCKET
 
@@ -146,6 +146,8 @@ def checks(config) -> list[tuple[bool, str, str]]:
         # Optional, like the helper: without the bindings only the calendar is missing.
         (True, "calendar available", "" if calendars.available() else
          "not installed: the calendar needs evolution-data-server and gir1.2-ecal-2.0"),
+        (True, "mail search available", "" if mail.available() else
+         "no mail found: mail search reads the index Thunderbird keeps"),
         (extension_installed(), "GNOME extension installed", EXTENSION),
         (extension_enabled(), "GNOME extension enabled", EXTENSION),
         (daemon_activatable(), "daemon can be started", BUS_NAME),

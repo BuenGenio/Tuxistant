@@ -13,7 +13,7 @@ from typing import NamedTuple
 
 from . import realtime
 from .config import DATA_DIR, DEFAULTS, valid_key
-from .gate import Ask, printable
+from .gate import APP_SAYS, Ask, printable
 from .realtime import RealtimeError
 
 ACTION = "task.run"
@@ -50,6 +50,8 @@ NOT_CLEAR = "I didn't catch what you want done."
 NO_ANSWER = "I couldn't get an answer for that."
 OUT_OF_STEPS = "That took too many steps, so I stopped before finishing."
 STOPPED = "You said no, so I stopped there."
+REST_DONE = "The other steps are done."            # said beside an answer the app reads out
+PART_FAILED = "Some of the other steps didn't work."
 NOT_SENT = "You said no, so nothing went to Claude."
 PART_DONE = "Part of it may already be done."
 UNREADABLE = "The model sent back something I could not read."
@@ -226,6 +228,7 @@ async def _outgoing(result: dict, model, session) -> str:
 
 async def _work(model, session) -> dict:
     step, acted, outcomes = 0, False, []
+    read_out = others = failed = False
     try:
         for step in range(1, MAX_STEPS + 1):
             session.busy(model.wait_s)
@@ -234,15 +237,25 @@ async def _work(model, session) -> dict:
                 return {"answer": _spoken(reply.text) or NO_ANSWER, "steps": step}
             if step == MAX_STEPS:
                 break   # nothing would read what it did, so it does not run
-            outcomes = []
+            outcomes, told = [], {}
             for call in reply.calls:
                 session.busy(ACTION_WAIT_S)
-                result = await _act(call, session)
+                asked = (call.name, call.arguments)     # a small model repeats itself, and the
+                result = told.get(asked) or await _act(call, session)   # answer is read out once
+                if result.get(APP_SAYS):
+                    told[asked] = result
                 if result.get("declined"):  # a small model would only ask again
                     return {"answer": STOPPED, "steps": step}
+                read_out = read_out or bool(result.get(APP_SAYS))
                 acted = acted or "error" not in result
+                failed = failed or "error" in result
+                others = others or not result.get(APP_SAYS)
                 outcomes.append(Outcome(call.id, await _outgoing(result, model, session),
                                         "error" in result))
+            if read_out:    # the app reads that answer out. Shown only "done", a model made one
+                if not others:                              # up, so none is asked for words on it
+                    return {"done": True, APP_SAYS: True, "steps": step}
+                return {"answer": PART_FAILED if failed else REST_DONE, "steps": step}
     except RealtimeError as e:
         return {"answer": _failed(e, acted), "steps": step}
     return {"answer": OUT_OF_STEPS, "steps": step}

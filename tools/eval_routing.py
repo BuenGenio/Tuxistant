@@ -24,7 +24,7 @@ from tuxistant.skills import Skills
 
 cfg = Config()
 KEY = cfg["api_key"]
-skills = Skills(config=DEFAULTS)
+skills = Skills(config={**DEFAULTS, "mail_search": True})   # every tool, including the one that's off
 REPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 ONLY = sys.argv[2] if len(sys.argv) > 2 else ""
 
@@ -85,6 +85,13 @@ CASES = [
     ("Schedule a meeting with Anna on Friday at 10", {"calendar_add"}),
     ("Put lunch with Sam in my calendar for the 14th of November at noon", {"calendar_add"}),
     ("Book the car service for next Monday", {"calendar_add"}),
+    ("When did I apply to renew my passport?", {"mail_search"}),
+    ("Did the bank email me about my new card?", {"mail_search"}),
+    ("What did my landlord say about the rent?", {"mail_search"}),
+    ("Find the email from the dentist", {"mail_search"}),
+    ("When did I order the new laptop?", {"mail_search"}),
+    ("Has the airline written to me about my flight?", {"mail_search"}),
+    ("What's my booking reference for the hotel in Lisbon?", {"mail_search"}),
     ("Search the web for electric bike reviews", {"web_search"}),
     ("Look up the opening hours of the Louvre", {"web_search"}),
     ("Search for the latest Ubuntu release", {"web_search"}),
