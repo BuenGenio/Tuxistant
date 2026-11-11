@@ -81,6 +81,11 @@ mkdir -p "$work/home" "$work/cache" "$work/state" "$work/config/glib-2.0/setting
     "$work/data/gnome-shell/extensions" "$work/data/tuxistant/themes" "$work/empty"
 cp -r "${TUX_EXTENSION:-$root/extension/tuxistant@buengenio}" "$here/tuxistant-shot@test" \
     "$work/data/gnome-shell/extensions/"
+# git ignores the compiled schema, so a fresh clone has none: compile it in the copy, as install.sh
+# does, or the extension can't load its settings.
+for schemas in "$work"/data/gnome-shell/extensions/*/schemas; do
+    [ -d "$schemas" ] && glib-compile-schemas "$schemas"
+done
 if [ -n "${TUX_EXTRA_THEMES:-}" ]; then
     cp -r "$TUX_EXTRA_THEMES"/. "$work/data/tuxistant/themes/"
 fi

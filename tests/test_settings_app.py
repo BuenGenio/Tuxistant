@@ -585,6 +585,8 @@ class Inner(unittest.TestCase):
     def setUpClass(cls):
         target = sa.extension_schema_dirs()[0]
         shutil.copytree(EXTENSION_SCHEMAS, target)
+        # git ignores the compiled schema, so a fresh clone has only the XML.
+        subprocess.run(["glib-compile-schemas", str(target)], check=True)
         cls.fake = start_fake()
         cls.app = sa.SettingsApp()
         cls.app.register(None)
