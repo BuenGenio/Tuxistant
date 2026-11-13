@@ -35,9 +35,9 @@ WORKS_WITH = [
     ("Tapo", "tapo", "now"),
     ("Open-Meteo", None, "now"),
     ("LibreTranslate", "libretranslate", "now"),
+    ("The Kyiv Independent", "kyiv-independent", "now"),
     # Built, but not yet asked for by voice on a real machine, which is what earns "now".
     ("Google Calendar", "google-calendar", "soon"),
-    ("The Kyiv Independent", "kyiv-independent", "soon"),
     ("Home Assistant", "home-assistant", "soon"),
     ("Spotify", "spotify", "soon"),
     ("InteliMaris", "intelimaris", "soon"),
@@ -188,7 +188,7 @@ def page(code, strings, languages, releases, detect, policy):
         alternates += (f'<link rel="alternate" hreflang="x-default" href="{SITE_URL}/">'
                        f'<link rel="canonical" href="{SITE_URL}{path_for(code)}">')
     data = {k: strings[k] for k in ("dlFor", "dlSoon", "dlPending", "dlMeta", "dlPlanned",
-                                    "preview", "planned", "themes", "showTheme")}
+                                    "preview", "stable", "planned", "themes", "showTheme")}
     data["releases"] = releases
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"

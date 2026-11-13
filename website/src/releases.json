@@ -1,5 +1,5 @@
 {
-  "linux":   { "version": "0.1.0", "channel": "preview", "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.1.0.tar.gz" },
+  "linux":   { "version": "0.2.0", "channel": "stable",  "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.2.0.tar.gz" },
   "macos":   { "version": null, "channel": "planned", "url": null },
   "windows": { "version": null, "channel": "planned", "url": null }
 }

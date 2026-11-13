@@ -35,7 +35,7 @@
     ]
   },
   "versionsTitle": "Versões", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
-  "preview": "Prévia", "planned": "Planejada", "linuxNeeds": "GNOME 50 e seu próprio servidor LocalAI", "tbd": "A anunciar",
+  "preview": "Prévia", "stable": "Estável", "planned": "Planejada", "linuxNeeds": "GNOME 50 e seu próprio servidor LocalAI", "tbd": "A anunciar",
   "donateTitle": "Ajude a criar a próxima versão", "donateText": "Seu apoio financia as versões para macOS e Windows.",
   "credit": "O Tux foi desenhado por Larry Ewing com o The GIMP. O logotipo do Home Assistant é do Home Assistant, aqui em uma só cor, sob a licença CC BY-NC-SA 4.0.",
   "worksWith": "Funciona com",

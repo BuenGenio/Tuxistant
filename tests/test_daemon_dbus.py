@@ -199,6 +199,7 @@ class Service(OnPrivateBus):
     async def test_say(self):
         await self.iface.call_say("One. Two.")
         await self.signal("StateChanged", "idle")
+        await self.signal("Presence", False)    # sent just after idle, so it can still be on its way
         self.assertEqual([r["input"] for r in self.http.requests], ["One.", "Two."])
         self.assertEqual(self.got("Presence"), [(True,), (False,)])
         self.assertTrue(self.speakers[0].drained)

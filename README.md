@@ -24,9 +24,11 @@ On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to f
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
-git clone https://github.com/BuenGenio/Tuxistant.git
+git clone --branch v0.2.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
+
+Or take the download from the website or the [releases page](https://github.com/BuenGenio/Tuxistant/releases), and skip `git`: `tar xzf Tuxistant-0.2.0.tar.gz && cd Tuxistant-0.2.0`.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
@@ -47,7 +49,7 @@ On a new account `~/.local/bin` isn't on your `PATH` until you log back in. Unti
 
 The installer puts a `tuxistant` command in `~/.local/bin`, the extension in `~/.local/share/gnome-shell/extensions`, a systemd user unit and a D-Bus activation file in `~/.local/share`, and creates `~/.config/tuxistant/config.json`. Set the server and API key in Settings under General. The server starts as `localhost:8080`, which is right when LocalAI runs on the same computer. To have the installer fetch the key, set `TUXISTANT_KEY_COMMAND` to a command that prints it.
 
-The `tuxistant` command runs from this checkout, so keep the folder where it is. Run `./install.sh` again after updating it. Running it twice is harmless and keeps your settings.
+The `tuxistant` command runs from this folder, so keep it where it is. To update, run `git fetch --tags` and `git checkout` the newer tag, or unpack the newer download in its place, then run `./install.sh` again. Running it twice is harmless and keeps your settings.
 
 To remove everything, including the Fn helper, run `./uninstall.sh`. Your settings, API key, history and themes stay unless you add `--purge`.
 
@@ -87,7 +89,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 | "Find my 2024 tax return" | Searches file names and contents, and reads out the best few. "Open the second one" works for a few minutes afterwards |
 | "Send it to my phone", "Where's my phone?" | Sends a file through GSConnect, rings the phone, or reads its battery. Sending asks first |
 | "Move everything in Downloads older than a year to the Trash" | Shows how many files and how much space, and waits for your click. Nothing is deleted outright |
-| "What's on my calendar tomorrow?", "Add dentist on Friday at 3pm" | Reads your calendars, and adds an event once you click to allow it. Any calendar that shows in GNOME Calendar works: add a Google, CalDAV or Microsoft account in GNOME Settings under Online Accounts |
+| "What's on my calendar tomorrow?", "Add dentist on Friday at 3pm" | Reads your calendars, and adds an event once you click to allow it. It uses the calendars GNOME Calendar shows: add the account once in GNOME Settings under Online Accounts. So far reading has been tried on Google and adding on a local calendar. CalDAV and Microsoft, which also needs the `evolution-ews` package, have not been tried yet |
 | "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account in Settings under General |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system |

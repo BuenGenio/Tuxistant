@@ -35,7 +35,7 @@
     ]
   },
   "versionsTitle": "Versions", "colSystem": "System", "colVersion": "Version", "colStatus": "Status", "colNeeds": "Needs",
-  "preview": "Preview", "planned": "Planned", "linuxNeeds": "GNOME 50 and your own LocalAI server", "tbd": "To be announced",
+  "preview": "Preview", "stable": "Stable", "planned": "Planned", "linuxNeeds": "GNOME 50 and your own LocalAI server", "tbd": "To be announced",
   "donateTitle": "Help build the next version", "donateText": "Your support pays for macOS and Windows versions.",
   "credit": "Tux was drawn by Larry Ewing with The GIMP. The Home Assistant logo is by Home Assistant, shown here in one colour, under CC BY-NC-SA 4.0.",
   "worksWith": "Works with",

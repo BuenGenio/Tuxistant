@@ -1,9 +1,14 @@
 # Changelog
 
-## Not yet released
+## 0.2.0
 
-- **Calendar.** "What's on my calendar tomorrow?", "When's my next meeting?" and "Add dentist on Friday at 3pm". It works with any calendar that shows in GNOME Calendar, so a Google, CalDAV or Microsoft account is added once in GNOME Settings under Online Accounts and Tuxistant never holds its password. Adding shows a card with the title, date, times and calendar first. Settings chooses which calendar new events go to.
+What has been added since 0.1.0 and has worked on the owner's own desktop, not only in tests. The calendar, news and file code here is the code that ran there, inside a development build whose turn handling was newer. Work that is built but not yet proved that way, such as web search, mail search, media control, timers, Home Assistant and skills with their own code, comes in 0.3.
+
+Some of what 0.1.0 brought has still only run in tests and in an isolated GNOME Shell, such as dictation, ringing a phone and `sudo` commands. [docs/ROADMAP.md](docs/ROADMAP.md) lists them under "Check on the real desktop". It needs the same as 0.1.0: GNOME Shell 50 on Wayland, Python 3.14, and a LocalAI server of your own with an 8 GB NVIDIA GPU.
+
+- **Calendar.** "What's on my calendar tomorrow?", "When's my next meeting?" and "Add dentist on Friday at 3pm". It works with any calendar that shows in GNOME Calendar, so a Google, CalDAV or Microsoft account is added once in GNOME Settings under Online Accounts and Tuxistant never holds its password. Adding shows a card with the title, date, times and calendar first. Settings chooses which calendar new events go to. Reading has been tried on Google calendars and adding on a local one. CalDAV and Microsoft accounts take the same path but have not been tried.
 - **News from a source you choose.** Settings has a list of nine: BBC News, The Guardian, NPR, CBC News, ABC News Australia, DW, France 24, Al Jazeera and The Kyiv Independent. A topic your source doesn't cover gets its top stories, and Tux says so. A redirect to any other host is refused.
+- **A fresh clone's tests pass.** The test harnesses now compile the extension's settings schema themselves. Before, about 137 tests failed on a new checkout because the compiled schema isn't kept in git.
 
 ## 0.1.0, a preview
 

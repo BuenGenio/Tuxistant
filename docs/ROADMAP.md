@@ -2,21 +2,21 @@
 
 Where the project stands and what comes next. Keep this current: it is how the next person picks up the work.
 
-Last updated 2026-11-10.
+Last updated 2026-11-13.
 
 ## Where things stand
 
-Steps 1 to 3 of the plan below are built. Steps 2 and 3 have passed their tests and live tests against the real server, but they have **not yet run on the real desktop**, because the new extension only loads at the next login.
+Steps 1 to 3 of the plan below are built. `v0.2.0` is the latest stable release: it holds only what has worked on the owner's real desktop, plus what 0.1.0 already had. Steps 2 and 3 have passed their tests and live tests against the real server, and parts of them have now run on the real desktop: the list under "Check on the real desktop" says which.
 
 | Part | State |
 |---|---|
 | Daemon, blob, captions, Fn hold, status icon, Settings, themes | Working on the real desktop |
-| Time, disk, weather, news | Working on the real desktop, by voice |
-| Approval gate and card | Tested in an isolated real GNOME Shell. Not yet on the real desktop |
+| Time, disk, weather, news | Working on the real desktop, by voice, with BBC News and The Kyiv Independent as the source |
+| Approval gate and card | Working on the real desktop: cards for adding calendar events and running a command were shown and allowed on 2026-11-11. Deny and the lock-screen path not yet tried there |
 | Files, phone, shell, system facts | Tested with the real model. See "Check on the real desktop" |
 | Translation | Spoken translation works on the real desktop. Translating a selection has not been tried there |
-| Calendar | Reads and adds events through Evolution Data Server. Tested against a real, private Evolution Data Server in two time zones, and reading was tried on the owner's ten Google calendars. Adding has not run on a real account, and CalDAV and Microsoft accounts have not been tried at all |
-| Tapo lights | Working on the real desktop with an L530. The bulb sometimes went missing until the Tapo app woke it. Since 2026-11-10 bulbs are remembered and asked directly, which still has to prove itself over a few days |
+| Calendar | Reads and adds events through Evolution Data Server. Tested against a real, private Evolution Data Server in two time zones, and reading was tried on the owner's ten Google calendars. On 2026-11-11 it read the calendar by voice and added four events through the card, to the local Personal calendar. Adding has not run on an online account, and CalDAV and Microsoft accounts have not been tried at all |
+| Tapo lights | Working on the real desktop with an L530. The bulb sometimes went missing until the Tapo app woke it. Since 2026-11-10 bulbs are remembered and asked directly. Over the next day it answered four of five times, and once said it couldn't find any lights |
 | Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
 | Multi-step planner, local model | Two live runs worked |
 | Multi-step planner, cloud | Tested against a stub only. Never called the real Claude API |
@@ -86,8 +86,8 @@ Don't act on these until they answer.
 None of this can be proved from a test. After `./install.sh` and a logout:
 
 1. **Passed 2026-11-10:** `tuxistant doctor` says approval cards are ready, and dictation too.
-2. A card appears, Deny and Allow both work, and the blob comes back for a card after an Fn hold was released.
-3. "Open my CV" opens it. `gio open` has only ever run from a test, not from inside `tuxistant.service`.
+2. **Passed in part 2026-11-11:** cards appeared and Allow worked, for calendar events and a command. A card appears, Deny and Allow both work, and the blob comes back for a card after an Fn hold was released.
+3. **Passed 2026-11-11:** "Open my CV" opens it. A PDF was found and opened by voice, from inside `tuxistant.service`.
 4. "Where's my phone?" rings it, and sending a small file arrives. No real transfer or ring has ever been done.
 5. "Install VLC" or any `sudo` command shows a password prompt. `pkexec` from a systemd user service has never run for real.
 6. "Translate what I've selected into French" reads the selection. A translation spoken in its own voice in a whole voice turn passed on 2026-11-10.
@@ -97,7 +97,7 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 10. Dictation, with `tuxistant doctor` saying it's ready: tap Fn, then hold and speak, in a GTK app such as Text Editor, in a terminal, and in VS Code or Chromium, which should take the paste route. Check that the clipboard is unchanged afterwards, that a password box refuses, and that Ctrl+Super+D starts and stops it.
 
 11. **Passed 2026-11-10:** lights, with the TP-Link account in Settings: "Is the light on?", then "Turn off the light" and "Make it warm white".
-12. Calendar: "What's on my calendar tomorrow?" by voice, then "Add a test event on Friday at 3pm", allow the card, and see it appear in GNOME Calendar and on the account. Pick a calendar in Settings first. Adding has only ever written to a private test calendar.
+12. **Passed in part 2026-11-11:** read by voice, and four events added through the card to the local Personal calendar. Adding has not yet written to an online account. Calendar: "What's on my calendar tomorrow?" by voice, then "Add a test event on Friday at 3pm", allow the card, and see it appear in GNOME Calendar and on the account. Pick a calendar in Settings first.
 
 Move site claims from Soon to Now only after the matching check passes.
 
@@ -172,5 +172,6 @@ Move site claims from Soon to Now only after the matching check passes.
 - Give the default theme a shape and colours of its own.
 - **Done 2026-11-10, after 0.1.0:** the news source is a choice in Settings.
 - **Done 2026-11-10:** `v0.1.0` is tagged as a preview, and the site's download button points at the tarball GitHub builds for the tag. [CHANGELOG.md](../CHANGELOG.md) has the text of the release page.
+- **Done 2026-11-13:** `v0.2.0` is tagged as the first stable release, from branch `stable-0.2`: 0.1.0 with the calendar, the choice of news source, and tests that pass on a fresh clone. Only what had worked on the real desktop went in. The rest is for 0.3.
 - Have native speakers check the site's translations, including the Auto/Light/Dark words. Five languages now, 25 to 30 later.
 - Replace the favicon, which is still the old penguin.
