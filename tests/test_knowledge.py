@@ -79,7 +79,10 @@ HERE_SHAPES = (
     "How much longer than the rice does the pasta need?",
     # Our things named after a shared noun, a timer that went off, and a lamp now.
     "Did our sun visor arrive?", "Where's our galaxy tab?", "Has a timer gone off?",
-    "Is there a timer set for the pasta?", "How bright is the bedroom lamp now?")
+    "Is there a timer set for the pasta?", "How bright is the bedroom lamp now?",
+    # Words people start with, before a shape that starts the question or a capital My.
+    "Okay. Timer?", "So, is the countdown still running", "Hey, could you start a countdown",
+    "Um, is the dishwasher still running?", "Hey Tux My emails?", "okay Our heating?")
 # Not private but never a fact: what is true only now, and questions about Tux itself.
 NOT_FACT_SHAPES = (
     "Which day of the week is it today?", "Is it a holiday tomorrow?", "What happened yesterday?",
@@ -87,10 +90,38 @@ NOT_FACT_SHAPES = (
     "Who is currently top of the league?", "Is the shop open at the moment?",
     "What films are out this week?", "Describe yourself", "What else can you help me with?",
     "Who built you?", "What's your purpose?", "Are you able to help?",
-    "Which features have you got?")
+    "Which features have you got?",
+    # A word of singing or recording, and the time after it.
+    "What was recorded on the camera this morning?", "Which programmes were recorded this week?",
+    "What is being recorded right now?", "Who sang at the Super Bowl tonight?",
+    "What was the highest temperature recorded today in London?",
+    "Who performed at the Oscars this year?", "Who sang the anthem at the game yesterday?",
+    "who sang tonight at the super bowl",
+    # Words people start with, before a question to Tux.
+    "Okay. Who made you?", "So, who are you?", "Hey Tux, who built you?")
 
-# Facts that share words with those, which must still be looked up: the tool refuses whatever
-# about_here() catches, so a fact caught there is never looked up on any turn.
+# Private questions 0.3.0 kept from the sorter that a narrower filter let through to it. Each
+# goes the normal way on a hold, and a click comes before the tool sends one out.
+ONCE_LEAKED = (
+    "Set the thermostat to 21", "Turn the thermostat down", "lower the thermostat by two degrees",
+    "what did i set the thermostat to", "Is the thermostat in away mode?",
+    "Did the countdown finish?", "When does the countdown end?", "How much longer is it?",
+    "how much longer is the turkey in for", "How much longer do we have to wait?",
+    "Okay. Is the countdown still going?", "So, thermostat temperature?",
+    "Hey, is a timer set?", "is our galaxy charged", "Did our sun newspaper arrive?",
+    "Is the front door of the apartment open?", "Is the back door of the cottage shut?",
+    "Is the patio door double-locked?", "what's that timer for", "Timer status?",
+    "When is Our anniversary?")
+# Private questions the tool refused before its filter freed lamps of famous rooms and bulbs set at
+# a number. WIDE keeps the shape as it was, so these get a click before they are looked up.
+ONCE_REFUSED = (
+    "What brightness is the bedroom light set at?",
+    "What colour is the light in the bedroom of the apartment?",
+    "How bright is the lamp in the kitchen of the cottage?",
+    "What colour is the desk lamp set at right now?")
+# Facts that share words with those, which must still be looked up. The tool refuses whatever
+# about_here() catches, so a fact caught there is never looked up on any turn. These reach the
+# sorter on a hold too.
 SHARED_WORDS = (
     "Who wrote Hamlet?", "Who invented the light bulb?", "When was the alarm clock invented?",
     "Who sings Bohemian Rhapsody?", "Who invented the padlock?",
@@ -103,7 +134,18 @@ SHARED_WORDS = (
     "What colour is a sodium lamp?", "What colour is the light from a red dwarf?",
     "When was the lava lamp invented?", "What can you make from milk?",
     "On what day did Apollo 11 land?", "Who directed The Day After Tomorrow?",
-    "Who sang Be Yourself?",
+    "Who sang Be Yourself?", "What can you do with baking soda?",
+    "How many bones are in your hand?", "Who sang Your Song?",
+    "How bright is the light from a supernova?", "What colour are the Northern Lights?",
+    # A light that is not a lamp here, at a place or a time, or in a room of somebody else's.
+    "What colour is the light at the top of the Empire State Building?",
+    "How bright is the light at the end of the tunnel?",
+    "What colour is the light in the operating room?",
+    # A title Whisper wrote in lower case, after a word of singing.
+    "who sang yesterday", "who sang lose yourself")
+# Facts with words 0.3.0 kept from the sorter where they aren't this home's. On a hold they go the
+# normal way, and the tool looks them up after a click.
+MAYBE_FACTS = (
     # Our, my, thermostat, timer, countdown and the rest, where they aren't this home's.
     "How old is our galaxy?", "Which star is closest to our planet?", "How far away is our moon?",
     "Who came up with the thermostat?", "When was the thermostat patented?",
@@ -112,13 +154,11 @@ SHARED_WORDS = (
     "How many members sit in the House of Representatives?",
     "What number is on the front door of the White House?", "Who first hosted Countdown?",
     "Who recorded My Generation?", "Who wrote the song Our House?", "Who wrote My Antonia?",
-    "Who sang The Final Countdown?", "What can you do with baking soda?",
-    "How many bones are in your hand?", "Who sang Your Song?",
+    "Who sang The Final Countdown?",
     # The same words where they aren't about a lock, a door, a garage, a timer or a lamp here.
     "What is locked-in syndrome?", "What is a back door in computing?",
     "When did the garage rock revival begin?", "How long is a pomodoro timer set for?",
     "What is a thermostat?", "How does a thermostat read the temperature?",
-    "How bright is the light from a supernova?", "What colour are the Northern Lights?",
     # Our, with a word before the shared noun, or the verb that ends the question after it.
     "Which galaxy is closest to our own?", "How far is our nearest galaxy?",
     "What did our early ancestors eat?", "How did our universe begin?",
@@ -134,10 +174,25 @@ SHARED_WORDS = (
     "Why did mission control stop the countdown for Apollo 13?",
     "How much longer is the Nile compared to the Amazon?", "How much longer will the sun last?",
     "How much longer is a year on Mars?",
-    # A light that is not a lamp here, at a place or a time.
-    "What colour is the light at the top of the Empire State Building?",
-    "How bright is the light at the end of the tunnel?",
-    "What colour is the light in the operating room?")
+    # A lamp in a room of somebody else's, or set into something.
+    "How bright is the light in the hall of mirrors at Versailles?",
+    "What colour is the bulb set in a traffic light?",
+    # A title, or a garage door, heating, reminder or alarm that is not one here.
+    "Who sang Sweet Child O' Mine?", "Who sang Sweet Child O\u2019 Mine?",
+    "Who invented the garage door opener?", "How does the heating element in a kettle work?",
+    "When were reminders added to the iPhone?", "Why is the alarm call of a blackbird so loud?")
+# Every word 0.3.0 kept from the sorter, alone in a question.
+BROAD_WORDS = (
+    "Is my order here?", "Is our order here?", "Whose is mine?", "Is it ours?", "Any timers?",
+    "Any reminders?", "What countdown?", "How long is left?", "Has the iron been left on?",
+    "How much longer?", "Will the pie be done?", "Is it locked?", "Is it unlocked?",
+    "Was it switched on?", "Was it turned off?", "Are the hall lights on now?",
+    "Did you lock the car?", "Are the curtains shut?", "Is the parcel by the front door?",
+    "Did the dog get out by the back door?", "What about the garage door?",
+    "What is in the garage?", "What about the heating?", "What about the thermostat?",
+    "What about the alarm?", "Is the alarm armed?", "Who is in the house?", "Who is at home?",
+    "What is home assistant?", "Is anybody home?", "How warm is it in the cellar?",
+    "What is the room temperature?", "Is the radio on?")
 
 
 def reply(text):
@@ -360,6 +415,25 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(await knowledge.is_fact(heard, CONFIG))
         self.assertEqual(web.model, [])
 
+    async def test_what_0_3_0_kept_from_the_sorter_still_skips_it(self):
+        """A miss here sends a private question out with no click, so this filter keeps every
+        word 0.3.0 kept, and the facts it catches go the normal way."""
+        cases = ONCE_LEAKED + ONCE_REFUSED + BROAD_WORDS + MAYBE_FACTS
+        web = Web(self, says=["FACT"] * len(cases))
+        for heard in cases:
+            with self.subTest(heard):
+                self.assertTrue(knowledge.never_a_fact(heard))
+                self.assertFalse(await knowledge.is_fact(heard, CONFIG))
+        self.assertEqual(web.model, [])
+
+    def test_the_wide_filter_holds_all_the_narrow_one_does(self):
+        for heard in HERE_ASKED + HERE_SHAPES + ONCE_LEAKED + ONCE_REFUSED + BROAD_WORDS:
+            with self.subTest(heard):
+                self.assertTrue(knowledge.maybe_here(heard))
+        for heard in MAYBE_FACTS:
+            with self.subTest(heard):
+                self.assertFalse(knowledge.about_here(heard), "the tool would refuse it")
+
     async def test_what_is_true_only_now_or_about_tux_goes_the_normal_way(self):
         web = Web(self, says=["FACT"] * len(NOT_FACT_SHAPES))
         for heard in NOT_FACT_SHAPES:
@@ -407,7 +481,8 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(said=said, case=case):
                     self.assertFalse(_near(said, case))
         # The sorter's examples may come from the tuned lists, but nothing the filter is tested on.
-        for said in (*HERE_ASKED, *HERE_SHAPES, *NOT_FACT_SHAPES, *SHARED_WORDS):
+        for said in (*HERE_ASKED, *HERE_SHAPES, *ONCE_LEAKED, *ONCE_REFUSED, *BROAD_WORDS,
+                     *NOT_FACT_SHAPES, *SHARED_WORDS, *MAYBE_FACTS):
             for case in evaluated:
                 with self.subTest(said=said, case=case):
                     self.assertFalse(_near(said, case))
@@ -627,12 +702,14 @@ class WhatGoesWhere(Base):
         self.assertNotRegex(knowledge.NOT_HERE, r"[_<>{}]")
 
     async def test_a_fact_that_shares_their_words_is_still_looked_up(self):
-        web = Web(self, says=["It was so."] * len(SHARED_WORDS))
-        for heard in SHARED_WORDS:
+        """The card for MAYBE_FACTS is Skills.execute's, so the handler itself looks them up."""
+        facts = SHARED_WORDS + MAYBE_FACTS
+        web = Web(self, says=["It was so."] * len(facts))
+        for heard in facts:
             with self.subTest(heard):
                 said, _ = await self.ask(heard)
                 self.assertEqual(said, "It was so.")
-        self.assertEqual(len(web.opened), len(SHARED_WORDS))
+        self.assertEqual(len(web.opened), len(facts))
 
     async def test_a_sum_never_leaves_this_computer(self):
         web = Web(self)
@@ -704,6 +781,115 @@ class Gate(unittest.IsolatedAsyncioTestCase):
         web, asked, _ = await self.run_it(True, True)
         self.assertEqual(len(asked), 1)
         self.assertEqual(len(web.opened), 1)
+
+
+class MaybeHere(unittest.IsolatedAsyncioTestCase):
+    """Words that are often about this home, in a question the tool can't refuse without refusing
+    facts: a click comes before anything leaves, on a card written from what will be sent."""
+
+    async def execute(self, question, click=False, tainted=False, config=CONFIG, says=()):
+        web = Web(self, says=list(says) or ["It was so."])
+        asked = []
+
+        async def confirm(ask):
+            asked.append(ask)
+            return click
+
+        session = Session(confirm=confirm)
+        session.tainted = tainted
+        _, result = await Skills(config=config).execute(
+            "knowledge_answer", json.dumps({"question": question}), session)
+        return web, asked, result
+
+    async def test_declined_nothing_is_sent(self):
+        for question in ("Set the thermostat to 21", "Is the patio door double-locked?",
+                         "Who came up with the thermostat?"):
+            with self.subTest(question):
+                web, asked, result = await self.execute(question)
+                self.assertEqual([ask.title for ask in asked], [knowledge.MAYBE_HERE])
+                self.assertTrue(result["declined"])
+                self.assertEqual((web.opened, web.searched, web.model), ([], [], []))
+
+    async def test_allowed_it_is_looked_up(self):
+        web, asked, result = await self.execute("Who came up with the thermostat?", click=True)
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(result, research.TOLD)
+        self.assertEqual(web.words(), "came up with thermostat")
+
+    async def test_the_card_says_what_is_sent_and_where(self):
+        _, asked, _ = await self.execute("How much longer is a year on Mars?")
+        lines = asked[0].detail.split("\n")
+        self.assertEqual(lines[0], knowledge.MAYBE_WHY)
+        self.assertEqual(lines[1], "Words sent: longer year mars")
+        self.assertIn("en.wikipedia.org", lines[2])
+        self.assertIn("your search server at home:8888", lines[2])
+        _, asked, _ = await self.execute(
+            "Who invented the egg timer?", config={**CONFIG, "search_server": "https://s.test/"})
+        self.assertIn("your search server at s.test,", asked[0].detail)
+
+    async def test_what_the_tool_refuses_needs_no_card(self):
+        web, asked, result = await self.execute("Is the front door locked?", click=True)
+        self.assertEqual(asked, [])
+        self.assertEqual(result, {"error": knowledge.NOT_HERE})
+        self.assertEqual(web.opened, [])
+
+    async def test_a_plain_fact_needs_no_card(self):
+        web, asked, _ = await self.execute("Who wrote Hamlet?")
+        self.assertEqual(asked, [])
+        self.assertEqual(len(web.opened), 1)
+
+    async def test_nothing_that_stays_here_needs_one(self):
+        web, asked, result = await self.execute("What's 7 times 8?")
+        self.assertEqual((asked, web.opened), ([], []))
+        web, asked, _ = await self.execute("Who came up with the thermostat?",
+                                           config={**CONFIG, "fact_lookup": False})
+        self.assertEqual((asked, web.opened, web.searched), ([], [], []))
+        self.assertEqual(len(web.model), 1, "answered by the model at home")
+
+    async def test_what_the_tool_once_refused_needs_a_click(self):
+        for question in ONCE_REFUSED:
+            with self.subTest(question):
+                web, asked, result = await self.execute(question)
+                self.assertEqual([ask.title for ask in asked], [knowledge.MAYBE_HERE])
+                self.assertTrue(result["declined"])
+                self.assertEqual((web.opened, web.searched, web.model), ([], [], []))
+
+    def test_what_the_tool_refused_it_refuses_or_asks_first(self):
+        for question in HERE_ASKED + HERE_SHAPES + ONCE_REFUSED:
+            with self.subTest(question):
+                self.assertTrue(knowledge.about_here(question)
+                                or knowledge.lookup_card({"question": question}, CONFIG))
+
+    async def test_after_something_private_what_stays_here_needs_no_card(self):
+        for question in ("Is the front door locked?", "What's 7 times 8?"):
+            with self.subTest(question):
+                web, asked, _ = await self.execute(question, tainted=True)
+                self.assertEqual((asked, web.opened, web.searched), ([], [], []))
+        web, asked, _ = await self.execute("Who wrote Hamlet?", tainted=True,
+                                           config={**CONFIG, "fact_lookup": False})
+        self.assertEqual((asked, web.opened, web.searched), ([], [], []))
+        self.assertEqual(len(web.model), 1, "answered by the model at home")
+
+    async def test_after_something_private_a_lookup_still_needs_a_click(self):
+        web, asked, result = await self.execute("Who wrote Hamlet?", tainted=True)
+        self.assertEqual(len(asked), 1)
+        self.assertTrue(asked[0].title.startswith("Let org.tuxistant.knowledge reach "))
+        self.assertTrue(result["declined"])
+        self.assertEqual((web.opened, web.searched, web.model), ([], [], []))
+
+    async def test_after_something_private_it_is_one_card(self):
+        web, asked, result = await self.execute("Set the thermostat to 21", tainted=True)
+        self.assertEqual(len(asked), 1)
+        self.assertTrue(asked[0].title.startswith("Let org.tuxistant.knowledge reach "))
+        self.assertTrue(result["declined"])
+        self.assertEqual(web.opened, [])
+        web, asked, _ = await self.execute("Set the thermostat to 21", click=True, tainted=True)
+        self.assertEqual(len(asked), 1)
+        self.assertEqual(len(web.opened), 1)
+
+    def test_broken_arguments_get_no_card_and_fail_as_before(self):
+        self.assertIsNone(knowledge.lookup_card({}, CONFIG))
+        self.assertIsNone(knowledge.lookup_card({"question": 5}, CONFIG))
 
 
 if __name__ == "__main__":

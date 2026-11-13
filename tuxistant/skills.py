@@ -66,6 +66,13 @@ def _plain(handler):
 # Which of a skill's declared hosts one call will reach, where a setting decides it. The card
 # shown after private data was read names these, not every host the skill could have reached.
 REACHES = {"news.headlines": livedata.news_hosts}
+# A card before the handler runs, for a call that may send something private out even in a fresh
+# conversation. Each is asked with the arguments and the config, and returns an Ask or None. The
+# reach card above already asks for the same click, so a call that shows it doesn't get this too.
+ASKS_FIRST = {"knowledge.answer": knowledge.lookup_card}
+# Whether a call sends anything out, asked the same way. One that doesn't needs no reach card: its
+# handler refuses it or answers it at home, on the same test.
+SENDS = {"knowledge.answer": knowledge.sends}
 # Offered to the model only while its setting is on: every tool in the list costs the small model
 # some of its other answers, and this one is off until asked for. The handler checks again.
 SWITCHED = {"mail.search": "mail_search"}
@@ -98,6 +105,15 @@ def _as_sent(arguments: str) -> str:
         return json.dumps(json.loads(arguments or "{}"), ensure_ascii=False)
     except ValueError:
         return arguments
+
+
+def _parsed(arguments: str) -> dict:
+    """What the handler will get, or nothing if it will fail on them."""
+    try:
+        args = json.loads(arguments or "{}")
+    except ValueError:
+        return {}
+    return args if isinstance(args, dict) else {}
 
 
 def _reach_card(action: dict, name: str, arguments: str, hosts) -> Ask:
@@ -172,14 +188,10 @@ class Skills:
         action = self.actions.get(name)
         if action is None:
             return name, {"error": f"unknown action {tool_name}"}
-        permissions = action["permissions"]
         try:
-            if session.tainted and leaves_home(permissions):
-                hosts = permissions["network"]
-                if name in REACHES and hosts is not True:   # never more than was declared
-                    hosts = [h for h in REACHES[name](self.config) if h in hosts] or hosts
-                if not await session.confirm(_reach_card(action, name, _as_sent(arguments), hosts)):
-                    return name, declined()
+            card = self._first_card(action, name, arguments, session)
+            if card and not await session.confirm(card):
+                return name, declined()
             if inspect.iscoroutinefunction(self.handlers.get(name)):
                 args = json.loads(arguments or "{}")
                 if not isinstance(args, dict):
@@ -192,11 +204,24 @@ class Skills:
                     return name, declined()
                 session.busy(outcome.timeout_s + 5)
                 outcome = await asyncio.to_thread(outcome.run)
-            if reads_private(permissions):
+            if reads_private(action["permissions"]):
                 session.tainted = True
             return name, outcome
         except Exception as e:
             return name, {"error": str(e) or type(e).__name__}
+
+    def _first_card(self, action: dict, name: str, arguments: str, session: Session) -> Ask | None:
+        """The card to click before the handler runs, if any, written here from the real call."""
+        permissions, args = action["permissions"], _parsed(arguments)
+        if (session.tainted and leaves_home(permissions)
+                and (name not in SENDS or SENDS[name](args, self.config))):
+            hosts = permissions["network"]
+            if name in REACHES and hosts is not True:   # never more than was declared
+                hosts = [h for h in REACHES[name](self.config) if h in hosts] or hosts
+            return _reach_card(action, name, _as_sent(arguments), hosts)
+        if name in ASKS_FIRST:
+            return ASKS_FIRST[name](args, self.config)
+        return None
 
     def listing(self) -> list[dict]:
         return [{"id": s["id"], "name": s["name"], "description": s["description"],
