@@ -5,13 +5,13 @@ version: 1.0.0
 permissions: {}
 actions:
   media.control:
-    description: Change this computer's volume, or play, pause and skip the music, video or podcast on it. Use it for volume 70, louder, quieter, turn it up, turn it down, mute, unmute, pause, play, resume, skip, next song and previous song
+    description: Change this computer's volume, or play, pause and skip the music, video or podcast on it. Use it for volume 70, louder, quieter, turn it up, turn it down, mute, unmute, pause, play, resume, skip, next, next song and previous song, even said as one word
     params:
       action: { type: string, enum: ["play", "pause", "skip", "next song", "previous song", "volume up", "volume down", "mute", "unmute", "set volume"], description: "The one thing the user asked for" }
       volume: { type: string, description: "Only with set volume: the percentage, like 40" }
       player: { type: string, description: "Only if the user named an app such as Spotify. Leave it out otherwise" }
     required: [action]
   media.playing:
-    description: Get the title and artist of what is playing on this computer right now. Use it for what's playing, what song is this, or who sings this
+    description: Get the title and artist of what is playing on this computer right now. Use it for what's playing now and what song this is, not for a song the user names
     params:
       player: { type: string, description: "Only if the user named an app such as Spotify. Leave it out otherwise" }

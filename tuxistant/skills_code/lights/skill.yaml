@@ -9,7 +9,7 @@ config: [tapo_email, tapo_password]
 timeout_s: 30
 actions:
   lights.set:
-    description: Turn the user's lights or lamp on or off, dim or brighten them, or change their colour
+    description: Turn the user's lights or lamp on or off, dim or brighten them, or change their colour. Use it for the light or the lamp when no room is named
     params:
       state: { type: string, enum: ["on", "off"], description: "on or off" }
       brightness: { type: string, description: "A percentage like 40, or brighter or dimmer" }
