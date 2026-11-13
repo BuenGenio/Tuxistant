@@ -25,7 +25,7 @@ What holds a code skill today:
 - **Only the network.** A skill you add may ask for nothing but the network. The network is shared with this computer, so it reaches the internet and your local network, and the card says so. Landlock keeps it away from this computer's own services: no abstract sockets from outside the sandbox, TCP only to ports 53, 80 and 443, and no listening. UDP, and TCP on those three ports, are not held back.
 - **No secrets.** The one secret a skill can be given is the TP-Link login, and only the Lights that come with Tuxistant get it.
 - **No quiet upgrades.** What a skill was first allowed is noted. A new version that asks for more isn't used until you take the skill out and put it back, and then what it saved is cleared.
-- **Short, plain text.** Action descriptions, parameters and answers are cut short and their hidden characters shown, before the model or the history sees them.
+- **Short, plain text.** Action descriptions, parameters and answers are cut short and their hidden characters shown, before the model or the history sees them. A name, description, version or parameter text with `<` or `>` is refused, and an answer loses them, so neither can carry chat-template delimiters such as `<|im_start|>` or `<tool_call>`. What a skill answers is still a stranger's text: it can make Tux say something false, but whatever the model does next meets the same gates.
 
 What doesn't hold yet: a skill can start as many processes as your account may, and keep a CPU core busy while it runs.
 

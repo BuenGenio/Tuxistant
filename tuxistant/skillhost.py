@@ -104,7 +104,21 @@ def _text(manifest: dict, field: str, required: bool = True) -> str:
     value = " ".join(str(value).split())
     if len(value) > MAX_TEXT[field] or not value.isprintable():
         raise ValueError(f"Its {field} is too long or holds characters that can't be shown.")
+    if _bracketed(value):
+        raise ValueError(f"Its {field} holds < or >, which a skill can't use.")
     return value
+
+
+def _bracketed(text: str) -> bool:
+    """What a manifest says goes into the tool list on every turn. <|im_start|> would be a real
+    control token to the chat template there, and <tool_call> a call to the server's parser, so
+    the author is told rather than the text quietly changed."""
+    return "<" in text or ">" in text
+
+
+def _unbracketed(text: str) -> str:
+    """A skill's answer loses its angle brackets, for the same reason webfetch.clean removes them."""
+    return text.replace("<", " ").replace(">", " ")
 
 
 def _actions(manifest: dict) -> dict:
@@ -127,6 +141,8 @@ def _actions(manifest: dict) -> dict:
         if len(description) > MAX_ACTION_TEXT or not description.isprintable():
             raise ValueError(f"The description of {name} is too long or holds characters that "
                              "can't be shown.")
+        if _bracketed(description):
+            raise ValueError(f"The description of {name} holds < or >, which a skill can't use.")
         params = action.get("params") or {}
         required = action.get("required") or []
         if not isinstance(params, dict) or not all(
@@ -135,6 +151,8 @@ def _actions(manifest: dict) -> dict:
         if not _schema_ok(params):
             raise ValueError(f"The params of {name} are too big or hold characters that can't "
                              "be shown.")
+        if _bracketed(json.dumps(params)):     # keys and every text in it, as _schema_ok passed
+            raise ValueError(f"The params of {name} hold < or >, which a skill can't use.")
         if not isinstance(required, list) or not set(required) <= set(params) or not all(
                 isinstance(r, str) for r in required):
             raise ValueError(f"The action {name} requires a parameter it doesn't declare.")
@@ -783,7 +801,8 @@ def _proxy(entry: _Running, tool: str):
 
 def _shaped(name: str, result) -> dict:
     """What a skill answers goes to the model and the history, so it is held to what a
-    description is: visible characters, a short error, and a size the model can take."""
+    description is: visible characters, no angle brackets, a short error, and a size the model
+    can take."""
     unusable = {"error": f"{name} gave an answer Tuxistant can't use."}
     if not isinstance(result, dict):
         return unusable
@@ -791,7 +810,7 @@ def _shaped(name: str, result) -> dict:
         cleaned = _cleaned(result, 0)
         if "error" in result:
             error = result["error"]
-            error = " ".join(error.split()) if isinstance(error, str) else ""
+            error = " ".join(_unbracketed(error).split()) if isinstance(error, str) else ""
             cleaned["error"] = printable(error, MAX_ERROR_CHARS) or f"{name} could not do that."
         size = len(json.dumps(cleaned, ensure_ascii=False))
     except (TypeError, ValueError, RecursionError):
@@ -809,7 +828,7 @@ def _cleaned(value, depth: int):
     if isinstance(value, list):
         return [_cleaned(item, depth + 1) for item in value]
     if isinstance(value, str):
-        return printable(value, MAX_RESULT_CHARS)
+        return printable(_unbracketed(value), MAX_RESULT_CHARS)
     if isinstance(value, float) and not math.isfinite(value):
         return None
     if value is None or isinstance(value, (bool, int, float)):
