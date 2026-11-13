@@ -14,18 +14,20 @@
 
 - A timer or reminder whose words couldn't be spoken, for example with the speech server down, is no longer marked missed at once. It stays pending and is tried again after one, two and four minutes, and only then counts as missed. The error shows once for each try. Once some of the words were heard it counts as said, so it is never said twice.
 - The timer chime plays to its end however the words fail, such as a refused connection or a timeout, not only on a server error. A key press still cuts it.
+- A timer or reminder whose words were cut by the screen locking before any was heard is no longer recorded as said. It is said after the unlock, late if it has to be.
+- One timer waiting to be tried again after its words failed no longer holds back the ones due after it. They are said on time.
 - If the timer scheduler ever fails, it is logged and starts again, so timers keep working for the rest of the session.
 - On a real daemon the timer chime never played on a locked screen, and a timer that came due while the screen was unlocked was marked missed instead of said. A setting was read by a name that was lost when the daemon's start-up code was split in two.
 - If the screen-lock check fails while it is being set up, speech stays locked, so a timer shows a notification and is not said aloud on what may be a locked screen.
 - A damaged `timers.json` holding an absurd id or time loses only that row. A due time in the last days of the year 9999 no longer stops every timer listing.
 - A saved id counter at its very top no longer hands out ids that the next start drops.
 - Lights are offered to the model only once a TP-Link email and password are in Settings.
-- A Home Assistant switch or helper whose name or id says alarm, siren, lock, security, armed, disarm or deadbolt, or a garage, door or gate that isn't also a light, lamp, bulb, heater or fan, now waits for a click whichever way it is switched. The name and the id are judged apart, and joined spellings such as Doorlock and Frontdoor count.
+- A Home Assistant switch or helper whose name or id says alarm, siren, lock, security, arm, disarm or deadbolt, or a garage, door or gate that isn't also a light, lamp, bulb, heater or fan, now waits for a click whichever way it is switched. The name and the id are judged apart, and joined spellings such as Doorlock, Frontdoor and Garageopener count.
 - Questions about the music playing, timers and the home, such as "How much time is left?", "Is the kettle on?" or the temperature in a room, go the normal way. They are no longer sorted as facts and sent to Wikipedia.
 - Without Evolution Data Server's Python bindings, Settings now names the packages to install, evolution-data-server and gir1.2-ecal-2.0, in the same words the voice uses, instead of suggesting an Online Account.
 - Settings no longer tells you to add an Online Account when it can't list your calendars, for example after a timeout or with a daemon that hasn't restarted since an update. It says the listing failed instead.
 - The evaluations and the live protocol test send the key only to a server named for the run, or to one saved in Settings that is neither the default nor on this computer. They share one set of stand-ins, which now also blocks timer notifications and never starts a code skill's process.
-- The voice check and the demo video now check the server before they send the key, like the evaluations. A demo video with no server the key may go to comes out silent. Every way of writing this computer's address is refused unless it is named for the run: 127.1, 2130706433, ::ffff:127.0.0.1, ip6-localhost and the machine's own name among them.
+- The voice check and the demo video now check the server before they send the key, like the evaluations. A demo video with no server the key may go to comes out silent. A server on this computer is refused unless it is named for the run: a loopback address in any spelling, such as 127.1, 2130706433 or ::ffff:127.0.0.1, a localhost name such as ip6-localhost, the machine's own name, and any address its network interfaces hold. Nothing is looked up, so another name that `/etc/hosts` gives this computer is not caught. The end-to-end harness now needs `TUXISTANT_SERVER` as well.
 - A new test, `tests/test_names.py`, fails the suite on any name a function reads as a global that nothing defines. It reads every file under `tuxistant/` and `tools/` without running them, so it would have caught the timer chime bug above.
 
 ## 0.2.0

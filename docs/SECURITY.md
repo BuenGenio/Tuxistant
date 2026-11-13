@@ -180,7 +180,7 @@ When a skill's new `skill.yaml` was broken, Tux said the last version that worke
 
 ### The switch that opens the garage
 
-A Home Assistant switch can be a garage door's relay, and a helper an alarm's arming flag. Both were switched with no card. One whose name or id says it works an alarm, a lock, a garage, a door or a gate now shows a card, which the daemon writes from the entity and the service. The name and the id are judged apart, so renaming a rewired `switch.porch_light` to "Garage door" still counts. One named for something else, such as "Relay 2", still runs with no card.
+A Home Assistant switch can be a garage door's relay, and a helper an alarm's arming flag. Both were switched with no card. One whose name or id says alarm, siren, lock, security, arm, disarm or deadbolt, joined spellings such as Doorlock included, or garage, door or gate, now shows a card, which the daemon writes from the entity and the service. The name and the id are judged apart, so renaming a rewired `switch.porch_light` to "Garage door" still counts. A garage, door or gate that is also called a light, lamp, bulb, heater or fan does not, so a relay named "Garage light" runs with no card even if it is wired to the garage door. One named for something else, such as "Relay 2", still runs with no card.
 
 ### The front door asked of Wikipedia
 
@@ -202,7 +202,7 @@ Each of these five guards has a regression test checked against a deliberately b
 
 The follow-up review also found that an "alarm" request could match an alarm siren switch. Generic alarm control now refuses before matching devices. Device names lose angle brackets as well as escaping control characters, so they cannot carry chat-template delimiters.
 
-The opt-in live protocol test now permits only the clock. The evaluations, the live test, the voice check and the demo video send the key only to a server named for the run, or to one saved in Settings that is neither the default nor on this computer. Every way of writing this computer's address counts, such as 127.1, ::ffff:127.0.0.1 and the machine's own name. A test fails if a tool reads the settings without that check straight after. Media cut-off tests pin the stand-ins themselves, not just the assignment names. These guards and the Home Assistant-only tool list were also checked by removing each fix in a throwaway copy; all six tests caught their mutation after first passing unbroken.
+The opt-in live protocol test now permits only the clock. The evaluations, the live test, the voice check and the demo video send the key only to a server named for the run, or to one saved in Settings that is neither the default nor on this computer. On this computer means a loopback address in any spelling, such as 127.1 or ::ffff:127.0.0.1, a localhost name, the machine's own name, or an address one of its network interfaces holds. Nothing is looked up, so another name that `/etc/hosts` gives this computer is not caught. A test fails if a tool reads the settings without that check straight after. Media cut-off tests pin the stand-ins themselves, not just the assignment names. These guards and the Home Assistant-only tool list were also checked by removing each fix in a throwaway copy; all six tests caught their mutation after first passing unbroken.
 
 Cloud tasks now ask before forwarding Home Assistant or stored timer results, including errors that reveal names. Tests exercise all four actions against a fake cloud SDK and verify that declining sends only a withheld notice.
 
