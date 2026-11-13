@@ -1739,6 +1739,42 @@ class Wired(WithHome):
         squashed = homeassistant._entity(raw, TOKEN, {})
         self.assertTrue(homeassistant._guarded(squashed))
 
+    def guarded(self, entity, name):
+        raw = {"entity_id": entity, "state": "on", "attributes": {"friendly_name": name}}
+        return homeassistant._guarded(homeassistant._entity(raw, TOKEN, {}))
+
+    def test_joined_up_names_and_arming_words_are_guarded(self):
+        for entity, name in (("switch.doorlock", "Doorlock"), ("switch.frontdoor", "Frontdoor"),
+                             ("switch.backdoor", "Backdoor"), ("switch.garagedoor", "Garagedoor"),
+                             ("switch.smartlock", "SmartLock"), ("switch.relay_4", "Deadbolt"),
+                             ("switch.drivewaygate", "Drivewaygate"),
+                             ("input_boolean.house_armed", "House armed"),
+                             ("input_boolean.disarm_at_dawn", "Dawn"),
+                             ("input_boolean.alarm_arming", "Arming")):
+            with self.subTest(entity):
+                self.assertTrue(self.guarded(entity, name))
+
+    def test_a_light_in_the_id_does_not_cancel_a_door_in_the_name(self):
+        for entity in ("switch.porch_light", "switch.garage_door_light_relay"):
+            with self.subTest(entity):
+                self.assertTrue(self.guarded(entity, "Garage door"))
+        self.add("switch.porch_light", "off", "Garage door")
+        result, _ = self.execute("home_set", name="garage door", state="on")
+        self.assertTrue(result["declined"])
+        self.assertEqual(self.asked[0].title, "Turn on Garage door?")
+        self.assertEqual(self.services(), [])
+
+    def test_words_that_only_hold_a_lock_or_a_door_are_not_guarded(self):
+        for entity, name in (("switch.clock_radio", "Clock radio"),
+                             ("switch.block_heater", "Block heater"),
+                             ("switch.doorbell_chime", "Doorbell"),
+                             ("switch.outdoor_plug", "Outdoor plug"),
+                             ("switch.indoor_fan", "Indoor fan"),
+                             ("switch.gateway", "Network gateway"),
+                             ("switch.frontdoor_lamp", "Frontdoor lamp")):
+            with self.subTest(entity):
+                self.assertFalse(self.guarded(entity, name))
+
     def test_the_card_text_is_the_daemons_own(self):
         """Nothing the server or the model wrote is on it but the entity's cut name and id."""
         self.add("switch.garage_door", "off", "Garage door")

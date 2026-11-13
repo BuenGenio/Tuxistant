@@ -73,8 +73,8 @@ SORTED = tuple((f'Message: "{said}"', label) for said, label in (
     ("What's the Italian for thanks?", "OTHER"), ("When did the Berlin Wall fall?", "FACT"),
     ("How many files are in Downloads?", "OTHER"), ("Tell me a joke", "OTHER"),
     ("What is florbium?", "FACT"), ("Who won the 1975 Nobel Prize in Gardening?", "FACT"),
-    ("Who sings this?", "OTHER"), ("How long is left on the pasta?", "OTHER"),
-    ("Is the front door locked?", "OTHER"),
+    ("Who is singing right now?", "OTHER"), ("How long until my eggs are done?", "OTHER"),
+    ("Is the back door shut?", "OTHER"),
 ))
 # What only this computer or this house can answer: the music playing, the timers, the home. Sent
 # to Wikipedia these would be a wrong answer and a private question asked of a stranger, with no
@@ -84,14 +84,21 @@ HERE = re.compile(r"\b(?:" + "|".join((
     r"(?:this|that|the current) (?:song|track|tune|album|record|artist|band|singer|music|video"
     r"|podcast|episode|playlist|station)",
     r"(?:song|track|tune|album|music) (?:is (?:this|that|playing|on)|playing)",
-    r"(?:sings?|singing|plays?|playing) (?:this|that|now|right now)",
-    r"(?:who|what)(?:'s| is) (?:singing|playing)",
+    r"(?:sings?|sang|singing|plays?|played|playing) (?:this|that|now|right now)",
+    r"(?:who|what)(?:'s| is| was) (?:singing|playing)",
     r"timers?|reminders?|countdown",
-    r"(?:time|minutes|seconds|long) left|left on|how much longer",
+    r"(?:time|minutes|seconds|long) (?:is |are )?left|left on|how much longer",
     r"locked|unlocked|switched (?:on|off)|turned (?:on|off)|lights? (?:on|off)",
     r"(?:doors?|windows?|gates?|garage|blinds?|curtains?) (?:open|closed|shut)",
     r"front door|back door|garage door|the garage|the heating|thermostat|the alarm(?! clock)",
-    r"in the house|at home|home assistant",
+    r"alarm (?:is )?(?:set|armed|disarmed|on|off)",
+    r"in the house|at home|home assistant|(?:any|some|every|no)(?:one|body) (?:at )?home",
+    r"(?:temperature|humidity|warm|cold|hot|humid)(?: is it)? (?:in|inside)(?: the)? (?:\w+ )?"
+    r"(?:room|bedroom|kitchen|bathroom|hall|hallway|office|study|lounge|basement|attic|nursery"
+    r"|cellar|loft|house|flat)",
+    r"(?:temperature|humidity) inside|(?:indoor|inside|room) (?:temperature|humidity)",
+    # "Is the kettle on?": asked of a thing as a whole question, it's a thing in this house.
+    r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running)$",
 )) + r")\b")
 GROUNDED = (
     "Answer the question in one short plain sentence using only the search results below. If "
@@ -196,7 +203,8 @@ def calculate(question: str) -> str | None:
 
 def about_here(heard: str) -> bool:
     """Whether the words are about this computer, its music or timers, or the home."""
-    return bool(HERE.search(heard.casefold().replace("\u2019", "'")))
+    said = heard.casefold().replace("\u2019", "'").strip().rstrip("?!. ")
+    return bool(HERE.search(said))
 
 
 async def is_fact(heard: str, config) -> bool:

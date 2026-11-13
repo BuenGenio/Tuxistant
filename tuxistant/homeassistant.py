@@ -123,10 +123,18 @@ UNSEEN = {"scene": "A scene can change anything in Home Assistant, a lock or a g
 # A switch or a helper can be wired to anything, so one whose name or id says it works an alarm,
 # a lock or a way in waits for a click, whichever way it is switched: a garage door's relay opens
 # it on and off alike, and switching an alarm's helper off can disarm it. A way in also names a
-# place, so "Garage light" and "Gate lamp", which say what they are, don't.
+# place, so "Garage light" and "Gate lamp", which say what they are, don't. The name and the id are
+# judged apart, since people rename a switch.porch_light "Garage door" when they rewire it.
 GUARDED_DOMAINS = {"switch", "input_boolean"}
-GUARDED_WORDS = {"alarm", "siren", "lock", "unlock", "security"}
+GUARDED_WORDS = {"alarm", "siren", "lock", "unlock", "security", "armed", "disarmed", "disarm",
+                 "arming", "disarming", "deadbolt"}
 WAY_IN = {"garage", "door", "gate"}
+# Joined up, as ids and names often are: "doorlock", "SmartLock", "frontdoor", "drivewaygate".
+# Not a clock, a block, a doorbell or the lights outdoors, nor a network gateway.
+JOINED_LOCK = re.compile(r"(?<![cb])lock")
+JOINED_WAY_IN = re.compile(r"door(?!bell)|(?:front|back|side|garden|drive|driveway|yard|main"
+                           r"|garage)gate|^gate(?!way)")
+NOT_DOORS = {"indoor", "outdoor"}
 HARMLESS = {"light", "lamp", "bulb", "heater", "fan"}
 GUARDED_VERBS = {"turn_on": "Turn on", "turn_off": "Turn off", "toggle": "Toggle"}
 GUARDED = ("Its name says it may work an alarm, a lock or a door, and a switch does whatever "
@@ -977,14 +985,27 @@ def _carry_out(server: _Server, steps: list[_Step], unit: str, problems: list[st
     return _result("now", lines, problems + refused + behind)
 
 
+def _works_a_lock(word: str) -> bool:
+    return word in GUARDED_WORDS or bool(JOINED_LOCK.search(word))
+
+
+def _way_in(word: str) -> bool:
+    return word in WAY_IN or word not in NOT_DOORS and bool(JOINED_WAY_IN.search(word))
+
+
+def _named_guarded(text: str) -> bool:
+    words = set(_words(re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)))
+    if any(map(_works_a_lock, words)):
+        return True
+    return any(map(_way_in, words)) and not words & HARMLESS
+
+
 def _guarded(entity: Entity) -> bool:
     """A switch named for an alarm, a lock or a way in. The id counts as much as the name, and
     "GarageDoor" as much as "garage door"."""
     if entity.domain not in GUARDED_DOMAINS:
         return False
-    named = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", entity.name)
-    words = {*_words(named), *_words(entity.id.partition(".")[2])}
-    return bool(words & GUARDED_WORDS or words & WAY_IN and not words & HARMLESS)
+    return _named_guarded(entity.name) or _named_guarded(entity.id.partition(".")[2])
 
 
 def _needs_click(step: _Step) -> bool:
