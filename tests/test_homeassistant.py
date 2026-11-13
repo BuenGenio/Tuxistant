@@ -1808,18 +1808,19 @@ class Wired(WithHome):
         self.assertNotIn("Bearer", json.dumps(said))
 
     def test_an_evaluation_is_cut_off_from_every_real_home(self):
-        """tools/eval_flows.py runs the real handlers, and a light or the heating has no card
-        for it to decline. It is read here and never imported, as importing it would run it."""
+        """tools/eval_flows.py and the live test run the real handlers behind
+        tools/eval_cutoffs.py, and a light or the heating has no card for them to decline.
+        eval_flows is read here and never imported, as importing it would run it."""
+        from tools.eval_cutoffs import NoHome, install
+        real_home = {**self.set_up, "ha_server": "192.168.1.5:8123"}
+        with install():
+            with self.assertRaises(RuntimeError):
+                homeassistant._opener.open("http://192.168.1.5:8123/api/states")
+            server = homeassistant._connect(real_home)
+            self.assertNotIn(TOKEN, repr(vars(server)))
+            self.assertEqual(server.url, "http://eval.invalid")
+            self.assertIsInstance(homeassistant._call.__self__, NoHome)
         flows = (ROOT / "tools" / "eval_flows.py").read_text()
-        for cut, put in (("_opener.open", "blocked"), ("_connect", "lambda _config: "),
-                         ("_call", r"NoHome\(\)\.call")):
-            with self.subTest(cut):
-                found = re.findall(rf"^homeassistant\.{re.escape(cut)} = {put}", flows, re.M)
-                self.assertEqual(len(found), 1)
-                self.assertLess(flows.index(f"\nhomeassistant.{cut} = "),
-                                flows.index("\nasyncio.run("))
-        self.assertLess(flows.index("\nhomeassistant._opener.open = "),
-                        flows.index("\ncfg = Config()"), "before the real settings are read")
         made_up = 'cfg.values["ha_server"], cfg.values["ha_token"] = "eval.invalid:8123", "eval"'
         self.assertEqual(flows.count(f"\n{made_up}\n"), 1,
                          "the real address and token are not what Skills is given")

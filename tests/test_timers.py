@@ -1352,16 +1352,22 @@ class Wired(InTemp, unittest.IsolatedAsyncioTestCase):
                         "a second daemon must have gone before the file is opened")
 
     def test_an_evaluation_gets_a_store_in_a_folder_that_goes_away(self):
-        """tools/eval_flows.py runs the real handlers, and these have no card for it to decline.
-        It is read here and never imported, as importing it would run it."""
-        flows = (ROOT / "tools" / "eval_flows.py").read_text()
-        self.assertEqual(re.findall(r"^TIMERS = (.+)$", flows, re.M),
-                         ['tempfile.TemporaryDirectory(prefix="tuxistant-eval-")'])
-        self.assertEqual(re.findall(r"^\s*timers\.attach\((.+)\)$", flows, re.M),
-                         ['timers.Store(Path(TIMERS.name) / "timers.json")'])
-        self.assertLess(flows.index("\ntimers.attach("), flows.index("\nasyncio.run("))
-        self.assertNotIn("timers.run(", flows, "nothing set in an evaluation may ever be said")
-        self.assertNotIn("DATA_DIR", flows)
+        """tools/eval_flows.py and the live test run the real handlers behind
+        tools/eval_cutoffs.py, and these have no card for them to decline. eval_flows is read
+        here and never imported, as importing it would run it."""
+        from tools.eval_cutoffs import install
+        with install():
+            folder = timers._attached.path.parent
+            self.assertTrue(folder.name.startswith("tuxistant-eval-"))
+            self.assertEqual(folder.parent, Path(tempfile.gettempdir()))
+            with self.assertRaises(RuntimeError):
+                timers.notify(None, None)     # what the scheduler would show
+        self.assertFalse(folder.exists())
+        self.assertIsNone(timers._attached)
+        for tool in ("eval_flows.py", "eval_cutoffs.py"):
+            source = (ROOT / "tools" / tool).read_text()
+            self.assertNotIn("timers.run(", source, "nothing set in an evaluation may be said")
+            self.assertNotIn("DATA_DIR", source)
 
     def test_the_chime_is_off_until_it_is_switched_on(self):
         """README says nothing listens or speaks while the screen is locked."""

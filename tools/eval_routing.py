@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Which tool does the real model pick? Run this after adding a tool or changing a description.
 
-    python3 tools/eval_routing.py [repeats] [text to filter on]
+    python3 tools/eval_routing.py [--server host:port] [repeats] [text to filter on]
     TUX_EVAL_HOME=1 python3 tools/eval_routing.py       with Home Assistant's tools and cases
 
 Nothing is executed: a turn stops at the first tool call. Needs the LocalAI server. The small
