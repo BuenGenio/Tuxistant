@@ -12,6 +12,10 @@ stand in for a built-in action.
 What a skill you added was allowed is kept by its id. A new version that asks for more is not
 used until you take the skill out and put it back, and then the data it kept is cleared, so
 what an older version stored can't leave through a permission it never had.
+
+A YAML file directly in your skills folder is a recipe: no code, only the requests, windows and
+sentences tuxistant/recipes.py knows how to make. Recipes and code skills you added share one
+budget of actions, as every tool the small model is offered costs it some of its other answers.
 """
 import asyncio
 import hashlib
@@ -45,6 +49,7 @@ DEFAULT_TIMEOUT_S = 15
 MAX_TIMEOUT_S = 60
 BUSY_MARGIN_S = 5
 MAX_MANIFEST_BYTES = 64 * 1024
+MAX_YAML_DEPTH = 16             # the deepest manifest that ships is 7
 MAX_FOLDER_BYTES = 50 * 1024 * 1024
 MAX_FOLDER_FILES = 2000
 MAX_ACTIONS = 32
@@ -60,6 +65,7 @@ USER_IDLE_S = 300
 IGNORED_PARTS = frozenset({"__pycache__"})
 GRANTS = "skill-grants.json"    # next to the skills folder, so tests that move it move this too
 CODE_DIR = "skill-code"         # the checked copies that skills really run from
+LOADED = "skills-loaded.json"   # yours that were loaded, by name, so a restart keeps their place
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
 ACTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+")
 PARAM = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}")
@@ -70,15 +76,57 @@ FIELDS = {"id", "name", "description", "version", "run", "permissions", "config"
 ACTION_FIELDS = {"description", "params", "required"}
 REFUSED_PERMISSIONS = ("shell", "files_read", "files_write", "clipboard")
 UPDATED = "That skill was just updated. Please ask again."
+USER_TOOLS = 6      # actions from skills you added, code and recipes together
+OVER_BUDGET = ("Tux already has six actions from skills you added, and more would make it worse "
+               "at choosing the right one. Take one out to use this one.")
+NOT_YAML = "A recipe's file name has to end in .yaml."
+TOO_DEEP = "It is nested more than 16 levels deep, which no skill needs."
 
 
-def _read_yaml(file: Path) -> dict:
+class Bounded(yaml.SafeLoader):
+    """safe_load that stops at the first node nested too deep. PyYAML takes about a millisecond
+    for each level of [ or { it holds open, so 64 KB of them held the event loop for a minute,
+    and composing is lazy, so stopping here stops the scan too."""
+    depth = 0
+
+    def compose_node(self, parent, index):
+        self.depth += 1
+        try:
+            if self.depth > MAX_YAML_DEPTH:
+                raise ValueError(TOO_DEEP)
+            return super().compose_node(parent, index)
+        finally:
+            self.depth -= 1
+
+
+class Unaliased(Bounded):
+    """A few hundred bytes of aliases grow to gigabytes once anything walks what they built, and
+    a cap on depth doesn't see them, as an alias isn't composed again. Refused as each node is
+    reached, so nothing reads the file twice. Recipes and the code skills you add use this."""
+
+    def compose_node(self, parent, index):
+        event = self.peek_event()
+        if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
+            raise ValueError("It uses a YAML anchor or alias, & or *, which a skill you add "
+                             "can't.")
+        return super().compose_node(parent, index)
+
+
+def load_yaml(text: str, loader=Bounded):
+    reader = loader(text)
+    try:
+        return reader.get_single_data()
+    finally:
+        reader.dispose()
+
+
+def _read_yaml(file: Path, loader=Bounded) -> dict:
     if file.is_symlink():
         raise ValueError(f"Its {file.name} is a link. It has to be a real file.")
     try:
         if file.stat().st_size > MAX_MANIFEST_BYTES:
             raise ValueError(f"Its {file.name} is too big.")
-        data = yaml.safe_load(file.read_text())
+        data = load_yaml(file.read_text(), loader)
     except FileNotFoundError:
         raise ValueError(f"It has no {file.name}.") from None
     except UnicodeDecodeError:
@@ -129,20 +177,10 @@ def _actions(manifest: dict) -> dict:
         raise ValueError(f"It declares more than {MAX_ACTIONS} actions.")
     checked = {}
     for name, action in actions.items():
-        if not isinstance(name, str) or len(name) > 60 or not ACTION.fullmatch(name):
-            raise ValueError(f"The action {shown(name, 60)} needs a name like skill.do, in "
-                             "small letters.")
+        action_name(name)
         if not isinstance(action, dict) or set(action) - ACTION_FIELDS:
             raise ValueError(f"The action {name} has fields it shouldn't have.")
-        description = action.get("description")
-        if not isinstance(description, str) or not description.strip():
-            raise ValueError(f"The action {name} has no description.")
-        description = " ".join(description.split())
-        if len(description) > MAX_ACTION_TEXT or not description.isprintable():
-            raise ValueError(f"The description of {name} is too long or holds characters that "
-                             "can't be shown.")
-        if _bracketed(description):
-            raise ValueError(f"The description of {name} holds < or >, which a skill can't use.")
+        description = action_description(name, action)
         params = action.get("params") or {}
         required = action.get("required") or []
         if not isinstance(params, dict) or not all(
@@ -159,6 +197,37 @@ def _actions(manifest: dict) -> dict:
         checked[name] = {"description": description, "params": params,
                          "required": required}
     return checked
+
+
+def action_name(name) -> str:
+    if not isinstance(name, str) or len(name) > 60 or not ACTION.fullmatch(name):
+        raise ValueError(f"The action {shown(name, 60)} needs a name like skill.do, in small "
+                         "letters.")
+    return name
+
+
+def action_description(name: str, action: dict) -> str:
+    """What the model routes on, so it is held to one short line it can be shown."""
+    description = action.get("description")
+    if not isinstance(description, str) or not description.strip():
+        raise ValueError(f"The action {name} has no description.")
+    description = " ".join(description.split())
+    if len(description) > MAX_ACTION_TEXT or not description.isprintable():
+        raise ValueError(f"The description of {name} is too long or holds characters that "
+                         "can't be shown.")
+    if _bracketed(description):
+        raise ValueError(f"The description of {name} holds < or >, which a skill can't use.")
+    return description
+
+
+def skill_id(manifest: dict, bundled: bool = False) -> str:
+    value = manifest.get("id")
+    if not isinstance(value, str) or len(value) > 100 or not SKILL_ID.fullmatch(value):
+        raise ValueError("Its id has to look like org.example.name, in small letters.")
+    if value.startswith(RESERVED) and not bundled:
+        raise ValueError(f"Its id starts with {RESERVED}, which only skills that come with "
+                         "Tuxistant may use.")
+    return value
 
 
 def _schema_ok(params: dict) -> bool:
@@ -247,18 +316,12 @@ def _timeout(manifest: dict) -> float:
 
 def load_code_manifest(folder: Path, bundled: bool) -> dict:
     """A code skill's skill.yaml, checked. Raises ValueError with a reason fit to be spoken."""
-    manifest = _read_yaml(folder / MANIFEST)
+    manifest = _read_yaml(folder / MANIFEST, Bounded if bundled else Unaliased)
     unknown = set(manifest) - FIELDS
     if unknown:
         raise ValueError(f"Its {MANIFEST} has fields Tuxistant doesn't know: "
                          f"{shown(', '.join(sorted(map(str, unknown))), 100)}.")
-    skill_id = manifest.get("id")
-    if not isinstance(skill_id, str) or len(skill_id) > 100 or not SKILL_ID.fullmatch(skill_id):
-        raise ValueError("Its id has to look like org.example.name, in small letters.")
-    if skill_id.startswith(RESERVED) and not bundled:
-        raise ValueError(f"Its id starts with {RESERVED}, which only skills that come with "
-                         "Tuxistant may use.")
-    return {"id": skill_id, "name": _text(manifest, "name"),
+    return {"id": skill_id(manifest, bundled), "name": _text(manifest, "name"),
             "description": _text(manifest, "description"),
             "version": _text(manifest, "version", required=False),
             "run": _run(manifest, folder), "permissions": _permissions(manifest),
@@ -323,12 +386,19 @@ class _Running:
 
 
 def _beyond(manifest: dict, granted: dict) -> list[str]:
-    """What a manifest asks for that was never allowed, in words."""
+    """What a manifest asks for that was never allowed, in words. A recipe names its hosts, so
+    one host more is more, though the network was allowed before."""
     more = []
-    if manifest["permissions"].get("network") and not granted.get("permissions", {}).get(
-            "network"):
-        more.append("the network")
-    more += [f"the setting {key}" for key in manifest["config"]
+    asked = manifest["permissions"].get("network")
+    had = granted.get("permissions", {}).get("network")
+    if asked and had is not True:
+        new = sorted(set(asked) - set(had or ())) if isinstance(asked, list) else []
+        if not isinstance(asked, list) or not isinstance(had, list):
+            more.append(f"to reach {', '.join(asked)}" if isinstance(asked, list)
+                        else "for the network")
+        elif new:
+            more.append(f"to reach {', '.join(new)}")
+    more += [f"for the setting {key}" for key in manifest.get("config", [])
              if key not in granted.get("config", [])]
     return more
 
@@ -370,7 +440,11 @@ class _Grants:
             return ""
         if record.get("folder") != folder.name:   # it stays refused while this folder is there
             record["folder"], self._dirty = folder.name, True
-        return (f"It now asks for {' and '.join(more)}, which it wasn't allowed before, so the "
+        if manifest.get("recipe"):
+            return (f"It now asks {' and '.join(more)}, which it wasn't allowed before, so the "
+                    "new version isn't used. To allow it, take the file out of your skills "
+                    "folder, wait a moment, and put it back.")
+        return (f"It now asks {' and '.join(more)}, which it wasn't allowed before, so the "
                 "new version isn't used. To allow it, take the skill out of your skills folder, "
                 "wait a moment, and put it back. What it saved is then cleared.")
 
@@ -378,7 +452,7 @@ class _Grants:
         """True when what the skill saved has to be cleared: it is back with more than before."""
         record = self.records.get(manifest["id"])
         fresh = {"permissions": dict(manifest["permissions"]),
-                 "config": list(manifest["config"]), "folder": folder.name}
+                 "config": list(manifest.get("config", [])), "folder": folder.name}
         if record is None:
             self.records[manifest["id"]], self._dirty = fresh, True
             return False
@@ -392,21 +466,45 @@ class _Grants:
 
     def gone(self, user: Path) -> None:
         for record in self.records.values():
-            if not record.get("removed") and not (user / str(record.get("folder"))).is_dir():
+            if not record.get("removed") and not (user / str(record.get("folder"))).exists():
                 record["removed"], self._dirty = True, True
 
     def save(self) -> None:
         if not self._dirty or not self.writable:
             return
         try:
-            self.file.parent.mkdir(parents=True, exist_ok=True)
-            fd, temp = tempfile.mkstemp(prefix=".grants-", dir=self.file.parent)
-            with os.fdopen(fd, "w") as out:
-                json.dump(self.records, out, indent=1, sort_keys=True)
-            os.replace(temp, self.file)
+            _write_json(self.file, self.records)
             self._dirty = False
         except OSError as e:
             log.warning("could not save what skills were allowed: %s", e)
+
+
+def _write_json(file: Path, data) -> None:
+    """Whole or not at all, so a crash halfway leaves the last copy."""
+    file.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(prefix=f".{file.stem}-", dir=file.parent)
+    try:
+        with os.fdopen(fd, "w") as out:
+            json.dump(data, out, indent=1, sort_keys=True)
+        os.replace(temp, file)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
+def _read_names(file: Path) -> set[str]:
+    try:
+        data = json.loads(file.read_text())
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError):
+        log.warning("could not read %s, so the skills you added load in name order", file)
+        return set()
+    return {name for name in data if _plain_name(name)} if isinstance(data, list) else set()
+
+
+def _plain_name(name) -> bool:
+    return isinstance(name, str) and name not in ("", ".", "..") and "/" not in name
 
 
 @dataclass
@@ -415,16 +513,26 @@ class _Found:
     manifest: dict
     folder: Path | None = None      # code skills only
     digest: str = ""
+    kind: str = "builtin"           # "builtin", "code" or "recipe"
 
 
 class SkillHost:
     def __init__(self, config, builtin=BUILTIN, bundled=BUNDLED, user=USER_DIR,
-                 launcher=None, on_change=None):
+                 launcher=None, on_change=None, recipes=None):
+        if recipes is None:
+            from . import recipes as recipe_module
+            recipes = recipe_module.handlers
+        self.recipe_handlers = recipes      # a recipe's manifest -> its async handlers
         self.config = config
         self.builtin, self.bundled, self.user = Path(builtin), Path(bundled), Path(user)
         self.launcher = launcher or self._launch
         self.on_change = on_change
         self.problems: dict[str, str] = {}
+        self.loaded = self.user.parent / LOADED
+        self.saved = _read_names(self.loaded)
+        # keys of what keeps its place in the budget: what the last reload loaded, or at start
+        # yours that loaded before the restart
+        self.offered: set[str] = {str(self.user / name) for name in self.saved}
         self.running: dict[str, _Running] = {}      # by folder
         self.last_good: dict[str, _Found] = {}      # by folder or file
         self.stopping: set[asyncio.Task] = set()
@@ -476,17 +584,31 @@ class SkillHost:
         problems: dict[str, str] = {}
         try:
             found = self._scan(problems)
-            chosen = self._resolve(found, problems)
+            sandbox_problem = self._sandbox_problem()
+            chosen = self._resolve(found, problems, sandbox_problem)
             self._grant(chosen)
-            skills, running = self._build(chosen, problems)
+            skills, running, offered = self._build(chosen, problems, sandbox_problem)
         except Exception as e:
             log.exception("reloading the skills failed")
             problems["skills"] = f"The skills could not be reloaded: {e}"
             self.problems = problems
             return dict(problems)
         self._swap(skills, running)
-        self.problems = problems
+        self.problems, self.offered = problems, offered
+        self._save_loaded()
         return dict(problems)
+
+    def _save_loaded(self) -> None:
+        """The order of the budget has to outlast a restart, or a skill refused for being one too
+        many would take the place of one that worked, at the next login."""
+        names = {Path(key).name for key in self.offered if Path(key).parent == self.user}
+        if names == self.saved or not self.grants.writable:
+            return
+        try:
+            _write_json(self.loaded, sorted(names))
+            self.saved = names
+        except OSError as e:
+            log.warning("could not save which skills were loaded: %s", e)
 
     # Reading what is on disk
 
@@ -495,11 +617,16 @@ class SkillHost:
         for file in self._listing(self.builtin, "*.yaml", problems):
             found += self._attempt(str(file), problems, lambda f=file: self._builtin(f))
         for root, bundled in ((self.bundled, True), (self.user, False)):
-            for folder in self._listing(root, "*", problems):
-                if folder.is_dir() and not folder.name.startswith(".") and (
-                        folder.name not in IGNORED_PARTS):
-                    found += self._attempt(str(folder), problems,
-                                           lambda f=folder, b=bundled: self._code(f, b))
+            for entry in self._listing(root, "*", problems):
+                if entry.name.startswith(".") or entry.name in IGNORED_PARTS:
+                    continue
+                if entry.is_dir():
+                    found += self._attempt(str(entry), problems,
+                                           lambda f=entry, b=bundled: self._code(f, b))
+                elif not bundled and _a_recipe(entry):
+                    found += self._attempt(str(entry), problems, lambda f=entry: self._recipe(f))
+                elif not bundled and _almost_a_recipe(entry):
+                    problems[str(entry)] = NOT_YAML
         live = {item.key for item in found} | set(problems)
         self.last_good = {key: item for key, item in self.last_good.items() if key in live}
         return found
@@ -553,13 +680,21 @@ class SkillHost:
         problem = "" if bundled else self.grants.problem(manifest, folder)
         if problem:
             raise ValueError(problem)
-        return _Found(str(folder), manifest, folder.resolve(), fingerprint(folder))
+        return _Found(str(folder), manifest, folder.resolve(), fingerprint(folder), "code")
+
+    def _recipe(self, file: Path) -> _Found:
+        from . import recipes
+        manifest = recipes.load(file)
+        problem = self.grants.problem(manifest, file)
+        if problem:
+            raise ValueError(problem)
+        return _Found(str(file), manifest, kind="recipe")
 
     def _grant(self, chosen: list[_Found]) -> None:
         for item in chosen:
-            if item.folder is not None and item.manifest["source"] == "yours" and (
-                    self.grants.grant(item.manifest, Path(item.key))):
-                self._clear_state(item.manifest["id"])
+            if item.kind != "builtin" and item.manifest["source"] == "yours" and (
+                    self.grants.grant(item.manifest, Path(item.key))) and item.kind == "code":
+                self._clear_state(item.manifest["id"])  # a recipe keeps nothing
         self.grants.gone(self.user)
         self.grants.save()
 
@@ -570,15 +705,28 @@ class SkillHost:
 
     # Deciding who gets what
 
-    def _resolve(self, found: list[_Found], problems: dict) -> list[_Found]:
+    def _resolve(self, found: list[_Found], problems: dict, sandbox_problem: str) -> list[_Found]:
+        """Yours that were loaded keep their place, ahead of new ones, so a file dropped in is
+        the one refused rather than one that was working."""
         ids, actions, tools = set(), set(), set()
-        builtin_ids = {item.manifest["id"] for item in found if item.folder is None}
+        builtin_ids = {item.manifest["id"] for item in found if item.kind == "builtin"}
+        ours = {_namespace(name) for name in HANDLERS} | {
+            _namespace(name) for item in found if item.manifest["source"] != "yours"
+            for name in item.manifest["actions"]}
+        yours = 0
         chosen = []
-        for item in found:
-            problem = self._clash(item, ids, actions, tools, builtin_ids)
+        for item in sorted(found, key=lambda item: item.manifest["source"] == "yours"
+                           and item.key not in self.offered):
+            mine = item.manifest["source"] == "yours"
+            unrunnable = mine and item.kind == "code" and sandbox_problem
+            problem = unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
+                mine and _lookalike(item.manifest, ours)) or (
+                OVER_BUDGET if mine and yours + len(item.manifest["actions"]) > USER_TOOLS
+                else "")
             if problem:
                 problems[item.key] = problem
                 continue
+            yours += len(item.manifest["actions"]) if mine else 0
             ids.add(item.manifest["id"])
             actions.update(item.manifest["actions"])
             tools.update(name.replace(".", "_") for name in item.manifest["actions"])
@@ -589,12 +737,13 @@ class SkillHost:
     def _clash(item: _Found, ids, actions, tools, builtin_ids) -> str:
         manifest = item.manifest
         skill_id = manifest["id"]
-        if item.folder is not None and skill_id in builtin_ids:
+        added = item.kind != "builtin"
+        if added and skill_id in builtin_ids:
             return f"The id {skill_id} belongs to a skill built into Tuxistant."
         if skill_id in ids:
             return f"Another skill already has the id {shown(skill_id, 100)}."
         for name in manifest["actions"]:
-            if name in actions or (item.folder is not None and name in HANDLERS):
+            if name in actions or (added and name in HANDLERS):
                 return f"Another skill already has the action {shown(name, 60)}."
             if name.replace(".", "_") in tools:
                 return f"The action {shown(name, 60)} would have the same tool name as another."
@@ -602,32 +751,36 @@ class SkillHost:
 
     # Building and swapping
 
-    def _build(self, chosen: list[_Found], problems: dict):
-        """The new Skills and the processes it uses. Nothing is swapped yet."""
+    def _build(self, chosen: list[_Found], problems: dict, sandbox_problem: str):
+        """The new Skills, the processes it uses and the keys of what keeps its place in the
+        budget. Nothing is swapped yet."""
         running, proxies = {}, {}
-        sandbox_problem = self._sandbox_problem()
-        manifests = []
+        manifests, offered = [], set()
         for item in chosen:
-            if item.folder is not None:
+            if item.kind == "recipe":
+                proxies.update(self.recipe_handlers(item.manifest))
+            elif item.kind == "code":
                 if sandbox_problem:
                     problems[item.key] = sandbox_problem
                     continue
                 try:
                     entry = self._process_for(item)
-                except Exception as e:
+                except Exception as e:     # it still counts, so it keeps its place too
                     problems[item.key] = f"It could not be started: {e}"
+                    offered.add(item.key)
                     continue
                 running[item.key] = entry
                 for name in item.manifest["actions"]:
                     proxies[name] = _proxy(entry, name)
             manifests.append(item.manifest)
+            offered.add(item.key)
         handlers = ChainMap(proxies, HANDLERS)  # HANDLERS read live, so tests can patch it
         try:
             skills = Skills(config=self.config, manifests=manifests, handlers=handlers)
         except Exception:
             self._drop_unused(running)
             raise
-        return skills, running
+        return skills, running, offered
 
     def _sandbox_problem(self) -> str:
         if self.launcher != self._launch:
@@ -781,11 +934,41 @@ class Offline:
 
 
 def offline(config, **folders) -> SkillHost:
-    """The skills the daemon would load, checked and listed, with no code skill started."""
-    host = SkillHost(config, launcher=Offline, **folders)
+    """The skills the daemon would load, checked and listed, with no code skill started and no
+    recipe sending anything."""
+    from . import recipes
+    host = SkillHost(config, launcher=Offline, recipes=recipes.offline_handlers, **folders)
     host.grants.writable = False    # a check allows nothing; the daemon does that
     host.reload()
     return host
+
+
+def _a_recipe(entry: Path) -> bool:
+    """A YAML file at the top of your skills folder. A link is let through to be refused with a
+    reason, rather than skipped without a word."""
+    return entry.suffix == ".yaml" and not ignored(entry.name) and (
+        entry.is_symlink() or entry.is_file())
+
+
+def _almost_a_recipe(entry: Path) -> bool:
+    """coins.yml or coins.json would otherwise be skipped without a word."""
+    return entry.suffix != ".yaml" and entry.suffix.casefold() in (".yaml", ".yml", ".json") and (
+        not ignored(entry.name))
+
+
+def _namespace(action: str) -> str:
+    """The first word of the tool name the model sees, plural or not: files.delete and
+    file_trash.now are file_delete and file_trash_now to it, beside file_find and file_trash."""
+    word = re.split(r"[._]", action, maxsplit=1)[0].casefold()
+    return word[:-1] if word.endswith("s") and len(word) > 1 else word
+
+
+def _lookalike(manifest: dict, ours: set) -> str:
+    for name in manifest["actions"]:
+        if _namespace(name) in ours:
+            return (f"Its action {shown(name, 60)} starts like one built into Tuxistant, so the "
+                    "model could take it for one.")
+    return ""
 
 
 def _proxy(entry: _Running, tool: str):

@@ -1,0 +1,16 @@
+# No network: low risk, and no card for any of these three.
+id: org.example.work
+name: Work
+description: Opens my work chat and tells visitors the Wi-Fi
+version: "1.0.0"
+permissions: {}
+actions:
+  work.chat:
+    description: Open the work chat app
+    open: { app: com.slack.Slack }        # a desktop id; ".desktop" is optional
+  work.sound:
+    description: Open the sound settings for a call
+    open: { settings: sound }
+  work.guestwifi:
+    description: Say the guest Wi-Fi name and where the password is
+    say: "The guest Wi-Fi is called Visitors, and the password is on the fridge."

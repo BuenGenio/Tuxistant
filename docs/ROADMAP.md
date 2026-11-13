@@ -6,7 +6,7 @@ Last updated 2026-11-13.
 
 ## Where things stand
 
-Steps 1 to 3 of the plan below are built, and most of step 4. `v0.2.0` is the latest stable release: it holds only what has worked on the owner's real desktop, plus what 0.1.0 already had. What has come since passes its unit tests and has been evaluated against the real server, with the results and the failures in [TESTING.md](TESTING.md), and most of it has **not yet run on the real desktop**: the list under "Check on the real desktop" says what has.
+Steps 1 to 3 of the plan below are built, and most of step 4. Step 5, recipe skills, is built for 0.5.0 and not yet tried on a real desktop. `v0.2.0` is the latest stable release: it holds only what has worked on the owner's real desktop, plus what 0.1.0 already had. What has come since passes its unit tests and has been evaluated against the real server, with the results and the failures in [TESTING.md](TESTING.md), and most of it has **not yet run on the real desktop**: the list under "Check on the real desktop" says what has.
 
 
 | Part | State |
@@ -31,7 +31,8 @@ Steps 1 to 3 of the plan below are built, and most of step 4. `v0.2.0` is the la
 | Demo video | A 64 second draft from `tools/demo_video.py`: the real extension in an isolated shell, with scripted requests and synthesised voices, and it says so on screen. The owner accepted it on 2026-11-10. Not published anywhere yet |
 | Server kit | In `server/`, copied from the owner's working server with its host name and user id made general. That general copy has not yet set up a second machine |
 | Local code skills and their sandbox | Built and tested: your own skills load, change and go while the daemon runs, each in bubblewrap. Lights now runs this way. Not yet tried on the real desktop |
-| Recipe skills, community registry | Not started |
+| Recipe skills | Built for 0.5.0 and tested with a pretend internet, a made-up app list and temporary folders. Not yet tried on the real desktop, and the four fixture recipes have not been run through `eval_routing` (checks 23 to 26) |
+| Community registry | Not started |
 
 The code is public under GPL-3.0.
 
@@ -43,7 +44,7 @@ The owner approved this order.
 2. **Done, pending real-desktop checks:** typed skills, then the shell gate, with translation as the first real skill, and the planner with an opt-in cloud model.
 3. **Done, pending real-desktop checks: dictation.** Tap Fn, then hold and speak, and the words are typed where the cursor is. No model is involved, so it needs no card. See "Dictation" in [CONTRACT.md](CONTRACT.md).
 4. **Under way: more built-in skills.** Calendar is built. General web search, research, facts answered from Wikipedia, mail search for Thunderbird, media control, timers and reminders, and Home Assistant are done, pending real-desktop checks. Opening apps and Settings pages is built, pending real-desktop checks. Still to come: journal, and mail for people who don't use Thunderbird, through GNOME's Online Accounts.
-5. **Local install of your own skills.** Recipe skills: YAML only, using built-in daemon actions (D-Bus, HTTP, open app), with no code of their own. They load from a user folder. Non-built-in skills must be refused `shell`.
+5. **Built, pending real-desktop checks: recipe skills.** One YAML file in your skills folder with no code of its own, which asks a host it names over HTTP, opens an app or a Settings page, or says a sentence, through daemon code that writes its cards. They load, change and go with the code skills, and share their budget of six actions. Non-built-in skills are refused `shell`. D-Bus is left out: a method name doesn't say what a call will do, so no card could be honest about it. Named desktop actions, written and described by the daemon, are the planned way instead. See "Recipe skills" in [SKILLS.md](SKILLS.md).
 6. **Built, pending real-desktop checks: code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared, and loads, changes and unloads while the daemon runs. See "Code skills" in [SKILLS.md](SKILLS.md). Local only. The only warning so far is a line on the card, "It is a skill you added.", shown when the taint rule asks.
 7. **Community registry.** A reviewed Git repo first, like Flathub: skills arrive as pull requests, and a static index is built from them onto the same GitHub Pages site. Signing means the host doesn't have to be trusted, so no server is needed. Logins, ratings or uploads would need one, as a small API beside the site rather than instead of it.
 
@@ -71,6 +72,7 @@ These were agreed with the owner, so don't reopen them without a reason.
 - **Themes are data**: a JSON file and a GLSL shader, and the website runs the same shaders.
 - **The site shows Now or Soon on every claim.** A feature moves to Now only once it has worked on a real machine.
 - **The site's macOS examples keep naming AirDrop, Spotlight and iPhone.** Tuxistant is meant to do those things on a Mac, so they stay, tagged Soon.
+- **No D-Bus in recipes, in any form (2026-11-13).** A D-Bus method name doesn't say what a call will do, so no daemon code could write an honest card for one. Desktop actions come later as named entries in a fixed table in the daemon, each with its own card rule, which a recipe names by entry: never a bus, path or method in a manifest.
 
 ## Waiting on the owner
 
@@ -100,6 +102,12 @@ Don't act on these until they answer.
 - Apps: an entry whose real file is in the home folder or anywhere else outside a package, such as `/opt`, shows a card with the command it runs, as that command can be anything and its name may come from a web page. A shortcut made on purpose, a Steam game or a "userapp" default browser costs a click every time. `_start` in `tuxistant/apps.py`.
 - Apps: each app starts in a systemd scope of its own through `systemd-run --user --scope`, so it isn't in `tuxistant.service`, under its 1 GB memory limit, or stopped by a daemon restart. Without `systemd-run` it starts as the daemon's child. `file.open`'s `gio open` still has that problem for apps that aren't started over D-Bus.
 - The installer now enables the user unit for everyone, not only with the Fn helper, so the daemon starts at every login. `install.sh`, one line.
+- Recipes: a `get` to a host on the internet whose address holds only `choice` and `number` values shows no card in a fresh conversation, so "What's bitcoin at?" is one step. A hostile recipe or model can make it again and again, five seconds apart, and a whole number can carry a few digits. A card for every request would close that at a click each time. `_call` in `tuxistant/recipes.py`, one condition.
+- Recipes: a request to your local network always shows a card, with the address dialled, as a plug or a router can act on a plain GET. That may teach people to click Allow without reading. Home Assistant and Lights stay the better way for the house. A "don't ask again" switch per recipe is planned.
+- Recipes: after the conversation has read something private, a post or a request carrying your words shows the usual card for reaching out and then its own card, two clicks, so `Skills.execute` stays as it is. One merged card is planned.
+- Recipes: skills you add, recipes and code skills together, bring at most six actions (`USER_TOOLS` in `tuxistant/skillhost.py`), as each tool costs the 4B model some of its other answers. Measured on 2026-11-13 (see "Recipes and the budget" in [TESTING.md](TESTING.md)): six recipe actions moved built-in routing by -18 of 1,550 tries as installed and +22 of 1,840 with Home Assistant only, ten repeats each, and facts by +12 and -9 of 150 and 170, so the budget stays at six. Two wordings in the examples take requests they shouldn't, and "Launch the calculator" and "Close Firefox" got worse; a run with three or four recipe actions would say whether those come from the number of tools.
+- Recipes: a recipe can't reach the servers this install talks to, Home Assistant included, so a Home Assistant webhook can't be a recipe yet. Adding Home Assistant to that list also keeps research pages from fetching it. The list is looked up once a minute at most, outside each page's 8 seconds, as Home Assistant away from home can take seconds to fail.
+- Recipes: the networks of this computer's containers and virtual machines are refused, found as a bridge with no physical card in it or a veth or tap on its own (`guest_networks` in `tuxistant/webfetch.py`). A bridge with the house's card in it counts as the house, so a virtual machine bridged onto your network is a device at home. An Ethernet tunnel on its own, such as a VXLAN tied to a card, looks like a veth and is refused with them.
 
 ## Check on the real desktop
 
@@ -129,6 +137,11 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 
 22. Apps: "Open Firefox", "Open the Bluetooth settings" and "Open Settings". Then restart the daemon and check that Firefox stays open. Make a test shortcut in `~/.local/share/applications`, ask for it, and see its card. Check whether the new window gets focus or GNOME shows a "ready" notice instead. None of this has run on the real desktop.
 
+23. A recipe for a public API: copy `docs/examples/recipes/coins.yaml` somewhere else, point it at a real price API you trust there, then copy it into `~/.local/share/tuxistant/skills/`. A host changed after the file is in the folder is refused until it is taken out and put back. "What's bitcoin at?" should say the price with no card, and History should show `coins.price`. Change its host in the file without taking it out, and Settings, left open, should list it under "Skills with problems".
+24. A recipe for a device at home, such as a WLED strip: the card shows the address on your local network and the body, Deny sends nothing, and Allow changes the strip.
+25. Settings: the Skills page shows a recipe as "A recipe you added.", a broken one under "Skills with problems" with its file name, and "Open skills folder" opens the folder.
+26. **Done 2026-11-13,** on the real server, ten repeats: see "Recipes and the budget" in [TESTING.md](TESTING.md). The recipe cases route 11 of 13 in both setups. Built-in routing moved by about 1.2 points, down as installed and up with Home Assistant only, and facts by +12 and -9, the usual reshuffle when the tool list changes, so `USER_TOOLS` stays at six. Still to do: tighten the `coins.price` and `work.sound` descriptions, which take "What's the price of gold?" (to no tool) and "Show me the Wi-Fi settings", and measure again with three or four recipe actions to see whether "Launch the calculator" and "Close Firefox" recover.
+
 Move site claims from Soon to Now only after the matching check passes.
 
 ## Known limits
@@ -139,6 +152,7 @@ Move site claims from Soon to Now only after the matching check passes.
 - It sometimes opens a file on the way to sending it, which is harmless but not asked for.
 - After a declined card it may say "I can't" rather than "OK, I've left that alone".
 - It chains `file.find` then `phone.send` itself and rarely picks `task.run`.
+- "Send the photo from yesterday to my phone" goes to `file_trash` with `older_than_days: 1`, 10 of 10 with or without recipes (2026-11-13). Only the trash card stops it. It needs a routing case of its own.
 - Its answers about the weather can pair days oddly, and "do I need a coat" varies.
 - With its tools in front of it, it refuses some plain facts and makes up others, such as "aubrium" for the rarest element. Telling it to look things up doesn't work: it picks the tool about one time in seven, and stronger wording broke "Where's my phone?". That's why hold turns are sorted before it hears them. A turn from the shortcut isn't, and still gets this model. See "Facts" below.
 - On a turn that does reach it, every tool costs plain facts. Adding the two light tools: 43 of 50 answered without them, 35 to 40 of 50 with them (5 repeats, 2026-11-10). "When did World War Two end?" went from 5 of 5 to 0 of 5. Shorter wording and a single tool didn't help, as the refusals only moved to other questions. All 27 light requests route right.

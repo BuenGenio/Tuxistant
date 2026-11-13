@@ -21,7 +21,8 @@ from tools import eval_config
 from tools.eval_config import Refused, evaluation_server, on_this_computer, run_server
 from tools.eval_cutoffs import ACTIONS, install, owner, stand_ins
 from tests.test_realtime_live import CountingSkills
-from tuxistant import apps, calendars, homeassistant, mail, mcp, media, phone, timers
+from tuxistant import (apps, calendars, homeassistant, mail, mcp, media, phone, timers,
+                       webfetch)
 from tuxistant.config import DEFAULTS, Config
 from tuxistant.gate import Session
 from tuxistant.skillhost import BUNDLED, Offline
@@ -29,7 +30,6 @@ from tuxistant.skills import HANDLERS
 
 ROOT = Path(__file__).resolve().parent.parent
 KEY = "sk-" + "e" * 40     # made up
-READ_INTERFACES = eval_config._interface_addresses     # setUp stands in for it
 HELD = {"192.168.1.20", "172.17.0.1", "fd00::5"}     # made-up interface addresses
 FIB_TRIE = """Main:
   +-- 0.0.0.0/0 3 0 5
@@ -56,7 +56,7 @@ class EvaluationServer(unittest.TestCase):
         self.addCleanup(folder.cleanup)
         self.path = Path(folder.name) / "config.json"
         for stand_in in (patch.dict("os.environ", {"TUXISTANT_SERVER": ""}),
-                         patch.object(eval_config, "_interface_addresses", return_value=HELD)):
+                         patch.object(eval_config, "this_computer", return_value=HELD)):
             stand_in.start()
             self.addCleanup(stand_in.stop)
 
@@ -121,8 +121,8 @@ class EvaluationServer(unittest.TestCase):
 
     def test_the_interface_addresses_are_read_from_the_kernel_lists(self):
         files = {"/proc/net/fib_trie": FIB_TRIE, "/proc/net/if_inet6": IF_INET6}
-        with patch.object(eval_config, "_read", side_effect=files.get):
-            found = READ_INTERFACES()
+        with patch.object(webfetch, "_read_proc", side_effect=files.get):
+            found = webfetch.this_computer()
         self.assertEqual(found, {"127.0.0.1", "172.17.0.1", "::1", "fd00::5"})
 
     def test_addresses_elsewhere_are_not_taken_for_this_computer(self):
@@ -421,7 +421,7 @@ class EveryActionIsCutOff(unittest.TestCase):
             if isinstance(node, ast.Attribute) and ast.unparse(node.value) == "CUT_OFF":
                 self.fail("the stand-ins stay until the evaluation ends")
         source = ast.unparse(tree)
-        self.assertIn("skills = offline(cfg).current()", source)
+        self.assertIn("skills = offline(cfg, user=eval_skills()).current()", source)
         self.assertIn("cfg.values['ha_server'], cfg.values['ha_token'] = "
                       "('eval.invalid:8123', 'eval')", source)
 
@@ -433,6 +433,24 @@ class EveryActionIsCutOff(unittest.TestCase):
         installed = lines.index("self.addCleanup(install().close)")
         for later in ("Config(", "evaluation_server(", "speech(", "Controller("):
             self.assertLess(installed, next(i for i, line in enumerate(lines) if later in line))
+
+
+class YourSkills(unittest.TestCase):
+    """An evaluation offers the same tools on every computer: never the owner's own skills."""
+
+    def test_the_folder_is_empty_unless_the_fixtures_are_asked_for(self):
+        with patch.dict("os.environ", {"TUX_EVAL_RECIPES": ""}):
+            folder = eval_config.eval_skills()
+        self.assertFalse(folder.exists())
+        self.assertEqual(list(folder.parent.iterdir()), [])
+        with patch.dict("os.environ", {"TUX_EVAL_RECIPES": "1"}):
+            self.assertEqual(eval_config.eval_skills(), ROOT / "tests" / "recipes")
+
+    def test_both_evaluations_use_it(self):
+        for tool in ("eval_routing.py", "eval_flows.py"):
+            source = (ROOT / "tools" / tool).read_text()
+            self.assertIn("user=eval_skills()", source, tool)
+            self.assertEqual(source.count("offline("), 1, tool)
 
 
 class LiveCutoff(unittest.IsolatedAsyncioTestCase):

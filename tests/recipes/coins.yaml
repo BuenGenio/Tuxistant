@@ -1,0 +1,16 @@
+id: org.example.coins
+name: Coin prices
+description: Says the price of bitcoin or ether
+version: "1.0.0"
+permissions:
+  network: [api.coins.example]
+actions:
+  coins.price:
+    description: Say the current price of bitcoin or ether in dollars
+    params:
+      coin: { type: choice, of: [bitcoin, ethereum], description: "Which coin" }
+    required: [coin]
+    get: https://api.coins.example/v1/price/{coin}?currency=usd
+    pick:
+      price: [usd]
+    say: "One {coin} is {price} dollars."

@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tests.test_webfetch import PUBLIC, WORDS, Web  # noqa: E402
+from tests.fakeweb import PUBLIC, WORDS, Web  # noqa: E402
 from tests.test_websearch import Clicks, FakeSearx  # noqa: E402
 from tests.test_websearch import hit as search_hit  # noqa: E402
 from tuxistant import realtime, research, webfetch, websearch  # noqa: E402
@@ -525,6 +525,23 @@ class Clock(Rig):
             said = self.said(await self.ask())
         self.assertLess(time.monotonic() - started, 1.8)
         self.assertIn(research.SOME_FAILED, said)
+
+    async def test_a_slow_home_assistant_costs_the_pages_nothing(self):
+        """Away from home its name can take seconds to fail. Looked up by each page inside its
+        own clock, it made every page fail."""
+        self.skills.config = {**self.config, "ha_server": "http://homeassistant.local:8123"}
+        real = self.web.resolve
+
+        def slow(host, port):
+            if host == "homeassistant.local":
+                time.sleep(1)
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", slow), \
+                mock.patch.object(research, "FETCH_S", 0.5):
+            said = self.said(await self.ask())
+        self.assertIn("site1.example", said)
+        self.assertNotIn(research.SOME_FAILED, said)
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
 
     async def test_a_cancel_stops_the_steps(self):
         def slow(_config, _path, _body):

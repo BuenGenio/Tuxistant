@@ -50,7 +50,14 @@ EXTRA_SKILLS = [
      "permissions": {"shell": True, "files_write": ["~/Documents"], "clipboard": True,
                      "camera": True},
      "actions": ["shell.run"]},
+    {"id": "org.example.tides", "name": "Tides", "description": "Says when the next high tide is",
+     "permissions": {"network": ["api.tides.example"]}, "actions": ["tides.next"],
+     "source": "yours", "recipe": True},
 ]
+SKILL_PROBLEMS = {
+    "/home/tux/.local/share/tuxistant/skills/broken.yaml":
+        "It asks for shell, and a recipe may only name the hosts it reaches.",
+}
 
 
 CALENDARS = [{"id": "cal-family", "name": "Family", "account": "me@example.org"},
@@ -71,6 +78,7 @@ class Daemon(ServiceInterface):
         self.delays = {}
         self.phones = PHONES
         self.calendars = CALENDARS
+        self.skill_problems = SKILL_PROBLEMS
         if not self.history.recent(1):
             self.seed_history()
 
@@ -134,6 +142,11 @@ class Daemon(ServiceInterface):
         return json.dumps(Skills().listing() + extra)
 
     @dbus_method()
+    async def SkillProblems(self) -> "s":
+        await self.enter("SkillProblems")
+        return json.dumps(self.skill_problems)
+
+    @dbus_method()
     async def ListPhones(self) -> "s":
         await self.enter("ListPhones")
         return json.dumps(self.phones)
@@ -161,6 +174,10 @@ class Daemon(ServiceInterface):
 
     @dbus_signal()
     def HistoryChanged(self):
+        pass
+
+    @dbus_signal()
+    def SkillsChanged(self):
         pass
 
 
@@ -198,6 +215,12 @@ class Control(ServiceInterface):
         """A finished request as the daemon would keep it, through the real History."""
         self.daemon.history.add(heard, reply, json.loads(actions), status)
         self.daemon.HistoryChanged()
+
+    @dbus_method()
+    def SetSkillProblems(self, problems: "s"):
+        """A reload found these, as after a file was dropped into the skills folder."""
+        self.daemon.skill_problems = json.loads(problems)
+        self.daemon.SkillsChanged()
 
     @dbus_method()
     def SetPhones(self, phones: "s"):

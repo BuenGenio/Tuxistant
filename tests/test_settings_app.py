@@ -66,6 +66,21 @@ class Logic(unittest.TestCase):
         self.assertFalse(sa.voice_matches(nicole, "male"), "male must not match Female")
         self.assertTrue(sa.voice_matches(lewis, "male brit"))
 
+    def test_skill_subtitles_say_whose_it_is(self):
+        recipe = {"description": "Tides", "permissions": {"network": ["api.example"]},
+                  "source": "yours", "recipe": True}
+        self.assertEqual(sa.skill_subtitle(recipe),
+                         "A recipe you added. Tides\nCan use the network (api.example)")
+        self.assertTrue(sa.skill_subtitle({**recipe, "recipe": False}).startswith(
+            "A skill you added. "))
+        self.assertTrue(sa.skill_subtitle({**recipe, "source": "built-in"}).startswith("Tides"))
+
+    def test_skill_problems_are_named_by_file(self):
+        found = sa.skill_problems({"/x/skills/b.yaml": "Bad.", "/x/skills/a": "Worse."})
+        self.assertEqual(found, [("a", "Worse.", "/x/skills/a"), ("b.yaml", "Bad.",
+                                                                 "/x/skills/b.yaml")])
+        self.assertEqual(sa.skill_problems(["not", "a", "mapping"]), [])
+
     def test_permission_words(self):
         words = sa.permission_words
         self.assertEqual(words({}), "Needs no special permissions")
@@ -1078,6 +1093,19 @@ class Inner(unittest.TestCase):
         self.assertIn("(your own server)", rows["Translate"].get_subtitle())
         self.assertNotIn("(home)", rows["Translate"].get_subtitle())
         self.assertFalse(rows["Run commands"].get_activatable(), "skills are read-only for now")
+        self.assertTrue(rows["Tides"].get_subtitle().startswith("A recipe you added. "))
+        self.assertFalse(rows["Disk space"].get_subtitle().startswith("A "))
+        wait(lambda: page.problem_rows, "the skills with problems")
+        self.assertTrue(page.problems.get_visible())
+        self.assertEqual([r.get_title() for r in page.problem_rows], ["broken.yaml"])
+        self.assertIn("may only name the hosts", page.problem_rows[0].get_subtitle())
+        self.assertTrue(page.problem_rows[0].get_tooltip_text().endswith("/skills/broken.yaml"))
+        before = {row.get_tooltip_text(): row.get_subtitle() for row in page.problem_rows}
+        self.addCleanup(control, "SetSkillProblems", json.dumps(before), signature="s")
+        control("SetSkillProblems", json.dumps({"/x/skills/coins.yml": "Has to end in .yaml."}),
+                signature="s")
+        wait(lambda: [r.get_title() for r in page.problem_rows] == ["coins.yml"],
+             "the problems a reload found, with the window open")
 
     def test_22_history_lists_and_refreshes_live(self):
         page = self.win.history

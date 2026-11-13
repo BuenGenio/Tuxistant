@@ -71,7 +71,8 @@ REACHES = {"news.headlines": livedata.news_hosts}
 # reach card above already asks for the same click, so a call that shows it doesn't get this too.
 ASKS_FIRST = {"knowledge.answer": knowledge.lookup_card}
 # Whether a call sends anything out, asked the same way. One that doesn't needs no reach card: its
-# handler refuses it or answers it at home, on the same test.
+# handler refuses it or answers it at home, on the same test. A recipe's handler carries its own
+# as .sends, as recipes come and go with the folder.
 SENDS = {"knowledge.answer": knowledge.sends}
 # Offered to the model only while its setting is on: every tool in the list costs the small model
 # some of its other answers, and this one is off until asked for. The handler checks again.
@@ -213,8 +214,9 @@ class Skills:
     def _first_card(self, action: dict, name: str, arguments: str, session: Session) -> Ask | None:
         """The card to click before the handler runs, if any, written here from the real call."""
         permissions, args = action["permissions"], _parsed(arguments)
+        sends = SENDS.get(name) or getattr(self.handlers.get(name), "sends", None)
         if (session.tainted and leaves_home(permissions)
-                and (name not in SENDS or SENDS[name](args, self.config))):
+                and (sends is None or sends(args, self.config))):
             hosts = permissions["network"]
             if name in REACHES and hosts is not True:   # never more than was declared
                 hosts = [h for h in REACHES[name](self.config) if h in hosts] or hosts
@@ -226,5 +228,6 @@ class Skills:
     def listing(self) -> list[dict]:
         return [{"id": s["id"], "name": s["name"], "description": s["description"],
                  "risk": s["risk"], "permissions": s.get("permissions") or {},
-                 "actions": sorted(s["actions"]), "source": s["source"]}
+                 "actions": sorted(s["actions"]), "source": s["source"],
+                 "recipe": bool(s.get("recipe"))}
                 for s in self.skills.values()]

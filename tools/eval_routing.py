@@ -4,6 +4,7 @@
     python3 tools/eval_routing.py [--server host:port] [repeats] [text to filter on]
     TUX_EVAL_HOME=1 python3 tools/eval_routing.py       with Home Assistant's tools and cases
     TUX_EVAL_MAIL=0 TUX_EVAL_TAPO=0 ...                 without mail search or the Tapo lights
+    TUX_EVAL_RECIPES=1 python3 tools/eval_routing.py    with the four recipes in tests/recipes
 
 Nothing is executed: a turn stops at the first tool call. Needs the LocalAI server. The small
 model is consistent, so a request that goes wrong usually goes wrong every time, and one tool's
@@ -13,6 +14,11 @@ Home Assistant's two tools are offered only once it is set up, so they and their
 out unless TUX_EVAL_HOME=1. The address and token are then made up, here only: the ones in
 Settings are never read, and nothing is ever sent to a home. Mail search and a made-up TP-Link
 account are on unless set to 0. A case whose tools are all off in a setup is left out.
+
+Your own skills folder is never read, so the numbers are the same on every computer. With
+TUX_EVAL_RECIPES=1 the four recipes in tests/recipes, copies of the examples with six actions
+between them, as many as skills you add may bring, stand in for skills you added, as they would
+be offered, and their cases are added. They never send or open anything here.
 """
 import asyncio
 import collections
@@ -27,7 +33,7 @@ import websockets
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tools.eval_config import evaluation_server
+from tools.eval_config import eval_skills, evaluation_server
 from tuxistant.config import Config, DEFAULTS
 from tuxistant.skillhost import offline
 
@@ -35,13 +41,14 @@ cfg = Config()
 evaluation_server(cfg)
 KEY = cfg["api_key"]
 HOME = os.environ.get("TUX_EVAL_HOME") == "1"
+RECIPES = os.environ.get("TUX_EVAL_RECIPES") == "1"
 MAIL = os.environ.get("TUX_EVAL_MAIL", "1") == "1"
 TAPO = os.environ.get("TUX_EVAL_TAPO", "1") == "1"
 # Lights are offered only with a TP-Link account. Made up too, and no code skill is started.
 SET_UP = {**({"tapo_email": "eval@example.test", "tapo_password": "eval"} if TAPO else {}),
           **({"ha_server": "eval.invalid:8123", "ha_token": "eval"} if HOME else {})}
 # The tools the daemon offers, code skills too, and mail search, which is off until turned on.
-skills = offline({**DEFAULTS, "mail_search": MAIL, **SET_UP}).current()
+skills = offline({**DEFAULTS, "mail_search": MAIL, **SET_UP}, user=eval_skills()).current()
 OFFERED = {t["name"] for t in skills.tools()}
 # Tools a setup switch can turn off. A case for any other tool the daemon doesn't offer stays in
 # and fails, so a renamed tool or a typo in a case shows up as BAD rather than vanishing.
@@ -261,6 +268,27 @@ HOME_CASES = [
     ("Pause the music in the kitchen", {"media_control"}),
 ]
 
+# Only with TUX_EVAL_RECIPES=1. The cases above must not move to these, apart from those in
+# WITH_RECIPES, which a recipe answers too: "Send my CV to my phone" stays on files and the phone,
+# not notes_phone, and "Open the sound settings" may be work_sound as well as app_open.
+RECIPE_CASES = [
+    ("When's high tide in Brighton?", {"tides_next"}),
+    ("What time is high tide in Whitby tomorrow?", {"tides_next"}),
+    ("What's bitcoin at?", {"coins_price"}),
+    ("How much is one ether in dollars?", {"coins_price"}),
+    ("What's the weather at the beach in Brighton?", {"weather_forecast"}),
+    ("Search the web for tide tables in Cornwall", {"web_search"}),
+    ("What's the price of gold?", {"web_search"}),
+    ("How much is an Apple share?", {"web_search"}),
+    ("Send a note to my phone saying back at six", {"notes_phone"}),
+    ("Send the photo from yesterday to my phone", {"file_find", "phone_send", "task_run"}),
+    ("Open the work chat", {"work_chat"}),
+    ("What's the guest Wi-Fi password?", {"work_guestwifi"}),
+    ("Open the sound settings for my call", {"work_sound", "app_open"}),
+]
+WITH_RECIPES = {"What's the price of bitcoin?": {"coins_price"},
+                "Open the sound settings": {"work_sound"}}
+
 # Questions it should simply answer. "No tool" alone can't tell an answer from "I can't do that".
 FACTS = [
     ("How many chemical elements are there?", r"118|hundred and eighteen"),
@@ -319,9 +347,11 @@ async def main():
     print("tool list size:", len(json.dumps(skills.tools())), "characters")
     right = total = 0
     started = time.monotonic()
-    for text, wanted in CASES + (HOME_CASES if HOME else []):
+    for text, wanted in CASES + (HOME_CASES if HOME else []) + (RECIPE_CASES if RECIPES else []):
         if ONLY and ONLY.lower() not in text.lower():
             continue
+        if RECIPES and text in WITH_RECIPES:
+            wanted = wanted | WITH_RECIPES[text]
         if HOME and text == "Switch off the bedroom lamp":
             wanted = {"lights_set", "home_set"}
         if HOME and not TAPO and wanted:

@@ -12,12 +12,17 @@ Ubuntu map to 127.0.1.1 and mDNS answers, and the addresses its own network inte
 the kernel lists them in /proc (LAN, docker0). Other names /etc/hosts maps to this computer are
 not caught.
 """
+import atexit
 import ipaddress
 import os
+import shutil
 import socket
 import sys
+import tempfile
+from pathlib import Path
 
 from tuxistant.config import DEFAULTS, clean_server
+from tuxistant.webfetch import this_computer
 
 ENV = "TUXISTANT_SERVER"
 FLAG = "--server"
@@ -25,6 +30,21 @@ NOTHING_SENT = "Nothing was sent."
 LOCAL_NAMES = {"localhost", "localhost.localdomain", "localhost4", "localhost6",
                "localhost4.localdomain4", "localhost6.localdomain6", "ip6-localhost",
                "ip6-loopback"}
+
+
+RECIPES = Path(__file__).resolve().parent.parent / "tests" / "recipes"
+
+
+def eval_skills() -> Path:
+    """The folder of skills you added, for an evaluation: never the owner's own, so the tools
+    offered are the same on every computer. With TUX_EVAL_RECIPES=1, four of the examples,
+    which fill the six actions skills you add may bring, and which the evaluation has cases
+    for."""
+    if os.environ.get("TUX_EVAL_RECIPES") == "1":
+        return RECIPES
+    folder = tempfile.mkdtemp(prefix="tux-eval-skills-")
+    atexit.register(shutil.rmtree, folder, True)
+    return Path(folder) / "skills"
 
 
 class Refused(SystemExit):
@@ -69,30 +89,6 @@ def _own_names() -> set:
     return {name, short, f"{short}.local"} - {"", ".local"}
 
 
-def _read(path: str) -> str:
-    try:
-        with open(path, encoding="ascii", errors="replace") as file:
-            return file.read()
-    except OSError:
-        return ""
-
-
-def _interface_addresses() -> set:
-    """What the kernel says this computer's interfaces hold. A port Docker publishes answers on
-    every one of them, not only on loopback."""
-    found, last = set(), None
-    for line in _read("/proc/net/fib_trie").splitlines():
-        if line.strip().startswith("|-- "):
-            last = line.strip()[4:]
-        elif "/32 host LOCAL" in line and last:
-            found.add(last)
-    for line in _read("/proc/net/if_inet6").splitlines():
-        packed = (line.split() or [""])[0]
-        if len(packed) == 32:
-            found.add(":".join(packed[i:i + 4] for i in range(0, 32, 4)))
-    return {_address(address) for address in found} - {None}
-
-
 def on_this_computer(server: str) -> bool:
     """Whether the address is this computer, by how it is written and what the interfaces
     hold. No name is looked up."""
@@ -103,7 +99,7 @@ def on_this_computer(server: str) -> bool:
     if address is None:
         return False
     ip = ipaddress.ip_address(address)
-    return ip.is_loopback or ip.is_unspecified or address in _interface_addresses()
+    return ip.is_loopback or ip.is_unspecified or address in this_computer()
 
 
 def _refuse(config, why: str):

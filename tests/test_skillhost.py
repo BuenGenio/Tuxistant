@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -211,6 +212,47 @@ class Refused(Case):
 
     def test_reserved_ids(self):
         self.assertIn("org.tuxistant.", self.problem(id="org.tuxistant.sneaky"))
+
+    def test_actions_that_look_like_built_in_tools(self):
+        """The model sees tool names, so an underscore or a plural looks the same to it."""
+        for action in ("time.later", "time_now.again", "times.now", "disk_usage.all",
+                       "weathers.today"):
+            with self.subTest(action):
+                self.assertIn("starts like one built into", self.problem(action=action))
+
+    def test_a_deep_manifest_is_refused_at_once(self):
+        folder = write_skill(self.user, "skill", text="a: " + "[" * 65_000)
+        started = time.monotonic()
+        problems = self.host.reload()
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertIn("nested more than 16 levels", problems[str(folder)])
+
+    def test_aliases_are_refused_at_once(self):
+        """A few KB of aliases built a graph the params check walked for minutes, on the event
+        loop, as a depth cap doesn't see an alias."""
+        width = 380
+        params = ("who: {type: string, description: \"Who\", enum: [&l0 ["
+                  + ", ".join(["x"] * width) + "], &l1 [" + ", ".join(["*l0"] * width)
+                  + "], &l2 [" + ", ".join(["*l1"] * width) + "], [*l2]]}")
+        text = MANIFEST.format(id="org.example.demo", action="demo.hello", permissions="{}",
+                               config="[]", timeout=15)
+        text = text.replace('who: { type: string, description: "Who to greet" }', params)
+        self.assertIn(params, text)
+        self.assertTrue(4_500 < len(text) < 6_000, len(text))
+        folder = write_skill(self.user, "skill", text=text)
+        started = time.monotonic()
+        problems = self.host.reload()
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertIn("anchor or alias", problems[str(folder)])
+        self.assertEqual(self.processes, [])
+
+    def test_one_anchor_refuses_a_skill_you_add_but_not_one_that_ships(self):
+        text = MANIFEST.format(id="org.example.demo", action="demo.hello", permissions="{}",
+                               config="[]", timeout=15).replace("name: Demo", "name: &n Demo")
+        self.assertIn("anchor or alias", self.problem(text=text))
+        bundled = text.replace("org.example.demo", "org.tuxistant.demo")
+        write_skill(self.bundled, "demo", text=bundled.replace("demo.hello", "demo.shipped"))
+        self.assertNotIn(str(self.bundled / "demo"), self.host.reload())
 
     def test_bad_ids_and_action_names(self):
         for manifest in ({"id": "../../etc"}, {"id": "Org.Example"}, {"id": "noprefix"},
@@ -489,6 +531,7 @@ class FakeHost:
     def __init__(self):
         self.served = []
         self.changed = []
+        self.problems = {"/somewhere/x.yaml": "It asks for shell."}
 
     def current(self):
         self.served.append(Skills())
@@ -536,6 +579,8 @@ class Daemon(unittest.IsolatedAsyncioTestCase):
         daemon = Service(self.config, self.history, host)
         self.assertEqual(json.loads(daemon.reload_skills()),
                          {"/somewhere": "It has no skill.yaml."})
+        self.assertEqual(json.loads(daemon.skill_problems()),
+                         {"/somewhere/x.yaml": "It asks for shell."})
         daemon.set_config("tapo_email", "me@example.org")
         await asyncio.gather(*daemon.children)
         self.assertEqual(host.changed, ["tapo_email"])
@@ -549,6 +594,7 @@ class Daemon(unittest.IsolatedAsyncioTestCase):
         from tuxistant.service import Daemon as Service
         daemon = Service(self.config, self.history, Skills())
         self.assertEqual(daemon.reload_skills(), "{}")
+        self.assertEqual(daemon.skill_problems(), "{}")
 
 
 class Command(unittest.TestCase):
