@@ -13,7 +13,7 @@ from unittest.mock import patch
 import yaml
 
 from tools import eval_cutoffs
-from tools.eval_config import evaluation_server, on_this_computer
+from tools.eval_config import Refused, evaluation_server, on_this_computer
 from tools.eval_cutoffs import ACTIONS, install, owner, stand_ins
 from tests.test_realtime_live import CountingSkills
 from tuxistant import calendars, homeassistant, mail, mcp, media, phone, timers
@@ -62,6 +62,35 @@ class EvaluationServer(unittest.TestCase):
             with self.subTest(saved):
                 self.refused(self.config(saved))
 
+    def test_every_form_the_resolver_reads_as_this_computer_is_refused(self):
+        """getaddrinfo reads all of these as 127.0.0.1 or 0.0.0.0; ipaddress rejects most."""
+        for saved in ("127.1:8080", "2130706433:8080", "0x7f000001:8080", "0177.0.0.1:8080",
+                      "0x7f.1:8080", "0:8080", "[::ffff:127.0.0.1]:8080", "[::]:8080",
+                      "ip6-localhost:8080", "ip6-loopback:8080", "localhost.localdomain:8080",
+                      "LOCALHOST.:8080", "http://localhost6:8080"):
+            with self.subTest(saved):
+                self.refused(self.config(saved))
+
+    def test_this_computers_own_name_is_refused(self):
+        """Debian and Ubuntu map it to 127.0.1.1 in /etc/hosts."""
+        with patch("socket.gethostname", return_value="tuxbox.lan"):
+            for saved in ("tuxbox:8080", "tuxbox.lan:8080", "TuxBox:8080"):
+                with self.subTest(saved):
+                    self.refused(self.config(saved))
+            self.assertFalse(on_this_computer("other.lan:8080"))
+
+    def test_addresses_elsewhere_are_not_taken_for_this_computer(self):
+        for server in ("192.168.1.5:8080", "10.0.0.2:8080", "3232235781:8080",
+                       "[2001:db8::1]:8080", "[::ffff:192.168.1.5]:8080", "model.example.test",
+                       "localhost.example.test:8080", "127.example.test:8080"):
+            with self.subTest(server):
+                self.assertFalse(on_this_computer(server))
+
+    def test_a_refusal_still_ends_a_tool_that_does_not_catch_it(self):
+        with self.assertRaises(SystemExit) as stopped:
+            evaluation_server(self.config(), ["tool"])
+        self.assertIsInstance(stopped.exception, Refused)
+
     def test_a_saved_server_elsewhere_is_used(self):
         config = self.config("model.example.test:8080")
         self.assertEqual(evaluation_server(config, ["tool"]), "model.example.test:8080")
@@ -102,6 +131,82 @@ class EvaluationServer(unittest.TestCase):
                     if use in source:
                         self.assertLess(guard, source.index(use), use)
                 self.assertNotIn("localhost", source)
+
+    def test_every_tool_that_reads_the_settings_asks_first(self):
+        """Config holds the key, so the guard is the very next statement after every Config()."""
+        tools = ("eval_routing", "eval_flows", "eval_facts", "check_voices", "demo_video")
+        for name in tools:
+            with self.subTest(name):
+                source = (ROOT / "tools" / f"{name}.py").read_text()
+                self.assertGreater(_guarded_configs(ast.parse(source)), 0)
+                self.assertNotIn("localhost", source)
+
+    def test_no_other_tool_reads_the_settings(self):
+        """A new tool that reads the key is added to the list above, with the guard."""
+        listed = {"eval_routing", "eval_flows", "eval_facts", "check_voices", "demo_video"}
+        for path in (ROOT / "tools").glob("*.py"):
+            if path.stem in listed:
+                continue
+            with self.subTest(path.name):
+                calls = [node for node in ast.walk(ast.parse(path.read_text()))
+                         if _calls(node, "Config")]
+                self.assertEqual(calls, [])
+
+
+def _guarded_configs(tree: ast.Module) -> int:
+    """How many Config() calls there are, after failing if one is not followed by the guard."""
+    found = 0
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if not isinstance(body, list):
+            continue
+        for i, statement in enumerate(body):
+            if hasattr(statement, "body"):      # looked at from inside, by the walk
+                continue
+            if not any(_calls(part, "Config") for part in ast.walk(statement)):
+                continue
+            after = body[i + 1] if i + 1 < len(body) else None
+            if after is None or not any(_calls(part, "evaluation_server")
+                                        for part in ast.walk(after)):
+                raise AssertionError(f"line {statement.lineno}: Config() with no guard after it")
+            found += 1
+    return found
+
+
+class DemoVideo(unittest.TestCase):
+    """Imported for real: it runs nothing until main(), and nothing here films or speaks."""
+    def setUp(self):
+        import sys
+        sys.path.insert(0, str(ROOT / "tests" / "shell_harness"))
+        self.addCleanup(sys.path.remove, str(ROOT / "tests" / "shell_harness"))
+        try:
+            from tools import demo_video
+        except ImportError as e:     # Pillow is needed only to cut the film
+            self.skipTest(str(e))
+        self.demo = demo_video
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.work = Path(folder.name)
+        saved = self.work / "config.json"
+        saved.write_text(f'{{"api_key": "{KEY}"}}')
+        made = patch.object(demo_video, "Config", lambda: Config(saved))
+        made.start()
+        self.addCleanup(made.stop)
+
+    def test_the_default_server_makes_the_film_silent_and_sends_nothing(self):
+        with patch.dict("os.environ", {"TUXISTANT_SERVER": ""}), \
+                patch.object(self.demo, "speech", side_effect=AssertionError("spoke")), \
+                contextlib.redirect_stderr(io.StringIO()) as said:
+            self.demo.voices(self.work, silent=False)
+        self.assertIn("silent", said.getvalue())
+        self.assertNotIn(KEY, said.getvalue())
+        self.assertFalse((self.work / "voice").exists())
+        self.assertTrue((self.work / "voice.json").exists())
+
+    def test_a_server_named_for_the_run_is_used(self):
+        self.assertEqual(self.demo.chosen("model.example.test:8080")["server"],
+                         "model.example.test:8080")
+        self.assertEqual(self.demo.chosen("localhost:8080")["api_key"], KEY)
 
 
 def _top_level(tree: ast.Module, test) -> int:

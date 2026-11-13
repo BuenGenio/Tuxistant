@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Builds the demo video from the real extension and Settings app in an isolated headless shell.
 
-    python3 tools/demo_video.py <video.mp4> [--work <folder>] [--reuse] [--silent]
+    python3 tools/demo_video.py <video.mp4> [--work <folder>] [--reuse] [--silent] [--server <host:port>]
 
 Everything on screen is real, and what it shows is scripted in tests/shell_harness/demo_shots.py
 and demo_script.py. This tool adds the labels, the title and the end card, and the voices: each
 line is spoken by the server in Settings, as the daemon would speak it, and the blob moves to that
-sound. Only the speech endpoint is called. Without a server the film is silent.
+sound. Only the speech endpoint is called. Without a server the film is silent, and the key goes
+only to a server chosen as tools/eval_config.py says, so the default on this computer is not used
+unless --server or TUXISTANT_SERVER names it.
 
 --work keeps the voices and the frames, and --reuse cuts the film again from what is there.
 Needs gnome-shell, ffmpeg and Pillow, like docs_images.py. Safe next to the desktop.
@@ -31,6 +33,7 @@ HARNESS = ROOT / "tests/shell_harness"
 sys.path[:0] = [str(ROOT), str(HARNESS)]
 import demo_script  # noqa: E402
 from demo_script import LINES, SCENES, TUX  # noqa: E402
+from tools.eval_config import Refused, evaluation_server  # noqa: E402
 from tuxistant.audio import BYTES_PER_S, RATE, level  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.realtime import RealtimeError, sentences, speech  # noqa: E402
@@ -69,8 +72,15 @@ def save_wav(path: Path, pcm: bytes):
         out.writeframes(pcm)
 
 
-async def recorded(folder: Path) -> dict:
-    config, clips = Config(), {}
+def chosen(server: str | None) -> Config:
+    """The settings with a server the key may go to, or Refused."""
+    config = Config()
+    evaluation_server(config, ["demo_video", *(["--server", server] if server is not None else [])])
+    return config
+
+
+async def recorded(config, folder: Path) -> dict:
+    clips = {}
     folder.mkdir(parents=True, exist_ok=True)
     for line in LINES:
         pcm = await spoken(config, line)
@@ -80,14 +90,14 @@ async def recorded(folder: Path) -> dict:
     return clips
 
 
-def voices(work: Path, silent: bool):
+def voices(work: Path, silent: bool, server: str | None = None):
     """How long each line lasts and how loud it is as it goes, for the scenes to keep time with."""
     clips = {line: {"seconds": demo_script.estimate(line)} for line in LINES}
     shutil.rmtree(work / "voice", ignore_errors=True)
     if not silent:
         try:
-            clips = asyncio.run(recorded(work / "voice"))
-        except RealtimeError as e:
+            clips = asyncio.run(recorded(chosen(server), work / "voice"))
+        except (Refused, RealtimeError) as e:
             shutil.rmtree(work / "voice", ignore_errors=True)
             print(f"The film will be silent. {e}", file=sys.stderr)
     (work / "voice.json").write_text(json.dumps(clips))
@@ -250,7 +260,7 @@ def cut(work: Path, video: Path):
 
 def build(work: Path, args):
     if not args.reuse:
-        voices(work, args.silent)
+        voices(work, args.silent, args.server)
         shoot(work)
     cut(work, args.video)
 
@@ -261,6 +271,7 @@ def main() -> int:
     parser.add_argument("--work", type=Path, help="keep the voices and the frames in this folder")
     parser.add_argument("--reuse", action="store_true", help="cut again from what --work already holds")
     parser.add_argument("--silent", action="store_true", help="no voices, and no call to the server")
+    parser.add_argument("--server", help="the speech server for this run, which gets the key")
     args = parser.parse_args()
     if args.reuse and not args.work:
         parser.error("--reuse needs the --work folder of an earlier run")

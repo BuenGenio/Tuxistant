@@ -2,7 +2,7 @@
 """Do the translation voices really say the words? Each sample goes through the voice and back
 through Whisper, then both are printed to compare.
 
-    python3 tools/check_voices.py [voice-model ...]
+    python3 tools/check_voices.py [--server host:port] [voice-model ...]
 
 Check a new voice this way, not by the length of its audio: voice-it_IT-aurora-medium had a
 plausible length and turned "Vorrei un caffè" into "Whatever they're for". Whisper mishearing one
@@ -19,6 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tools.eval_config import evaluation_server  # noqa: E402
 from tuxistant import translate  # noqa: E402
 from tuxistant.audio import RATE  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
@@ -53,6 +54,7 @@ def transcribe(config, pcm: bytes) -> str:
 
 async def main():
     config = Config()
+    evaluation_server(config)   # first, as it takes --server out of the arguments
     wanted = set(sys.argv[1:])
     for language, model in translate.VOICES.items():
         if wanted and model not in wanted:
