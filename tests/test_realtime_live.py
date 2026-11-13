@@ -1,6 +1,8 @@
 """One real VAD turn and one real hold turn against the LocalAI server, with fake audio.
 
-Skipped unless asked for, and it never reads or stores the key itself:
+Skipped unless asked for, and it never reads or stores the key itself. The server must be named,
+as the default is any program listening on this computer. Tool calls other than the clock get an
+error, and behind that every handler meets the stand-ins of tools/eval_cutoffs.py:
 
     TUXISTANT_LIVE=1 TUXISTANT_SERVER=host:8080 \
     TUXISTANT_API_KEY=... python3 -m unittest -v tests.test_realtime_live
@@ -16,6 +18,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_daemon_fakes import FakeMic, FakeSpeaker  # noqa: E402
+from tools.eval_config import evaluation_server  # noqa: E402
+from tools.eval_cutoffs import install  # noqa: E402
 from tuxistant import __main__ as cli  # noqa: E402
 from tuxistant.audio import BYTES_PER_S, level  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
@@ -71,9 +75,14 @@ class Live(unittest.IsolatedAsyncioTestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         folder = Path(temp.name)
+        # Its tool calls run the real handlers, so they meet what an evaluation does.
+        self.addCleanup(install().close)
         self.config = Config(folder / "config.json")
-        self.config.values.update(server=os.environ.get("TUXISTANT_SERVER", "localhost:8080"),
-                                  api_key=os.environ["TUXISTANT_API_KEY"])
+        try:
+            evaluation_server(self.config, argv=[])
+        except SystemExit as refused:   # asyncio would take it for the end of the program
+            self.fail(str(refused))
+        self.config.values["api_key"] = os.environ["TUXISTANT_API_KEY"]
         self.history = History(folder / "history.db")
         self.addCleanup(self.history.db.close)
         self.skills = CountingSkills()

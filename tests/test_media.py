@@ -7,6 +7,8 @@ the same module over real D-Bus against tests/media_fake_player.py, on a throwaw
 RunsOnPrivateBus starts with dbus-run-session.
 """
 import asyncio
+import contextlib
+import io
 import json
 import os
 import re
@@ -25,7 +27,10 @@ from dbus_fast.aio import MessageBus
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from tools.eval_cutoffs import ACTIONS, MadeUpPlayer, MadeUpVolume, install  # noqa: E402
 from tuxistant import media  # noqa: E402
+from tuxistant.config import DEFAULTS  # noqa: E402
+from tuxistant.gate import Session  # noqa: E402
 
 PRIVATE, REAL_BUS = "TUXISTANT_TEST_PRIVATE_BUS", "TUXISTANT_TEST_REAL_BUS"
 FAKE_PLAYER = Path(__file__).with_name("media_fake_player.py")
@@ -1327,15 +1332,31 @@ class Wired(WithPlayers):
         self.assertTrue(all(item.voice for item in spoken))
 
     def test_an_evaluation_is_cut_off_from_the_players_and_the_volume(self):
-        """tools/eval_flows.py runs the real handlers, and these two have no card for it to
-        decline. It is read here and never imported, as importing it would run it."""
-        flows = (ROOT / "tools" / "eval_flows.py").read_text()
-        for cut, standin in (("_connect", "made_up_bus"), ("_wpctl", "MadeUpVolume()")):
-            with self.subTest(cut):
-                self.assertIn(f"\nmedia.{cut} = {standin}\n", flows)
-                self.assertTrue(callable(getattr(media, cut)))
-                self.assertEqual(len(re.findall(rf"^media\.{cut} = ", flows, re.M)), 1)
-                self.assertLess(flows.index(f"\nmedia.{cut} = "), flows.index("\nasyncio.run("))
+        """tools/eval_flows.py and the live test run the real handlers behind
+        tools/eval_cutoffs.py, and these two have no card for them to decline. What is checked
+        is what is really in place, not how a line reads. tests/test_eval_config.py checks that
+        both install it first."""
+        for action in media.HANDLERS:
+            self.assertEqual(ACTIONS[action], ("media._connect", "media._wpctl"))
+        real = media._connect, media._wpctl
+        with install(), contextlib.redirect_stdout(io.StringIO()) as printed:
+            self.assertIsInstance(asyncio.run(media._connect()), MadeUpPlayer)
+            self.assertIsInstance(media._wpctl, MadeUpVolume)
+            spoken = self.made_up_turns({"action": "toggle"}, {"action": "toggle"},
+                                        {"volume": 25})
+        self.assertEqual((media._connect, media._wpctl), real)
+        # The made-up player must follow PlayPause, or every toggle reads as the handler failing.
+        self.assertEqual(spoken, ["Paused Eval Player.",
+                                  "Eval Player is playing Song 1 by The Evals.",
+                                  "Volume 25 percent."])
+        self.assertIn("would send PlayPause", printed.getvalue())
+
+    def made_up_turns(self, *requests) -> list[str]:
+        """What Tux says to each request, through the real handler."""
+        session = Session()
+        for args in requests:
+            media.HANDLERS["media.control"](args, DEFAULTS, session)
+        return [item.text for item in session.take_after()]
 
 
 BUS_CONFIG = """<busconfig>

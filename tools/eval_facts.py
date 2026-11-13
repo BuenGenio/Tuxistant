@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Does Tux answer facts from what's written down, and does it make things up?
 
-    python3 tools/eval_facts.py [--reps 2] [--pause 3] [--sort-only]
+    python3 tools/eval_facts.py [--server host:port] [--reps 2] [--pause 3] [--sort-only]
 
 Runs the real route on a hold turn, without the audio: the sorter, then Wikipedia, web search and
 the real model. What matters most is the WRONG column, as a wrong answer sounds exactly like a
@@ -208,13 +208,13 @@ async def sums(config) -> bool:
 
 
 async def main():
+    config = Config()
+    evaluation_server(config)   # first, as it takes --server out of the arguments
     options = argparse.ArgumentParser()
     options.add_argument("--reps", type=int, default=2)
     options.add_argument("--pause", type=float, default=3)
     options.add_argument("--sort-only", action="store_true")
     args = options.parse_args()
-    config = Config()
-    evaluation_server(config)
     config.values["fact_lookup"] = True
     good = await sorter(config, args.reps)
     if not args.sort_only:
