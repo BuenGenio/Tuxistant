@@ -565,6 +565,22 @@ class ThroughExecute(NoDesktop):
         self.assertEqual(self.launched, [self.path("backup.desktop")])
         self.assertEqual(session.after[0].text, "Opening Backup now.")
 
+    def test_the_same_carded_call_twice_asks_once(self):
+        async def yes(ask):
+            self.asked.append(ask)
+            return True
+        session = Session(self.skills, yes)
+        arguments = json.dumps({"name": "backup now"})
+
+        async def twice():
+            return [(await self.skills.execute("app_open", arguments, session))[1]
+                    for _ in range(2)]
+
+        self.assertEqual(asyncio.run(twice()), [{APP_SAYS: True}] * 2)
+        self.assertEqual([ask.title for ask in self.asked], ["Open Backup now?"])
+        self.assertEqual(self.launched, [self.path("backup.desktop")])
+        self.assertEqual([s.text for s in session.after], ["Opening Backup now."] * 2)
+
 
 class Card(NoDesktop):
     def ask(self) -> Ask:

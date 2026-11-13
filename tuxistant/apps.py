@@ -449,6 +449,8 @@ def _open_by_id(desktop_id: str, text: str, entries: list[App], config, session)
 def _start(app: App, text: str, config, session) -> dict | Ask:
     if app.kind in PACKAGED:
         return _launch_and_say(app, text, config, session)
+    if _again(app.id):    # the 4B's second copy of a call whose card was just allowed
+        return _say(session, config, text)
     # The card is made from the very bytes whose digest is checked after the click.
     data = _read(app.path)
     keys = _keyfile(data) if data is not None else None
