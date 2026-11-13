@@ -1474,11 +1474,14 @@ class TimersComeDue(Case):
                          ["Your pasta timer finished 5 minutes ago."])
 
     async def test_words_the_server_refuses_hold_back_no_other_and_none_overlap(self):
-        rig = self.wired()
-        playing = []
+        # With the chime on, pasta opens a speaker before its words fail, and that speaker
+        # takes a while to drain. Tea's must not start until it has.
+        rig = self.wired(timer_chime=True, speaker={"play_s": 0.05})
+        open_at_start = []
 
         async def speech(_config, sentence, _voice):
-            playing.append([s for s in rig.speakers if not (s.drained or s.stopped)])
+            *before, own = rig.speakers     # own is this item's chime
+            open_at_start.append([s for s in before if not (s.drained or s.stopped)])
             if "pasta" in sentence:
                 raise RuntimeError("The server could not say that.")
             return tone(0.1)
@@ -1487,10 +1490,14 @@ class TimersComeDue(Case):
                 mock.patch.object(controller, "ERROR_HOLD_S", 0.01), self.assertLogs(timers.log):
             self.due_now("pasta")
             self.due_now("tea")
-            await self.until(lambda: [i.label for i in self.store.pending()] == ["pasta"])
+            await self.until(lambda: "tea" not in [i.label for i in self.store.pending()])
         self.assertEqual(rig.of("Reply"), ["Your pasta timer is done.", "Your tea timer is done."])
+        self.assertEqual([i.label for i in self.store.pending()], ["pasta"], "still owed")
         self.assertEqual([(i.label, i.state) for i in self.store.kept()], [("tea", "done")])
-        self.assertEqual(playing, [[], []], "each starts once the one before is over")
+        self.assertEqual(len(rig.speakers), 2, "one chime each")
+        self.assertEqual(open_at_start, [[], []], "each starts once the one before is over")
+        self.assertEqual(rig.journal, ["speaker.start", "speaker.drained"] * 2,
+                         "pasta's chime plays to its end before tea's starts")
 
     async def test_with_the_server_down_it_waits_shows_the_error_once_and_is_said_later(self):
         rig = self.wired()
