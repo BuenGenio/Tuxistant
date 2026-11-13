@@ -1,5 +1,7 @@
 # Changelog
 
+## Not yet released
+
 ## 0.4.0, a preview
 
 A preview. Nothing new here has been tried on the owner's own desktop yet: opening apps and Settings pages, the facts lookup's card and the Home Assistant matching have run only in tests and in evaluations against a real model.
