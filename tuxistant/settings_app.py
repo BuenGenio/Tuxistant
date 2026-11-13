@@ -1474,6 +1474,8 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.load_config()
         elif name == "HistoryChanged":
             self.history.load()
+        elif name == "SkillsChanged":
+            self.skills.load()
 
     def on_owner(self, owner):
         if owner is None:
@@ -1488,11 +1490,12 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.toast(error_text(error.message))
 
     def on_active(self, *_):
-        # Themes dropped into the folder show up on coming back from the file manager, and a
-        # phone on coming back from pairing it.
+        # Themes and skills dropped into their folders show up on coming back from the file
+        # manager, and a phone on coming back from pairing it.
         if self.is_active() and self.state == "ready":
             self.general.load()
             self.appearance.load()
+            self.skills.load()
 
     def save(self, key, value):
         """Write a setting. If the daemon refuses, say so and show what it really holds."""

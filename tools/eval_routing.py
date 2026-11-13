@@ -4,7 +4,7 @@
     python3 tools/eval_routing.py [--server host:port] [repeats] [text to filter on]
     TUX_EVAL_HOME=1 python3 tools/eval_routing.py       with Home Assistant's tools and cases
     TUX_EVAL_MAIL=0 TUX_EVAL_TAPO=0 ...                 without mail search or the Tapo lights
-    TUX_EVAL_RECIPES=1 python3 tools/eval_routing.py    with the two recipes in tests/recipes
+    TUX_EVAL_RECIPES=1 python3 tools/eval_routing.py    with the four recipes in tests/recipes
 
 Nothing is executed: a turn stops at the first tool call. Needs the LocalAI server. The small
 model is consistent, so a request that goes wrong usually goes wrong every time, and one tool's
@@ -16,8 +16,9 @@ Settings are never read, and nothing is ever sent to a home. Mail search and a m
 account are on unless set to 0. A case whose tools are all off in a setup is left out.
 
 Your own skills folder is never read, so the numbers are the same on every computer. With
-TUX_EVAL_RECIPES=1 the two recipes in tests/recipes stand in for skills you added, as they would
-be offered, and their cases are added. They never send anything here.
+TUX_EVAL_RECIPES=1 the four recipes in tests/recipes, copies of the examples with six actions
+between them, as many as skills you add may bring, stand in for skills you added, as they would
+be offered, and their cases are added. They never send or open anything here.
 """
 import asyncio
 import collections
@@ -267,8 +268,9 @@ HOME_CASES = [
     ("Pause the music in the kitchen", {"media_control"}),
 ]
 
-# Only with TUX_EVAL_RECIPES=1. The weather, news, search and facts cases above must not move to
-# these, apart from the price of bitcoin, which coins_price answers too.
+# Only with TUX_EVAL_RECIPES=1. The cases above must not move to these, apart from those in
+# WITH_RECIPES, which a recipe answers too: "Send my CV to my phone" stays on files and the phone,
+# not notes_phone, and "Open the sound settings" may be work_sound as well as app_open.
 RECIPE_CASES = [
     ("When's high tide in Brighton?", {"tides_next"}),
     ("What time is high tide in Whitby tomorrow?", {"tides_next"}),
@@ -276,8 +278,16 @@ RECIPE_CASES = [
     ("How much is one ether in dollars?", {"coins_price"}),
     ("What's the weather at the beach in Brighton?", {"weather_forecast"}),
     ("Search the web for tide tables in Cornwall", {"web_search"}),
+    ("What's the price of gold?", {"web_search"}),
+    ("How much is an Apple share?", {"web_search"}),
+    ("Send a note to my phone saying back at six", {"notes_phone"}),
+    ("Send the photo from yesterday to my phone", {"file_find", "phone_send", "task_run"}),
+    ("Open the work chat", {"work_chat"}),
+    ("What's the guest Wi-Fi password?", {"work_guestwifi"}),
+    ("Open the sound settings for my call", {"work_sound", "app_open"}),
 ]
-WITH_RECIPES = {"What's the price of bitcoin?": {"coins_price"}}
+WITH_RECIPES = {"What's the price of bitcoin?": {"coins_price"},
+                "Open the sound settings": {"work_sound"}}
 
 # Questions it should simply answer. "No tool" alone can't tell an answer from "I can't do that".
 FACTS = [

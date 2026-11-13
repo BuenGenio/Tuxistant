@@ -51,7 +51,7 @@ ACTIONS = {
     "lights.set": ("mcp.SkillProcess",), "lights.status": ("mcp.SkillProcess",),
 }
 # Recipes are not named here: the evaluations read no folder of yours, and with
-# TUX_EVAL_RECIPES=1 the two in tests/recipes get offline()'s handlers, which send and open
+# TUX_EVAL_RECIPES=1 the four in tests/recipes get offline()'s handlers, which send and open
 # nothing, so no recipe action ever runs in an evaluation.
 
 

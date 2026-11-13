@@ -78,6 +78,7 @@ class Daemon(ServiceInterface):
         self.delays = {}
         self.phones = PHONES
         self.calendars = CALENDARS
+        self.skill_problems = SKILL_PROBLEMS
         if not self.history.recent(1):
             self.seed_history()
 
@@ -143,7 +144,7 @@ class Daemon(ServiceInterface):
     @dbus_method()
     async def SkillProblems(self) -> "s":
         await self.enter("SkillProblems")
-        return json.dumps(SKILL_PROBLEMS)
+        return json.dumps(self.skill_problems)
 
     @dbus_method()
     async def ListPhones(self) -> "s":
@@ -173,6 +174,10 @@ class Daemon(ServiceInterface):
 
     @dbus_signal()
     def HistoryChanged(self):
+        pass
+
+    @dbus_signal()
+    def SkillsChanged(self):
         pass
 
 
@@ -210,6 +215,12 @@ class Control(ServiceInterface):
         """A finished request as the daemon would keep it, through the real History."""
         self.daemon.history.add(heard, reply, json.loads(actions), status)
         self.daemon.HistoryChanged()
+
+    @dbus_method()
+    def SetSkillProblems(self, problems: "s"):
+        """A reload found these, as after a file was dropped into the skills folder."""
+        self.daemon.skill_problems = json.loads(problems)
+        self.daemon.SkillsChanged()
 
     @dbus_method()
     def SetPhones(self, phones: "s"):

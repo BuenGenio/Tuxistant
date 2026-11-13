@@ -7,7 +7,7 @@ permissions:
   network: [ntfy.example]
 actions:
   notes.phone:
-    description: Send a short note to my phone
+    description: Send a short note I say to my phone. Not for files
     params:
       note: { type: text, max: 120, description: "The note" }
     required: [note]

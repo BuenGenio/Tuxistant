@@ -64,6 +64,8 @@ OPENING_SETTINGS = "Opening Settings."
 WONT_OPEN = "{name} wouldn't open."
 NO_SETTINGS = "GNOME Settings isn't installed on this computer."
 NOT_INSTALLED = "That recipe opens {id}, which isn't installed here."
+HIDDEN_APP = ("That recipe opens {id}, which isn't in the app grid, such as a helper that runs in "
+              "the background, so I left it alone.")
 NO_PAGE_HERE = "Settings on this computer has no {title} page."
 NO_SUCH_PAGE = ("Settings has no page called {name}. It has pages such as Bluetooth, display, "
                 "sound, Wi-Fi, network and power.")
@@ -610,6 +612,8 @@ def open_entry(app_id: str, page: str, config, session):
         return _open_panel(panel, entries, config, session)
     for entry in entries:
         if entry.id in (app_id, f"{app_id}.desktop"):
+            if not entry.shown:     # app.open can't reach these by name either
+                return _say(session, config, HIDDEN_APP.format(id=_said(app_id)))
             return _start(entry, OPENING.format(name=entry.name), config, session)
     return _say(session, config, NOT_INSTALLED.format(id=_said(app_id)))
 

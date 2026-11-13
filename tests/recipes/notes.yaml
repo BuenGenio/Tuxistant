@@ -1,0 +1,16 @@
+# Sends your own words, so it shows a card with the address and the exact body every time.
+id: org.example.notes
+name: Notes to my phone
+description: Sends a short note to my phone
+version: "1.0.0"
+permissions:
+  network: [ntfy.example]
+actions:
+  notes.phone:
+    description: Send a short note I say to my phone. Not for files
+    params:
+      note: { type: text, max: 120, description: "The note" }
+    required: [note]
+    post: https://ntfy.example/my-topic
+    text: "{note}"
+    say: "Sent."

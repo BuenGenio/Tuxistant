@@ -21,7 +21,7 @@ from tuxistant import apps, recipes, skillhost, webfetch  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.gate import APP_SAYS, Ask, Session  # noqa: E402
 from tuxistant.skillhost import SkillHost  # noqa: E402
-from tuxistant.skills import BUILTIN  # noqa: E402
+from tuxistant.skills import BUILTIN, Skills  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 EXAMPLES = ROOT / "docs" / "examples" / "recipes"
@@ -169,11 +169,31 @@ class Loading(Case):
                          "Say when the next high tide is at a seaside town")
 
     def test_no_recipes_leaves_the_tools_as_they_were(self):
-        before = SkillHost(CONFIG, self.builtin, self.bundled, self.root / "none",
-                           launcher=lambda *_: None)
-        before.reload()
-        self.host.reload()
-        self.assertEqual(before.current().tools(), self.host.current().tools())
+        self.assertEqual(self.host.reload(), {})
+        self.assertEqual(self.host.current().tools(),
+                         Skills(self.builtin, config=CONFIG).tools())
+        self.assertEqual({t["name"] for t in self.host.current().tools()},
+                         {"app_open", "time_now", "weather_forecast"})
+
+    def test_the_evaluation_fixtures_fill_the_budget(self):
+        host = skillhost.offline(CONFIG, builtin=BUILTIN, bundled=self.bundled, user=FIXTURES)
+        self.assertEqual(host.problems, {})
+        yours = [s for s in host.current().listing() if s["source"] == "yours"]
+        self.assertEqual(sum(len(s["actions"]) for s in yours), skillhost.USER_TOOLS)
+
+    def test_settings_pages_by_the_names_people_use(self):
+        for said, page in (("sound", "sound"), ("Sound", "sound"), ("appearance", "background"),
+                           ("Accessibility", "universal-access"),
+                           ("universal-access", "universal-access"), ("Wi-Fi", "wifi"),
+                           ("wallpaper", "background"), ("Online Accounts", "online-accounts"),
+                           ("Displays", "display"), ("Date and Time", "datetime")):
+            with self.subTest(said):
+                opener = {"description": "Open a page", "open": {"settings": said}}
+                (self.user / "page.yaml").unlink(missing_ok=True)
+                self.add("page.yaml", recipe(permissions={}, actions={"tides.next": opener}))
+                self.assertEqual(self.host.reload(), {})
+                plan = self.host.current().actions["tides.next"]["plan"]
+                self.assertEqual(plan.page, page)
 
 
 class Refused(Case):
@@ -270,6 +290,41 @@ class Refused(Case):
     def test_an_unquoted_on_is_not_a_json_key(self):
         text = (EXAMPLES / "deskstrip.yaml").read_text().replace('"on": true', "on: true")
         self.assertIn("in quotes", self.problem(text))
+
+    def test_a_file_of_brackets_is_refused_at_once(self):
+        started = time.monotonic()
+        problem = self.problem("a: " + "[" * (64 * 1024 - 4))
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertIn("nested more than 16 levels", problem)
+
+    def test_a_file_that_isnt_named_yaml_is_a_problem(self):
+        for name in ("coins.yml", "coins.YAML", "coins.json"):
+            with self.subTest(name):
+                file = self.add(name, (EXAMPLES / "coins.yaml").read_text())
+                self.assertEqual(self.host.reload(),
+                                 {str(file): "A recipe's file name has to end in .yaml."})
+                file.unlink()
+
+    def test_actions_that_look_like_built_in_tools(self):
+        for name in ("shell_run.now", "file_delete.all", "web_search.now", "app_open.x",
+                     "files.delete", "file_trash.now", "apps.open", "timers.cancel",
+                     "webs.search"):
+            with self.subTest(name):
+                self.refused(recipe(actions={name: action()}), "starts like one built into")
+
+    def test_an_unquoted_placeholder(self):
+        text = (EXAMPLES / "deskstrip.yaml").read_text().replace('"{level}"', "{level}")
+        self.assertIn('Put "{level}" in quotes', self.problem(text))
+        notes = (EXAMPLES / "notes.yaml").read_text().replace('"{note}"', "{note}")
+        self.assertIn('Put "{note}" in quotes', self.problem(notes))
+        greet = {"description": "Greet", "say": {"who": None},
+                 "params": {"who": {"type": "text", "description": "Who"}}, "required": ["who"]}
+        self.refused(recipe(permissions={}, actions={"tides.next": greet}),
+                     'Put "{who}" in quotes')
+
+    def test_a_choice_read_as_a_number(self):
+        self.refused(with_action(params={"town": {"type": "choice", "of": [1, 2]}}),
+                     "read as a number")
 
     def test_yaml_aliases(self):
         text = (EXAMPLES / "tides.yaml").read_text().replace(
@@ -412,6 +467,9 @@ class Cards(Case):
         self.assertEqual(self.methods(), [("POST", "/my-topic", b"Back at 6")])
         self.assertEqual(self.tls, ["ntfy.example"])
         self.assertEqual(self.web.requests[0][1]["Content-Type"], "text/plain; charset=utf-8")
+        self.assertEqual(set(self.web.requests[0][1]), {     # as SKILLS.md names them
+            "Host", "User-Agent", "Accept", "Accept-Encoding", "Content-Type", "Content-Length"})
+        self.assertEqual(self.web.requests[0][1]["Accept-Encoding"], "identity")
 
     async def test_deny_sends_nothing(self):
         self.example("notes.yaml")
@@ -528,13 +586,52 @@ class Cards(Case):
         self.example("coins.yaml", "notes.yaml")
         self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
         self.route("/my-topic", "ok", "text/plain")
+        session = self.session()
         for _ in range(2):
-            first = await self.call("coins_price", {"coin": "bitcoin"})
-            second = await self.call("notes_phone", {"note": "hi"})
-        self.assertEqual(first, ({APP_SAYS: True}, []))
-        self.assertEqual(second, ({APP_SAYS: True}, []))
+            first = await self.call("coins_price", {"coin": "bitcoin"}, session)
+            second = await self.call("notes_phone", {"note": "hi"}, session)
+        self.assertEqual(first, ({APP_SAYS: True}, ["One bitcoin is 2 dollars.", "Sent."]))
+        self.assertEqual(second, first, "said once in a reply")
         self.assertEqual(len(self.web.sent), 2)
         self.assertEqual(len(self.asked), 1, "the copy gets no second card")
+
+    async def test_a_question_asked_again_is_answered_again(self):
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        for _ in range(2):
+            result, said = await self.call("coins_price", {"coin": "bitcoin"})
+            self.assertEqual((result, said), ({APP_SAYS: True}, ["One bitcoin is 2 dollars."]))
+        self.assertEqual(len(self.web.sent), 1)
+
+    async def test_after_private_data_a_copy_gets_no_second_card(self):
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        session = self.session(tainted=True)
+        for _ in range(2):
+            result, said = await self.call("coins_price", {"coin": "bitcoin"}, session)
+        self.assertEqual([a.title for a in self.asked],
+                         ["Let org.example.coins reach api.coins.example?"])
+        self.assertEqual((result, said), ({APP_SAYS: True}, ["One bitcoin is 2 dollars."]))
+        self.assertEqual(len(self.web.sent), 1)
+
+    async def test_after_private_data_a_copy_just_out_of_time_is_asked_again(self):
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        session = self.session(tainted=True)
+        await self.call("coins_price", {"coin": "bitcoin"}, session)
+        key = next(iter(recipes._recent))
+        at, said = recipes._recent[key]
+        recipes._recent[key] = (at - (recipes.AGAIN_S - 0.5), said)    # 4.5 s ago
+        await self.call("coins_price", {"coin": "bitcoin"}, session)
+        self.assertEqual(len(self.asked), 2, "the card errs towards asking")
+        self.assertEqual(len(self.web.sent), 1)
+
+    async def test_after_private_data_a_call_that_sends_nothing_gets_no_card(self):
+        self.example("coins.yaml")
+        result, _ = await self.call("coins_price", {"coin": "dogecoin"},
+                                    self.session(tainted=True))
+        self.assertEqual(result, {"error": "Say one of: bitcoin or ethereum."})
+        self.assertEqual((self.asked, self.web.lookups), ([], []))
 
     async def test_a_copy_after_a_failure_tries_again(self):
         self.example("coins.yaml")
@@ -664,6 +761,16 @@ class OpenAndSay(Case):
         self.assertIn("Runs: /opt/chat/run", self.asked[0].detail)
         self.assertEqual(said, ["Opening Chat."])
 
+    async def test_a_hidden_entry_is_not_opened(self):
+        self.entries.append(made("orca.desktop", "Orca Screen Reader", shown=False))
+        text = (EXAMPLES / "work.yaml").read_text().replace("com.slack.Slack", "orca")
+        self.add("work.yaml", text)
+        self.host.reload()
+        result, said = await self.call("work_chat")
+        self.assertEqual(said, ["That recipe opens orca, which isn't in the app grid, such as a "
+                                "helper that runs in the background, so I left it alone."])
+        self.assertEqual((self.launched, self.asked), ([], []))
+
     async def test_an_app_that_isnt_installed_is_said(self):
         self.entries = self.entries[1:]
         self.example("work.yaml")
@@ -772,7 +879,35 @@ class Host(Case):
             "actions:\n  code.a:\n    description: A\n")
         (folder / "m.py").write_text("")
         problems = self.host.reload()
-        self.assertEqual(problems, {str(self.user / "work.yaml"): skillhost.OVER_BUDGET})
+        self.assertEqual(problems, {str(folder): skillhost.OVER_BUDGET},
+                         "the new one, not one that was working")
+
+    async def test_a_new_skill_never_takes_the_place_of_a_working_one(self):
+        self.example("work.yaml", "coins.yaml", "deskstrip.yaml", "notes.yaml")    # 6
+        alarm = {"description": "Say it is time to get up", "say": "Time to get up."}
+        self.add("alarm.yaml", recipe(id="org.example.alarm", permissions={},
+                                      actions={"alarm.ring": alarm}))
+        problems = self.host.reload()
+        self.assertEqual(problems, {str(self.user / "alarm.yaml"): skillhost.OVER_BUDGET})
+        self.assertIn("work.chat", self.host.current().actions)
+        self.assertEqual(self.host.reload(), problems, "and stays so")
+        (self.user / "notes.yaml").unlink()
+        self.assertEqual(self.host.reload(), {})
+        self.assertIn("alarm.ring", self.host.current().actions)
+
+    async def test_code_skills_that_cant_run_use_none_of_the_budget(self):
+        folder = self.user / "aa-code"
+        folder.mkdir()
+        (folder / "skill.yaml").write_text(
+            "id: org.example.code\nname: Code\ndescription: Code\nrun: [python3, m.py]\n"
+            "actions:\n" + "".join(f"  code.a{i}:\n    description: A\n" for i in range(6)))
+        (folder / "m.py").write_text("")
+        shutil.copy(EXAMPLES / "coins.yaml", self.user / "coins.yaml")
+        no_sandbox = "Skills with code of their own need bubblewrap, and it isn't working here."
+        with mock.patch.object(SkillHost, "_sandbox_problem", return_value=no_sandbox):
+            problems = self.host.reload()
+        self.assertEqual(problems, {str(folder): no_sandbox})
+        self.assertIn("coins.price", self.host.current().actions)
 
     async def test_offline_recipes_send_nothing(self):
         self.example("coins.yaml", "notes.yaml")

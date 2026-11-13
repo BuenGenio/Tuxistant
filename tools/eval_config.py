@@ -37,8 +37,9 @@ RECIPES = Path(__file__).resolve().parent.parent / "tests" / "recipes"
 
 def eval_skills() -> Path:
     """The folder of skills you added, for an evaluation: never the owner's own, so the tools
-    offered are the same on every computer. With TUX_EVAL_RECIPES=1, the two recipes the
-    evaluation has cases for."""
+    offered are the same on every computer. With TUX_EVAL_RECIPES=1, four of the examples,
+    which fill the six actions skills you add may bring, and which the evaluation has cases
+    for."""
     if os.environ.get("TUX_EVAL_RECIPES") == "1":
         return RECIPES
     folder = tempfile.mkdtemp(prefix="tux-eval-skills-")

@@ -49,6 +49,7 @@ DEFAULT_TIMEOUT_S = 15
 MAX_TIMEOUT_S = 60
 BUSY_MARGIN_S = 5
 MAX_MANIFEST_BYTES = 64 * 1024
+MAX_YAML_DEPTH = 16             # the deepest manifest that ships is 7
 MAX_FOLDER_BYTES = 50 * 1024 * 1024
 MAX_FOLDER_FILES = 2000
 MAX_ACTIONS = 32
@@ -77,6 +78,32 @@ UPDATED = "That skill was just updated. Please ask again."
 USER_TOOLS = 6      # actions from skills you added, code and recipes together
 OVER_BUDGET = ("Tux already has six actions from skills you added, and more would make it worse "
                "at choosing the right one. Take one out to use this one.")
+NOT_YAML = "A recipe's file name has to end in .yaml."
+TOO_DEEP = "It is nested more than 16 levels deep, which no skill needs."
+
+
+class Bounded(yaml.SafeLoader):
+    """safe_load that stops at the first node nested too deep. PyYAML takes about a millisecond
+    for each level of [ or { it holds open, so 64 KB of them held the event loop for a minute,
+    and composing is lazy, so stopping here stops the scan too."""
+    depth = 0
+
+    def compose_node(self, parent, index):
+        self.depth += 1
+        try:
+            if self.depth > MAX_YAML_DEPTH:
+                raise ValueError(TOO_DEEP)
+            return super().compose_node(parent, index)
+        finally:
+            self.depth -= 1
+
+
+def load_yaml(text: str, loader=Bounded):
+    reader = loader(text)
+    try:
+        return reader.get_single_data()
+    finally:
+        reader.dispose()
 
 
 def _read_yaml(file: Path) -> dict:
@@ -85,7 +112,7 @@ def _read_yaml(file: Path) -> dict:
     try:
         if file.stat().st_size > MAX_MANIFEST_BYTES:
             raise ValueError(f"Its {file.name} is too big.")
-        data = yaml.safe_load(file.read_text())
+        data = load_yaml(file.read_text())
     except FileNotFoundError:
         raise ValueError(f"It has no {file.name}.") from None
     except UnicodeDecodeError:
@@ -463,6 +490,7 @@ class SkillHost:
         self.launcher = launcher or self._launch
         self.on_change = on_change
         self.problems: dict[str, str] = {}
+        self.offered: set[str] = set()              # keys of what the last reload loaded
         self.running: dict[str, _Running] = {}      # by folder
         self.last_good: dict[str, _Found] = {}      # by folder or file
         self.stopping: set[asyncio.Task] = set()
@@ -514,16 +542,17 @@ class SkillHost:
         problems: dict[str, str] = {}
         try:
             found = self._scan(problems)
-            chosen = self._resolve(found, problems)
+            sandbox_problem = self._sandbox_problem()
+            chosen = self._resolve(found, problems, sandbox_problem)
             self._grant(chosen)
-            skills, running = self._build(chosen, problems)
+            skills, running, offered = self._build(chosen, problems, sandbox_problem)
         except Exception as e:
             log.exception("reloading the skills failed")
             problems["skills"] = f"The skills could not be reloaded: {e}"
             self.problems = problems
             return dict(problems)
         self._swap(skills, running)
-        self.problems = problems
+        self.problems, self.offered = problems, offered
         return dict(problems)
 
     # Reading what is on disk
@@ -541,6 +570,8 @@ class SkillHost:
                                            lambda f=entry, b=bundled: self._code(f, b))
                 elif not bundled and _a_recipe(entry):
                     found += self._attempt(str(entry), problems, lambda f=entry: self._recipe(f))
+                elif not bundled and _almost_a_recipe(entry):
+                    problems[str(entry)] = NOT_YAML
         live = {item.key for item in found} | set(problems)
         self.last_good = {key: item for key, item in self.last_good.items() if key in live}
         return found
@@ -619,7 +650,9 @@ class SkillHost:
 
     # Deciding who gets what
 
-    def _resolve(self, found: list[_Found], problems: dict) -> list[_Found]:
+    def _resolve(self, found: list[_Found], problems: dict, sandbox_problem: str) -> list[_Found]:
+        """Yours that were loaded keep their place, ahead of new ones, so a file dropped in is
+        the one refused rather than one that was working."""
         ids, actions, tools = set(), set(), set()
         builtin_ids = {item.manifest["id"] for item in found if item.kind == "builtin"}
         ours = {_namespace(name) for name in HANDLERS} | {
@@ -627,9 +660,11 @@ class SkillHost:
             for name in item.manifest["actions"]}
         yours = 0
         chosen = []
-        for item in found:
+        for item in sorted(found, key=lambda item: item.manifest["source"] == "yours"
+                           and item.key not in self.offered):
             mine = item.manifest["source"] == "yours"
-            problem = self._clash(item, ids, actions, tools, builtin_ids) or (
+            unrunnable = mine and item.kind == "code" and sandbox_problem
+            problem = unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
                 mine and _lookalike(item.manifest, ours)) or (
                 OVER_BUDGET if mine and yours + len(item.manifest["actions"]) > USER_TOOLS
                 else "")
@@ -661,11 +696,11 @@ class SkillHost:
 
     # Building and swapping
 
-    def _build(self, chosen: list[_Found], problems: dict):
-        """The new Skills and the processes it uses. Nothing is swapped yet."""
+    def _build(self, chosen: list[_Found], problems: dict, sandbox_problem: str):
+        """The new Skills, the processes it uses and the keys of what it offers. Nothing is
+        swapped yet."""
         running, proxies = {}, {}
-        sandbox_problem = self._sandbox_problem()
-        manifests = []
+        manifests, offered = [], set()
         for item in chosen:
             if item.kind == "recipe":
                 proxies.update(self.recipe_handlers(item.manifest))
@@ -682,13 +717,14 @@ class SkillHost:
                 for name in item.manifest["actions"]:
                     proxies[name] = _proxy(entry, name)
             manifests.append(item.manifest)
+            offered.add(item.key)
         handlers = ChainMap(proxies, HANDLERS)  # HANDLERS read live, so tests can patch it
         try:
             skills = Skills(config=self.config, manifests=manifests, handlers=handlers)
         except Exception:
             self._drop_unused(running)
             raise
-        return skills, running
+        return skills, running, offered
 
     def _sandbox_problem(self) -> str:
         if self.launcher != self._launch:
@@ -858,12 +894,20 @@ def _a_recipe(entry: Path) -> bool:
         entry.is_symlink() or entry.is_file())
 
 
+def _almost_a_recipe(entry: Path) -> bool:
+    """coins.yml or coins.json would otherwise be skipped without a word."""
+    return entry.suffix != ".yaml" and entry.suffix.casefold() in (".yaml", ".yml", ".json") and (
+        not ignored(entry.name))
+
+
 def _namespace(action: str) -> str:
-    return action.partition(".")[0]
+    """The first word of the tool name the model sees, plural or not: files.delete and
+    file_trash.now are file_delete and file_trash_now to it, beside file_find and file_trash."""
+    word = re.split(r"[._]", action, maxsplit=1)[0].casefold()
+    return word[:-1] if word.endswith("s") and len(word) > 1 else word
 
 
 def _lookalike(manifest: dict, ours: set) -> str:
-    """file.delete would be file_delete to the model, beside file_find and file_trash."""
     for name in manifest["actions"]:
         if _namespace(name) in ours:
             return (f"Its action {shown(name, 60)} starts like one built into Tuxistant, so the "

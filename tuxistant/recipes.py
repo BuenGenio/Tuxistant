@@ -26,8 +26,8 @@ import yaml
 
 from . import apps, webfetch
 from .gate import APP_SAYS, MAX_DETAIL_CHARS, Ask, Speak, shown
-from .skillhost import (HOST, MAX_ACTION_TEXT, MAX_MANIFEST_BYTES, PARAM, _bracketed, _schema_ok,
-                        _text, action_description, action_name, skill_id)
+from .skillhost import (HOST, MAX_ACTION_TEXT, MAX_MANIFEST_BYTES, PARAM, Bounded, _bracketed,
+                        _schema_ok, _text, action_description, action_name, load_yaml, skill_id)
 
 FIELDS = {"id", "name", "description", "version", "permissions", "actions"}
 ACTION_FIELDS = {"description", "params", "required", "get", "post", "open", "json", "text",
@@ -56,8 +56,6 @@ APP_ID = re.compile(r"[A-Za-z0-9._-]{1,200}")
 INTEGER = re.compile(r"-?\d{1,12}")
 HIDDEN = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
 SCHEMES = {"https": 443, "http": 80}
-PANEL_KEYS = {panel.desktop.removeprefix("gnome-").removesuffix("-panel.desktop")
-              for panel in apps.PANELS}
 JSON_TYPES = ("application/json",)
 
 DONE = "Done."
@@ -114,9 +112,7 @@ def _read(file: Path) -> dict:
     try:
         if file.stat().st_size > MAX_MANIFEST_BYTES:
             raise ValueError(f"{file.name} is too big.")
-        text = file.read_text()
-        _no_aliases(text)
-        data = yaml.safe_load(text)
+        data = load_yaml(file.read_text(), _Unaliased)
     except FileNotFoundError:
         raise ValueError(f"{file.name} has gone.") from None
     except UnicodeDecodeError:
@@ -132,11 +128,15 @@ def _read(file: Path) -> dict:
     return data
 
 
-def _no_aliases(text: str) -> None:
-    """A few hundred bytes of aliases grow to gigabytes once anything walks what they built."""
-    for event in yaml.parse(text, Loader=yaml.SafeLoader):
+class _Unaliased(Bounded):
+    """A few hundred bytes of aliases grow to gigabytes once anything walks what they built.
+    Refused as each node is reached, so nothing reads the file twice."""
+
+    def compose_node(self, parent, index):
+        event = self.peek_event()
         if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
             raise ValueError("It uses a YAML anchor or alias, & or *, which a recipe can't.")
+        return super().compose_node(parent, index)
 
 
 def _hosts(permissions) -> list[str]:
@@ -372,6 +372,9 @@ def _choice_param(where: str, name: str, spec: dict, description: str) -> Param:
         if isinstance(option, bool):    # YAML 1.1 reads on, off, yes and no as true and false
             raise ValueError(f"{where} has a choice YAML read as {str(option).lower()}. Put "
                              "each choice like on or yes in quotes.")
+        if isinstance(option, (int, float)):
+            raise ValueError(f"{where} has a choice YAML read as a number. Put each choice like "
+                             "1 or 2.5 in quotes.")
         if not isinstance(option, str) or not CHOICE.fullmatch(option):
             raise ValueError(f"{where} has a choice that isn't a short word or two.")
     if len({option.casefold() for option in options}) != len(options):
@@ -402,8 +405,23 @@ def _schema(param: Param) -> dict:
     return {**schema, "description": param.description} if param.description else schema
 
 
+def _unquoted(value) -> str:
+    """Unquoted, "{level}" is YAML for a mapping, {"level": None}: its name, or ""."""
+    if isinstance(value, dict) and len(value) == 1:
+        (key, item), = value.items()
+        if isinstance(key, str) and item is None and PLACEHOLDER.fullmatch(f"{{{key}}}"):
+            return key
+    return ""
+
+
+def _quote_it(name: str) -> str:
+    return f'Put "{{{name}}}" in quotes, or YAML reads it as a mapping.'
+
+
 def _template(action: str, what: str, text, limit: int, names: set) -> tuple:
     """Literal text and placeholder names, alternating. The only syntax is {name}."""
+    if _unquoted(text):
+        raise ValueError(f"Its {what} for {action} isn't text. {_quote_it(_unquoted(text))}")
     if not isinstance(text, str) or len(text) > limit:
         raise ValueError(f"Its {what} for {action} has to be text of at most {limit} "
                          "characters.")
@@ -497,6 +515,9 @@ def _json(name: str, body, params: set):
         if depth > MAX_BODY_DEPTH:
             raise ValueError(f"The json body of {name} is nested too deep.")
         if isinstance(value, dict):
+            if _unquoted(value) in params:
+                raise ValueError(f"The json body of {name} has {{{_unquoted(value)}}} as a "
+                                 f"mapping. {_quote_it(_unquoted(value))}")
             for key in value:
                 _json_key(name, key)
             return {key: walk(item, depth + 1) for key, item in value.items()}
@@ -567,11 +588,25 @@ def _opened(name: str, target) -> dict:
         if not isinstance(app, str) or not APP_ID.fullmatch(app):
             raise ValueError(f"The action {name} names an app id that isn't one.")
         return {"app": app}
-    page = target.get("settings")
-    if page not in PANEL_KEYS:
-        raise ValueError(f"The action {name} names a settings page Tux doesn't know, such as "
-                         "sound, bluetooth or display.")
+    page = _page(target.get("settings"))
+    if not page:
+        raise ValueError(f"The action {name} names a settings page Tux doesn't know. Use its "
+                         "name as Settings shows it, such as Sound, Bluetooth, Displays or "
+                         "Accessibility.")
     return {"page": page}
+
+
+def _page(name) -> str:
+    """A Settings page by its title, a word app.open knows it by, or its file's name, in any
+    case: appearance, Wi-Fi, universal-access. The file's name is what open_entry takes."""
+    if not isinstance(name, str):
+        return ""
+    said = apps._squash(apps._words(name))
+    for panel in apps.PANELS:
+        stem = panel.desktop.removeprefix("gnome-").removesuffix("-panel.desktop")
+        if said in {apps._squash(apps._words(n)) for n in (stem, panel.title, *panel.words)}:
+            return stem
+    return ""
 
 
 def _defaults_cover(name: str, fields: dict, params: dict, required: tuple) -> None:
@@ -768,7 +803,21 @@ def offline_handlers(manifest: dict) -> dict:
 def _handler(plan: Plan):
     async def call(args: dict, config, session):
         return await _call(plan, args, config, session)
+    call.sends = lambda args, _config: _sends(plan, args)
     return call
+
+
+def _sends(plan: Plan, args: dict) -> bool:
+    """For Skills' reach card: whether the call would send anything. A copy of a request just
+    answered doesn't, so it gets no second card, and nor do arguments the handler refuses. A
+    second less than the handler's, so what this calls a copy is still one when it runs."""
+    if plan.effect not in ("get", "post"):
+        return False
+    try:
+        request = build(plan, values(plan, args))
+    except ArgumentError:
+        return False
+    return _again(_key(plan, request), AGAIN_S - 1) is None
 
 
 async def _call(plan: Plan, args: dict, config, session):
@@ -781,8 +830,9 @@ async def _call(plan: Plan, args: dict, config, session):
         request = build(plan, found)
     except ArgumentError as e:
         return {"error": str(e)}
-    if _again(_key(plan, request)):
-        return {APP_SAYS: True}
+    said = _again(_key(plan, request))
+    if said is not None:
+        return _echo(session, config, said)
     try:
         where = await asyncio.to_thread(_place, request, config)
     except webfetch.PageError as e:
@@ -834,13 +884,18 @@ def _send_and_say(plan: Plan, request: Request, where: webfetch.Place, found: di
     if not 200 <= reply.status < 300:
         said = SAID_NO if reply.status >= 400 else NO_ANSWER
         return _say(session, config, said.format(host=request.host))
-    _remember(_key(plan, request))
+    said = _answer(plan, reply, found, request.host)
+    _remember(_key(plan, request), said)
+    return _say(session, config, said)
+
+
+def _answer(plan: Plan, reply: webfetch.Reply, found: dict, host: str) -> str:
     picked = _picked(plan, reply)
     if picked is None:
-        return _say(session, config, UNREADABLE.format(host=request.host))
+        return UNREADABLE.format(host=host)
     if plan.say is None:
-        return _say(session, config, DONE)
-    return _say(session, config, _sentence(plan.say, found, picked))
+        return DONE
+    return _sentence(plan.say, found, picked)
 
 
 def _picked(plan: Plan, reply: webfetch.Reply) -> dict | None:
@@ -906,8 +961,15 @@ def _say(session, config, text: str) -> dict:
     return {APP_SAYS: True}
 
 
-# Only requests that were answered, so a copy after a failure tries again.
-_recent: dict[tuple, float] = {}
+def _echo(session, config, text: str) -> dict:
+    """A copy sends nothing, but a question asked again gets its answer again: once a reply."""
+    if any(speak.text == text for speak in session.after):
+        return {APP_SAYS: True}
+    return _say(session, config, text)
+
+
+# Only requests that were answered, with what was said, so a copy after a failure tries again.
+_recent: dict[tuple, tuple[float, str]] = {}
 _recent_lock = threading.Lock()
 
 
@@ -915,14 +977,16 @@ def _key(plan: Plan, request: Request) -> tuple:
     return plan.skill, plan.action, request.method, request.url, request.body
 
 
-def _again(key: tuple) -> bool:
+def _again(key: tuple, within: float = AGAIN_S) -> str | None:
+    """What was said for this request if it was answered in the last few seconds."""
     with _recent_lock:
-        return time.monotonic() - _recent.get(key, -AGAIN_S) < AGAIN_S
+        at, said = _recent.get(key, (-math.inf, ""))
+        return said if time.monotonic() - at < within else None
 
 
-def _remember(key: tuple) -> None:
+def _remember(key: tuple, said: str) -> None:
     with _recent_lock:
         now = time.monotonic()
-        for old in [k for k, at in _recent.items() if now - at >= AGAIN_S]:
+        for old in [k for k, (at, _) in _recent.items() if now - at >= AGAIN_S]:
             del _recent[old]
-        _recent[key] = now
+        _recent[key] = (now, said)

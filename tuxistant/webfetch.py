@@ -365,7 +365,9 @@ def send(where: Place, scheme: str, host: str, port: int, path: str, method: str
          body: bytes | None = None, content_type: str | None = None,
          seconds: float = TOTAL_S) -> Reply:
     """A recipe's one request, to the addresses place() checked, or PageError if nothing answers.
-    No redirect is followed and nothing but these headers goes: no cookie, key or referrer."""
+    No redirect is followed and nothing but these headers goes, with the Host, Accept-Encoding:
+    identity and, with a body, Content-Length that http.client adds: no cookie, key or
+    referrer."""
     headers = {"User-Agent": RECIPE_AGENT, "Accept": RECIPE_ACCEPT}
     if body is not None:
         headers["Content-Type"] = content_type or "application/octet-stream"

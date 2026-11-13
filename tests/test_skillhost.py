@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
@@ -211,6 +212,20 @@ class Refused(Case):
 
     def test_reserved_ids(self):
         self.assertIn("org.tuxistant.", self.problem(id="org.tuxistant.sneaky"))
+
+    def test_actions_that_look_like_built_in_tools(self):
+        """The model sees tool names, so an underscore or a plural looks the same to it."""
+        for action in ("time.later", "time_now.again", "times.now", "disk_usage.all",
+                       "weathers.today"):
+            with self.subTest(action):
+                self.assertIn("starts like one built into", self.problem(action=action))
+
+    def test_a_deep_manifest_is_refused_at_once(self):
+        folder = write_skill(self.user, "skill", text="a: " + "[" * 65_000)
+        started = time.monotonic()
+        problems = self.host.reload()
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertIn("nested more than 16 levels", problems[str(folder)])
 
     def test_bad_ids_and_action_names(self):
         for manifest in ({"id": "../../etc"}, {"id": "Org.Example"}, {"id": "noprefix"},

@@ -31,7 +31,7 @@ Steps 1 to 3 of the plan below are built, and most of step 4. Step 5, recipe ski
 | Demo video | A 64 second draft from `tools/demo_video.py`: the real extension in an isolated shell, with scripted requests and synthesised voices, and it says so on screen. The owner accepted it on 2026-11-10. Not published anywhere yet |
 | Server kit | In `server/`, copied from the owner's working server with its host name and user id made general. That general copy has not yet set up a second machine |
 | Local code skills and their sandbox | Built and tested: your own skills load, change and go while the daemon runs, each in bubblewrap. Lights now runs this way. Not yet tried on the real desktop |
-| Recipe skills | Built for 0.5.0 and tested with a pretend internet, a made-up app list and temporary folders. Not yet tried on the real desktop, and the two fixture recipes have not been run through `eval_routing` (checks 23 to 26) |
+| Recipe skills | Built for 0.5.0 and tested with a pretend internet, a made-up app list and temporary folders. Not yet tried on the real desktop, and the four fixture recipes have not been run through `eval_routing` (checks 23 to 26) |
 | Community registry | Not started |
 
 The code is public under GPL-3.0.
@@ -136,10 +136,10 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 
 22. Apps: "Open Firefox", "Open the Bluetooth settings" and "Open Settings". Then restart the daemon and check that Firefox stays open. Make a test shortcut in `~/.local/share/applications`, ask for it, and see its card. Check whether the new window gets focus or GNOME shows a "ready" notice instead. None of this has run on the real desktop.
 
-23. A recipe for a public API: copy `docs/examples/recipes/coins.yaml`, pointed at a real price API you trust, into `~/.local/share/tuxistant/skills/`. "What's bitcoin at?" should say the price with no card, and History should show `coins.price`. Change its host in the file without taking it out, and Settings should list it under "Skills with problems".
+23. A recipe for a public API: copy `docs/examples/recipes/coins.yaml` somewhere else, point it at a real price API you trust there, then copy it into `~/.local/share/tuxistant/skills/`. A host changed after the file is in the folder is refused until it is taken out and put back. "What's bitcoin at?" should say the price with no card, and History should show `coins.price`. Change its host in the file without taking it out, and Settings, left open, should list it under "Skills with problems".
 24. A recipe for a device at home, such as a WLED strip: the card shows the address on your local network and the body, Deny sends nothing, and Allow changes the strip.
 25. Settings: the Skills page shows a recipe as "A recipe you added.", a broken one under "Skills with problems" with its file name, and "Open skills folder" opens the folder.
-26. `TUX_EVAL_RECIPES=1 python3 tools/eval_routing.py` against the real server. The tides and coins cases should route, and the weather, news, search and facts cases shouldn't move. If it costs more than about 1% of tries, or any fact, lower `USER_TOOLS` or the advised description length.
+26. `TUX_EVAL_RECIPES=1 python3 tools/eval_routing.py` against the real server. The recipe cases should route, and the cases without recipes shouldn't move, apart from those in `WITH_RECIPES`: "Send my CV to my phone" stays off `notes_phone`, and "What's the price of gold?" stays on `web_search`. If it costs more than about 1% of tries, or any fact, lower `USER_TOOLS` or the advised description length.
 
 Move site claims from Soon to Now only after the matching check passes.
 

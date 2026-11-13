@@ -1090,6 +1090,12 @@ class Inner(unittest.TestCase):
         self.assertEqual([r.get_title() for r in page.problem_rows], ["broken.yaml"])
         self.assertIn("may only name the hosts", page.problem_rows[0].get_subtitle())
         self.assertTrue(page.problem_rows[0].get_tooltip_text().endswith("/skills/broken.yaml"))
+        before = {row.get_tooltip_text(): row.get_subtitle() for row in page.problem_rows}
+        self.addCleanup(control, "SetSkillProblems", json.dumps(before), signature="s")
+        control("SetSkillProblems", json.dumps({"/x/skills/coins.yml": "Has to end in .yaml."}),
+                signature="s")
+        wait(lambda: [r.get_title() for r in page.problem_rows] == ["coins.yml"],
+             "the problems a reload found, with the window open")
 
     def test_22_history_lists_and_refreshes_live(self):
         page = self.win.history
