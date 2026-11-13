@@ -5,7 +5,7 @@ version: 1.0.0
 permissions: {}
 actions:
   app.open:
-    description: Open an app such as Firefox, Spotify or the terminal, or a page of Settings such as Bluetooth, display or sound settings. Not for files or folders
+    description: Open an app such as Firefox, Spotify or the terminal, or a page of Settings such as Bluetooth, display or sound settings. It can't close apps. Not for files or folders
     params:
       name: { type: string, description: "The app or Settings page as the user said it, like firefox or bluetooth settings" }
     required: [name]

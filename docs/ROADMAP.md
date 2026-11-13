@@ -22,7 +22,7 @@ Steps 1 to 3 of the plan below are built, and most of step 4. `v0.2.0` is the la
 | Media control | Pauses, resumes and skips players through MPRIS, says what is playing, and sets the volume through `wpctl`. Tested against stand-in players, some of them on a private bus, and a stand-in `wpctl`. No real player has been told anything and no real `wpctl` has been run. Routing has been measured with the current tools; see [TESTING.md](TESTING.md) for results and limits |
 | Timers and reminders | Wired into the daemon on 2026-11-11: `timer.set`, `timer.list` and `timer.cancel`, kept in `timers.json`, said through the controller without ever interrupting, with a notification. Tested with a clock that only tests move, on the real controller with fake audio, and through the real `service.run` on a private bus with a stand-in screen shield. Not yet in the real daemon, by voice or on the real desktop: no real notification has been shown and the chime has never been heard. Routing has been measured with the current tools; see [TESTING.md](TESTING.md) for results and limits |
 | Home Assistant | Wired in on 2026-11-11, and offered to the model only once an address and a token are in Settings. Controls and reads lights, switches, fans, scenes, scripts, heating, covers, locks and media players by name. Tested against a fake server on localhost. Its author also ran it against a real Home Assistant 2026.11 in Docker with its demo devices, before a scene got its card: that test file is updated and has not been run since. Not yet on a real home, or by voice. Routing has been measured with the current tools; see [TESTING.md](TESTING.md) for results and limits |
-| Apps and Settings pages | Built and tested with stand-ins. Not yet on the real desktop, and its routing cases are not yet measured |
+| Apps and Settings pages | Built and tested with stand-ins. Not yet on the real desktop. Routing has been measured with the current tools; see [TESTING.md](TESTING.md) for results and limits |
 | Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
 | Facts, web search, research | Tested against the real server, Wikipedia and SearXNG. Not yet by voice on the real desktop |
 | Multi-step planner, local model | Two live runs worked |
@@ -180,7 +180,7 @@ Move site claims from Soon to Now only after the matching check passes.
 **Media:**
 
 - No real player has been told anything and no real `wpctl` has been run, to read the volume or to change it. What `wpctl` takes and prints was read from its help and from the binary here (WirePlumber 0.5.13). How long a real player needs to show a change is a guess: Tux waits up to 1.5 s and then says what it sees.
-- "Open Spotify" and "Play Spotify" arrived as a bare play with no name in the last measured runs, which starts whatever was left paused, such as a video in a browser. Media control can't open an app. "Open Spotify" now has `app_open` to go to, but no routing run has measured whether it does.
+- "Open Spotify" and "Play Spotify" arrived as a bare play with no name in the last measured runs, which starts whatever was left paused, such as a video in a browser. Media control can't open an app. "Open Spotify" now goes to `app_open` 3 of 3 in every setup measured, but "Play Spotify" is still a bare play.
 - Other requests the model gets wrong: "Next" alone goes to the calendar, "Resume" alone gets "I can't resume anything", "Unpause" comes as unmute, "Half volume" comes as volume down, which is a step down unless the model put 50 beside it, and "Pause the music and turn the volume down" does one of the two. "Next song" and "Resume the music" are right.
 - Tux can't tell you the volume without changing it.
 - After "Mute", Tux's own voice is muted too, so the answer is only seen in the caption.
@@ -196,7 +196,8 @@ Move site claims from Soon to Now only after the matching check passes.
 **Apps:**
 
 - It can't switch to or raise an app that is already running, as GNOME Shell lets only itself do that. A running Firefox opens a new window.
-- There is no closing.
+- There is no closing. "Close Firefox" opened Firefox until `app_open` said it can't close apps.
+- "Launch the calculator" runs the shell command `calc` in two of the four setups measured, and "Open my Downloads folder" reaches `app_open`, which says no app has that name and offers to look for a folder.
 - A window opened from the daemon may not take focus.
 - Settings words are English. A page's translated name matches only when said exactly.
 - A step in a multi-step task that opens an app ends the task, as media does.
