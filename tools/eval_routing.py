@@ -3,6 +3,7 @@
 
     python3 tools/eval_routing.py [--server host:port] [repeats] [text to filter on]
     TUX_EVAL_HOME=1 python3 tools/eval_routing.py       with Home Assistant's tools and cases
+    TUX_EVAL_MAIL=0 TUX_EVAL_TAPO=0 ...                 without mail search or the Tapo lights
 
 Nothing is executed: a turn stops at the first tool call. Needs the LocalAI server. The small
 model is consistent, so a request that goes wrong usually goes wrong every time, and one tool's
@@ -10,7 +11,8 @@ wording can move requests that seem unrelated. Add a case whenever a real reques
 
 Home Assistant's two tools are offered only once it is set up, so they and their cases are left
 out unless TUX_EVAL_HOME=1. The address and token are then made up, here only: the ones in
-Settings are never read, and nothing is ever sent to a home.
+Settings are never read, and nothing is ever sent to a home. Mail search and a made-up TP-Link
+account are on unless set to 0. A case whose tools are all off in a setup is left out.
 """
 import asyncio
 import collections
@@ -33,11 +35,16 @@ cfg = Config()
 evaluation_server(cfg)
 KEY = cfg["api_key"]
 HOME = os.environ.get("TUX_EVAL_HOME") == "1"
+MAIL = os.environ.get("TUX_EVAL_MAIL", "1") == "1"
+TAPO = os.environ.get("TUX_EVAL_TAPO", "1") == "1"
 # Lights are offered only with a TP-Link account. Made up too, and no code skill is started.
-SET_UP = {"tapo_email": "eval@example.test", "tapo_password": "eval",
+SET_UP = {**({"tapo_email": "eval@example.test", "tapo_password": "eval"} if TAPO else {}),
           **({"ha_server": "eval.invalid:8123", "ha_token": "eval"} if HOME else {})}
 # The tools the daemon offers, code skills too, and mail search, which is off until turned on.
-skills = offline({**DEFAULTS, "mail_search": True, **SET_UP}).current()
+skills = offline({**DEFAULTS, "mail_search": MAIL, **SET_UP}).current()
+OFFERED = {t["name"] for t in skills.tools()}
+# With Home Assistant and no Tapo account, every light belongs to Home Assistant.
+INSTEAD_OF_TAPO = {"lights_set": "home_set", "lights_status": "home_status"}
 REPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3
 ONLY = sys.argv[2] if len(sys.argv) > 2 else ""
 
@@ -178,6 +185,28 @@ CASES = [
     ("Half volume", {"media_control"}),
     ("Cancel", None),
     ("Never mind", None),
+    # Added with the full tool set: words that several tools could take.
+    ("Skip", {"media_control"}),
+    ("Resume", {"media_control"}),
+    ("Stop the video", {"media_control"}),
+    ("Turn the music off", {"media_control"}),
+    ("Can you make it a bit quieter?", {"media_control"}),
+    ("What's the name of this track?", {"media_playing"}),
+    ("Who's the artist of this song?", {"media_playing"}),
+    ("Open Firefox", None),
+    ("Open my Downloads folder", {"file_open", "file_find", "shell_run"}),
+    ("Set an alarm for half past six", {"timer_set"}),
+    ("Start a five minute countdown", {"timer_set"}),
+    ("Put a timer on for the eggs, seven minutes", {"timer_set"}),
+    ("Remind me in an hour to check the oven", {"timer_set"}),
+    ("How much time is left on my timer?", {"timer_list"}),
+    ("Delete the reminder about mum", {"timer_cancel"}),
+    ("What's next on my calendar?", {"calendar_events"}),
+    ("Remind me about Anna's birthday on Saturday", {"calendar_add", "timer_set"}),
+    ("Add a reminder to my calendar to renew the car insurance on the 3rd", {"calendar_add"}),
+    ("Turn off the lamp", {"lights_set"}),
+    ("Are the lights still on?", {"lights_status"}),
+    ("Did anyone email me about the parcel?", {"mail_search"}),
 ]
 
 # Only with TUX_EVAL_HOME=1, on top of everything above. With both set up, "the light" with
@@ -208,6 +237,11 @@ HOME_CASES = [
     ("Lock the screen", {"shell_run", None}),
     ("What's the temperature outside?", {"weather_forecast"}),
     ("How do you say the light is on in French?", {"translate_text"}),
+    ("Turn on the porch light", {"home_set", "lights_set"}),     # named: either provider
+    ("Is the kitchen light on?", {"home_status", "lights_status"}),
+    ("Open the living room curtains", {"home_set"}),
+    ("Switch the heating off", {"home_set"}),
+    ("Pause the music in the kitchen", {"media_control"}),
 ]
 
 # Questions it should simply answer. "No tool" alone can't tell an answer from "I can't do that".
@@ -224,6 +258,7 @@ FACTS = [
     ("Who painted the Mona Lisa?", r"vinci"),
     ("What do Ukrainians call the president of russia these days?", r"хуйло|khuylo|huylo"),
     ("Who wrote Bohemian Rhapsody?", r"mercury|queen"),
+    ("Who sang Hey Jude?", r"beatles|mccartney"),
     # About time, and not for a timer. They are here and not above because they are facts:
     # eval_facts takes every case above as something that must not be sorted as one.
     ("How many minutes are there in a day?", r"1,?440|fourteen hundred"),
@@ -270,9 +305,15 @@ async def main():
     for text, wanted in CASES + (HOME_CASES if HOME else []):
         if ONLY and ONLY.lower() not in text.lower():
             continue
-        seen = collections.Counter()
         if HOME and text == "Switch off the bedroom lamp":
             wanted = {"lights_set", "home_set"}
+        if HOME and not TAPO and wanted:
+            wanted = {INSTEAD_OF_TAPO.get(name, name) for name in wanted}
+        if wanted is not None:
+            wanted = wanted & (OFFERED | {None})
+            if not wanted:
+                continue    # its tool is off in this setup
+        seen = collections.Counter()
         sample = ""
         for _ in range(REPS):
             name, args = await first_tool(text)

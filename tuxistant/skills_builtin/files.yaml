@@ -15,7 +15,7 @@ actions:
       days: { type: integer, description: "Only files changed in the last this many days" }
     required: [query]
   file.open:
-    description: Open a file on screen. Only when the user says open or show, never as a step towards something else
+    description: Open a file on screen. Only when the user says open or show, never as a step towards something else. Not for apps
     params:
       file: { type: string, description: "A result number from file_find, like 1, or a path" }
     required: [file]

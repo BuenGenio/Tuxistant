@@ -6,7 +6,7 @@ permissions:
   shell: true
 actions:
   shell.run:
-    description: Install an app, or run a command on this computer and get its output, when no other tool fits. Use it for what a file says, what is in a folder, and for changing the computer, because the user is asked first
+    description: Install or update an app or the system, or run a command on this computer and get its output, when no other tool fits. Use it for what a file says, what is in a folder, and for changing the computer, because the user is asked first
     params:
       command: { type: string, description: "One shell command line, for example: du -sh ~/Downloads" }
     required: [command]
