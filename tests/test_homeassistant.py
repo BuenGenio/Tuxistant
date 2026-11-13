@@ -1807,12 +1807,15 @@ class Wired(WithHome):
         self.assertEqual(self.services(), [])
 
     def test_a_long_harmless_name_is_judged_whole_too(self):
-        """A light after the 40th character still counts, as it would in a short name."""
-        for entity, name in (("switch.shed_plug", "Garage door side of the shed, wall plug for the work light"),
-                             ("switch.kitchen_plug", "Kitchen counter plug for the kettle and the toaster oven")):
-            with self.subTest(entity):
-                self.assertGreater(len(name), homeassistant.MAX_NAME_CHARS)
-                self.assertFalse(self.guarded(entity, name))
+        """A long name with nothing guarded in it runs with no card."""
+        name = "Kitchen counter plug for the kettle and the toaster oven"
+        self.assertGreater(len(name), homeassistant.MAX_NAME_CHARS)
+        self.assertFalse(self.guarded("switch.kitchen_plug", name))
+
+    def test_a_light_past_the_cut_does_not_lift_the_card(self):
+        """Judged as shown and as written, either one asking is enough: it only ever adds a card."""
+        name = "Garage door side of the shed, wall plug for the work light"
+        self.assertTrue(self.guarded("switch.shed_plug", name))
         self.add("switch.kitchen_plug", "off", "Kitchen counter plug for the kettle and the toaster oven")
         result, _ = self.execute("home_set", name="kitchen counter plug", state="on")
         self.assertNotIn("declined", result)

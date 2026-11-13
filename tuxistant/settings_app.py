@@ -641,7 +641,7 @@ class GeneralPage(Adw.PreferencesPage):
     def _mail_group(self):
         group = Adw.PreferencesGroup(title="Mail", description=MAIL_NOTE)
         group.add(self._switch("mail_search", "Search my mail",
-                               "Junk and Trash are never read, and sign-in codes are hidden"))
+                               "Junk and Trash are skipped, and sign-in codes are hidden where they are recognised"))
         return group
 
     def _timers_group(self):

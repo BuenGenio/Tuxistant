@@ -401,7 +401,7 @@ class Entity:
     words: frozenset    # of the name
     where: frozenset    # the words of its area's name
     squashed: str       # the name's words run together: "HeatPump" is "heat pump"
-    guarded: bool       # its whole name, not only the cut one, says alarm, lock or a way in
+    guarded: bool       # its first MAX_JUDGED_CHARS characters, not only the 40 shown, say alarm, lock or a way in
 
     @property
     def domain(self) -> str:
@@ -1014,11 +1014,13 @@ def _named_guarded(text: str) -> bool:
 
 def _guarded(entity: Entity) -> bool:
     """A switch named for an alarm, a lock or a way in. The id counts as much as the name, and
-    "GarageDoor" as much as "garage door". The name is judged whole, as the one on the card is
-    cut to 40 characters and "Shelly relay channel one outside wall garage door" would pass."""
+    "GarageDoor" as much as "garage door". The name is judged as the card shows it, cut to 40
+    characters, and up to MAX_JUDGED_CHARS, so "Shelly relay channel one outside wall garage door"
+    counts; a card is shown if either says so."""
     if entity.domain not in GUARDED_DOMAINS:
         return False
-    return entity.guarded or _named_guarded(entity.id.partition(".")[2])
+    return (entity.guarded or _named_guarded(entity.name)
+            or _named_guarded(entity.id.partition(".")[2]))
 
 
 def _needs_click(step: _Step) -> bool:
