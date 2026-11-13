@@ -1871,6 +1871,30 @@ class Wired(WithHome):
         whole = "x" * (cut - 6) + "GarageFan"
         self.assertTrue(self.guarded("switch.relay_2", whole), "a word the cut ends on is kept")
 
+    def test_a_guard_word_the_cut_runs_past_still_asks(self):
+        """A name with no break to back up to is still judged on its first 255 characters."""
+        for name in ("x" * 60 + "doorlock" + "x" * 200, "x" * 100 + "garagedoor" + "x" * 200,
+                     "X" * 100 + "GARAGEDOOR" + "X" * 200,
+                     "Relay-" + "x" * 60 + "frontdoorlock" + "x" * 300):
+            with self.subTest(name[:20]):
+                self.assertTrue(self.guarded("switch.relay_2", name))
+                self.assertNotIn("door", homeassistant._findable(name, TOKEN).casefold())
+
+    def test_a_guard_word_the_cut_splits_still_asks(self):
+        """The part the cut leaves can add a card, though it never finds the thing."""
+        cut = homeassistant.MAX_JUDGED_CHARS
+        for head, tail in (("-doorlo", "ck"), ("_garagedo", "or"), ("-GarageÉcl", "airage"),
+                           ("-GarageFanc", "y")):
+            name = "Relay" + "x" * (cut - 5 - len(head)) + head + tail
+            with self.subTest(head):
+                self.assertTrue(name[:cut].endswith(head))
+                self.assertTrue(self.guarded("switch.relay_2", name))
+
+    def test_a_name_with_no_break_is_found_by_its_id(self):
+        entity = homeassistant._entity({"entity_id": "light.kitchen_lamp", "attributes":
+                                        {"friendly_name": "x" * 300}}, TOKEN, {})
+        self.assertEqual(entity.words, {"kitchen", "lamp"})
+
     def test_a_long_guarded_name_waits_for_a_click_whichever_way_it_is_switched(self):
         entity, name = self.LONG_GUARDED[0]
         self.add(entity, "off", name)
