@@ -403,7 +403,8 @@ def effect_words(plan, raw) -> tuple:
     if plan.effect == "post":
         return does, "Tux shows you a card with the exact request every time."
     if plan.free_text:
-        return does, "Tux shows you a card with the exact request first, as words you say go into it."
+        return does, ("Tux shows you a card with the exact request first, as words you say go "
+                      "into it.")
     return does, ("No card in a fresh conversation, as only numbers or choices from its list go "
                   "into it. A card if the host is on your local network or the conversation has "
                   "read something private.")
