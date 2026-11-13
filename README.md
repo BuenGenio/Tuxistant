@@ -58,7 +58,7 @@ The installer puts a `tuxistant` command in `~/.local/bin`, the extension in `~/
 
 The `tuxistant` command runs from this folder, so keep it where it is. To update a clone, run `git fetch --tags`, `git checkout` the newer tag, and run `./install.sh` again. To update from a download, unpack the newer one, which makes a new folder beside the old one, run `./install.sh` from the new folder, and then delete the old one. Don't unpack it over the old folder, because files the new version removed would stay behind. Either way, restart the daemon afterwards with `systemctl --user restart tuxistant`, or log out and back in. Until then the old version keeps running. Running the installer twice is harmless and keeps your settings.
 
-To remove everything, including the Fn helper, run `./uninstall.sh`. Your settings, API key, history and themes stay unless you add `--purge`.
+To remove everything, including the Fn helper, run `./uninstall.sh`. Your settings, API key, history, themes and what skills kept stay unless you add `--purge`.
 
 ## Use
 

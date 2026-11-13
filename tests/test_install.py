@@ -67,13 +67,15 @@ class Prefix(unittest.TestCase):
         self.home = self.tmp / "home"
         self.data = self.tmp / "data"
         self.config = self.tmp / "config"
+        self.state = self.tmp / "state"
         self.bin = self.tmp / "bin"
         self.dest = self.tmp / "dest"
         self.home.mkdir()
         self.env = {
             "HOME": str(self.home), "PATH": f"{self.shims}:{os.environ['PATH']}",
             "XDG_DATA_HOME": str(self.data), "XDG_CONFIG_HOME": str(self.config),
-            "XDG_BIN_HOME": str(self.bin), "DESTDIR": str(self.dest),
+            "XDG_BIN_HOME": str(self.bin), "XDG_STATE_HOME": str(self.state),
+            "DESTDIR": str(self.dest),
             "SHIM_LOG": str(self.shim_log), "SSH_REPLY": "",
             "TUXISTANT_INSTALL_DRYRUN": "1",
             # HOME is a temp folder, and the daemon's modules may be in the real user's site folder.
@@ -253,12 +255,21 @@ class DryRun(Prefix):
 
 
 class Uninstall(Prefix):
+    def skill_state(self):
+        kept = self.staged(self.state / "tuxistant/skills/lights/lights.json")
+        kept.parent.mkdir(parents=True)
+        kept.write_text("{}")
+        return kept
+
     def test_reverses_install_and_keeps_user_data(self):
         self.ok("install.sh", "--fn-helper")
+        kept = self.skill_state()
         done = self.ok("uninstall.sh")
-        self.assertEqual(sorted(tree(self.dest)), [str(self.config_file.relative_to(self.dest))])
+        self.assertEqual(sorted(tree(self.dest)), sorted(
+            str(p.relative_to(self.dest)) for p in (self.config_file, kept)))
         self.assertFalse(self.helper.parent.exists())
         self.assertIn("--purge", done.stdout)
+        self.assertIn(str(self.staged(self.state / "tuxistant")), done.stdout)
         self.assertEqual(self.calls(), [])
 
     def test_purge_removes_user_data_too(self):
@@ -266,8 +277,26 @@ class Uninstall(Prefix):
         history = self.staged(self.data / "tuxistant/history.db")
         history.parent.mkdir(parents=True)
         history.write_text("x")
+        self.skill_state()
         self.ok("uninstall.sh", "--purge")
         self.assertEqual(tree(self.dest), {})
+        self.assertFalse(self.staged(self.state / "tuxistant").exists())
+
+    def test_state_dir_is_where_code_skills_keep_their_state(self):
+        for xdg in ({"XDG_STATE_HOME": str(self.state)}, {}):
+            env = {"HOME": str(self.home), "PATH": os.environ["PATH"], **xdg}
+            shell = subprocess.run(
+                ["sh", "-c", '. "$PROJECT/packaging/paths.sh" && printf %s "$STATE_DIR"'],
+                env={**env, "PROJECT": str(ROOT)}, capture_output=True, text=True, check=True)
+            python = subprocess.run(
+                [sys.executable, "-c", "from tuxistant import skillbox, skillhost\n"
+                 "print(skillbox.state_dir('lights')); print(skillhost._state_dir('lights'))"],
+                env={**env, "PYTHONPATH": str(ROOT), "PYTHONUSERBASE": site.getuserbase()},
+                cwd=self.tmp, capture_output=True, text=True, timeout=60)
+            self.assertEqual(python.returncode, 0, python.stderr)
+            expected = Path(shell.stdout) / "skills" / "lights"
+            self.assertTrue(expected.is_relative_to(self.state if xdg else self.home), expected)
+            self.assertEqual(python.stdout.split(), [str(expected)] * 2)
 
     def test_idempotent_and_safe_on_a_clean_system(self):
         self.ok("uninstall.sh")
