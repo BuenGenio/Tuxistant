@@ -1780,6 +1780,45 @@ class Wired(WithHome):
             with self.subTest(entity):
                 self.assertFalse(self.guarded(entity, name))
 
+    LONG_GUARDED = (("switch.shelly1_relay", "Shelly relay channel one outside wall GARAGE DOOR"),
+                    ("switch.sonoff_2", "Relay on the left side of the shed - front gate"),
+                    ("input_boolean.helper_7", "Helper made by the installer for the house alarm"))
+
+    def test_a_long_name_is_judged_whole_not_as_cut_for_the_card(self):
+        """The card shows 40 characters. The word that needs a click can come after them."""
+        for entity, name in self.LONG_GUARDED:
+            with self.subTest(entity):
+                cut = homeassistant._name(name, TOKEN).casefold()
+                self.assertNotIn(name.split()[-1].casefold(), cut)
+                self.assertTrue(self.guarded(entity, name))
+        self.assertTrue(self.guarded("switch.relay_9", "x" * 200 + " garage door"))
+        self.assertTrue(self.guarded("switch.garage_door", "x" * 1_000_000), "the id still counts")
+
+    def test_a_long_guarded_name_waits_for_a_click_whichever_way_it_is_switched(self):
+        entity, name = self.LONG_GUARDED[0]
+        self.add(entity, "off", name)
+        for state in ("on", "off", "toggle"):
+            with self.subTest(state):
+                self.asked.clear()
+                result, _ = self.execute("home_set", name="shelly relay channel one", state=state)
+                self.assertTrue(result.get("declined"), result)
+                self.assertIn(f"({entity})", self.asked[0].detail)
+                self.assertIn(homeassistant.GUARDED, self.asked[0].detail)
+        self.assertEqual(self.services(), [])
+
+    def test_a_long_harmless_name_is_judged_whole_too(self):
+        """A light after the 40th character still counts, as it would in a short name."""
+        for entity, name in (("switch.shed_plug", "Garage door side of the shed, wall plug for the work light"),
+                             ("switch.kitchen_plug", "Kitchen counter plug for the kettle and the toaster oven")):
+            with self.subTest(entity):
+                self.assertGreater(len(name), homeassistant.MAX_NAME_CHARS)
+                self.assertFalse(self.guarded(entity, name))
+        self.add("switch.kitchen_plug", "off", "Kitchen counter plug for the kettle and the toaster oven")
+        result, _ = self.execute("home_set", name="kitchen counter plug", state="on")
+        self.assertNotIn("declined", result)
+        self.assertEqual(self.asked, [])
+        self.assertEqual(self.services(), [("switch/turn_on", {"entity_id": ["switch.kitchen_plug"]})])
+
     def test_the_card_text_is_the_daemons_own(self):
         """Nothing the server or the model wrote is on it but the entity's cut name and id."""
         self.add("switch.garage_door", "off", "Garage door")

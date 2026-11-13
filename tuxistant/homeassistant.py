@@ -47,6 +47,7 @@ EXTRAS_FOR_S = 600              # areas and the unit of temperature change rarel
 MAX_SINGLE_READS = 12           # this many are asked about one by one, which is always fresh
 SETTLE_S = (0.4, 0.8)           # waits before reading again: some devices lag their service call
 MAX_NAME_CHARS = 40             # a name is whatever anyone typed into Home Assistant
+MAX_JUDGED_CHARS = 255          # of a name, when deciding whether a switch needs a click
 MAX_TOKEN_CHARS = 1024
 MAX_SPOKEN = 5                  # a small model reads out all it is given
 MAX_PROBLEMS = 2                # a house can have a dozen lamps unplugged at the wall
@@ -400,6 +401,7 @@ class Entity:
     words: frozenset    # of the name
     where: frozenset    # the words of its area's name
     squashed: str       # the name's words run together: "HeatPump" is "heat pump"
+    guarded: bool       # its whole name, not only the cut one, says alarm, lock or a way in
 
     @property
     def domain(self) -> str:
@@ -412,10 +414,15 @@ KEPT = ("brightness", "color_mode", "color_temp_kelvin", "hs_color", "supported_
 WORDS_KEPT = ("color_mode", "unit_of_measurement", "device_class")    # kept only if they are text
 
 
+def _cleaned(text, token: str) -> str:
+    """A name from the server, uncut. It is other people's text, and a server that echoed the
+    token into it would otherwise have it read out."""
+    return " ".join(str(text or "").replace(token, "").replace("<", "").replace(">", "").split())
+
+
 def _name(text, token: str) -> str:
-    """A name from the server, fit to say and to show. It is other people's text, and a server
-    that echoed the token into it would otherwise have it read out."""
-    return shown(" ".join(str(text or "").replace(token, "").replace("<", "").replace(">", "").split()), MAX_NAME_CHARS)
+    """A name from the server, fit to say and to show."""
+    return shown(_cleaned(text, token), MAX_NAME_CHARS)
 
 
 def _entity(raw, token: str, areas: dict) -> Entity | None:
@@ -430,7 +437,9 @@ def _entity(raw, token: str, areas: dict) -> Entity | None:
     where = frozenset(word for area in areas.get(entity_id, ()) for word in _words(area))
     kept = {key: attrs[key] for key in KEPT
             if key in attrs and (key not in WORDS_KEPT or isinstance(attrs[key], str))}
-    return Entity(entity_id, name, state[:64], kept, frozenset(words), where, "".join(words))
+    guarded = (entity_id.partition(".")[0] in GUARDED_DOMAINS
+               and _named_guarded(_cleaned(attrs.get("friendly_name"), token)[:MAX_JUDGED_CHARS]))
+    return Entity(entity_id, name, state[:64], kept, frozenset(words), where, "".join(words), guarded)
 
 
 @dataclass(frozen=True)
@@ -1005,10 +1014,11 @@ def _named_guarded(text: str) -> bool:
 
 def _guarded(entity: Entity) -> bool:
     """A switch named for an alarm, a lock or a way in. The id counts as much as the name, and
-    "GarageDoor" as much as "garage door"."""
+    "GarageDoor" as much as "garage door". The name is judged whole, as the one on the card is
+    cut to 40 characters and "Shelly relay channel one outside wall garage door" would pass."""
     if entity.domain not in GUARDED_DOMAINS:
         return False
-    return _named_guarded(entity.name) or _named_guarded(entity.id.partition(".")[2])
+    return entity.guarded or _named_guarded(entity.id.partition(".")[2])
 
 
 def _needs_click(step: _Step) -> bool:
