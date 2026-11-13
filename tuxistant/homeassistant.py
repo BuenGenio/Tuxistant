@@ -47,7 +47,7 @@ EXTRAS_FOR_S = 600              # areas and the unit of temperature change rarel
 MAX_SINGLE_READS = 12           # this many are asked about one by one, which is always fresh
 SETTLE_S = (0.4, 0.8)           # waits before reading again: some devices lag their service call
 MAX_NAME_CHARS = 40             # a name is whatever anyone typed into Home Assistant
-MAX_JUDGED_CHARS = 255          # of a name, when deciding whether a switch needs a click
+MAX_JUDGED_CHARS = 255          # of a name, when finding a thing or judging whether it needs a click
 MAX_TOKEN_CHARS = 1024
 MAX_SPOKEN = 5                  # a small model reads out all it is given
 MAX_PROBLEMS = 2                # a house can have a dozen lamps unplugged at the wall
@@ -395,10 +395,10 @@ def _words(text) -> list[str]:
 @dataclass(frozen=True)
 class Entity:
     id: str             # as the server listed it, and checked against ENTITY_ID
-    name: str           # cleaned: fit to say and to show
+    name: str           # cleaned and cut: fit to say and to show
     state: str
     attrs: dict         # only the attributes in KEPT
-    words: frozenset    # of the name
+    words: frozenset    # of the name before the cut, up to MAX_JUDGED_CHARS
     where: frozenset    # the words of its area's name
     squashed: str       # the name's words run together: "HeatPump" is "heat pump"
     guarded: bool       # its first MAX_JUDGED_CHARS characters, not only the 40 shown, say alarm, lock or a way in
@@ -425,27 +425,43 @@ def _name(text, token: str) -> str:
     return shown(_cleaned(text, token), MAX_NAME_CHARS)
 
 
+def _judged(text, token: str) -> str:
+    """A name from the server for finding it and judging it, never to say. The cut for saying
+    would lose "garage door" from a long name and add the words of its "(9 more characters)"."""
+    whole = _cleaned(text, token)
+    if len(whole) <= MAX_JUDGED_CHARS or whole[MAX_JUDGED_CHARS] == " ":
+        return whole[:MAX_JUDGED_CHARS]
+    # the start of a word split by the cut, "garage do", would be a word that finds it
+    return whole[:MAX_JUDGED_CHARS].rsplit(" ", 1)[0]
+
+
+def _kind(entity: Entity) -> str:
+    """What kind of thing it is, to say. A domain no table here knows is the server's text."""
+    return DOMAIN_WORDS.get(entity.domain) or shown(entity.domain.replace("_", " "), 20)
+
+
 def _entity(raw, token: str, areas: dict) -> Entity | None:
     """One entry of /api/states cut down to what is used here, or None if it isn't one."""
     entity_id = raw.get("entity_id") if isinstance(raw, dict) else None
     if not isinstance(entity_id, str) or len(entity_id) > 255 or not ENTITY_ID.fullmatch(entity_id):
         return None
     attrs = raw.get("attributes") if isinstance(raw.get("attributes"), dict) else {}
-    name = _name(attrs.get("friendly_name"), token) or entity_id.partition(".")[2].replace("_", " ")
+    friendly = attrs.get("friendly_name")
+    judged = _judged(friendly, token) or entity_id.partition(".")[2].replace("_", " ")
+    name = _name(friendly, token) or shown(judged, MAX_NAME_CHARS)
     state = raw.get("state") if isinstance(raw.get("state"), str) else "unknown"
-    words = _words(name)
+    words = _words(judged)
     where = frozenset(word for area in areas.get(entity_id, ()) for word in _words(area))
     kept = {key: attrs[key] for key in KEPT
             if key in attrs and (key not in WORDS_KEPT or isinstance(attrs[key], str))}
-    guarded = (entity_id.partition(".")[0] in GUARDED_DOMAINS
-               and _named_guarded(_cleaned(attrs.get("friendly_name"), token)[:MAX_JUDGED_CHARS]))
+    guarded = entity_id.partition(".")[0] in GUARDED_DOMAINS and _named_guarded(judged)
     return Entity(entity_id, name, state[:64], kept, frozenset(words), where, "".join(words), guarded)
 
 
 @dataclass(frozen=True)
 class _Home:
     entities: tuple     # sorted the way they are listed aloud
-    areas: dict         # entity id: the names of the areas it is in
+    areas: dict         # entity id: the names of the areas it is in, for finding, never said
     unit: str           # " degrees Celsius", or " degrees" when the server didn't say
     names_at: float     # when the list was fetched
     states_at: float    # the same, until something here changes a state
@@ -467,7 +483,7 @@ def _areas(server: _Server) -> dict:
     for entry in listed if isinstance(listed, list) else []:
         if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[1], list):
             for entity_id in entry[1]:
-                if isinstance(entity_id, str) and (name := _name(entry[0], server.token)):
+                if isinstance(entity_id, str) and (name := _judged(entry[0], server.token)):
                     found.setdefault(entity_id, []).append(name)
     return found
 
@@ -660,7 +676,7 @@ def _a(word: str) -> str:
 
 
 def _cannot(entity: Entity, want: _Want) -> str:
-    kind = DOMAIN_WORDS.get(entity.domain, entity.domain.replace("_", " "))
+    kind = _kind(entity)
     if entity.domain == "alarm_control_panel":
         return NO_ALARMS
     if entity.domain not in SERVICES:
@@ -1088,8 +1104,7 @@ def status(args: dict, config, _session=None) -> dict:
         raise ValueError(_nothing_called(home, said, READABLE))
     readable = [entity for entity in found if entity.domain in READABLE]
     if not readable:
-        kind = DOMAIN_WORDS.get(found[0].domain, found[0].domain.replace("_", " "))
-        raise ValueError(f"{found[0].name} is {_a(kind)}, which I don't read.")
+        raise ValueError(f"{found[0].name} is {_a(_kind(found[0]))}, which I don't read.")
     chosen = [entity for entity in readable if _is(entity, said.kinds)] or readable
     latest, problems = _fresh(server, chosen, STATES_FOR_S)
     return _result("status", [(e.name, _describe(e, home.unit)) for e in latest], problems)
