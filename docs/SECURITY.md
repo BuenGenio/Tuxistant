@@ -178,6 +178,16 @@ A skill answered with 900,000 characters, starting with a text-direction overrid
 
 When a skill's new `skill.yaml` was broken, Tux said the last version that worked was still in use. It kept the old manifest, but the sandbox showed the live folder, so the next restart ran the new, unchecked code. Skills now run from a copy made when they were checked.
 
+### The switch that opens the garage
+
+A Home Assistant switch can be a garage door's relay, and a helper an alarm's arming flag. Both were switched with no card. One whose name or id says it works an alarm, a lock, a garage, a door or a gate now shows a card, which the daemon writes from the entity and the service. The name and the id are judged apart, so renaming a rewired `switch.porch_light` to "Garage door" still counts. One named for something else, such as "Relay 2", still runs with no card.
+
+### The front door asked of Wikipedia
+
+The fact sorter wasn't told about music, timers or the home, so "Is the front door locked?" could be asked of Wikipedia with no click. A fixed word filter now sends those the normal way first, and the sorter's prompt names them.
+
+The sorter's examples for them were first copied from the routing evaluation's own cases, so its leak count passed by construction. The examples are now new wordings, a test keeps them out of the evaluations, and the facts evaluation's never-seen set measures wordings nothing was tuned on.
+
 ## Media, reminders and Home Assistant wiring
 
 Browser media metadata can contain instructions written by a page. The media handlers now queue their replies for the app to speak and return only `APP_SAYS` to the model. This covers player names in errors as well as track titles and successful controls.
@@ -192,11 +202,11 @@ Each of these five guards has a regression test checked against a deliberately b
 
 The follow-up review also found that an "alarm" request could match an alarm siren switch. Generic alarm control now refuses before matching devices. Device names lose angle brackets as well as escaping control characters, so they cannot carry chat-template delimiters.
 
-The opt-in live protocol test now permits only the clock, and evaluation scripts refuse to send a key to an implicit localhost default. Media cut-off tests pin the stand-ins themselves, not just the assignment names. These guards and the Home Assistant-only tool list were also checked by removing each fix in a throwaway copy; all six tests caught their mutation after first passing unbroken.
+The opt-in live protocol test now permits only the clock. The evaluations, the live test, the voice check and the demo video send the key only to a server named for the run, or to one saved in Settings that is neither the default nor on this computer. Every way of writing this computer's address counts, such as 127.1, ::ffff:127.0.0.1 and the machine's own name. A test fails if a tool reads the settings without that check straight after. Media cut-off tests pin the stand-ins themselves, not just the assignment names. These guards and the Home Assistant-only tool list were also checked by removing each fix in a throwaway copy; all six tests caught their mutation after first passing unbroken.
 
 Cloud tasks now ask before forwarding Home Assistant or stored timer results, including errors that reveal names. Tests exercise all four actions against a fake cloud SDK and verify that declining sends only a withheld notice.
 
-The lifecycle review found that a fast speech-server failure could discard the timer chime and mark unsaid words as done. The chime now drains on a speech failure, and the record says missed. Corrupt timer files with huge integers or deeply nested JSON are recovered without preventing startup. Failed lock queries keep speech locked and scheduler failures are logged. Five deliberate breaks of these fixes were caught; the deep-JSON fixture was increased until it exercised Python's recursion failure rather than merely parsing a nested list.
+The lifecycle review found that a fast speech-server failure could discard the timer chime and mark unsaid words as done. The chime now drains on any speech failure. Words that fail before any is heard are tried three more times, a minute, two and four minutes apart, before the record says missed. Corrupt timer files with huge integers or deeply nested JSON are recovered without preventing startup. Failed lock queries keep speech locked and scheduler failures are logged. The lock check's setup is inside the same guard, so every way it fails leaves speech locked before the timers start. Five deliberate breaks of these fixes were caught; the deep-JSON fixture was increased until it exercised Python's recursion failure rather than merely parsing a nested list.
 
 ## When the checks themselves failed
 
