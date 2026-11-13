@@ -605,39 +605,86 @@ class Cards(Case):
                 await self.call("coins_price", {"coin": coin})
         self.assertEqual(self.web.lookups.count("ha.lan"), 1)
 
-    def hung_home_assistant(self):
-        """ha.lan takes as long as homeassistant.local can away from home."""
+    def hung(self, name: str, addresses=None) -> threading.Event:
+        """name takes as long as homeassistant.local can away from home, then answers with
+        addresses, if given, once the returned event is set."""
         release, real = threading.Event(), self.web.resolve
         self.addCleanup(release.set)
+        if addresses:
+            self.web.names[name] = addresses
 
         def hung(host, port):
-            if host == "ha.lan":
+            if host == name:
                 release.wait(5)
             return real(host, port)
-        for module, name, new in ((webfetch, "_resolve", hung), (webfetch, "OWN_WAIT_S", 0.2),
-                                  (recipes, "SEND_S", 0.5)):
-            # create: so this runs on code from before OWN_WAIT_S, and fails there
-            patcher = mock.patch.object(module, name, new, create=True)
+        for module, attribute, new in ((webfetch, "_resolve", hung),
+                                       (webfetch, "OWN_WAIT_S", 0.2), (recipes, "SEND_S", 0.5)):
+            # create: so this also runs on code that waited OWN_WAIT_S for its own servers
+            patcher = mock.patch.object(module, attribute, new, create=True)
             patcher.start()
             self.addCleanup(patcher.stop)
+        return release
 
     async def test_a_slow_home_assistant_leaves_the_host_its_time(self):
-        """On a cold cache the install's own servers are waited for OWN_WAIT_S at most, before
-        the host's SEND_S starts, so a healthy host isn't said not to answer."""
+        """The install's own servers are looked up alongside the host, not before it, so the two
+        lookups share SEND_S rather than add up in it."""
+        real = self.web.resolve
+
+        def slow(host, port):
+            if host in ("ha.lan", "api.coins.example"):
+                time.sleep(0.4)
+            return real(host, port)
         self.example("coins.yaml")
         self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
-        self.hung_home_assistant()
-        result, said = await self.call("coins_price", {"coin": "bitcoin"})
+        with mock.patch.object(webfetch, "_resolve", slow), \
+                mock.patch.object(recipes, "SEND_S", 0.7):
+            result, said = await self.call("coins_price", {"coin": "bitcoin"})
         self.assertEqual(said, ["One bitcoin is 2 dollars."])
         self.assertEqual(self.web.dialled, [PUBLIC])
 
     async def test_a_home_assistant_still_being_looked_up_is_refused_by_name(self):
-        self.hung_home_assistant()
+        self.hung("ha.lan")
         text = (EXAMPLES / "coins.yaml").read_text().replace("api.coins.example", "ha.lan")
         started = time.monotonic()
         await self.refused_unsent("That recipe's host, ha.lan, isn't somewhere I'll send to.",
                                   {"ha.lan": [PUBLIC]}, text=text)
-        self.assertLess(time.monotonic() - started, 0.9)
+        self.assertLess(time.monotonic() - started, 0.4)
+
+    async def test_a_slow_own_server_on_the_internet_is_not_reached_by_its_address(self):
+        """The voice server, slow to look up, is on the open internet at the recipe host's
+        address. The host isn't judged without it: it "didn't answer", with no card, and once the
+        lookup has ended the address is refused."""
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        release = self.hung("tuxserver", [PUBLIC])
+        await self.refused_unsent("api.coins.example didn't answer.")
+        release.set()
+        webfetch.own_servers(CONFIG, 1)     # waits for the lookup to end
+        await self.refused_unsent(
+            "That recipe's host, api.coins.example, isn't somewhere I'll send to.")
+
+    async def test_a_slow_home_assistant_is_not_reached_by_its_address(self):
+        """The same at home: no card for a device that is Home Assistant."""
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        self.hung("ha.lan")
+        await self.refused_unsent("api.coins.example didn't answer.",
+                                  {"api.coins.example": ["192.168.1.30"]})
+
+    async def test_home_assistant_s_address_is_kept_while_the_next_lookup_runs(self):
+        """A minute on, ha.lan is slow to look up again. The address it gave last time is still
+        refused meanwhile, rather than dropped for want of a quick answer."""
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        with mock.patch.object(webfetch, "OWN_S", 0):
+            result, said = await self.call("coins_price", {"coin": "bitcoin"})
+            self.assertEqual(said, ["One bitcoin is 2 dollars."])
+            self.web.dialled.clear()
+            recipes._recent.clear()
+            self.hung("ha.lan")
+            started = time.monotonic()
+            await self.refused_unsent(
+                "That recipe's host, api.coins.example, isn't somewhere I'll send to.",
+                {"api.coins.example": ["192.168.1.30"]})
+            self.assertLess(time.monotonic() - started, 0.4, "the old addresses were used")
 
     async def test_an_answer_cut_short_is_not_said(self):
         """The deadline hangs up and http.client takes that for the end of the answer: 12345 of

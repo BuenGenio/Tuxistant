@@ -52,9 +52,10 @@ SYS_NET = "/sys/class/net"
 ROUTES = "/proc/net/route"
 ROUTES6 = "/proc/net/ipv6_route"
 IFF_TAP = 0x0002
-IFF_VNET_HDR = 0x4000    # virtio headers: QEMU's tap has them, a VPN's doesn't
+# Virtio headers. QEMU, Firecracker and crosvm turn them on for a virtual machine's tap; ZeroTier
+# and OpenVPN don't on theirs today. A VPN may, for offloads, as tailscaled does on its tun.
+IFF_VNET_HDR = 0x4000
 OWN_S = 60              # how long the addresses of the install's own servers are kept
-OWN_WAIT_S = 3          # the most a call waits for them, so a slow one leaves it its own time
 MAX_REPLY_BYTES = 64 * 1024
 RECIPE_AGENT = "Tuxistant"
 RECIPE_ACCEPT = "application/json, text/plain;q=0.9"
@@ -166,52 +167,66 @@ def _server_host(server: str) -> str | None:
 
 OWN_KEYS = ("server", "translate_server", "search_server", "ha_server")
 _own_lock = threading.Lock()
-_own_addresses: dict[tuple, tuple[float, frozenset, frozenset]] = {}
+_own_addresses: dict[str, tuple[float, frozenset]] = {}     # host: (until, addresses)
 _own_pending: dict[str, concurrent.futures.Future] = {}
 
 
-def own_servers(config) -> tuple[set[str], set[str]]:
+def own_servers(config, seconds: float) -> tuple[set[str], set[str]]:
     """Names and addresses of the servers this install talks to. A page has no business reaching
     them, even if they are on the open internet. A name that won't resolve is still refused.
     The names come from the settings every time. The addresses are kept for a minute, as Home
     Assistant away from home, or at homeassistant.local, can take seconds to fail, and every page
-    and recipe call would wait for it. They are looked up together, and waited for OWN_WAIT_S at
-    most: a name still being looked up is refused by name, and its addresses join those kept
-    when its lookup ends."""
-    hosts = [host for key in OWN_KEYS if config[key] and (host := _server_host(config[key]))]
-    names = {_name(host) for host in hosts}
-    key = tuple(config[k] for k in OWN_KEYS)
+    and recipe call would wait for it. Each name is looked up in a thread of its own, all at once.
+    A name never looked up is waited for, seconds at most, and TimeoutError is raised if one is
+    still running then, so the caller refuses rather than go on without its addresses. A name
+    looked up before keeps its last addresses while the next lookup runs, and when a lookup
+    fails, so they are never dropped for being slow."""
+    hosts = list(dict.fromkeys(_own_hosts(config)))
+    waits = _start_own_lookups(hosts)
+    done, running = concurrent.futures.wait(waits, timeout=seconds)
+    if running:
+        raise TimeoutError
     with _own_lock:
-        kept = _own_addresses.get(key)
-    if kept and time.monotonic() < kept[0]:
-        return names, set(kept[1])
-    lookups = {host: _own_lookup(host) for host in dict.fromkeys(hosts)}
-    concurrent.futures.wait(lookups.values(), timeout=OWN_WAIT_S)
-    addresses = set()
-    for lookup in lookups.values():
-        if lookup.done():
-            addresses.update(lookup.result())
-    with _own_lock:
-        _own_addresses[key] = (time.monotonic() + OWN_S, frozenset(addresses), frozenset(hosts))
-    for host, lookup in lookups.items():     # one that ended since the wait, before the store
-        if lookup.done():
-            _own_found(host, lookup)
-    with _own_lock:
-        kept = _own_addresses.get(key)
-    return names, set(kept[1]) if kept else addresses
+        kept = [_own_addresses.get(host) for host in hosts]
+    addresses = set().union(*(entry[1] for entry in kept if entry),
+                            *(lookup.result() for lookup in done))
+    return {_name(host) for host in hosts}, addresses
 
 
-def _own_lookup(host: str) -> concurrent.futures.Future:
-    """One lookup of a name at a time: a call that finds it still running waits on that one."""
-    with _own_lock:
-        lookup = _own_pending.get(host)
-        started = lookup is None
-        if started:
-            lookup = _own_pending[host] = concurrent.futures.Future()
-    if started:     # a daemon thread: a lookup can't be stopped, and a hung one mustn't hold exit
-        lookup.add_done_callback(lambda done: _own_found(host, done))
-        threading.Thread(target=_own_resolve, args=(host, lookup), daemon=True).start()
-    return lookup
+def look_up_own_servers(config, seconds: float):
+    """Starts what own_servers needs and waits for it, seconds at most, without raising."""
+    try:
+        own_servers(config, seconds)
+    except TimeoutError:
+        pass
+
+
+def _own_hosts(config) -> list[str]:
+    return [host for key in OWN_KEYS if config[key] and (host := _server_host(config[key]))]
+
+
+def _own_names(config) -> set[str]:
+    return {_name(host) for host in _own_hosts(config)}
+
+
+def _start_own_lookups(hosts) -> list[concurrent.futures.Future]:
+    """Starts a lookup of each name not looked up in the last minute, one per name at a time,
+    and returns those of names never looked up: their addresses aren't known yet."""
+    now, waits = time.monotonic(), []
+    for host in hosts:
+        with _own_lock:
+            kept = _own_addresses.get(host)
+            if kept and now < kept[0]:
+                continue
+            lookup = _own_pending.get(host)
+            started = lookup is None
+            if started:
+                lookup = _own_pending[host] = concurrent.futures.Future()
+        if started:     # a daemon thread: a lookup can't be stopped, and mustn't hold up exit
+            threading.Thread(target=_own_resolve, args=(host, lookup), daemon=True).start()
+        if kept is None:
+            waits.append(lookup)
+    return waits
 
 
 def _own_resolve(host: str, lookup: concurrent.futures.Future):
@@ -219,18 +234,13 @@ def _own_resolve(host: str, lookup: concurrent.futures.Future):
         found = frozenset(map(_same, _resolve(host, 0)))
     except Exception:   # anything: a lookup that never ended would make every call wait for it
         found = frozenset()
-    lookup.set_result(found)
-
-
-def _own_found(host: str, lookup: concurrent.futures.Future):
-    """A lookup has ended: its addresses join every kept list that names it."""
-    found = lookup.result()
-    with _own_lock:
+    with _own_lock:     # stored before the waiters wake, so they find it
         if _own_pending.get(host) is lookup:
             del _own_pending[host]
-        for key, (until, addresses, hosts) in list(_own_addresses.items()):
-            if host in hosts and not found <= addresses:
-                _own_addresses[key] = (until, addresses | found, hosts)
+            kept = _own_addresses.get(host)
+            _own_addresses[host] = (time.monotonic() + OWN_S,
+                                    found or (kept[1] if kept else frozenset()))
+    lookup.set_result(found)
 
 
 def forget_own_servers():
@@ -279,8 +289,11 @@ def _devtype(path: str) -> str:
 def _guest_port(root: str, name: str, bridged: bool) -> bool:
     """A veth, whose other end is a container on this computer, or a virtual machine's tap. A
     physical card, a VLAN or bond stacked on one, a VXLAN or other tunnel, and a VPN aren't.
-    A tap in a bridge is a virtual machine's. One on its own is a VPN's, such as ZeroTier's or
-    an OpenVPN tap, unless it carries virtio headers, as QEMU's does: a VPN has no use for them."""
+    A tap in a bridge is a virtual machine's. One on its own is taken for a VPN's, such as
+    ZeroTier's or an OpenVPN tap, unless it carries virtio headers, as QEMU's, Firecracker's and
+    crosvm's do. Those VPNs don't turn them on today, but one could, for offloads, as tailscaled
+    does on its tun: a tap-mode VPN that did would be taken for a virtual machine, and what is
+    reached through it refused, which fails closed."""
     path = os.path.join(root, name)
     if os.path.exists(os.path.join(path, "device")) or os.path.isdir(os.path.join(path, "bridge")):
         return False
@@ -403,14 +416,15 @@ def _local(address: str) -> bool:
     return any(ip in net for net in LOCAL_NETS if net.version == ip.version)
 
 
-def place(host: str, port: int, own: tuple[set[str], set[str]]) -> Place:
+def place(host: str, port: int, own: tuple[set[str], set[str]], addresses=None) -> Place:
     """Where a recipe may send: all on the open internet, or all in the house. Never this computer,
     its containers and virtual machines, the servers this install talks to, or a name that answers
-    with a mix of the two."""
+    with a mix of the two. The host is looked up here unless its addresses are given."""
     names, own_addresses = own
     if _name(host) in names:
         raise PageError(NOT_ALLOWED)
-    addresses = _resolve(host, port)
+    if addresses is None:
+        addresses = _resolve(host, port)
     same = set(map(_same, addresses))
     if not addresses or same & own_addresses or same & this_computer():
         raise PageError(NOT_ALLOWED)
@@ -422,6 +436,20 @@ def place(host: str, port: int, own: tuple[set[str], set[str]]) -> Place:
     if all(map(_local, addresses)):
         return Place(addresses, True)
     raise PageError(NOT_ALLOWED)
+
+
+def recipe_place(host: str, port: int, config, seconds: float) -> Place:
+    """place(), with the install's own servers looked up alongside the host rather than before
+    it, so a slow one can't use up the host's time. The host is judged once both are known. If an
+    own server never looked up before hasn't answered within seconds, TimeoutError: the call is
+    refused rather than judged without its addresses."""
+    deadline = time.monotonic() + seconds
+    if _name(host) in _own_names(config):
+        raise PageError(NOT_ALLOWED)
+    _start_own_lookups(dict.fromkeys(_own_hosts(config)))
+    addresses = _resolve(host, port)
+    own = own_servers(config, max(deadline - time.monotonic(), 0))
+    return place(host, port, own, addresses)
 
 
 def _path(parts) -> str:
@@ -643,10 +671,13 @@ def _words(text: str, kind: str) -> str:
 
 def fetch(url: str, config, seconds: float = TOTAL_S) -> Page:
     """Reads a page, or raises PageError. The request carries no cookies and no key: nothing in
-    this module ever sees one. The clock starts after the install's own servers are looked up,
-    so a slow one costs this page nothing."""
-    own = own_servers(config)
+    this module ever sees one. The install's own servers are waited for within the page's
+    seconds, and a page is refused while one never looked up before is still being looked up."""
     deadline = time.monotonic() + seconds
+    try:
+        own = own_servers(config, seconds)
+    except TimeoutError:
+        raise PageError(UNREADABLE) from None
     for _ in range(MAX_REDIRECTS + 1):
         location, kind, text = _get(check(url, own), deadline)
         if location is None:

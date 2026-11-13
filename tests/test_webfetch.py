@@ -145,10 +145,10 @@ class Refusals(unittest.TestCase):
     def test_a_server_name_that_will_not_resolve_is_still_refused_by_name(self):
         config = {**CONFIG, "search_server": "gone.example:8888"}
         self.web.names["gone.example"] = None
-        names, _ = webfetch.own_servers(config)
+        names, _ = webfetch.own_servers(config, 1)
         self.assertIn("gone.example", names)
         self.web.names["gone.example"] = [PUBLIC]
-        self.assertIn("gone.example", webfetch.own_servers(config)[0])
+        self.assertIn("gone.example", webfetch.own_servers(config, 1)[0])
 
 
     def test_a_mangled_server_setting_is_not_a_crash(self):
@@ -548,8 +548,8 @@ class CutShort(unittest.TestCase):
 
 
 class OwnServers(unittest.TestCase):
-    """Looked up before a page's clock starts, and kept for a minute, by the names in the
-    settings."""
+    """Looked up all at once, each in a thread of its own, and kept for a minute, by the names in
+    the settings. A name never looked up is waited for within the caller's time."""
 
     def setUp(self):
         self.web = Web(self)
@@ -557,18 +557,58 @@ class OwnServers(unittest.TestCase):
         real = self.web.resolve
 
         def slow(host, port):
-            if host == "homeassistant.local":   # mDNS away from home: seconds, then nothing
-                time.sleep(1.0)
+            if host == "homeassistant.local":   # mDNS: a while
+                time.sleep(0.2)
             return real(host, port)
         patcher = mock.patch.object(webfetch, "_resolve", slow)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_a_slow_home_assistant_costs_a_quick_page_nothing(self):
+    def hung(self, address=None):
+        """homeassistant.local answers, with address if given, once the returned event is set:
+        as long as it can take away from home."""
+        release, real = threading.Event(), self.web.resolve
+        self.addCleanup(release.set)
+        if address:
+            self.web.names["homeassistant.local"] = [address]
+
+        def hung(host, port):
+            if host == "homeassistant.local":
+                release.wait(5)
+            return real(host, port)
+        patcher = mock.patch.object(webfetch, "_resolve", hung)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return release
+
+    def lookups_reach(self, count: int):
+        for _ in range(100):
+            if self.web.lookups.count("homeassistant.local") >= count:
+                return
+            time.sleep(0.02)
+
+    def test_a_slow_home_assistant_is_waited_for_within_the_page_s_time(self):
         started = time.monotonic()
         page = webfetch.fetch("http://example.com/", self.config, CLOCK_S)
         self.assertIn("real page text", page.text)
-        self.assertGreaterEqual(time.monotonic() - started, 1.0, "it was looked up")
+        self.assertGreaterEqual(time.monotonic() - started, 0.2, "it was looked up")
+
+    def test_a_page_is_refused_while_an_own_server_is_still_being_looked_up(self):
+        """Home Assistant on the open internet, slow to look up, at the page's address: the page
+        isn't read from it on the strength of a lookup that hasn't ended."""
+        release = self.hung(PUBLIC)
+        # create: so this also runs on code that waited OWN_WAIT_S and went on without it
+        with mock.patch.object(webfetch, "OWN_WAIT_S", 0.2, create=True):
+            started = time.monotonic()
+            with self.assertRaises(PageError):
+                webfetch.fetch("http://example.com/", self.config, CLOCK_S)
+        self.assertLess(time.monotonic() - started, CLOCK_S + 0.4)
+        self.assertEqual(self.web.dialled, [])
+        release.set()
+        self.lookups_reach(1)
+        with self.assertRaises(PageError):
+            webfetch.fetch("http://example.com/", self.config, CLOCK_S)
+        self.assertEqual(self.web.dialled, [])
 
     def test_they_are_looked_up_once_a_minute(self):
         for _ in range(3):
@@ -576,53 +616,64 @@ class OwnServers(unittest.TestCase):
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
         with mock.patch.object(webfetch, "OWN_S", 0):
             webfetch.forget_own_servers()
-            webfetch.own_servers(self.config)
-            webfetch.own_servers(self.config)
+            webfetch.own_servers(self.config, 1)
+            started = time.monotonic()
+            webfetch.own_servers(self.config, 1)
+            self.assertLess(time.monotonic() - started, 0.15, "the old addresses do meanwhile")
+            self.lookups_reach(3)
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 3)
 
     def test_the_names_are_refused_whatever_was_kept(self):
         self.web.names["tux.example"] = [PUBLIC]
-        webfetch.own_servers(self.config)
+        webfetch.own_servers(self.config, 1)
         moved = {**self.config, "search_server": "tux.example:8888"}
-        self.assertIn("tux.example", webfetch.own_servers(moved)[0])
+        self.assertIn("tux.example", webfetch.own_servers(moved, 1)[0])
         with self.assertRaises(PageError):
             webfetch.fetch("http://tux.example/", moved, CLOCK_S)
         with self.assertRaises(PageError):
             webfetch.fetch("http://homeassistant.local/", self.config, CLOCK_S)
 
-
-    def test_a_lookup_still_running_is_refused_by_name_and_its_address_kept_when_it_ends(self):
-        """A slow name is waited for OWN_WAIT_S at most. Until its lookup ends it is refused by
-        name, and then by the addresses it gave too, with no second lookup."""
-        release, real = threading.Event(), self.web.resolve
-        self.addCleanup(release.set)
-        self.web.names["homeassistant.local"] = ["192.168.1.30"]
+    def test_a_lookup_never_ended_fails_the_call_and_its_address_is_refused_when_it_ends(self):
+        """No answer from a name never looked up is no answer for the caller, and when it comes
+        it is kept, with no second lookup."""
+        release = self.hung("192.168.1.30")
         self.web.names["ha-by-number.example"] = ["192.168.1.30"]
-
-        def hung(host, port):
-            if host == "homeassistant.local":
-                release.wait(5)
-            return real(host, port)
-        with mock.patch.object(webfetch, "_resolve", hung), \
-                mock.patch.object(webfetch, "OWN_WAIT_S", 0.2, create=True), \
-                mock.patch.object(webfetch, "this_computer", return_value=set()):
+        with mock.patch.object(webfetch, "this_computer", return_value=set()):
             started = time.monotonic()
-            names, addresses = own = webfetch.own_servers(self.config)
+            with self.assertRaises(TimeoutError):
+                webfetch.own_servers(self.config, 0.2)
+            with self.assertRaises(TimeoutError):
+                webfetch.recipe_place("ha-by-number.example", 80, self.config, 0.2)
             self.assertLess(time.monotonic() - started, 0.9)
-            self.assertIn("homeassistant.local", names)
-            self.assertIn("192.168.1.20", addresses, "the others were waited for")
-            self.assertNotIn("192.168.1.30", addresses)
             with self.assertRaises(PageError):
-                webfetch.place("homeassistant.local", 8123, own)
-            webfetch.own_servers(self.config)
+                webfetch.recipe_place("homeassistant.local", 8123, self.config, 0.2)
             release.set()
-            for _ in range(100):
-                if "192.168.1.30" in webfetch.own_servers(self.config)[1]:
-                    break
-                time.sleep(0.02)
+            names, addresses = webfetch.own_servers(self.config, 1)
+            self.assertIn("homeassistant.local", names)
+            self.assertLessEqual({"192.168.1.20", "192.168.1.30"}, addresses)
             with self.assertRaises(PageError):
-                webfetch.place("ha-by-number.example", 80, webfetch.own_servers(self.config))
+                webfetch.recipe_place("ha-by-number.example", 80, self.config, 1)
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
+
+    def test_addresses_are_kept_while_the_next_lookup_runs_and_when_it_fails(self):
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
+        with mock.patch.object(webfetch, "OWN_S", 0):
+            self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+            release = self.hung()
+            self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 0.1)[1])
+            self.web.names["homeassistant.local"] = None    # away from home: it fails
+            release.set()
+            self.lookups_reach(2)
+            time.sleep(0.05)
+            self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+        self.web.names["homeassistant.local"] = ["192.168.1.31"]
+        with mock.patch.object(webfetch, "OWN_S", 0):
+            webfetch.own_servers(self.config, 1)
+            self.lookups_reach(4)
+            time.sleep(0.05)
+        self.assertEqual(webfetch.own_servers(self.config, 1)[1] & {"192.168.1.30",
+                                                                    "192.168.1.31"},
+                         {"192.168.1.31"}, "a lookup that answers replaces them")
 
 
 def _hex(address: str) -> str:
@@ -724,6 +775,14 @@ class Guests(unittest.TestCase):
         self.card("tun0", 8, kind="65534", tun="0x1001", route="10.7.0.0/24")
         self.assertEqual(self.found(), {"192.168.100.0/24"})
 
+    def test_a_vpn_tap_with_virtio_headers_is_taken_for_a_virtual_machine(self):
+        """Virtio headers are what tells QEMU's tap from a VPN's, and a VPN may turn them on for
+        offloads, as tailscaled does on its tun (0x5001 here). A tap-mode VPN that did would look
+        like QEMU's: what is reached through it is refused, which fails closed."""
+        self.card("zt-offload", 2, tun="0x5002", route="10.147.18.0/24")
+        self.card("tailscale0", 3, kind="65534", tun="0x5001", route="100.64.0.0/10")
+        self.assertEqual(self.found(), {"10.147.18.0/24"})
+
     def test_the_most_specific_route_decides(self):
         """A Docker network made on another network can hold the house's range: the kernel
         sends to the house by its narrower route, and so does this."""
@@ -808,7 +867,7 @@ class Places(unittest.TestCase):
     def test_home_assistant_is_one_of_them(self):
         config = {**CONFIG, "ha_server": "http://ha.lan:8123"}
         self.web.names["ha.lan"] = ["192.168.1.30"]
-        names, addresses = webfetch.own_servers(config)
+        names, addresses = webfetch.own_servers(config, 1)
         self.assertIn("ha.lan", names)
         self.assertIn("192.168.1.30", addresses)
 

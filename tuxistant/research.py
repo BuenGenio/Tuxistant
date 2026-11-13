@@ -221,8 +221,11 @@ async def run(args: dict, config, session) -> dict:
     deadline = time.monotonic() + LIMIT_S
     query = _topic(query)
     # Each page is checked against the install's own servers. They are looked up once, while the
-    # search runs, so a slow one, such as Home Assistant away from home, costs no page its time.
-    own = asyncio.ensure_future(asyncio.to_thread(webfetch.own_servers, config))
+    # search runs, and waited for before the pages start, so a slow one, such as Home Assistant
+    # away from home, costs no page its time. One still unanswered then is waited for within each
+    # page's own time, and the page is refused if it still hasn't answered.
+    own = asyncio.ensure_future(asyncio.to_thread(webfetch.look_up_own_servers, config,
+                                                  LIMIT_S))
     hits = _candidates(await _search(query, config))
     if not hits:
         return {"message": NOTHING_FOUND}
