@@ -382,6 +382,21 @@ class SettingsPages(NoDesktop):
         self.opens("Flatpak KDE System Settings", "org.kde.systemsettings.desktop")
         self.opens("system settings", "gnome-system-panel.desktop")
 
+    def test_a_kind_word_the_app_does_not_have_opens_no_page(self):
+        """Only the system copy is installed, so a Flatpak, home or Snap one is answered, not
+        taken for the System page."""
+        self.kde()
+        for name, kind in (("Flatpak KDE System Settings", "a Flatpak"),
+                           ("home KDE System Settings", "one added in your home folder"),
+                           ("KDE System Settings snap", "a Snap"),
+                           ("open the Flatpak KDE System Settings app", "a Flatpak")):
+            with self.subTest(name):
+                self.assertEqual(self.said(name),
+                                 f"The KDE System Settings on this computer isn't {kind}.")
+                self.assertEqual(self.launched, [])
+        self.opens("system KDE System Settings", "kdesystemsettings.desktop")
+        self.opens("flatpak system settings", "gnome-system-panel.desktop")
+
     def test_internet_settings_are_the_network_page(self):
         self.defaults["https"] = "firefox.desktop"
         self.entries.append(made("gnome-network-panel.desktop", "Network", shown=False))

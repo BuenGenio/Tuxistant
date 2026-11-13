@@ -57,6 +57,7 @@ NO_LIST = "I can't list the apps on this computer."
 WHICH = "Which one: {names}?"
 MORE = "Several apps match that, such as {names}. Which one?"
 TWINS = "There's more than one {name}: {kinds}. Say {choices}."
+NOT_THAT_KIND = "The {name} on this computer isn't {kind}."
 OPENING = "Opening {name}."
 OPENING_PAGE = "Opening {title} in Settings."
 OPENING_SETTINGS = "Opening Settings."
@@ -380,14 +381,20 @@ def _matching_kind(query: str, entries: list[App]) -> tuple[int | None, list[App
     return whole
 
 
-def _named_exactly(said: str, entries: list[App]) -> list[App]:
+def _named_exactly(said: str, entries: list[App]) -> tuple[list[App], str | None]:
     """Apps named exactly what was said, settings word and all, with a kind word in front or
-    behind if one was said. "System settings" stays the page, not Settings from the system."""
+    behind if one was said. "System settings" stays the page, not Settings from the system.
+    When only other kinds have that name, they come back with the kind asked, so a wrong kind
+    word is answered instead of falling through to a page."""
     tier, found = _matching(said, entries)
     rest, kind = _kind_asked(_without_tail(said))
-    if tier != 0 and kind and _settings_asked(rest)[0]:
-        tier, found = _matching(rest, [entry for entry in entries if entry.kind == kind])
-    return found if tier == 0 else []
+    if tier == 0 or not (kind and _settings_asked(rest)[0]):
+        return (found if tier == 0 else []), None
+    tier, found = _matching(rest, [entry for entry in entries if entry.kind == kind])
+    if tier == 0:
+        return found, None
+    tier, found = _matching(rest, entries)
+    return (found, kind) if tier == 0 else ([], None)
 
 
 def _joined(items: list[str], last: str) -> str:
@@ -573,7 +580,11 @@ def open_app(args: dict, config, session):
     if not query or (settings and query == "gnome"):     # "GNOME Settings", "GNOME Control Center"
         return _open_by_id(SETTINGS_ID, OPENING_SETTINGS, entries, config, session)
     # "KDE System Settings" is an app, though its settings word would make it the System page.
-    if settings and (exact := _named_exactly(said, entries)):
+    exact, wrong_kind = _named_exactly(said, entries) if settings else ([], None)
+    if wrong_kind:
+        return _say(session, config, NOT_THAT_KIND.format(name=exact[0].name,
+                                                          kind=KIND_SAID[wrong_kind]))
+    if exact:
         return _open_found(exact, config, session)
     # "Firefox settings" opens Firefox, as Settings has no page for it.
     tier, found = _matching_kind(query, entries)
