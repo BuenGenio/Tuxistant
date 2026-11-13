@@ -18,12 +18,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .files import _tilde
-from .gate import APP_SAYS, Ask, Speak, shown
+from .gate import APP_SAYS, MAX_DETAIL_CHARS, Ask, Speak, shown
 
 OPEN_TIMEOUT_S = 10
 MAX_SAID = 200          # characters of the request looked at
 MAX_NAME = 60           # an app's name as said or shown
-MAX_COMMAND = 300       # the command line on a card
 MAX_CHOICES = 3
 CLOSE_ENOUGH = 0.85     # difflib ratio for a misheard name
 CLOSE_LONG = 5          # letters: "team" is one letter from "steam", so short words aren't guessed
@@ -70,6 +69,7 @@ CHANGED = "That app's shortcut changed after the card was shown, so I've left it
 UNREADABLE = "I can't read that app's shortcut, so I've left it alone."
 FILLS_IN = ("That app's shortcut adds to its command as it starts, so a card couldn't show what "
             "runs. I've left it alone.")
+TOO_LONG = "That app's shortcut is too long for a card to show all of it, so I've left it alone."
 CARD_WHY = {"home": "It was added in your home folder, not installed as a package, so it can run "
                     "any command.",
             "other": "It isn't from an installed package, so it can run any command."}
@@ -380,6 +380,16 @@ def _matching_kind(query: str, entries: list[App]) -> tuple[int | None, list[App
     return whole
 
 
+def _named_exactly(said: str, entries: list[App]) -> list[App]:
+    """Apps named exactly what was said, settings word and all, with a kind word in front or
+    behind if one was said. "System settings" stays the page, not Settings from the system."""
+    tier, found = _matching(said, entries)
+    rest, kind = _kind_asked(_without_tail(said))
+    if tier != 0 and kind and _settings_asked(rest)[0]:
+        tier, found = _matching(rest, [entry for entry in entries if entry.kind == kind])
+    return found if tier == 0 else []
+
+
 def _joined(items: list[str], last: str) -> str:
     return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} {last} {items[-1]}"
 
@@ -439,6 +449,9 @@ def _start(app: App, text: str, config, session) -> dict | Ask:
         return _say(session, config, UNREADABLE)
     if _fills_in(_value(keys, "Exec")):
         return _say(session, config, FILLS_IN)
+    # A card that cuts would hide the end of the command, which is where a surprise would be.
+    if len(detail := _card(app, keys)) > MAX_DETAIL_CHARS:
+        return _say(session, config, TOO_LONG)
     digest = hashlib.sha256(data).hexdigest()
 
     def run() -> dict:
@@ -446,20 +459,20 @@ def _start(app: App, text: str, config, session) -> dict | Ask:
             return _say(session, config, CHANGED)
         return _launch_and_say(app, text, config, session)
 
-    return Ask(f"Open {app.name}?", _card(app, keys), run)
+    return Ask(f"Open {app.name}?", detail, run)
 
 
 def _card(app: App, keys) -> str:
     lines = [CARD_WHY[app.kind]]
     if command := _value(keys, "Exec"):
-        lines.append(f"Runs: {shown(command, MAX_COMMAND)}")
+        lines.append(f"Runs: {shown(command, MAX_DETAIL_CHARS)}")
     if _flag(keys, "DBusActivatable"):
         lines.append(OVER_DBUS)
     if _flag(keys, "Terminal"):
         lines.append(IN_TERMINAL)
     if folder := _value(keys, "Path"):
-        lines.append(f"In folder: {shown(folder)}")
-    lines.append(f"File: {shown(_tilde(Path(app.path)))}")
+        lines.append(f"In folder: {shown(folder, MAX_DETAIL_CHARS)}")
+    lines.append(f"File: {shown(_tilde(Path(app.path)), MAX_DETAIL_CHARS)}")
     return "\n".join(lines)
 
 
@@ -559,6 +572,9 @@ def open_app(args: dict, config, session):
     entries = _installed()
     if not query or (settings and query == "gnome"):     # "GNOME Settings", "GNOME Control Center"
         return _open_by_id(SETTINGS_ID, OPENING_SETTINGS, entries, config, session)
+    # "KDE System Settings" is an app, though its settings word would make it the System page.
+    if settings and (exact := _named_exactly(said, entries)):
+        return _open_found(exact, config, session)
     # "Firefox settings" opens Firefox, as Settings has no page for it.
     tier, found = _matching_kind(query, entries)
     if panel := _page(query, entries, settings, tier):
