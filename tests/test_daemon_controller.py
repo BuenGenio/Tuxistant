@@ -1448,6 +1448,50 @@ class TimersComeDue(Case):
         await asyncio.sleep(0.1)
         self.assertEqual(len(rig.of("Reply")), 1, "and it is not said again")
 
+    async def test_a_lock_before_any_word_is_heard_leaves_it_owed_until_the_unlock(self):
+        asked = asyncio.Event()
+
+        async def speech(*_args):       # the words are still on their way when the screen locks
+            asked.set()
+            await asyncio.Event().wait()
+
+        rig = self.wired()
+        with mock.patch.object(controller, "speech", speech):
+            made = self.due_now()
+            await self.until(asked.is_set)
+            await rig.ctl.set_locked(True)
+            await asyncio.sleep(0.2)
+        self.assertEqual(len(self.store.pending()), 1, "nothing was heard, so it is still owed")
+        self.assertEqual(rig.of("Error"), [])
+        with mock.patch.object(timers, "epoch", lambda: made.due + 300), \
+                mock.patch.object(self.crier, "now", lambda: made.due + 300):
+            await rig.ctl.set_locked(False)
+            await self.until(lambda: not self.store.pending())
+        self.assertEqual(self.store.kept()[0].state, "done")
+        self.assertEqual(rig.of("Reply"), ["Your pasta timer is done.",
+                                           "Your pasta timer finished 5 minutes ago."])
+        self.assertEqual([r["input"] for r in self.tts.requests],
+                         ["Your pasta timer finished 5 minutes ago."])
+
+    async def test_words_the_server_refuses_hold_back_no_other_and_none_overlap(self):
+        rig = self.wired()
+        playing = []
+
+        async def speech(_config, sentence, _voice):
+            playing.append([s for s in rig.speakers if not (s.drained or s.stopped)])
+            if "pasta" in sentence:
+                raise RuntimeError("The server could not say that.")
+            return tone(0.1)
+
+        with mock.patch.object(controller, "speech", speech), \
+                mock.patch.object(controller, "ERROR_HOLD_S", 0.01), self.assertLogs(timers.log):
+            self.due_now("pasta")
+            self.due_now("tea")
+            await self.until(lambda: [i.label for i in self.store.pending()] == ["pasta"])
+        self.assertEqual(rig.of("Reply"), ["Your pasta timer is done.", "Your tea timer is done."])
+        self.assertEqual([(i.label, i.state) for i in self.store.kept()], [("tea", "done")])
+        self.assertEqual(playing, [[], []], "each starts once the one before is over")
+
     async def test_with_the_server_down_it_waits_shows_the_error_once_and_is_said_later(self):
         rig = self.wired()
         rig.config.values["server"] = f"127.0.0.1:{free_port()}"    # nothing listens there

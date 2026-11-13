@@ -1161,6 +1161,7 @@ class Desk:
         self.locked = self.busy = False
         self.chime_wanted = True
         self.failing, self.partly = None, False     # what goes wrong, and if words were heard first
+        self.lock_midway = False        # the screen locks before a word, which stops the words
         self.spoken, self.sounds, self.notified = [], [], []
         self.crier = timers.Announcer(self.say, self.sound, self.notify, lambda: self.locked,
                                       lambda: self.chime_wanted, clock.now)
@@ -1169,7 +1170,8 @@ class Desk:
         if self.locked or self.busy:
             return None
         self.spoken.append((text, lead))
-        if self.failing is None or self.partly:
+        self.locked = self.lock_midway
+        if (self.failing is None or self.partly) and not self.lock_midway:
             heard()
         job = asyncio.get_running_loop().create_future()
         job.set_result(self.failing)
@@ -1300,10 +1302,11 @@ class ComingDue(InTemp, unittest.IsolatedAsyncioTestCase):
         desk.failing = "Cannot reach the server at 127.0.0.1:8080"
         due = item(label="pasta")
         with self.assertLogs("tuxistant", "WARNING"):
-            self.assertIs(await desk.crier.announce(due), False, "not said, so still owed")
+            self.assertEqual(await desk.crier.announce(due), timers.LATER,
+                             "not said, so still owed")
         self.assertEqual(desk.spoken, [("Your pasta timer is done.", timers.chime())])
         desk.clock.jump(timers.FAILED_WAIT_S - 1)
-        self.assertIs(await desk.crier.announce(due), False)
+        self.assertEqual(await desk.crier.announce(due), timers.LATER)
         self.assertEqual(len(desk.spoken), 1, "not tried again at once: each try shows an error")
         desk.failing = None
         desk.clock.jump(1)
@@ -1317,7 +1320,7 @@ class ComingDue(InTemp, unittest.IsolatedAsyncioTestCase):
         due, tried = item(label="pasta"), []
         with self.assertLogs("tuxistant", "WARNING"):
             for _ in range(timers.FAILED_TRIES - 1):
-                self.assertIs(await desk.crier.announce(due), False)
+                self.assertEqual(await desk.crier.announce(due), timers.LATER)
                 tried.append(desk.clock.time)
                 desk.clock.jump(desk.crier.failed[due.id][1] - desk.clock.time)
         with self.assertRaisesRegex(RuntimeError, "Cannot reach"):
@@ -1332,6 +1335,50 @@ class ComingDue(InTemp, unittest.IsolatedAsyncioTestCase):
         desk.failing, desk.partly = "The server stopped responding", True
         self.assertIs(await desk.crier.announce(item(label="pasta")), True, "not said twice")
         self.assertEqual(desk.crier.failed, {})
+
+    async def test_a_lock_before_any_word_is_heard_waits_for_the_unlock_and_is_no_failure(self):
+        desk = Desk(Clock())
+        desk.lock_midway = True
+        due = item(label="pasta")
+        self.assertIs(await desk.crier.announce(due), False, "not said, so still owed")
+        self.assertEqual(desk.crier.failed, {}, "a lock is not a failed try")
+        desk.lock_midway = desk.locked = False
+        desk.clock.jump(300)
+        self.assertIs(await desk.crier.announce(due), True)
+        self.assertEqual(desk.spoken[1], ("Your pasta timer finished 5 minutes ago.", b""))
+
+    async def test_a_lock_cuts_failing_words_and_still_no_try_is_counted(self):
+        desk = Desk(Clock())
+        desk.failing, desk.lock_midway = "Cannot reach the server at 127.0.0.1:8080", True
+        self.assertIs(await desk.crier.announce(item(label="pasta")), False)
+        self.assertEqual(desk.crier.failed, {})
+
+    async def test_one_waiting_after_a_failure_holds_nothing_back(self):
+        clock = Clock()
+        desk = Desk(clock)
+        refused = "The server could not say that"
+
+        async def say(text, lead, heard):     # it refuses the pasta sentence alone
+            desk.failing = refused if "pasta" in text else None
+            return await Desk.say(desk, text, lead, heard)
+
+        desk.crier.say = say
+        self.store.add("timer", "pasta", T0 + 10, T0)
+        self.store.add("timer", "tea", T0 + 20, T0)
+        task = asyncio.create_task(timers.run(self.store, desk.crier.announce, clock.now,
+                                              clock.sleep, desk.crier.note))
+        self.addAsyncCleanup(asyncio.gather, task, return_exceptions=True)
+        self.addCleanup(task.cancel)
+        with self.assertLogs("tuxistant", "WARNING"):
+            await clock.pass_(30)
+        self.assertEqual([text for text, _ in desk.spoken],
+                         ["Your pasta timer is done.", "Your tea timer is done."],
+                         "tea on time, with pasta still owed")
+        self.assertEqual([i.label for i in self.store.pending()], ["pasta"])
+        with self.assertLogs("tuxistant", "WARNING"):
+            await clock.pass_(timers.FAILED_WAIT_S)
+        self.assertEqual(desk.spoken[-1][0], "Your pasta timer finished 1 minute ago.",
+                         "tried again after its own wait")
 
     async def test_with_speech_down_it_stays_pending_and_is_said_once_it_is_back(self):
         clock = Clock()
