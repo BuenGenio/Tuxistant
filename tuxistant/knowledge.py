@@ -7,7 +7,9 @@ breaks other requests. So the choice is taken away from it. A hold turn is sorte
 model hears it (see Turn._ask in controller.py), and a fact never reaches that model at all.
 Whatever isn't sorted as a fact goes the normal way, and words about the music playing, the
 timers or the home go that way before the sorter is asked, as a private question called a fact
-would be sent to Wikipedia with no click.
+would be sent to Wikipedia with no click. So do words that only make sense today, or that ask
+about Tux itself. The tool refuses the private ones too, as the voice model can pick it on a turn
+that was never sorted.
 
 Wikipedia goes first, as its answers were never wrong. Its search matches words, though, so
 "the rarest element" finds lists and never reaches Astatine. Web search finds that sort of thing,
@@ -52,6 +54,10 @@ NOT_CLEAR = "I didn't catch the question."
 DONT_KNOW = "I couldn't find that, so I don't know."
 NO_LOOKUP = "I can't look that up right now."
 TOO_SLOW = "The model took too long to answer"
+# On a normal turn the voice model picks this tool for "Is the front door locked?" too. It reads
+# results out word for word, so this is said to the user as well as steering it to another tool.
+NOT_HERE = ("That's about this computer or this home, not general knowledge, so I didn't look it "
+            "up. Use another tool for it, or say you can't.")
 
 # Asked plainly, it answers the question rather than sorting it: "Who composed The Rite of Spring?"
 # got "Maurice Ravel". So the words are shown as a message, and it's shown what to do with some.
@@ -107,8 +113,19 @@ HERE = re.compile(r"\b(?:" + "|".join((
     rf"(?:temperature|humidity|warm|cold|hot|humid)(?: is it| it is| is)?(?: in| inside)?"
     rf"(?: the)? (?:\w+ )?(?:{ROOMS})",
     r"(?:temperature|humidity) inside|(?:indoor|inside|room) (?:temperature|humidity)",
+    rf"(?:colou?r|brightness) (?:is|are|of) (?:the|this|that) (?:(?:\w+ )?(?:lamp|bulb)"
+    rf"|(?:(?:{ROOMS}|desk|ceiling|porch|bedside) )?light)s?$",
     # "Is the kettle on?": asked of a thing as a whole question, it's a thing in this house.
     r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running|done|finished|ready)$",
+)) + r")\b")
+# Not private, but never a fact: what is true only now, and questions about Tux itself. The sorter
+# called some of these a fact every time it was asked, so they skip it. The tool may look them up.
+# Matched in lower case only: "Who sang Yesterday?" names a song, and titles have capitals.
+NOT_FACT = re.compile(r"\b(?:" + "|".join((
+    r"today|tonight|tomorrow|yesterday|right now|at the moment|so far this",
+    r"this (?:morning|afternoon|evening|week|weekend|month|year)",
+    r"latest|newest|most recent|currently",
+    r"yourself|^what (?:else )?(?:can|could|do) you (?:do|help(?: me)?(?: with)?)$",
 )) + r")\b")
 GROUNDED = (
     "Answer the question in one short plain sentence using only the search results below. If "
@@ -211,10 +228,19 @@ def calculate(question: str) -> str | None:
     return f"That's {words}." if words else None
 
 
+def _plain(heard: str) -> str:
+    return heard.casefold().replace("\u2019", "'").strip().rstrip("?!. ")
+
+
 def about_here(heard: str) -> bool:
     """Whether the words are about this computer, its music or timers, or the home."""
-    said = heard.casefold().replace("\u2019", "'").strip().rstrip("?!. ")
-    return bool(HERE.search(said))
+    return bool(HERE.search(_plain(heard)))
+
+
+def never_a_fact(heard: str) -> bool:
+    """Whether the words can be told from a fact without asking the model."""
+    said = heard.replace("\u2019", "'").strip().rstrip("?!. ")
+    return about_here(heard) or bool(NOT_FACT.search(said[:1].lower() + said[1:]))
 
 
 async def is_fact(heard: str, config) -> bool:
@@ -223,7 +249,7 @@ async def is_fact(heard: str, config) -> bool:
     label is the model doing something else, so that's a no too."""
     if calculate(heard):
         return True
-    if not config["fact_lookup"] or about_here(heard):
+    if not config["fact_lookup"] or never_a_fact(heard):
         return False
     try:
         reply = await _brain(config, SORT, f'Message: "{heard[:MAX_QUESTION_CHARS]}"', SORT_TOKENS,
@@ -298,6 +324,8 @@ async def answer(args: dict, config, session) -> dict:
     question = clean(str(args.get("question") or ""), MAX_QUESTION_CHARS)
     if not question:
         return {"error": NOT_CLEAR}
+    if about_here(question):    # it would be a wrong answer and a private question sent out
+        return {"error": NOT_HERE}
     said = calculate(question)
     if not said and config["fact_lookup"]:
         timer = asyncio.get_running_loop().call_later(NOTICE_AFTER_S, session.notice,

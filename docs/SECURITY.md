@@ -188,6 +188,8 @@ The fact sorter wasn't told about music, timers or the home, so "Is the front do
 
 The sorter's examples for them were first copied from the routing evaluation's own cases, so its leak count passed by construction. The examples are now new wordings, a test keeps them out of the evaluations, and the facts evaluation's never-seen set measures wordings nothing was tuned on.
 
+The filter only stood in front of the sorter. On a turn from the shortcut nothing is sorted, and the voice model could pick `knowledge_answer` for "Is the front door locked?" itself, with no card, so the question still went to Wikipedia and web search. The tool now runs the same filter first and refuses, whatever turn it is called on.
+
 ## Media, reminders and Home Assistant wiring
 
 Browser media metadata can contain instructions written by a page. The media handlers now queue their replies for the app to speak and return only `APP_SAYS` to the model. This covers player names in errors as well as track titles and successful controls.

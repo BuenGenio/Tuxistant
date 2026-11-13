@@ -52,7 +52,16 @@ HERE_SHAPES = (
     "How many minutes until the cake is done?", "How many seconds until the kettle's ready?",
     "Did I lock the door?", "Did you lock the shed?", "Can you unlock the side gate?",
     "How cold is the bedroom?", "How hot is it upstairs?", "How warm is it downstairs?",
-    "How hot is the kitchen?", "Is the washing machine finished?", "Is the dryer ready?")
+    "How hot is the kitchen?", "Is the washing machine finished?", "Is the dryer ready?",
+    "Which colour are the bedroom lights?", "What's the brightness of the porch light?",
+    "What colour is that bulb?")
+# Not private but never a fact: what is true only now, and questions about Tux itself.
+NOT_FACT_SHAPES = (
+    "Which day of the week is it today?", "Is it a holiday tomorrow?", "What happened yesterday?",
+    "Is there rain tonight?", "Which Android version is newest?", "What's the most recent Firefox?",
+    "Who is currently top of the league?", "Is the shop open at the moment?",
+    "What films are out this week?", "Describe yourself", "What else can you help me with?",
+    "What could you do?")
 
 
 def reply(text):
@@ -252,6 +261,14 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(await knowledge.is_fact(heard, CONFIG))
         self.assertEqual(web.model, [])
 
+    async def test_what_is_true_only_now_or_about_tux_goes_the_normal_way(self):
+        web = Web(self, says=["FACT"] * len(NOT_FACT_SHAPES))
+        for heard in NOT_FACT_SHAPES:
+            with self.subTest(heard):
+                self.assertFalse(knowledge.about_here(heard), "it isn't private")
+                self.assertFalse(await knowledge.is_fact(heard, CONFIG))
+        self.assertEqual(web.model, [])
+
     async def test_facts_that_share_their_words_still_reach_the_sorter(self):
         facts = ("Who wrote Hamlet?", "Who invented the light bulb?", "What is the speed of light?",
                  "When was the alarm clock invented?", "Who sings Bohemian Rhapsody?",
@@ -262,11 +279,15 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
                  "Who is the artist behind Guernica?", "Which band sang Wonderwall?",
                  "Who performed at Live Aid?", "How hot is the surface of Venus?",
                  "When was the Hoover Dam finished?", "How cold is it in Antarctica?",
-                 "How long until the next solar eclipse?", "Who was the lead singer of Queen?")
+                 "How long until the next solar eclipse?", "Who was the lead singer of Queen?",
+                 "What colour is a sodium lamp?", "What colour is the light from a red dwarf?",
+                 "When was the lava lamp invented?", "What can you make from milk?",
+                 "What day did the Titanic sink?", "Who directed The Day After Tomorrow?",
+                 "Who sang Be Yourself?")
         web = Web(self, says=["FACT"] * len(facts))
         for heard in facts:
             with self.subTest(heard):
-                self.assertFalse(knowledge.about_here(heard))
+                self.assertFalse(knowledge.never_a_fact(heard))
                 self.assertTrue(await knowledge.is_fact(heard, CONFIG))
         self.assertEqual(len(web.model), len(facts))
 
@@ -295,7 +316,7 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
         as wordings tuned to pass them end up in its patterns."""
         unseen = _never_seen()
         self.assertGreater(len(unseen), 30)
-        for said in (*_shown(), *HERE_ASKED, *HERE_SHAPES):
+        for said in (*_shown(), *HERE_ASKED, *HERE_SHAPES, *NOT_FACT_SHAPES):
             for case in unseen:
                 with self.subTest(said=said, case=case):
                     self.assertFalse(_near(said, case))
@@ -488,6 +509,36 @@ class WhatGoesWhere(Base):
         self.assertEqual(said, "Paris.")
         self.assertEqual(web.opened, [])
         self.assertEqual(web.searched, [])
+
+    async def test_the_tool_refuses_music_timers_and_the_home(self):
+        """On a turn from the shortcut nothing is sorted, and the voice model can pick this tool
+        for "Is the front door locked?". That must not reach Wikipedia, or the model's memory."""
+        for config in (CONFIG, {**CONFIG, "fact_lookup": False}):
+            web = Web(self, says=["It's locked."] * 99)
+            for heard in HERE_ASKED + HERE_SHAPES:
+                with self.subTest(heard=heard, lookup=config["fact_lookup"]):
+                    session = Session()
+                    told = await knowledge.answer({"question": heard}, config, session)
+                    self.assertEqual(told, {"error": knowledge.NOT_HERE})
+                    self.assertEqual(session.take_after(), [])
+            self.assertEqual((web.opened, web.searched, web.model), ([], [], []))
+
+    async def test_the_refusal_comes_back_through_the_tool(self):
+        web = Web(self)
+        _, result = await Skills(config=CONFIG).execute(
+            "knowledge_answer", json.dumps({"question": "Is the front door locked?"}), Session())
+        self.assertEqual(result, {"error": knowledge.NOT_HERE})
+        self.assertEqual(web.opened, [])
+
+    def test_the_refusal_is_a_plain_sentence_to_say(self):
+        self.assertTrue(knowledge.NOT_HERE.endswith("."))
+        self.assertNotRegex(knowledge.NOT_HERE, r"[_<>{}]")
+
+    async def test_a_fact_that_shares_their_words_is_still_looked_up(self):
+        web = Web(self, says=["Linus Yale."])
+        said, _ = await self.ask("Who invented the padlock?")
+        self.assertEqual(said, "Linus Yale.")
+        self.assertEqual(len(web.opened), 1)
 
     async def test_a_sum_never_leaves_this_computer(self):
         web = Web(self)

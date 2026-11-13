@@ -119,10 +119,10 @@ A handler that wants its result spoken in another language appends a `Speak(text
 `tuxistant/knowledge.py`, and `Turn._ask` in `tuxistant/controller.py`. The 4B model makes up what it doesn't know, in the same voice as what it does, and no wording makes it reach for a tool. So on a hold turn the daemon decides, before the voice model hears anything:
 
 1. It gets the words. None at all ends the turn quietly.
-2. `knowledge.is_fact`: a request that is entirely a sum is a fact. Otherwise, with `fact_lookup` on, one small call to the model with no tools says FACT or OTHER. Anything but exactly FACT is a no, and so is a failure or 2 s without an answer, because the normal route can do everything.
+2. `knowledge.is_fact`: a request that is entirely a sum is a fact. Words about the music playing, timers or the home (`about_here`), words that only hold now, such as today, tomorrow, latest or currently, and questions about Tux itself, such as "What can you do?", are not, with no call (`never_a_fact`). Otherwise, with `fact_lookup` on, one small call to the model with no tools says FACT or OTHER. Anything but exactly FACT is a no, and so is a failure or 2 s without an answer, because the normal route can do everything.
 3. A fact goes through `session.execute("knowledge.answer", ...)`, so it has a history record and meets the same gates. The voice model isn't asked, and the session may not even be open yet. Anything else goes to the voice model.
 
-`knowledge.answer` tries these in order, stopping at the first that answers:
+`knowledge.answer` first refuses words about the music playing, timers or the home, whether or not `fact_lookup` is on, with an error that says so and tells the voice model to use another tool or say it can't. A turn from the shortcut is never sorted, and the voice model picks this tool for those questions too. Otherwise it tries these in order, stopping at the first that answers:
 
 1. `calculate()`, for a sum. It turns the words into an expression and walks the parsed tree, which holds only numbers and arithmetic. Nothing is evaluated.
 2. Wikipedia's API, on the words that matter: five pages, 1200 characters of each.
@@ -131,7 +131,7 @@ A handler that wants its result spoken in another language appends a `Speak(text
 
 Steps 2 and 3 hand the results to a model with no tools, told to answer only from them or say "I don't know". Nothing is answered from memory. With `fact_lookup` off, the only call is the model with no tools, and nothing leaves your server.
 
-The sorter's prompt matters more than it looks. Asked plainly, the model answers the question instead of sorting it, so the words go in as `Message: "..."` after twelve worked examples. An empty thinking block takes four tokens before the first word, so a limit of 5 leaves room for one.
+The sorter's prompt matters more than it looks. Asked plainly, the model answers the question instead of sorting it, so the words go in as `Message: "..."` after fifteen worked examples. An empty thinking block takes four tokens before the first word, so a limit of 5 leaves room for one.
 
 A VAD turn can't be sorted, as the server replies by itself when it hears you stop. The same action is on its tool list, and the model picks it now and then.
 
