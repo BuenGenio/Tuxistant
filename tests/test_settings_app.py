@@ -287,8 +287,8 @@ class Logic(unittest.TestCase):
         self.assertEqual(sa.calendar_listing([]), ([], ""))
         with mock.patch.object(calendars, "_backend", side_effect=ValueError(calendars.NO_EDS)):
             reply = json.loads(json.dumps(calendars.writable()))
-        self.assertEqual(sa.calendar_listing(reply), ([], calendars.NO_EDS))
-        self.assertEqual(sa.calendar_listing({}), ([], sa.NO_CALENDARS))
+        self.assertEqual(sa.calendar_listing(reply), (None, calendars.NO_EDS))
+        self.assertEqual(sa.calendar_listing({}), (None, sa.NO_CALENDARS))
         self.assertEqual(sa.calendar_listing("nonsense"), ([], ""))
 
     def test_calendar_choices(self):
@@ -1393,7 +1393,7 @@ class Inner(unittest.TestCase):
 
     def test_25_calendar_lists_what_can_be_changed_and_saves_the_choice(self):
         page = self.win.general
-        wait(lambda: page.calendars is not None, "the calendar list")
+        self.real_calendars()
         self.assertEqual(page.calendar_labels,
                          ["Automatic", "Family (me@example.org)", "Personal (On This Computer)"])
         self.assertEqual(page.calendar.get_selected(), 0)
@@ -1433,24 +1433,47 @@ class Inner(unittest.TestCase):
     def test_25_calendar_a_failed_listing_gives_no_account_advice(self):
         # A timeout or a daemon older than this app: the user may well have accounts already.
         page = self.win.general
-        wait(lambda: page.calendars is not None, "the calendar list")
-        self.addCleanup(self.load_calendars, page.calendars, sa.CALENDAR_NOTE)
-        control("FailNext", "ListCalendars", "timed out", signature="ss")
-        forget()
-        page.load()
-        wait(lambda: calls("ListCalendars"), "a fresh calendar list")
-        wait(lambda: page.calendar.get_subtitle() == sa.CALENDARS_FAILED, "the calendar note")
+        self.addCleanup(self.load_calendars, self.real_calendars(), sa.CALENDAR_NOTE)
+        self.fail_calendar_listing()
         self.assertNotIn("Online Accounts", page.calendar.get_subtitle())
         self.assertEqual(page.calendar_labels, ["Automatic"])
         settle()
         self.assertEqual(saved(), [], "a failed listing is not a choice")
 
+    def test_25_calendar_a_failed_listing_does_not_call_the_saved_one_gone(self):
+        """We only know the list didn't come, not that the saved calendar left."""
+        page = self.win.general
+        self.addCleanup(self.load_calendars, self.real_calendars(), sa.CALENDAR_NOTE)
+        self.addCleanup(control, "Change", "calendar_add_to", '""', signature="ss")
+        control("Change", "calendar_add_to", '"cal-family"', signature="ss")
+        wait(lambda: page.calendar.get_selected() == 1, "the saved calendar")
+        self.fail_calendar_listing()
+        self.assertEqual(page.calendar_labels, ["Automatic", "…"])
+        self.assertEqual(page.calendar.get_selected(), 1)
+        self.load_calendars({"problem": calendars.NO_EDS}, calendars.NO_EDS)
+        self.assertEqual(page.calendar_labels, ["Automatic", "…"])
+        settle()
+        self.assertEqual(saved(), [], "the saved calendar is kept as it is")
+
+    def fail_calendar_listing(self):
+        page = self.win.general
+        control("FailNext", "ListCalendars", "timed out", signature="ss")
+        forget()
+        page.load()
+        wait(lambda: calls("ListCalendars"), "a fresh calendar list")
+        wait(lambda: page.calendar.get_subtitle() == sa.CALENDARS_FAILED, "the calendar note")
+
+    def real_calendars(self) -> list:
+        """The list the fake sends, taken before a test replaces it: a problem leaves None."""
+        page = self.win.general
+        wait(lambda: isinstance(page.calendars, list) and not page.calendar_problem,
+             "the calendar list")
+        return list(page.calendars)
+
     def list_calendars_as(self, reply, subtitle):
         """Have the fake daemon send this reply and wait for the row to show it. Afterwards the
         real list comes back, on the fake and on the page."""
-        page = self.win.general
-        wait(lambda: page.calendars is not None, "the calendar list")
-        self.addCleanup(self.load_calendars, page.calendars, sa.CALENDAR_NOTE)
+        self.addCleanup(self.load_calendars, self.real_calendars(), sa.CALENDAR_NOTE)
         self.load_calendars(reply, subtitle)
 
     def load_calendars(self, reply, subtitle):
