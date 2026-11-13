@@ -44,13 +44,16 @@ def _uptime() -> str:
     return _span(float(Path("/proc/uptime").read_text().split()[0]))
 
 
-def _ip() -> dict:
-    """The address this computer uses, which is the one people mean, not every Docker bridge."""
+def _ip(tailscale: bool = False) -> dict:
+    """The address this computer uses, which is the one people mean, not every Docker bridge.
+    Tailscale's only when switched on: said aloud on a call or a recording, it maps your tailnet."""
     try:
         route = json.loads(_tool("ip", "-j", "route", "get", "1.1.1.1"))[0]
         found = {"address": route["prefsrc"], "connection": route.get("dev", "")}
     except (ValueError, LookupError, TypeError):
         return {"address": "not connected"}
+    if not tailscale:
+        return found
     try:
         for link in json.loads(_tool("ip", "-j", "-4", "addr", "show", "tailscale0")):
             found["tailscale"] = link["addr_info"][0]["local"]
@@ -113,10 +116,18 @@ def running(args: dict, _config, _session=None) -> dict:
     return {"name": name, "running": active or bool(_tool("pgrep", "-i", "-x", "--", name).strip())}
 
 
-def info(args: dict, _config, _session=None) -> dict:
+def _says_tailscale(config) -> bool:
+    try:
+        return config["say_tailscale_address"] is True   # not "false" from a hand-written file
+    except (TypeError, KeyError):
+        return False
+
+
+def info(args: dict, config, _session=None) -> dict:
     about = args.get("about")
     wanted = [about] if about in FACTS else list(FACTS)    # a model that invents a word gets it all
-    return {name: FACTS[name]() for name in wanted}
+    return {name: _ip(_says_tailscale(config)) if name == "ip" else FACTS[name]()
+            for name in wanted}
 
 
 class _Tally:

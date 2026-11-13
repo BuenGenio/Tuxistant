@@ -39,6 +39,7 @@ DEFAULTS = {
     "fact_lookup": True,          # questions of general knowledge are answered from Wikipedia
     "mail_search": False,         # the one-time opt-in: answers may come from Thunderbird's mail
     "timer_chime": False,         # a short sound when a timer or reminder comes due, locked or not
+    "say_tailscale_address": False,   # the IP address question also gets the Tailscale one
     "cloud_enabled": False,       # the one-time opt-in: multi-step requests may use a cloud model
     "cloud_api_key": "",
     "cloud_model": "claude-opus-5-5",
@@ -64,7 +65,7 @@ EDITABLE = {
     "location": str, "fahrenheit": bool, "news_source": str, "phone_device": str,
     "calendar_add_to": str,
     "translate_server": str, "search_server": str, "fact_lookup": bool, "mail_search": bool,
-    "tapo_email": str, "tapo_password": str, "timer_chime": bool,
+    "tapo_email": str, "tapo_password": str, "timer_chime": bool, "say_tailscale_address": bool,
     "ha_server": str, "ha_token": str,
     "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str,
 }

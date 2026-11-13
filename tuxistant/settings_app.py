@@ -558,6 +558,7 @@ class GeneralPage(Adw.PreferencesPage):
         self.add(self._mail_group())
         self.add(self._timers_group())
         self.add(self._phone_group())
+        self.add(self._privacy_group())
         self.add(self._translation_and_search_group())
         self.add(self._lights_group())
         self.add(self._home_group())
@@ -657,6 +658,13 @@ class GeneralPage(Adw.PreferencesPage):
         self.phone = Adw.ComboRow(title="Default device", use_markup=False)
         self.phone.connect("notify::selected", self.on_phone)
         group.add(self.phone)
+        return group
+
+    def _privacy_group(self):
+        group = Adw.PreferencesGroup(title="Privacy")
+        group.add(self._switch("say_tailscale_address", "Say my Tailscale address",
+                               "When you ask for your IP address, also say this computer's "
+                               "Tailscale address"))
         return group
 
     def _translation_and_search_group(self):
