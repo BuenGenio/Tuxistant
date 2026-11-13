@@ -68,6 +68,10 @@ RETRY_S = 2                 # how soon to offer an item again after announce sai
 # a minute, so a second try says it is late and has no chime.
 FAILED_WAIT_S = 60
 FAILED_TRIES = 4
+# announce's answer for one in that wait. Unlike False it lets the items after it be said: the
+# wait is minutes long, and the words that failed may be its own alone, as a sentence the speech
+# server refuses.
+LATER = "later"
 NOTE_WAIT_S = 10            # a note that takes longer than this is given up on
 NOTIFY_WAIT_S = 3           # the desktop answers a notification at once, or isn't going to
 TWICE_S = 10                # the same thing set again this soon is the model repeating itself
@@ -348,11 +352,13 @@ async def _ring(store: Store, item: Item, note, now: float) -> None:
         await _noted(note, marked)
 
 
-async def _say(store: Store, announce, item: Item, now) -> bool:
-    """Offers one item to announce. False if it has to wait."""
+async def _say(store: Store, announce, item: Item, now) -> bool | str:
+    """Offers one item to announce. False if it has to wait, and LATER if it waits but the items
+    after it need not."""
     try:
-        if await announce(item) is False:
-            return False
+        answer = await announce(item)
+        if answer is False or answer == LATER:
+            return answer
         state = "done"
     except Exception:       # as above. It was not said, and the record says so
         log.exception("timers: could not announce item %s", item.id)
@@ -362,16 +368,25 @@ async def _say(store: Store, announce, item: Item, now) -> bool:
 
 
 async def _fire(store: Store, announce, note, now) -> bool:
-    """One pass over what has come due. Returns whether any is still waiting to be said."""
+    """One pass over what has come due. Returns whether any is still waiting to be said.
+
+    Locked or busy, everything after the one refused would be refused too, so the pass stops
+    there: else one could slip in first the moment Tux comes free. One that answers LATER is
+    passed over. That never has two speak at once, as announce returns only once its words
+    are over, and it is offered again at the next pass, ahead of anything due later.
+    """
     for item in store.due(now()):       # each gets its trace at once, even when speech must wait
         await _ring(store, item, note, now())
+    later = False
     for found in store.due(now()):
         item = store.live(found.id)     # the one before took a while: this may be cancelled now
         if item is None or item.rung is None:
             continue
-        if not await _say(store, announce, item, now):
-            return True                 # in order: nothing overtakes one that is waiting
-    return False
+        answer = await _say(store, announce, item, now)
+        if answer is False:
+            return True
+        later = later or answer == LATER
+    return later
 
 
 def _nap(store: Store, now: float, waiting: bool) -> float | None:
@@ -401,7 +416,9 @@ async def run(store: Store, announce, now=epoch, sleep=asyncio.sleep, note=None)
 
     announce(item) is awaited, and is what says it. False means not now, as when the screen is
     locked or Tux is in the middle of a sentence: the item stays pending and is offered again
-    every RETRY_S seconds, so a restart meanwhile loses nothing. Anything else means it was said.
+    every RETRY_S seconds, so a restart meanwhile loses nothing, and nothing due after it is said
+    first. LATER is the same, except that the items after it are offered. Anything else means it
+    was said.
     note(item), if given, is awaited once for each item at the moment it is found due, whether or
     not it can be said: it is for a trace, such as a notification. An item too old to be said
     reaches note alone, with its state "missed".
@@ -811,13 +828,14 @@ class Announcer:
         if item.state == "pending" and self.locked() and self.chimes():
             await self.sound(chime())
 
-    async def announce(self, item: Item) -> bool:
+    async def announce(self, item: Item) -> bool | str:
         """Says it if Tux is free, and reports whether it was. Said late, it needs no chime: the
         person has just come back. One whose words failed before any was heard is not said: it
-        waits and is tried again, and raises when it has failed FAILED_TRIES times."""
+        waits, answering LATER, and is tried again. It raises when it has failed FAILED_TRIES
+        times."""
         tries, after = self.failed.get(item.id, (0, 0))
         if self.now() < after:
-            return False
+            return LATER
         on_time = self.now() - item.due < LATE_AFTER_S
         heard = []
         job = await self.say(words(item, self.now()),
@@ -826,13 +844,20 @@ class Announcer:
         if job is None:
             return False
         await asyncio.wait({job})   # the next one must not start over this. Not ours to cancel
-        problem = None if job.cancelled() else job.result()
-        if problem is None or heard:    # some was heard: saying it again would say it twice
+        return self._ended(item, tries, None if job.cancelled() else job.result(), bool(heard))
+
+    def _ended(self, item: Item, tries: int, problem: str | None, heard: bool) -> bool | str:
+        if heard:       # some was heard: saying it again would say it twice
+            self.failed.pop(item.id, None)
+            return True
+        if self.locked():   # the lock cut it off: it waits for the unlock, and that is no failure
+            return False
+        if problem is None:     # a key press cut it off, so somebody was there to hear it
             self.failed.pop(item.id, None)
             return True
         return self._failed(item, tries + 1, problem)
 
-    def _failed(self, item: Item, tries: int, problem: str) -> bool:
+    def _failed(self, item: Item, tries: int, problem: str) -> str:
         if tries >= FAILED_TRIES:
             self.failed.pop(item.id, None)
             raise RuntimeError(problem)
@@ -840,7 +865,7 @@ class Announcer:
         self.failed[item.id] = (tries, self.now() + wait)
         log.warning("timers: could not say item %s, trying again in %d seconds: %s",
                     item.id, wait, problem)
-        return False
+        return LATER
 
 
 _attached: Store | None = None
