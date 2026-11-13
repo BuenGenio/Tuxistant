@@ -99,7 +99,7 @@ UNSEEN_OTHER = [
     "Who's this band?", "What's this one called?", "Who recorded the tune we're hearing?",
     "How many minutes before the pizza comes out?", "When does the oven timer go off?",
     "Has the laundry timer finished?", "Did I leave the garage open?",
-    "Are the blinds down in the bedroom?", "Is the back porch light still on?",
+    "Are the blinds down in the bedroom?", "Did somebody leave the kitchen tap running?",
     "How warm is the nursery?", "Is the hallway lamp lit?", "Who's on the speaker?",
 ]
 SUMS = [
@@ -123,6 +123,7 @@ NOT_FACTS = [
     "Send this to my phone", "Read my emails", "Turn the volume up", "What's on my calendar?",
     # Once never seen, but the word filter now catches them by a shape written after they were.
     "Which artist is on?", "How long till the eggs are done?", "Is the dishwasher done?",
+    "Is the back porch light still on?",
 ]
 
 
