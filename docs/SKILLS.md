@@ -145,7 +145,7 @@ Every action, every card and the answer to it are in the request history, includ
 
 ## Facts
 
-A question of general knowledge is answered from Wikipedia, then web search, and never from the model's memory. If neither clearly says, Tux says it doesn't know. On a hold turn the daemon decides this itself, as the model can't be made to. "Facts" in [CONTRACT.md](CONTRACT.md) has how. The question leaves your own server with no click, which is why `knowledge.yaml` declares `network: true`, and why "Look up facts on Wikipedia" in Settings turns it off. A question about the music playing, timers or the home is refused by the tool itself, so the voice model can't send one to Wikipedia by picking it.
+A question of general knowledge is answered from Wikipedia, then web search, and never from the model's memory. If neither clearly says, Tux says it doesn't know. On a hold turn the daemon decides this itself, as the model can't be made to. "Facts" in [CONTRACT.md](CONTRACT.md) has how. The question leaves your own server with no click, which is why `knowledge.yaml` declares `network: true`, and why "Look up facts on Wikipedia" in Settings turns it off. A question about the music playing, timers or the home that the word filter in `tuxistant/knowledge.py` knows by its shape, such as "Is the front door locked?", is refused by the tool itself, so the voice model can't send that one to Wikipedia by picking it. One worded otherwise, such as "Who's at the door?", can still go there on any turn the voice model answers.
 
 ## Web search and research
 
