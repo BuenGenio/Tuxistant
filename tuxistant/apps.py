@@ -26,6 +26,8 @@ MAX_NAME = 60           # an app's name as said or shown
 MAX_COMMAND = 300       # the command line on a card
 MAX_CHOICES = 3
 CLOSE_ENOUGH = 0.85     # difflib ratio for a misheard name
+CLOSE_LONG = 5          # letters: "team" is one letter from "steam", so short words aren't guessed
+LOOSE_TIER = 5          # keywords and close spellings, which a Settings page's other words beat
 AGAIN_S = 5             # a 4B often sends the same call twice in one reply
 SETTINGS_ID = "org.gnome.Settings.desktop"
 GROUP = "Desktop Entry"
@@ -42,6 +44,9 @@ KIND_SAID = {"Flatpak": "a Flatpak", "Snap": "a Snap", "system": "one from the s
 # An Exec basename that says nothing about the app.
 LAUNCHERS = {"flatpak", "snap", "env", "sh", "bash", "python", "python3", "java", "wine", "gjs",
              "electron", "apprun", "gio", "gtk-launch", "pkexec", "sudo"}
+# Field codes gio launch fills with files or addresses, which Tux never passes. Some of the others
+# put the entry's icon (%i), name (%c) or file (%k) into the command after the card was shown.
+PLAIN_FIELDS = frozenset("fFuU%")
 # Keys in _words() form. "mail app" loses its TAIL before it gets here, so the bare forms count.
 ALIASES = {"browser": "https", "web browser": "https", "internet": "https", "mail": "mailto",
            "email": "mailto", "e mail": "mailto", "mail app": "mailto", "email app": "mailto"}
@@ -63,6 +68,8 @@ NO_SUCH_PAGE = ("Settings has no page called {name}. It has pages such as Blueto
                 "sound, Wi-Fi, network and power.")
 CHANGED = "That app's shortcut changed after the card was shown, so I've left it alone."
 UNREADABLE = "I can't read that app's shortcut, so I've left it alone."
+FILLS_IN = ("That app's shortcut adds to its command as it starts, so a card couldn't show what "
+            "runs. I've left it alone.")
 CARD_WHY = {"home": "It was added in your home folder, not installed as a package, so it can run "
                     "any command.",
             "other": "It isn't from an installed package, so it can run any command."}
@@ -118,7 +125,7 @@ PANELS = (
                "microphone", "headphones", "sound output", "sound input"),
     _panel_row("gnome-wifi-panel.desktop", "Wi-Fi", "wifi", "wi fi", "wireless", "hotspot"),
     _panel_row("gnome-network-panel.desktop", "Network", "network", "ethernet", "wired", "vpn",
-               "proxy"),
+               "proxy", "internet"),
     _panel_row("gnome-background-panel.desktop", "Appearance", "appearance", "background",
                "wallpaper", "dark mode", "dark style", "theme", "accent colour", "accent color"),
     _panel_row("gnome-notifications-panel.desktop", "Notifications", "notifications",
@@ -271,24 +278,44 @@ def _kind_asked(query: str) -> tuple[str, str | None]:
     return query, None
 
 
-def _panel(query: str, entries: list[App], loose: bool) -> Panel | None:
-    squashed = _squash(query)
-    for panel in PANELS:
-        if squashed in {_squash(word) for word in panel.words}:
-            return panel
+def _page_named(query: str, entries: list[App]) -> Panel | None:
+    """A page's own title, or the name its desktop file shows, translated or not."""
     by_id = {entry.id: entry for entry in entries}
-    for panel in PANELS:    # a page's own name, translated or not
-        if panel.desktop in by_id and query in by_id[panel.desktop].names:
+    for panel in PANELS:
+        if _squash(query) == _squash(_words(panel.title)) or (
+                panel.desktop in by_id and query in by_id[panel.desktop].names):
             return panel
-    if not loose:
-        return None
+    return None
+
+
+def _page_word(query: str) -> Panel | None:
+    squashed = _squash(query)
+    return next((panel for panel in PANELS
+                 if squashed in {_squash(word) for word in panel.words}), None)
+
+
+def _page_inside(query: str) -> Panel | None:
     inside = [(len(word), panel) for panel in PANELS for word in panel.words
               if f" {word} " in f" {query} "]
     return max(inside, key=lambda found: found[0], default=(0, None))[1]
 
 
+def _page(query: str, entries: list[App], settings: bool, tier: int | None) -> Panel | None:
+    """With "settings" said, any page the words name. Otherwise an app named exactly this wins
+    ("Terminal", "Clocks"), then a page named exactly this ("Bluetooth" is the page, not Blueman),
+    then an app with the word in its name, generic name, id or program ("zoom" is Zoom Workplace,
+    not Accessibility), then a page's other words."""
+    if settings:
+        return _page_named(query, entries) or _page_word(query) or _page_inside(query)
+    if tier == 0:
+        return None
+    if named := _page_named(query, entries):
+        return named
+    return _page_word(query) if tier is None or tier >= LOOSE_TIER else None
+
+
 def _close(squashed: str, entries: list[App]) -> tuple[int | None, list[App]]:
-    if len(squashed) < 4:
+    if len(squashed) < CLOSE_LONG:
         return None, []
 
     def score(entry: App) -> float:
@@ -327,13 +354,15 @@ def _matching(query: str, entries: list[App]) -> tuple[int | None, list[App]]:
 
 
 def _matching_kind(query: str, entries: list[App]) -> tuple[int | None, list[App]]:
-    """"Flatpak Firefox" looks among the Flatpaks first, and at everything if none fits."""
+    """"Flatpak Firefox" looks among the Flatpaks first, and at everything if none fits. An app
+    named exactly what was said comes first, as "System Monitor" is not a system "monitor"."""
+    whole = _matching(query, entries)
     rest, kind = _kind_asked(query)
-    if kind:
+    if kind and whole[0] != 0:
         tier, found = _matching(rest, [entry for entry in entries if entry.kind == kind])
         if found:
             return tier, found
-    return _matching(query, entries)
+    return whole
 
 
 def _joined(items: list[str], last: str) -> str:
@@ -356,12 +385,13 @@ def _twins(group: list[App], config, session):
 
 
 def _open_found(found: list[App], config, session):
+    # "draw.io" and "drawio" answer to the same words, so asking which one would never end.
     groups: dict[str, list[App]] = {}
     for app in found:
-        groups.setdefault(app.name, []).append(app)
-    names = list(groups)
+        groups.setdefault(_squash(_words(app.name)) or app.name, []).append(app)
+    names = [group[0].name for group in groups.values()]
     if len(names) == 1:
-        return _twins(groups[names[0]], config, session)
+        return _twins(next(iter(groups.values())), config, session)
     if len(names) <= MAX_CHOICES:
         return _say(session, config, WHICH.format(names=_joined(names, "or")))
     return _say(session, config, MORE.format(names=_joined(names[:MAX_CHOICES], "and")))
@@ -392,6 +422,8 @@ def _start(app: App, text: str, config, session) -> dict | Ask:
     keys = _keyfile(data) if data is not None else None
     if keys is None:
         return _say(session, config, UNREADABLE)
+    if _fills_in(_value(keys, "Exec")):
+        return _say(session, config, FILLS_IN)
     digest = hashlib.sha256(data).hexdigest()
 
     def run() -> dict:
@@ -414,6 +446,11 @@ def _card(app: App, keys) -> str:
         lines.append(f"In folder: {shown(folder)}")
     lines.append(f"File: {shown(_tilde(Path(app.path)))}")
     return "\n".join(lines)
+
+
+def _fills_in(command: str) -> bool:
+    """Read left to right as GLib does, so "%%i" is a percent sign and an i."""
+    return any(code not in PLAIN_FIELDS for code in re.findall(r"%(.)", command, re.DOTALL))
 
 
 def _keyfile(data: bytes):
@@ -499,18 +536,17 @@ def _launch(path: str) -> bool:
 
 
 def open_app(args: dict, config, session):
-    query, settings = _settings_asked(_without_tail(_words(args.get("name") or "")))
+    said = _words(args.get("name") or "")
+    # "Default apps" is a page's word, though "apps" is usually only the end of an app's name.
+    query, settings = _settings_asked(said if _page_word(said) else _without_tail(said))
     if not query and not settings:
         raise ValueError(NO_NAME)
     entries = _installed()
     if not query or (settings and query == "gnome"):     # "GNOME Settings", "GNOME Control Center"
         return _open_by_id(SETTINGS_ID, OPENING_SETTINGS, entries, config, session)
-    # An app named exactly this wins ("Terminal", "Clocks"), then a page named exactly this
-    # ("Bluetooth" is the page, not Blueman), then looser app matches. "Firefox settings" opens
-    # Firefox, as Settings has no page for it.
+    # "Firefox settings" opens Firefox, as Settings has no page for it.
     tier, found = _matching_kind(query, entries)
-    panel = _panel(query, entries, loose=settings)
-    if panel and (settings or tier != 0):
+    if panel := _page(query, entries, settings, tier):
         return _open_panel(panel, entries, config, session)
     if found:
         return _open_found(found, config, session)

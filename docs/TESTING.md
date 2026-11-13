@@ -34,7 +34,7 @@ The opt-in live protocol test permits only `time.now`; every unexpected tool is 
 
 ## Apps
 
-`tests/test_apps.py` makes up the app list, records launches instead of making them, and makes `subprocess` fail any test that would start something for real. The tests of the real launcher put stand-in `gio` and `systemd-run` scripts on a `PATH` that holds nothing else, and the stand-in `systemd-run` never runs what follows it. The real Gio list is read only in a child process (`tests/apps_driver.py`) with temporary XDG folders, no session bus and no display, and the driver refuses to run otherwise. `tools/eval_cutoffs.py`, which both `tools/eval_flows.py` and `tests/test_realtime_live.py` install, swaps in a made-up app list and a launcher that only prints. Nothing here has opened a real app.
+`tests/test_apps.py` makes up the app list, records launches instead of making them, and makes `subprocess` fail any test that would start something for real. The tests of the real launcher put stand-in `gio` and `systemd-run` scripts on a `PATH` that holds nothing else, and the stand-in `systemd-run` never runs what follows it. The real Gio list is read only in a child process (`tests/apps_driver.py`) with temporary XDG folders, a session bus address that points at no socket, and no display. The driver refuses to run unless it is marked isolated, its home, data and config folders and its one bus socket are in the temp folder, and neither `DISPLAY` nor `WAYLAND_DISPLAY` is set. `tools/eval_cutoffs.py`, which both `tools/eval_flows.py` and `tests/test_realtime_live.py` install, swaps in a made-up app list and a launcher that only prints. Nothing here has opened a real app.
 
 ## Timers and reminders
 
