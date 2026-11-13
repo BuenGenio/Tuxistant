@@ -164,8 +164,8 @@ def _host(host) -> str:
 
 def _plain_address(host: str) -> None:
     """The resolver reads 127.1, 2130706433 and 0x7f000001 as addresses. Only the usual
-    spelling is let through, and only for somewhere that isn't this computer or the cloud's
-    metadata service."""
+    spelling is let through, and only for somewhere that isn't this computer, Tailscale's own
+    address, which tailscaled answers on this computer, or the cloud's metadata service."""
     try:
         packed = socket.inet_aton(host)
     except OSError:
@@ -175,7 +175,7 @@ def _plain_address(host: str) -> None:
                          "192.168.1.40.")
     ip = ipaddress.ip_address(host)
     if (ip.is_loopback or ip.is_link_local or ip.is_unspecified or ip.is_multicast
-            or ip.is_reserved or host == "255.255.255.255"):
+            or ip.is_reserved or host in ("255.255.255.255", "100.100.100.100")):
         raise ValueError(f"A recipe can't reach {host}.")
 
 
@@ -822,8 +822,11 @@ async def _call(plan: Plan, args: dict, config, session):
     said = _again(_key(plan, request))
     if said is not None:
         return _echo(session, config, said)
-    try:
-        where = await asyncio.to_thread(_place, request, config)
+    session.busy(CARD_S)    # a name can take seconds to look up, and nothing has been said yet
+    try:    # waited for from out here: nothing stops a name lookup from inside the thread
+        where = await asyncio.wait_for(asyncio.to_thread(_place, request, config), SEND_S)
+    except TimeoutError:
+        return _say(session, config, NO_ANSWER.format(host=request.host))
     except webfetch.PageError as e:
         refused = NOT_THERE if str(e) == webfetch.NOT_ALLOWED else NO_ANSWER
         return _say(session, config, refused.format(host=request.host))

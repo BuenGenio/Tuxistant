@@ -63,7 +63,11 @@ class Web:
         self.port = self.http.server_address[1]
         threading.Thread(target=self.http.serve_forever, args=(0.01,), daemon=True).start()
         test.addCleanup(self.close)
-        for name, new in (("_dial", self.dial), ("_resolve", self.resolve)):
+        self.guests = []    # the networks of this computer's containers, made up
+        webfetch.forget_own_servers()
+        test.addCleanup(webfetch.forget_own_servers)
+        for name, new in (("_dial", self.dial), ("_resolve", self.resolve),
+                          ("guest_networks", lambda: list(self.guests))):
             patcher = mock.patch.object(webfetch, name, new)
             patcher.start()
             test.addCleanup(patcher.stop)
@@ -85,3 +89,29 @@ class Web:
 
     def paths(self):
         return [path for path, _ in self.requests]
+
+
+def slow_server(test, steps) -> int:
+    """A loopback server that reads one request and then sends each (wait, bytes) in turn, and
+    hangs up at the end. Returns its port."""
+    listener = socket.create_server(("127.0.0.1", 0))
+    test.addCleanup(listener.close)
+    stop = threading.Event()
+    test.addCleanup(stop.set)
+
+    def answer():
+        try:
+            sock, _ = listener.accept()
+        except OSError:
+            return
+        with sock:
+            sock.recv(4096)
+            try:
+                for wait, chunk in steps:
+                    if stop.wait(wait):
+                        return
+                    sock.sendall(chunk)
+            except OSError:
+                pass
+    threading.Thread(target=answer, daemon=True).start()
+    return listener.getsockname()[1]

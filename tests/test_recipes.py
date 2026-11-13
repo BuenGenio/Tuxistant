@@ -3,7 +3,9 @@ or bus: names come from tests/fakeweb.py's table and every connection goes to it
 server, this computer's addresses are made up, the app list is made up and nothing is launched,
 and every skill folder is a temporary one."""
 import inspect
+import ipaddress
 import json
+import socket
 import shutil
 import sys
 import tempfile
@@ -15,7 +17,7 @@ from unittest import mock
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tests.fakeweb import PUBLIC, Web  # noqa: E402
+from tests.fakeweb import PUBLIC, Web, slow_server  # noqa: E402
 from tests.test_apps import made  # noqa: E402
 from tuxistant import apps, recipes, skillhost, webfetch  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
@@ -224,7 +226,8 @@ class Refused(Case):
 
     def test_this_computer_and_the_clouds_metadata_by_name(self):
         for host in ("localhost", "printer.localhost", "127.0.0.1", "169.254.169.254",
-                     "0.0.0.0", "224.0.0.1", "255.255.255.255", "127.1", "2130706433"):
+                     "0.0.0.0", "224.0.0.1", "255.255.255.255", "127.1", "2130706433",
+                     "100.100.100.100"):
             with self.subTest(host):
                 data = with_action(get=f"http://{host}/v1/next?town={{town}}")
                 data["permissions"] = {"network": [host]}
@@ -540,6 +543,17 @@ class Cards(Case):
                 self.web.dialled.clear()
                 await self.refused_unsent(no, names)
 
+    async def test_this_computers_containers_and_tailscale(self):
+        """They look like a device at home, but answer on this computer."""
+        no = "That recipe's host, api.coins.example, isn't somewhere I'll send to."
+        self.web.guests = [ipaddress.ip_network("172.17.0.0/16"),
+                           ipaddress.ip_network("192.168.122.0/24")]
+        for address in ("172.17.0.2", "192.168.122.5", "100.100.100.100",
+                        "fd7a:115c:a1e0::53", "fd00:ec2::254"):
+            with self.subTest(address):
+                self.web.dialled.clear()
+                await self.refused_unsent(no, {"api.coins.example": [address]})
+
     async def test_own_servers_are_refused_by_name(self):
         text = (EXAMPLES / "coins.yaml").read_text().replace("api.coins.example", "ha.lan")
         await self.refused_unsent("That recipe's host, ha.lan, isn't somewhere I'll send to.",
@@ -553,6 +567,57 @@ class Cards(Case):
     async def test_a_name_that_doesnt_resolve(self):
         self.web.names.pop("api.coins.example")
         await self.refused_unsent("api.coins.example didn't answer.")
+
+    async def test_a_name_that_takes_too_long_to_look_up(self):
+        """Nothing in the thread can stop a lookup, so the call stops waiting for it, and the
+        turn has been told to wait before it starts."""
+        real, busy = self.web.resolve, []
+
+        def slow(host, port):
+            if host == "api.coins.example":
+                time.sleep(1)
+            return real(host, port)
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        session = Session(self.host.current(), confirm=self.confirm, busy=busy.append)
+        with mock.patch.object(webfetch, "_resolve", slow), \
+                mock.patch.object(recipes, "SEND_S", 0.3):
+            started = time.monotonic()
+            result, said = await self.call("coins_price", {"coin": "bitcoin"}, session)
+        self.assertLess(time.monotonic() - started, 0.9)
+        self.assertEqual(said, ["api.coins.example didn't answer."])
+        self.assertEqual(busy, [recipes.CARD_S])
+        self.assertEqual(self.web.dialled, [])
+
+    async def test_a_slow_home_assistant_is_looked_up_once(self):
+        real = self.web.resolve
+
+        def slow(host, port):
+            if host == "ha.lan":
+                time.sleep(0.4)
+            return real(host, port)
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        with mock.patch.object(webfetch, "_resolve", slow):
+            for coin in ("bitcoin", "ethereum", "bitcoin"):
+                recipes._recent.clear()
+                await self.call("coins_price", {"coin": coin})
+        self.assertEqual(self.web.lookups.count("ha.lan"), 1)
+
+    async def test_an_answer_cut_short_is_not_said(self):
+        """The deadline hangs up and http.client takes that for the end of the answer: 12345 of
+        1234567 must not be said as the price."""
+        text = (EXAMPLES / "coins.yaml").read_text().replace("price: [usd]", "price: []")
+        self.add("coins.yaml", text)
+        self.host.reload()
+        port = slow_server(self, [(0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                                      b"Content-Length: 7\r\n\r\n12345")]
+                           + [(0.3, b"6"), (0.3, b"7")])
+        with mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
+                ("127.0.0.1", port), timeout=2)), \
+                mock.patch.object(recipes, "SEND_S", 0.4):
+            result, said = await self.call("coins_price", {"coin": "bitcoin"})
+        self.assertEqual(said, ["api.coins.example didn't answer."])
 
     async def test_a_card_too_long_to_show_is_left_alone(self):
         self.example("notes.yaml")

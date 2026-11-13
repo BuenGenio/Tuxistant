@@ -14,6 +14,7 @@ import codecs
 import html
 import http.client
 import ipaddress
+import os
 import re
 import socket
 import ssl
@@ -42,6 +43,15 @@ NAT64 = ipaddress.ip_network("64:ff9b::/96")
 # A device in the house: private ranges, and Tailscale's or a carrier's shared range.
 LOCAL_NETS = tuple(map(ipaddress.ip_network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
                                               "100.64.0.0/10", "fc00::/7")))
+# They look like a device at home but answer on this computer, or are a cloud's metadata service:
+# Tailscale's own DNS and API, which tailscaled answers here, and AWS's IPv6 metadata address.
+NOT_DEVICES = tuple(map(ipaddress.ip_network, ("100.100.100.100/32", "fd7a:115c:a1e0::53/128",
+                                               "fd00:ec2::254/128")))
+SYS_NET = "/sys/class/net"
+ROUTES = "/proc/net/route"
+ADDRESSES6 = "/proc/net/if_inet6"
+IFF_TAP = 0x0002
+OWN_S = 60              # how long the addresses of the install's own servers are kept
 MAX_REPLY_BYTES = 64 * 1024
 RECIPE_AGENT = "Tuxistant"
 RECIPE_ACCEPT = "application/json, text/plain;q=0.9"
@@ -151,19 +161,38 @@ def _server_host(server: str) -> str | None:
         return None
 
 
+OWN_KEYS = ("server", "translate_server", "search_server", "ha_server")
+_own_lock = threading.Lock()
+_own_addresses: dict[tuple, tuple[float, frozenset]] = {}
+
+
 def own_servers(config) -> tuple[set[str], set[str]]:
     """Names and addresses of the servers this install talks to. A page has no business reaching
-    them, even if they are on the open internet. A name that won't resolve is still refused."""
-    names, addresses = set(), set()
-    for key in ("server", "translate_server", "search_server", "ha_server"):
-        host = _server_host(config[key]) if config[key] else None
-        if host:
-            names.add(_name(host))
-            try:
-                addresses.update(map(_same, _resolve(host, 0)))
-            except PageError:
-                pass
+    them, even if they are on the open internet. A name that won't resolve is still refused.
+    The names come from the settings every time. The addresses are kept for a minute, as Home
+    Assistant away from home, or at homeassistant.local, can take seconds to fail, and every page
+    and recipe call would wait for it."""
+    hosts = [host for key in OWN_KEYS if config[key] and (host := _server_host(config[key]))]
+    names = {_name(host) for host in hosts}
+    key = tuple(config[k] for k in OWN_KEYS)
+    with _own_lock:
+        kept = _own_addresses.get(key)
+    if kept and time.monotonic() < kept[0]:
+        return names, set(kept[1])
+    addresses = set()
+    for host in hosts:
+        try:
+            addresses.update(map(_same, _resolve(host, 0)))
+        except PageError:
+            pass
+    with _own_lock:
+        _own_addresses[key] = (time.monotonic() + OWN_S, frozenset(addresses))
     return names, addresses
+
+
+def forget_own_servers():
+    with _own_lock:
+        _own_addresses.clear()
 
 
 def _read_proc(path: str) -> str:
@@ -190,6 +219,100 @@ def this_computer() -> set[str]:
     return {_same(address) for address in found if _is_address(address)}
 
 
+def _sys(path: str) -> str:
+    return _read_proc(path).strip()
+
+
+def _guest_port(root: str, name: str) -> bool:
+    """A tap or a veth: its other end is a virtual machine or a container on this computer. A
+    physical card, or a VLAN or bond stacked on one, isn't."""
+    path = os.path.join(root, name)
+    if os.path.exists(os.path.join(path, "device")) or os.path.isdir(os.path.join(path, "bridge")):
+        return False
+    try:
+        if any(entry.startswith("lower_") for entry in os.listdir(path)):
+            return False
+    except OSError:
+        return False
+    tun = _sys(os.path.join(path, "tun_flags"))
+    if tun:
+        try:
+            return bool(int(tun, 16) & IFF_TAP)
+        except ValueError:
+            return False
+    if _sys(os.path.join(path, "type")) != "1":     # Ethernet: not an IP tunnel or a VPN
+        return False
+    link = _sys(os.path.join(path, "iflink"))      # a veth's peer, in the container's namespace
+    return link not in ("", "0") and link != _sys(os.path.join(path, "ifindex"))
+
+
+def _guest_interfaces(root: str = SYS_NET) -> set[str]:
+    """Docker's and Podman's bridges, libvirt's virbr0, LXD's and the like: a bridge none of whose
+    ports is a physical card, and a tap or veth on its own. A bridge with the house's card in it
+    is the house."""
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return set()
+    found = set()
+    for name in names:
+        if os.path.isdir(os.path.join(root, name, "bridge")):
+            try:
+                ports = os.listdir(os.path.join(root, name, "brif"))
+            except OSError:
+                ports = []
+            if all(_guest_port(root, port) for port in ports):
+                found.add(name)
+        elif _guest_port(root, name):
+            found.add(name)
+    return found
+
+
+def _little_endian(hexed: str) -> ipaddress.IPv4Address:
+    return ipaddress.IPv4Address(bytes.fromhex(hexed)[::-1])
+
+
+def guest_networks(root: str = SYS_NET, routes: str = ROUTES,
+                   addresses6: str = ADDRESSES6) -> list:
+    """The networks this computer's containers and virtual machines live on. Their addresses
+    look like the house's, but what answers there runs on this computer, and a container's port
+    is reachable there even when Docker publishes it only on 127.0.0.1."""
+    guests, found = _guest_interfaces(root), []
+    for line in _read_proc(routes).splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 8 or fields[0] not in guests or fields[2] != "00000000":
+            continue
+        try:
+            net = ipaddress.IPv4Network(
+                f"{_little_endian(fields[1])}/{_little_endian(fields[7])}", strict=False)
+        except ValueError:
+            continue
+        if net.prefixlen:
+            found.append(net)
+    for line in _read_proc(addresses6).splitlines():
+        fields = line.split()
+        if len(fields) < 6 or fields[5] not in guests or fields[3] != "00":   # 00: global scope
+            continue
+        packed = fields[0]
+        try:
+            net = ipaddress.IPv6Network(
+                ":".join(packed[i:i + 4] for i in range(0, 32, 4)) + f"/{int(fields[2], 16)}",
+                strict=False)
+        except ValueError:
+            continue
+        if net.prefixlen:
+            found.append(net)
+    return found
+
+
+def _not_a_device(address: str, guests: list) -> bool:
+    try:
+        ip = ipaddress.ip_address(address.partition("%")[0])
+    except ValueError:
+        return True
+    return any(ip in net for net in (*NOT_DEVICES, *guests) if net.version == ip.version)
+
+
 def _is_address(text: str) -> bool:
     try:
         ipaddress.ip_address(text)
@@ -210,13 +333,17 @@ def _local(address: str) -> bool:
 
 def place(host: str, port: int, own: tuple[set[str], set[str]]) -> Place:
     """Where a recipe may send: all on the open internet, or all in the house. Never this computer,
-    the servers this install talks to, or a name that answers with a mix of the two."""
+    its containers and virtual machines, the servers this install talks to, or a name that answers
+    with a mix of the two."""
     names, own_addresses = own
     if _name(host) in names:
         raise PageError(NOT_ALLOWED)
     addresses = _resolve(host, port)
     same = set(map(_same, addresses))
     if not addresses or same & own_addresses or same & this_computer():
+        raise PageError(NOT_ALLOWED)
+    guests = guest_networks()
+    if any(_not_a_device(address, guests) for address in same):
         raise PageError(NOT_ALLOWED)
     if all(map(public, addresses)):
         return Place(addresses, False)
@@ -292,11 +419,18 @@ class _Tls(http.client.HTTPSConnection):
         self.sock = self.tls.wrap_socket(self.raw, server_hostname=self.host)
 
 
-def _hang_up(sock: socket.socket):
+def _hang_up(sock: socket.socket, late: threading.Event):
+    late.set()
     try:
         sock.shutdown(socket.SHUT_RDWR)
     except OSError:
         pass
+
+
+def _cut(reply: http.client.HTTPResponse, data: bytes, limit: int) -> bool:
+    """Whether the server stopped before the length it gave. http.client reads that as the end,
+    and a price cut to its first digits is a wrong price said as if it were right."""
+    return len(data) < limit and bool(reply.length)
 
 
 def _decode(body: bytes, charset: str | None) -> str:
@@ -314,7 +448,10 @@ def _read(reply: http.client.HTTPResponse) -> tuple[str, str]:
     encoding = (reply.getheader("Content-Encoding") or "identity").strip().lower()
     if reply.status != 200 or kind not in TEXT_TYPES or encoding != "identity":
         raise PageError(UNREADABLE)
-    return kind, _decode(reply.read(MAX_BYTES), reply.headers.get_content_charset())
+    body = reply.read(MAX_BYTES)
+    if _cut(reply, body, MAX_BYTES):
+        raise PageError(UNREADABLE)
+    return kind, _decode(body, reply.headers.get_content_charset())
 
 
 def _exchange(target: Target, method: str, body: bytes | None, headers: dict, deadline: float,
@@ -322,17 +459,22 @@ def _exchange(target: Target, method: str, body: bytes | None, headers: dict, de
     """One request, with read(reply) run while the connection is open. A timeout on the socket
     only bounds each read, so a server dripping a byte at a time would go on for ever. Hanging up
     at the deadline ends it wherever it has got to, including the TLS handshake, which is why it
-    holds its own handle."""
+    holds its own handle. To http.client that hang-up looks like the end of the answer, so
+    whatever was read by then is thrown away rather than taken as all of it."""
     raw = _connect(target, deadline)
-    watch = raw.dup()
-    timer = threading.Timer(max(deadline - time.monotonic(), 0), _hang_up, [watch])
+    watch, late = raw.dup(), threading.Event()
+    timer = threading.Timer(max(deadline - time.monotonic(), 0), _hang_up, [watch, late])
     timer.daemon = True
     connection = (_Tls if target.scheme == "https" else _Plain)(target, raw)
     raw.settimeout(CONNECT_S)
     timer.start()
     try:
         connection.request(method, target.path, body=body, headers=headers)
-        return read(connection.getresponse())
+        answer = read(connection.getresponse())
+        timer.cancel()
+        if late.is_set():
+            raise PageError(UNREADABLE)
+        return answer
     except (OSError, ValueError, http.client.HTTPException):
         raise PageError(UNREADABLE) from None
     finally:
@@ -358,6 +500,8 @@ def _reply(reply: http.client.HTTPResponse) -> Reply:
     if encoding != "identity":      # nothing here asked for it, and it can unpack to gigabytes
         return Reply(reply.status, kind, None)
     data = reply.read(MAX_REPLY_BYTES + 1)
+    if _cut(reply, data, MAX_REPLY_BYTES + 1):
+        raise PageError(UNREADABLE)
     return Reply(reply.status, kind, data if len(data) <= MAX_REPLY_BYTES else None)
 
 
@@ -427,9 +571,10 @@ def _words(text: str, kind: str) -> str:
 
 def fetch(url: str, config, seconds: float = TOTAL_S) -> Page:
     """Reads a page, or raises PageError. The request carries no cookies and no key: nothing in
-    this module ever sees one."""
-    deadline = time.monotonic() + seconds
+    this module ever sees one. The clock starts after the install's own servers are looked up,
+    so a slow one costs this page nothing."""
     own = own_servers(config)
+    deadline = time.monotonic() + seconds
     for _ in range(MAX_REDIRECTS + 1):
         location, kind, text = _get(check(url, own), deadline)
         if location is None:

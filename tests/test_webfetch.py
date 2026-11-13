@@ -4,11 +4,13 @@ No test here reaches a real network. _dial is the only way out, and it either re
 server on loopback, and names come from a table. Numeric forms use the real resolver, which parses
 them without asking anyone.
 """
+import ipaddress
 import json
 import os
 import socket
 import ssl
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -19,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tuxistant import webfetch  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.webfetch import PageError, clean, public  # noqa: E402
-from tests.fakeweb import PUBLIC, WORDS, Web  # noqa: E402
+from tests.fakeweb import PUBLIC, WORDS, Web, slow_server  # noqa: E402
 
 PUBLIC6 = "2606:4700:4700::1111"
 CLOCK_S = 0.5
@@ -126,7 +128,7 @@ class Refusals(unittest.TestCase):
     def test_each_of_its_servers_even_on_the_open_internet(self):
         """Public addresses, or the check for private ones would refuse these first and this
         would prove nothing."""
-        for key in ("server", "translate_server", "search_server"):
+        for key in ("server", "translate_server", "search_server", "ha_server"):
             with self.subTest(key):
                 config = {**DEFAULTS, "server": "voice.example:8080", key: "tux.example:1234"}
                 self.web.names |= {"voice.example": ["8.8.8.8"], "tux.example": ["8.8.4.4"],
@@ -483,6 +485,189 @@ class Dripping(unittest.TestCase):
         self.stops_on_time("https://example.com/")
 
 
+class CutShort(unittest.TestCase):
+    """An answer that stops early, at the deadline or because the server hung up, is no answer:
+    http.client takes the hang-up for the end, and the first digits of a price are a wrong
+    price."""
+
+    def serve(self, *steps):
+        port = slow_server(self, steps)
+        self.addCleanup(mock.patch.stopall)
+        mock.patch.object(webfetch, "own_servers", return_value=(set(), set())).start()
+        mock.patch.object(webfetch, "_resolve", return_value=[PUBLIC]).start()
+        mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
+            ("127.0.0.1", port), timeout=2)).start()
+
+    def send(self):
+        started = time.monotonic()
+        try:
+            return webfetch.send(webfetch.Place([PUBLIC], False), "http", "a.example", 80, "/",
+                                 "GET", seconds=CLOCK_S)
+        finally:
+            self.assertLess(time.monotonic() - started, CLOCK_S + 1)
+
+    def test_a_length_that_drips_past_the_deadline(self):
+        self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                       b"Content-Length: 7\r\n\r\n123"),
+                   *[(0.3, b"4")] * 4)
+        with self.assertRaises(PageError) as caught:
+            self.send()
+        self.assertEqual(str(caught.exception), webfetch.UNREADABLE)
+
+    def test_an_answer_with_no_length_cut_by_the_deadline(self):
+        self.serve((0, b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n12345"),
+                   *[(0.3, b"6")] * 4)
+        with self.assertRaises(PageError):
+            self.send()
+
+    def test_a_server_that_hangs_up_before_its_length(self):
+        self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                       b"Content-Length: 7\r\n\r\n12345"))
+        with self.assertRaises(PageError):
+            self.send()
+
+    def test_a_whole_answer_in_time_is_still_read(self):
+        self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                       b"Content-Length: 7\r\n\r\n1234567"))
+        self.assertEqual(self.send(), webfetch.Reply(200, "application/json", b"1234567"))
+
+    def test_a_page_cut_by_the_deadline(self):
+        page = (f"<p>{WORDS}</p>" * 3).encode()
+        self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                       b"Content-Length: 100000\r\n\r\n" + page),
+                   *[(0.3, b"<p>more</p>")] * 4)
+        with self.assertRaises(PageError):
+            webfetch.fetch("http://example.com/", CONFIG, CLOCK_S)
+
+    def test_a_page_whose_server_hangs_up_before_its_length(self):
+        page = (f"<p>{WORDS}</p>" * 3).encode()
+        self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                       b"Content-Length: 100000\r\n\r\n" + page))
+        with self.assertRaises(PageError):
+            webfetch.fetch("http://example.com/", CONFIG, CLOCK_S)
+
+
+class OwnServers(unittest.TestCase):
+    """Looked up before a page's clock starts, and kept for a minute, by the names in the
+    settings."""
+
+    def setUp(self):
+        self.web = Web(self)
+        self.config = {**CONFIG, "ha_server": "http://homeassistant.local:8123"}
+        real = self.web.resolve
+
+        def slow(host, port):
+            if host == "homeassistant.local":   # mDNS away from home: seconds, then nothing
+                time.sleep(1.0)
+            return real(host, port)
+        patcher = mock.patch.object(webfetch, "_resolve", slow)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_slow_home_assistant_costs_a_quick_page_nothing(self):
+        started = time.monotonic()
+        page = webfetch.fetch("http://example.com/", self.config, CLOCK_S)
+        self.assertIn("real page text", page.text)
+        self.assertGreaterEqual(time.monotonic() - started, 1.0, "it was looked up")
+
+    def test_they_are_looked_up_once_a_minute(self):
+        for _ in range(3):
+            webfetch.fetch("http://example.com/", self.config, CLOCK_S)
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
+        with mock.patch.object(webfetch, "OWN_S", 0):
+            webfetch.forget_own_servers()
+            webfetch.own_servers(self.config)
+            webfetch.own_servers(self.config)
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 3)
+
+    def test_the_names_are_refused_whatever_was_kept(self):
+        self.web.names["tux.example"] = [PUBLIC]
+        webfetch.own_servers(self.config)
+        moved = {**self.config, "search_server": "tux.example:8888"}
+        self.assertIn("tux.example", webfetch.own_servers(moved)[0])
+        with self.assertRaises(PageError):
+            webfetch.fetch("http://tux.example/", moved, CLOCK_S)
+        with self.assertRaises(PageError):
+            webfetch.fetch("http://homeassistant.local/", self.config, CLOCK_S)
+
+
+def _hex(address: str) -> str:
+    return bytes(reversed(socket.inet_aton(address))).hex().upper()
+
+
+class Guests(unittest.TestCase):
+    """This computer's containers and virtual machines, found in a made-up /sys and /proc."""
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.net = self.root / "net"
+        self.routes, self.six = [], []
+
+    def card(self, name, index, kind="1", link=None, physical=False, tun=None, lower=None,
+             ports=None, route=None, six=None):
+        path = self.net / name
+        path.mkdir(parents=True)
+        for file, value in (("type", kind), ("ifindex", str(index)),
+                            ("iflink", str(index if link is None else link))):
+            (path / file).write_text(value + "\n")
+        if physical:
+            (path / "device").mkdir()
+        if tun is not None:
+            (path / "tun_flags").write_text(tun + "\n")
+        if lower:
+            (path / f"lower_{lower}").mkdir()
+        if ports is not None:
+            (path / "bridge").mkdir()
+            (path / "brif").mkdir()
+            for port in ports:
+                (path / "brif" / port).mkdir()
+        if route:
+            net, mask = route.split("/")
+            netmask = str(ipaddress.IPv4Network(f"0.0.0.0/{mask}").netmask)
+            self.routes.append(f"{name}\t{_hex(net)}\t00000000\t0001\t0\t0\t0\t"
+                               f"{_hex(netmask)}\t0\t0\t0")
+        for address, length, scope in six or ():
+            packed = socket.inet_pton(socket.AF_INET6, address).hex()
+            self.six.append(f"{packed} {index:02x} {length:02x} {scope} 80 {name}")
+
+    def found(self):
+        (self.root / "route").write_text(
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\t"
+            "IRTT\n" + "\n".join(self.routes) + "\n")
+        (self.root / "if_inet6").write_text("\n".join(self.six) + "\n")
+        return {str(net) for net in webfetch.guest_networks(
+            str(self.net), str(self.root / "route"), str(self.root / "if_inet6"))}
+
+    def test_what_counts_as_a_guest(self):
+        self.card("eth0", 2, physical=True, route="192.168.1.0/24",
+                  six=[("2a00:1450::5", 64, "00"), ("fe80::1", 64, "20")])
+        self.card("docker0", 4, ports=[], route="172.17.0.0/16",
+                  six=[("fd00:dead::1", 64, "00"), ("fe80::2", 64, "20")])
+        self.card("br-1234", 5, ports=["veth1"], route="172.18.0.0/16")
+        self.card("veth1", 20, link=2)
+        self.card("virbr0", 6, ports=["vnet0"], route="192.168.122.0/24")
+        self.card("vnet0", 21, tun="0x1002")
+        self.card("cni-podman0", 7, ports=["veth2"], route="10.88.0.0/16")
+        self.card("veth2", 22, link=3)
+        self.card("ve-box", 23, link=2, route="10.0.0.0/28")       # systemd-nspawn
+        self.card("br0", 8, ports=["eth1", "eth0.10"], route="192.168.50.0/24")
+        self.card("eth1", 9, physical=True)
+        self.card("eth0.10", 10, link=2, lower="eth0", route="192.168.10.0/24")
+        self.card("tailscale0", 11, kind="65534", tun="0x5001", route="100.64.0.0/10",
+                  six=[("fd7a:115c:a1e0::1", 128, "00")])
+        self.card("wg0", 12, kind="65534", route="10.6.0.0/24")
+        self.card("tun9", 13, kind="776", link=0, route="10.9.0.0/24")
+        self.routes.append(f"eth0\t00000000\t{_hex('192.168.1.1')}\t0003\t0\t0\t600\t"
+                           f"00000000\t0\t0\t0")
+        self.routes.append("docker0\tnot hex\t00000000\t0001\t0\t0\t0\tzz\t0\t0\t0")
+        self.assertEqual(self.found(), {"172.17.0.0/16", "fd00:dead::/64", "172.18.0.0/16",
+                                        "192.168.122.0/24", "10.88.0.0/16", "10.0.0.0/28"})
+
+    def test_nothing_to_read_is_no_guests(self):
+        self.assertEqual(webfetch.guest_networks(str(self.root / "none"), str(self.root / "x"),
+                                                 str(self.root / "y")), [])
+
+
 class Places(unittest.TestCase):
     """Where a recipe may send: all public, all at home, or nowhere."""
 
@@ -511,6 +696,21 @@ class Places(unittest.TestCase):
             with self.subTest(addresses), self.assertRaises(PageError) as caught:
                 self.place(*addresses)
             self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+
+    def test_this_computers_containers_and_virtual_machines(self):
+        """They answer here, though they look like the house: a container's port answers on its
+        own address even when Docker publishes it only on 127.0.0.1."""
+        self.web.guests = [ipaddress.ip_network(net) for net in (
+            "172.17.0.0/16", "192.168.122.0/24", "10.88.0.0/16", "fd00:dead::/64")]
+        for address in ("172.17.0.2", "192.168.122.5", "10.88.0.3", "fd00:dead::5",
+                        "100.100.100.100", "fd7a:115c:a1e0::53", "fd00:ec2::254"):
+            with self.subTest(address), self.assertRaises(PageError) as caught:
+                self.place(address)
+            self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+        for address in ("192.168.1.40", "172.18.0.9", "100.100.100.101", "fd7a:115c:a1e0::5"):
+            with self.subTest(address):
+                self.assertTrue(self.place(address).local)
+        self.assertEqual(self.web.dialled, [])
 
     def test_own_servers_by_name_and_address(self):
         own = ({"device.example"}, set())
