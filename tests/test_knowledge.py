@@ -90,7 +90,15 @@ NOT_FACT_SHAPES = (
     "Who is currently top of the league?", "Is the shop open at the moment?",
     "What films are out this week?", "Describe yourself", "What else can you help me with?",
     "Who built you?", "What's your purpose?", "Are you able to help?",
-    "Which features have you got?")
+    "Which features have you got?",
+    # A word of singing or recording, and the time after it.
+    "What was recorded on the camera this morning?", "Which programmes were recorded this week?",
+    "What is being recorded right now?", "Who sang at the Super Bowl tonight?",
+    "What was the highest temperature recorded today in London?",
+    "Who performed at the Oscars this year?", "Who sang the anthem at the game yesterday?",
+    "who sang tonight at the super bowl",
+    # Words people start with, before a question to Tux.
+    "Okay. Who made you?", "So, who are you?", "Hey Tux, who built you?")
 
 # Private questions 0.3.0 kept from the sorter that a narrower filter let through to it. Each
 # goes the normal way on a hold, and a click comes before the tool sends one out.
@@ -104,6 +112,13 @@ ONCE_LEAKED = (
     "Is the front door of the apartment open?", "Is the back door of the cottage shut?",
     "Is the patio door double-locked?", "what's that timer for", "Timer status?",
     "When is Our anniversary?")
+# Private questions the tool refused before its filter freed lamps of famous rooms and bulbs set at
+# a number. WIDE keeps the shape as it was, so these get a click before they are looked up.
+ONCE_REFUSED = (
+    "What brightness is the bedroom light set at?",
+    "What colour is the light in the bedroom of the apartment?",
+    "How bright is the lamp in the kitchen of the cottage?",
+    "What colour is the desk lamp set at right now?")
 # Facts that share words with those, which must still be looked up. The tool refuses whatever
 # about_here() catches, so a fact caught there is never looked up on any turn. These reach the
 # sorter on a hold too.
@@ -126,8 +141,6 @@ SHARED_WORDS = (
     "What colour is the light at the top of the Empire State Building?",
     "How bright is the light at the end of the tunnel?",
     "What colour is the light in the operating room?",
-    "How bright is the light in the hall of mirrors at Versailles?",
-    "What colour is the bulb set in a traffic light?",
     # A title Whisper wrote in lower case, after a word of singing.
     "who sang yesterday", "who sang lose yourself")
 # Facts with words 0.3.0 kept from the sorter where they aren't this home's. On a hold they go the
@@ -160,7 +173,14 @@ MAYBE_FACTS = (
     "Is there a countdown on New Year's Eve?", "Did a timer go off before the Challenger launch?",
     "Why did mission control stop the countdown for Apollo 13?",
     "How much longer is the Nile compared to the Amazon?", "How much longer will the sun last?",
-    "How much longer is a year on Mars?")
+    "How much longer is a year on Mars?",
+    # A lamp in a room of somebody else's, or set into something.
+    "How bright is the light in the hall of mirrors at Versailles?",
+    "What colour is the bulb set in a traffic light?",
+    # A title, or a garage door, heating, reminder or alarm that is not one here.
+    "Who sang Sweet Child O' Mine?", "Who sang Sweet Child O\u2019 Mine?",
+    "Who invented the garage door opener?", "How does the heating element in a kettle work?",
+    "When were reminders added to the iPhone?", "Why is the alarm call of a blackbird so loud?")
 # Every word 0.3.0 kept from the sorter, alone in a question.
 BROAD_WORDS = (
     "Is my order here?", "Is our order here?", "Whose is mine?", "Is it ours?", "Any timers?",
@@ -398,7 +418,7 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
     async def test_what_0_3_0_kept_from_the_sorter_still_skips_it(self):
         """A miss here sends a private question out with no click, so this filter keeps every
         word 0.3.0 kept, and the facts it catches go the normal way."""
-        cases = ONCE_LEAKED + BROAD_WORDS + MAYBE_FACTS
+        cases = ONCE_LEAKED + ONCE_REFUSED + BROAD_WORDS + MAYBE_FACTS
         web = Web(self, says=["FACT"] * len(cases))
         for heard in cases:
             with self.subTest(heard):
@@ -407,7 +427,7 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.model, [])
 
     def test_the_wide_filter_holds_all_the_narrow_one_does(self):
-        for heard in HERE_ASKED + HERE_SHAPES + ONCE_LEAKED + BROAD_WORDS:
+        for heard in HERE_ASKED + HERE_SHAPES + ONCE_LEAKED + ONCE_REFUSED + BROAD_WORDS:
             with self.subTest(heard):
                 self.assertTrue(knowledge.maybe_here(heard))
         for heard in MAYBE_FACTS:
@@ -461,8 +481,8 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(said=said, case=case):
                     self.assertFalse(_near(said, case))
         # The sorter's examples may come from the tuned lists, but nothing the filter is tested on.
-        for said in (*HERE_ASKED, *HERE_SHAPES, *ONCE_LEAKED, *BROAD_WORDS, *NOT_FACT_SHAPES,
-                     *SHARED_WORDS, *MAYBE_FACTS):
+        for said in (*HERE_ASKED, *HERE_SHAPES, *ONCE_LEAKED, *ONCE_REFUSED, *BROAD_WORDS,
+                     *NOT_FACT_SHAPES, *SHARED_WORDS, *MAYBE_FACTS):
             for case in evaluated:
                 with self.subTest(said=said, case=case):
                     self.assertFalse(_near(said, case))
@@ -825,6 +845,37 @@ class MaybeHere(unittest.IsolatedAsyncioTestCase):
                                            config={**CONFIG, "fact_lookup": False})
         self.assertEqual((asked, web.opened, web.searched), ([], [], []))
         self.assertEqual(len(web.model), 1, "answered by the model at home")
+
+    async def test_what_the_tool_once_refused_needs_a_click(self):
+        for question in ONCE_REFUSED:
+            with self.subTest(question):
+                web, asked, result = await self.execute(question)
+                self.assertEqual([ask.title for ask in asked], [knowledge.MAYBE_HERE])
+                self.assertTrue(result["declined"])
+                self.assertEqual((web.opened, web.searched, web.model), ([], [], []))
+
+    def test_what_the_tool_refused_it_refuses_or_asks_first(self):
+        for question in HERE_ASKED + HERE_SHAPES + ONCE_REFUSED:
+            with self.subTest(question):
+                self.assertTrue(knowledge.about_here(question)
+                                or knowledge.lookup_card({"question": question}, CONFIG))
+
+    async def test_after_something_private_what_stays_here_needs_no_card(self):
+        for question in ("Is the front door locked?", "What's 7 times 8?"):
+            with self.subTest(question):
+                web, asked, _ = await self.execute(question, tainted=True)
+                self.assertEqual((asked, web.opened, web.searched), ([], [], []))
+        web, asked, _ = await self.execute("Who wrote Hamlet?", tainted=True,
+                                           config={**CONFIG, "fact_lookup": False})
+        self.assertEqual((asked, web.opened, web.searched), ([], [], []))
+        self.assertEqual(len(web.model), 1, "answered by the model at home")
+
+    async def test_after_something_private_a_lookup_still_needs_a_click(self):
+        web, asked, result = await self.execute("Who wrote Hamlet?", tainted=True)
+        self.assertEqual(len(asked), 1)
+        self.assertTrue(asked[0].title.startswith("Let org.tuxistant.knowledge reach "))
+        self.assertTrue(result["declined"])
+        self.assertEqual((web.opened, web.searched, web.model), ([], [], []))
 
     async def test_after_something_private_it_is_one_card(self):
         web, asked, result = await self.execute("Set the thermostat to 21", tainted=True)

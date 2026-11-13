@@ -70,6 +70,9 @@ REACHES = {"news.headlines": livedata.news_hosts}
 # conversation. Each is asked with the arguments and the config, and returns an Ask or None. The
 # reach card above already asks for the same click, so a call that shows it doesn't get this too.
 ASKS_FIRST = {"knowledge.answer": knowledge.lookup_card}
+# Whether a call sends anything out, asked the same way. One that doesn't needs no reach card: its
+# handler refuses it or answers it at home, on the same test.
+SENDS = {"knowledge.answer": knowledge.sends}
 # Offered to the model only while its setting is on: every tool in the list costs the small model
 # some of its other answers, and this one is off until asked for. The handler checks again.
 SWITCHED = {"mail.search": "mail_search"}
@@ -209,14 +212,15 @@ class Skills:
 
     def _first_card(self, action: dict, name: str, arguments: str, session: Session) -> Ask | None:
         """The card to click before the handler runs, if any, written here from the real call."""
-        permissions = action["permissions"]
-        if session.tainted and leaves_home(permissions):
+        permissions, args = action["permissions"], _parsed(arguments)
+        if (session.tainted and leaves_home(permissions)
+                and (name not in SENDS or SENDS[name](args, self.config))):
             hosts = permissions["network"]
             if name in REACHES and hosts is not True:   # never more than was declared
                 hosts = [h for h in REACHES[name](self.config) if h in hosts] or hosts
             return _reach_card(action, name, _as_sent(arguments), hosts)
         if name in ASKS_FIRST:
-            return ASKS_FIRST[name](_parsed(arguments), self.config)
+            return ASKS_FIRST[name](args, self.config)
         return None
 
     def listing(self) -> list[dict]:

@@ -87,15 +87,15 @@ SORTED = tuple((f'Message: "{said}"', label) for said, label in (
     ("Who is singing right now?", "OTHER"), ("How much longer on the rice?", "OTHER"),
     ("Is the back door shut?", "OTHER"),
 ))
-# What only this computer or this house can answer: the music playing, the timers, the home. Sent
-# to Wikipedia these would be a wrong answer and a private question asked of a stranger. Two
-# filters do this, as the two jobs fail in opposite ways. WIDE keeps a hold turn from the sorter,
-# where catching a fact only costs an answer from the normal route, so it keeps every word 0.3.0
-# kept. HERE makes the tool refuse on every turn, where catching a fact means it is never looked
-# up, so a noun that facts use too, such as thermostat or timer, counts there only with the words
-# of a reading, or as the whole question. What only WIDE catches needs a click before it leaves
-# (lookup_card). One filter for both was narrowed three times to stop refusing facts, and each
-# time it let private questions through to the sorter.
+# What only this computer or this house can answer: the music playing, the timers, the home. Sent to
+# Wikipedia these would be a wrong answer and a private question asked of a stranger. Two filters do
+# this, as the two jobs fail in opposite ways. WIDE keeps a hold turn from the sorter, where
+# catching a fact only costs an answer from the normal route, so it keeps every word 0.3.0 kept and
+# every shape as the one filter last had it. HERE makes the tool refuse on every turn, where
+# catching a fact means it is never looked up, so a noun that facts use too, such as thermostat or
+# timer, counts there only with the words of a reading, or as the whole question. What only WIDE
+# catches needs a click before it leaves (lookup_card). One filter for both was narrowed three times
+# to stop refusing facts, and each time it let private questions through to the sorter.
 # Each is a shape rather than a phrase, as people word these a hundred ways. None may be written
 # from tools/eval_facts.py, or its leak count would pass by construction.
 ROOMS = ("room|bedroom|kitchen|bathroom|hall|hallway|office|study|lounge|basement|attic|cellar"
@@ -162,9 +162,18 @@ BROAD = (
     r"(?:temperature|humidity) inside|(?:indoor|inside|room) (?:temperature|humidity)",
     r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running|done|finished|ready)$",
 )
+REMINDER = r"reminders?"
+# "a back door in computing" is nobody's, and "the garage rock revival" is music.
+DOOR = (rf"(?:front|back|garage) door{ELSEWHERE}(?! (?:in|into) (?:computing|computers|software"
+        rf"|cryptography|encryption|programming|computer security|hacking|malware)\b)")
+GARAGE = r"the garage(?! (?:rock|punk|band|music)s?\b)|the heating|the alarm(?! clock)"
+# A lamp, light or bulb of this home: "the light from a red dwarf" and "a sodium lamp" are not.
+LIT_BY = rf"(?:colou?r|brightness|bright|dim)(?:'s| is| are| of) (?:the|this|that) {LAMP}"
+LIT_NOW = r"| (?:right )?now$| at the moment$)"
+LIT = rf"{LIT_BY}(?:$| (?:in|on) (?:the|my|our) {HOME_ROOM}\b| set\b{LIT_NOW}"
 SHAPES = (
     r"my|mine|ours|our", *MUSIC,
-    r"reminders?",
+    REMINDER,
     # "Who invented the egg timer?" is a fact, and "Is the oven timer done?" is not.
     rf"{OWNED} (?:\w+ )?{DEVICE}(?:'s| is| are| was)? (?:{READING})",
     rf"(?:^(?:is|are)|there|got|has|have|had|did) (?:a|any) (?:\w+ )?{DEVICE} (?:{STATE})"
@@ -190,36 +199,46 @@ SHAPES = (
     r"(?<!-)locked(?!-)|unlocked|switched (?:on|off)|turned (?:on|off)|lights? (?:on|off)",
     r"(?:lock|unlock) the (?:\w+ )?(?:door|gate|car|house|shed)s?",
     r"(?:doors?|windows?|gates?|garage|blinds?|curtains?) (?:open|closed|shut)",
-    # "a back door in computing" is nobody's, and "the garage rock revival" is music.
-    rf"(?:front|back|garage) door{ELSEWHERE}(?! (?:in|into) (?:computing|computers|software"
-    rf"|cryptography|encryption|programming|computer security|hacking|malware)\b)",
-    r"the garage(?! (?:rock|punk|band|music)s?\b)|the heating|the alarm(?! clock)",
+    DOOR, GARAGE,
     r"alarm (?:is )?(?:set|armed|disarmed|on|off)",
     rf"in the house{ELSEWHERE}|at home|home assistant|(?:any|some|every|no)(?:one|body) (?:at )?home",
     rf"(?:temperature|humidity|warm|cold|hot|humid)(?: is it| it is| is)?(?: in| inside)?"
     rf"(?: the)? (?:\w+ )?(?:{ROOMS}){ELSEWHERE}",
     r"(?:temperature|humidity) inside|(?:indoor|inside|room) (?:temperature|humidity)",
-    # A lamp, light or bulb of this home: "the light from a red dwarf" and "a sodium lamp" are not.
-    rf"(?:colou?r|brightness|bright|dim)(?:'s| is| are| of) (?:the|this|that) {LAMP}"
-    rf"(?:$| (?:in|on) (?:the|my|our) {HOME_ROOM}\b{ELSEWHERE}| set(?:$| to\b)| (?:right )?now$"
-    rf"| at the moment$)",
+    LIT,
     # "Is the kettle on?": asked of a thing as a whole question, it's a thing in this house.
     r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running|done|finished|ready)$",
 )
-HERE = re.compile(r"\b(?:" + "|".join(SHAPES) + r")\b")
+# The tool refuses what HERE catches, so a few of the shapes are narrower there, each to free facts
+# that have their words: "Who invented the garage door opener?", "the hall of mirrors at
+# Versailles". WIDE keeps them as they were, so these get a click before they are looked up.
+NARROWER = {
+    REMINDER: rf"{REMINDER}(?! (?:added|app|apps|feature|features)\b)",
+    DOOR: rf"{DOOR}(?! openers?\b)",
+    GARAGE: r"the garage(?! (?:rock|punk|band|music|door opener)s?\b)|the heating(?! element)"
+            r"|the alarm(?! clock| call)",
+    LIT: rf"{LIT_BY}(?:$| (?:in|on) (?:the|my|our) {HOME_ROOM}\b{ELSEWHERE}| set(?:$| to\b)"
+         rf"{LIT_NOW}",
+}
+HERE = re.compile(r"\b(?:" + "|".join(NARROWER.get(shape, shape) for shape in SHAPES) + r")\b")
 WIDE = re.compile(r"\b(?:" + "|".join(BROAD + SHAPES) + r")\b")
 # Spoken words come out in lower case after the first, so "Who sang My Way?" names a song. Only a
-# capital right after a word counts: Whisper starts a new sentence at a pause, as in "Okay. My
-# emails?", and that capital says nothing. Nor does one after a word people only start with, as in
-# "Hey Tux My emails?", so those words are taken off first, which the shapes that start the
-# question need as well.
+# capital right after a word counts, or after one with an apostrophe, as in "Sweet Child O' Mine":
+# Whisper starts a new sentence at a pause, as in "Okay. My emails?", and that capital says nothing.
+# Nor does one after a word people only start with, as in "Hey Tux My emails?", so those words are
+# taken off first, which the shapes that start the question need as well.
 LEAD = re.compile(r"^(?:(?:okay|ok|so|hey tux|hey|um+|uh+|and|well|right)\b[,.!?]*\s+)+", re.I)
-TITLED = re.compile(r"(?:(?<=\w )|(?<=\w [\"'\u201c\u2018]))(?:My|Our|Mine|Ours)\b")
+TITLED = re.compile(r"(?:(?<=\w )|(?<=\w [\"'\u201c\u2018])|(?<=\w' ))(?:My|Our|Mine|Ours)\b")
 # Not private, but never a fact: what is true only now, and questions about Tux itself. The sorter
 # called some of these a fact every time it was asked, so they skip it. The tool may look them up.
 # Matched in lower case only: "Who sang Yesterday?" names a song, and titles have capitals. Whisper
-# often writes one in lower case, so what follows a word of singing is left out too.
-SUNG = re.compile(r"\b(?:sang|sings?|sung|recorded|performed)\b.*")
+# often writes one in lower case, so the title after "who sang" is left out: one word that ends the
+# question, or the words before one that says where or when. "Who sang at the Super Bowl tonight?"
+# and "What was recorded on the camera this morning?" keep theirs.
+WHEN = ("at|in|on|during|for|this|last|today|tonight|tomorrow|yesterday|right|so|currently|latest"
+        "|newest|most")
+SUNG = re.compile(rf"^who (?:sang|sings?|sung|recorded|performed) (?:[\w'-]+$|(?!(?:{WHEN})\b)"
+                  rf"[\w'-]+(?: (?!(?:{WHEN})\b)[\w'-]+)*)")
 ABOUT_TUX = ("name|names|skills?|abilities|ability|features?|powers?|limits|purpose|job|creator"
              "|maker|makers|model|version|age|birthday|favou?rite")
 NOT_FACT = re.compile(r"\b(?:" + "|".join((
@@ -354,9 +373,10 @@ def maybe_here(heard: str) -> bool:
 
 def never_a_fact(heard: str) -> bool:
     """Whether the words can be told from a fact without asking the model."""
-    said = SUNG.sub("", heard.replace("\u2019", "'").strip().rstrip("?!. "))
-    return (maybe_here(heard) or about_here(heard)
-            or bool(NOT_FACT.search(said[:1].lower() + said[1:])))
+    return maybe_here(heard) or about_here(heard) or any(
+        NOT_FACT.search(SUNG.sub("", said[:1].lower() + said[1:]))
+        for said in (heard.replace("\u2019", "'").strip().rstrip("?!. "),
+                     _unled(heard).rstrip("?!. ")))
 
 
 async def is_fact(heard: str, config) -> bool:
@@ -444,13 +464,20 @@ def _search_host(config) -> str:
     return urllib.parse.urlsplit(websearch._base(config)).netloc
 
 
+def sends(args: dict, config) -> bool:
+    """Whether answer() sends the question out. It refuses what is surely about here, and keeps a
+    sum, or any question while looking things up is off, on this computer and its own server."""
+    question = _question(args)
+    return bool(question and config["fact_lookup"] and not calculate(question)
+                and not about_here(question))
+
+
 def lookup_card(args: dict, config) -> Ask | None:
     """The card Skills.execute shows before answer() runs, when the question might be about this
     home but isn't surely: it would be sent out, and the tool can't refuse it without refusing
     facts. It names the words _look_up sends and where, and nothing else leaves."""
     question = _question(args)
-    if (not question or not config["fact_lookup"] or calculate(question) or about_here(question)
-            or not maybe_here(question)):
+    if not sends(args, config) or not maybe_here(question):
         return None
     words = shown(_terms(question), MAX_DETAIL_CHARS)
     where = (f"{urllib.parse.urlsplit(API).hostname}, and if that doesn't answer, your search "

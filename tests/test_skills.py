@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 from tuxistant.skillhost import offline  # noqa: E402
-from tuxistant.skills import ASKS_FIRST, REACHES, Skills, risk_of  # noqa: E402
+from tuxistant.skills import ASKS_FIRST, REACHES, SENDS, Skills, risk_of  # noqa: E402
 
 HOME = {"ha_server": "homeassistant.local:8123", "ha_token": "made-up-token"}
 TAPO = {"tapo_email": "fake@example.test", "tapo_password": "made up"}
@@ -128,7 +128,7 @@ class Built(unittest.TestCase):
     def test_cards_before_the_handler_are_for_built_in_actions(self):
         """They are daemon code reading the real call, never something a manifest declares."""
         actions = Skills().actions
-        for name in (*ASKS_FIRST, *REACHES):
+        for name in (*ASKS_FIRST, *REACHES, *SENDS):
             with self.subTest(name):
                 self.assertEqual(actions[name]["source"], "built-in")
 
