@@ -22,12 +22,13 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 
 ## Install
 
-There are two releases to choose from:
+There are three releases to choose from:
 
 - **0.2.0**, the stable release. What it added to 0.1.0 has all worked on the owner's own desktop, and it is what the website offers.
 - **0.3.0**, a preview. It adds media, timers, Home Assistant, mail search, facts from Wikipedia, web search and research, and your own skills. Most of it has only run in tests so far; [CHANGELOG.md](CHANGELOG.md) says which parts.
+- **0.4.0**, a preview. It adds opening apps and Settings pages, and a click before the facts lookup sends a question that may be about your home. None of it has been tried on a real desktop yet.
 
-On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.2.0; for the preview, use `--branch v0.3.0` instead:
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.2.0; for a preview, use `--branch v0.3.0` or `--branch v0.4.0` instead:
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
@@ -35,7 +36,7 @@ git clone --branch v0.2.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
 
-Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.2.0 from the website, and skip `git`: `tar xzf Tuxistant-0.2.0.tar.gz && cd Tuxistant-0.2.0`, or `tar xzf Tuxistant-0.3.0.tar.gz && cd Tuxistant-0.3.0` for the preview.
+Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.2.0 from the website, and skip `git`: `tar xzf Tuxistant-0.2.0.tar.gz && cd Tuxistant-0.2.0`, or `tar xzf Tuxistant-0.4.0.tar.gz && cd Tuxistant-0.4.0` for the newest preview.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 

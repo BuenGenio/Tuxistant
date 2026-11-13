@@ -1,6 +1,15 @@
 # Changelog
 
-## Not yet released
+## 0.4.0, a preview
+
+A preview. Nothing new here has been tried on the owner's own desktop yet: opening apps and Settings pages, the facts lookup's card and the Home Assistant matching have run only in tests and in evaluations against a real model.
+
+Two changes reach what 0.3.0 already did:
+
+- The facts lookup, when the voice model picks it, now refuses some questions about the home and asks for a click on others, where 0.3.0 sent whatever it was given to Wikipedia and web search. A fact that shares a word with home questions, such as "How many planets are in our solar system?", now costs a click on those turns.
+- Home Assistant reads more of a long name, so a request that reached one device in 0.3.0 can now get "Say which one".
+
+After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension is unchanged. For only what has been seen working, stay on 0.2.0.
 
 - Tux opens apps and Settings pages: "Open Firefox", "Open Spotify", "Open the Bluetooth settings", "Open the display settings". It opens only what is installed, and asks which one when several match. A shortcut that isn't from an installed package, such as one added in your home folder, shows a card first with the command it runs, and says when it starts over D-Bus, in a terminal or in another folder. One whose command has a field code other than those for files and addresses is left alone, as some, such as `%i` for its icon, are filled in by `gio launch` after the card. "Open Firefox", "Open Spotify" and the Settings pages reach it every time in the measured runs, and "Close Firefox" no longer opens Firefox. Not yet tried on a real desktop.
 - Home Assistant finds a device by any whole word in the first 255 characters of its name, not only the first 40. "Garage door" now finds a switch named "Shelly relay channel one outside wall garage door", and the words of "(9 more characters)" no longer find anything. Areas work the same way. What Tux says and the card still show the name cut to 40 characters.
