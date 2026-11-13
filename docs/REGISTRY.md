@@ -1,6 +1,6 @@
 # The skills registry
 
-Where people share recipe skills, and how Tux finds, installs, updates and removes them. This is the plan agreed with the owner on 2026-11-13. Nothing here is built yet.
+Where people share recipe skills, and how Tux finds, installs, updates and removes them. This is the plan agreed with the owner on 2026-11-13. Nothing here is built yet. The exact file formats are in [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md).
 
 The plan starts from the same assumption as the rest of Tuxistant: a bad skill will eventually get past review. Review, signing and moderation make that rarer and shorter. What protects you when it happens is what Tux itself enforces: risk computed from permissions, a card for every risky action, recipes that can only reach the hosts they name, and no shell.
 
