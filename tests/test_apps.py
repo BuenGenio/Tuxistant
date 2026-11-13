@@ -209,10 +209,26 @@ class Matching(NoDesktop):
     def test_a_short_word_is_not_guessed_from_a_longer_one(self):
         """"team" is one letter from "steam", which is close enough by spelling alone."""
         self.entries.append(made("steam.desktop", "Steam", program="steam"))
-        for name in ("teams", "team", "open teams"):
+        for name in ("teams", "team", "open teams", "ms teams", "open ms teams"):
             with self.subTest(name), self.assertRaises(ValueError):
                 self.open(name)
         self.assertEqual(self.launched, [])
+
+    def test_a_name_misheard_as_several_words(self):
+        self.entries.append(made("org.wesnoth.Wesnoth.desktop", "The Battle for Wesnoth"))
+        for name in ("battle for wes north", "the battle for westnoth"):
+            with self.subTest(name):
+                self.opens(name, "org.wesnoth.Wesnoth.desktop")
+
+    def test_twins_whose_name_starts_with_the(self):
+        """The reply's own words, "Flatpak The Room", must lead somewhere."""
+        self.entries += [made("the-room.desktop", "The Room"),
+                         made("com.fireproof.Room.desktop", "Room", "Flatpak")]
+        self.assertEqual(self.said("the room"), "There's more than one The Room: one from the "
+                         "system and a Flatpak. Say system The Room or Flatpak The Room.")
+        self.opens("Flatpak The Room", "com.fireproof.Room.desktop")
+        self.opens("system The Room", "the-room.desktop")
+        self.opens("the room flatpak", "com.fireproof.Room.desktop")
 
     def test_names_that_differ_only_in_case_or_punctuation_are_one_app(self):
         self.entries += [made("drawio.desktop", "draw.io"),
@@ -321,6 +337,14 @@ class SettingsPages(NoDesktop):
                                  ("power", "gnome-power-panel.desktop")):
             with self.subTest(name):
                 self.opens(name, desktop_id)
+
+    def test_a_page_word_with_a_kind_word_in_it(self):
+        """No app is called "system details", so a system app called Device Details doesn't
+        take it from About."""
+        self.entries += [made("gnome-about-panel.desktop", "About", shown=False),
+                         made("org.x.DeviceDetails.desktop", "Device Details")]
+        self.opens("open system details", "gnome-about-panel.desktop")
+        self.opens("system device details", "org.x.DeviceDetails.desktop")
 
     def test_internet_settings_are_the_network_page(self):
         self.defaults["https"] = "firefox.desktop"
@@ -767,7 +791,7 @@ class RealGioList(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         cls.addClassCleanup(folder.cleanup)
         root = Path(folder.name)
-        for name in ("home", "config", "bin"):
+        for name in ("home", "config", "xdg", "bin"):
             (root / name).mkdir()
         tool = root / "bin" / "tux-made-up-app"
         tool.write_text("#!/bin/sh\nexit 1\n")     # Gio leaves out entries it can't find
@@ -781,6 +805,7 @@ class RealGioList(unittest.TestCase):
             "[Default Applications]\nx-scheme-handler/https=browse.desktop\n")
         env = {"HOME": str(root / "home"), "XDG_DATA_HOME": str(root / "data"),
                "XDG_CONFIG_HOME": str(root / "config"), "XDG_DATA_DIRS": str(root / "sys"),
+               "XDG_CONFIG_DIRS": str(root / "xdg"),
                "TMPDIR": tempfile.gettempdir(), "LANGUAGE": "de", "LANG": "C.UTF-8",
                "XDG_CURRENT_DESKTOP": "GNOME", "PATH": str(root / "bin"),
                "DBUS_SESSION_BUS_ADDRESS": f"unix:path={root}/nobus", "GIO_USE_VFS": "local",
@@ -824,7 +849,7 @@ class RealGioList(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0)
         self.assertIn("not isolated", done.stderr)
 
-    def test_the_driver_refuses_a_display_or_a_bus_outside_the_temp_folder(self):
+    def test_the_driver_refuses_a_display_a_bus_or_a_folder_outside_the_temp_folder(self):
         """None of these is real: each would only be refused, never reached."""
         nobus = self.env["DBUS_SESSION_BUS_ADDRESS"]
         for changed in ({"DISPLAY": ":tux-none"}, {"WAYLAND_DISPLAY": "tux-none"},
@@ -832,7 +857,12 @@ class RealGioList(unittest.TestCase):
                         {"DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent/tux-bus"},
                         {"DBUS_SESSION_BUS_ADDRESS": f"{nobus};unix:path=/nonexistent/tux-bus"},
                         {"DBUS_SESSION_BUS_ADDRESS": "unix:abstract=tux-none"},
-                        {"DBUS_SESSION_BUS_ADDRESS": None}):
+                        {"DBUS_SESSION_BUS_ADDRESS": None}, {"XDG_CONFIG_DIRS": None},
+                        {"XDG_CONFIG_DIRS": "/nonexistent-xdg"},
+                        {"XDG_CONFIG_DIRS": f"{self.root}/xdg:/nonexistent-xdg"},
+                        {"XDG_CACHE_HOME": "/nonexistent-cache"},
+                        {"XDG_STATE_HOME": "/nonexistent-state"},
+                        {"XDG_RUNTIME_DIR": "/nonexistent-run"}):
             env = {name: value for name, value in {**self.env, **changed}.items()
                    if value is not None}
             with self.subTest(changed):

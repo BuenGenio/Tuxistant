@@ -271,10 +271,11 @@ def _settings_asked(query: str) -> tuple[str, bool]:
 
 def _kind_asked(query: str) -> tuple[str, str | None]:
     words = query.split()
+    # "Flatpak the Room": the rest takes the form the names have, with no "the" in front.
     if len(words) > 1 and words[0] in KINDS:
-        return " ".join(words[1:]), KINDS[words[0]]
+        return " ".join(_without_filler(words[1:])), KINDS[words[0]]
     if len(words) > 1 and words[-1] in KINDS:
-        return " ".join(words[:-1]), KINDS[words[-1]]
+        return " ".join(_without_filler(words[:-1])), KINDS[words[-1]]
     return query, None
 
 
@@ -314,20 +315,32 @@ def _page(query: str, entries: list[App], settings: bool, tier: int | None) -> P
     return _page_word(query) if tier is None or tier >= LOOSE_TIER else None
 
 
-def _close(squashed: str, entries: list[App]) -> tuple[int | None, list[App]]:
-    if len(squashed) < CLOSE_LONG:
+def _close(said: str, entries: list[App]) -> tuple[int | None, list[App]]:
+    if len(_squash(said)) < CLOSE_LONG:
         return None, []
 
     def score(entry: App) -> float:
         forms = {_squash(name) for name in entry.names}
         forms |= {word for name in entry.names for word in name.split()}
-        return max((difflib.SequenceMatcher(None, squashed, form).ratio() for form in forms),
-                   default=0.0)
+        return max((_closeness(said, form) for form in forms), default=0.0)
 
     scored = [(score(entry), entry) for entry in entries]
     found = [entry for value, entry in sorted(scored, key=lambda pair: -pair[0])
              if value >= CLOSE_ENOUGH]
     return (6, found) if found else (None, [])
+
+
+def _closeness(said: str, form: str) -> float:
+    """Every word said must mostly line up with the name, or "ms team" would be "steam"."""
+    matcher = difflib.SequenceMatcher(None, _squash(said), form)
+    matched = {at for block in matcher.get_matching_blocks()
+               for at in range(block.a, block.a + block.size)}
+    start = 0
+    for word in said.split():
+        if 2 * len(matched & set(range(start, start + len(word)))) <= len(word):
+            return 0.0
+        start += len(word)
+    return matcher.ratio()
 
 
 def _is(query: str, forms) -> bool:
@@ -350,18 +363,20 @@ def _matching(query: str, entries: list[App]) -> tuple[int | None, list[App]]:
     for tier, test in enumerate(tiers):
         if found := [entry for entry in shown_ones if test(entry)]:
             return tier, found
-    return _close(_squash(query), shown_ones)
+    return _close(query, shown_ones)
 
 
 def _matching_kind(query: str, entries: list[App]) -> tuple[int | None, list[App]]:
     """"Flatpak Firefox" looks among the Flatpaks first, and at everything if none fits. An app
-    named exactly what was said comes first, as "System Monitor" is not a system "monitor"."""
+    named exactly what was said comes first, as "System Monitor" is not a system "monitor". The
+    tier is always the whole query's, as a Settings page is matched against all that was said:
+    "system details" is About, not an app called Device Details."""
     whole = _matching(query, entries)
     rest, kind = _kind_asked(query)
     if kind and whole[0] != 0:
-        tier, found = _matching(rest, [entry for entry in entries if entry.kind == kind])
+        _, found = _matching(rest, [entry for entry in entries if entry.kind == kind])
         if found:
-            return tier, found
+            return whole[0], found
     return whole
 
 
