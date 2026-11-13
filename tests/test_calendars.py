@@ -407,7 +407,8 @@ class Missing(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "gir1.2-ecal-2.0"):
                 calendars.Eds()
             self.assertFalse(calendars.available())
-            self.assertEqual(calendars.writable(), [], "Settings just shows nothing to choose")
+            self.assertEqual(calendars.writable(), {"problem": calendars.NO_EDS},
+                             "Settings says which packages, not to add an account")
 
 
 if __name__ == "__main__":

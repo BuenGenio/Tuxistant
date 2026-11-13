@@ -204,6 +204,10 @@ class Control(ServiceInterface):
         self.daemon.phones = json.loads(phones)
 
     @dbus_method()
+    def SetCalendars(self, calendars: "s"):
+        self.daemon.calendars = json.loads(calendars)
+
+    @dbus_method()
     def FailNext(self, method: "s", message: "s"):
         self.daemon.failures[method] = message
 

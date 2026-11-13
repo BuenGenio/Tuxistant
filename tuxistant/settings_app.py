@@ -69,6 +69,8 @@ PHONE_NOTE = "Used when you don't name a device"
 CALENDARS_TIMEOUT_MS = 30000    # the daemon connects to each calendar to see if it can be changed
 CALENDAR_NOTE = "Where new events go when you don't name a calendar"
 NO_CALENDARS = "No calendar here can be changed. Add an account in GNOME Settings, Online Accounts"
+# A timeout or an older daemon says nothing about accounts, so no advice to add one.
+CALENDARS_FAILED = "Tuxistant couldn't list your calendars just now"
 GONE_CALENDAR = "Not available: a calendar that is no longer here"
 NO_PHONES = "GSConnect isn't running or has no devices"
 CLOUD_HEADING = "Send complex requests to Anthropic?"
@@ -305,6 +307,14 @@ def phone_choices(devices: list[dict] | None, saved: str) -> dict[str, str]:
     return choices
 
 
+def calendar_listing(reply) -> tuple[list[dict], str]:
+    """ListCalendars sends a list, or {"problem": text} when the daemon can't reach calendars at
+    all. The daemon words the problem, so voice and Settings say the same thing."""
+    if isinstance(reply, dict):
+        return [], shown(str(reply.get("problem") or NO_CALENDARS))
+    return (reply if isinstance(reply, list) else []), ""
+
+
 def calendar_choices(calendars: list[dict] | None, saved: str) -> dict[str, str]:
     """{id: label} for the row. Automatic is the system's own default calendar. As with phones, a
     saved calendar that isn't listed stays a choice, so the next save doesn't lose it."""
@@ -531,6 +541,7 @@ class GeneralPage(Adw.PreferencesPage):
         self.saved_home = ""
         self.devices = None  # what ListPhones last said: None until it has answered
         self.calendars = None   # the same for ListCalendars
+        self.calendar_problem = ""
         self.calendar_labels, self.calendar_values = [], []
         self.phone_values = []
         self.phone_labels = []
@@ -772,7 +783,8 @@ class GeneralPage(Adw.PreferencesPage):
         self.win.daemon.fetch("ListPhones", self.show_devices, timeout=PHONES_TIMEOUT_MS,
                               fail=lambda _error: self.show_devices([]))
         self.win.daemon.fetch("ListCalendars", self.show_calendars, timeout=CALENDARS_TIMEOUT_MS,
-                              fail=lambda _error: self.show_calendars([]))
+                              fail=lambda _error: self.show_calendars(
+                                  {"problem": CALENDARS_FAILED}))
 
     def sync(self, config):
         """Show what the daemon holds, leaving alone anything the user is halfway through."""
@@ -863,8 +875,8 @@ class GeneralPage(Adw.PreferencesPage):
         self.phone.set_selected(self.phone_values.index(saved))
         self.phone.set_subtitle(NO_PHONES if self.devices == [] else PHONE_NOTE)
 
-    def show_calendars(self, calendars):
-        self.calendars = calendars
+    def show_calendars(self, reply):
+        self.calendars, self.calendar_problem = calendar_listing(reply)
         self.syncing = True
         self.show_calendar()
         self.syncing = False
@@ -878,7 +890,8 @@ class GeneralPage(Adw.PreferencesPage):
             self.calendar.set_model(Gtk.StringList.new(labels))
         self.calendar_labels, self.calendar_values = labels, list(choices)
         self.calendar.set_selected(self.calendar_values.index(saved))
-        self.calendar.set_subtitle(NO_CALENDARS if self.calendars == [] else CALENDAR_NOTE)
+        empty = NO_CALENDARS if self.calendars == [] else CALENDAR_NOTE
+        self.calendar.set_subtitle(self.calendar_problem or empty)
 
     def show_cloud(self):
         """The switch follows the config: after Cancel, or a reload behind an open dialog."""
