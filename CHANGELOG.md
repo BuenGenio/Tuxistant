@@ -2,6 +2,8 @@
 
 ## Not yet released
 
+- Home Assistant finds a device by any word of its name, not only the first 40 characters. "Garage door" now finds a switch named "Shelly relay channel one outside wall garage door", and the words of "(9 more characters)" no longer find anything. Areas work the same way. What Tux says and the card still show the name cut to 40 characters.
+
 ## 0.3.0, a preview
 
 A preview. Most of what is new here has run only in tests and in evaluations against a real model, not yet on the owner's own desktop. Mail search was asked four times there: two answers, and two turns cut short. Web search, facts, your own skills, media, timers and Home Assistant have not yet been tried by voice on a real desktop, and Home Assistant has never been used with a real home.
