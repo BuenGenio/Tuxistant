@@ -180,7 +180,7 @@ Move site claims from Soon to Now only after the matching check passes.
 **Media:**
 
 - No real player has been told anything and no real `wpctl` has been run, to read the volume or to change it. What `wpctl` takes and prints was read from its help and from the binary here (WirePlumber 0.5.13). How long a real player needs to show a change is a guess: Tux waits up to 1.5 s and then says what it sees.
-- "Open Spotify" and "Play Spotify" arrived as a bare play with no name in the last measured runs, which starts whatever was left paused, such as a video in a browser. Media control can't open an app. "Open Spotify" now goes to `app_open` 3 of 3 in every setup measured, but "Play Spotify" is still a bare play.
+- Before `app_open`, "Open Spotify" and "Play Spotify" arrived as a bare play with no name, which starts whatever was left paused, such as a video in a browser. Media control can't open an app. "Open Spotify" now goes to `app_open` 3 of 3 in every setup measured, but "Play Spotify" is still a bare play.
 - Other requests the model gets wrong: "Next" alone goes to the calendar, "Resume" alone gets "I can't resume anything", "Unpause" comes as unmute, "Half volume" comes as volume down, which is a step down unless the model put 50 beside it, and "Pause the music and turn the volume down" does one of the two. "Next song" and "Resume the music" are right.
 - Tux can't tell you the volume without changing it.
 - After "Mute", Tux's own voice is muted too, so the answer is only seen in the caption.
@@ -191,7 +191,7 @@ Move site claims from Soon to Now only after the matching check passes.
 - A player that doesn't speak MPRIS can't be seen: mpv without its plugin, or Firefox with media keys switched off. A phone's players that GSConnect mirrors onto the bus are players like any other.
 - A title with right-to-left marks or joined emoji is read out with its escapes in it.
 - Media replies, including player names in errors, are read by the app itself. They never enter the model context.
-- The two tools were measured with the real model on 2026-11-11 on an earlier list of 21: the same 171 of 177 requests routed right with and without them, and 29 and 31 of 33 plain facts were answered. The current lists, 29 to 31 tools in the four setups in [TESTING.md](TESTING.md), were measured on 2026-11-13; see there for the results. A sorter check on 73 new requests, including "Who sings this?", returned no false facts.
+- The two tools were measured with the real model on 2026-11-11 on an earlier list of 21: the same 171 of 177 requests routed right with and without them, and 29 and 31 of 33 plain facts were answered. The current lists, 30 to 32 tools in the four setups in [TESTING.md](TESTING.md), were measured on 2026-11-13; see there for the results. A sorter check on 73 new requests, including "Who sings this?", returned no false facts.
 
 **Apps:**
 

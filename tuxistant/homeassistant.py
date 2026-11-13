@@ -140,6 +140,9 @@ JOINED_WAY_IN = re.compile(r"door(?!bell)|(?:front|back|side|garden|drive|drivew
                            r"|garage)gate|^gate(?!way)|^garage(?!(?:" + "|".join(HARMLESS)
                            + r")s?$)")
 NOT_DOORS = {"indoor", "outdoor"}
+CAMEL_BREAK = re.compile(r"(?<=[a-z])(?=[A-Z])")
+# Where a name is split into the words it is found and judged by.
+WORD_BREAK = re.compile(r"[\W_]|" + CAMEL_BREAK.pattern)
 GUARDED_VERBS = {"turn_on": "Turn on", "turn_off": "Turn off", "toggle": "Toggle"}
 GUARDED = ("Its name says it may work an alarm, a lock or a door, and a switch does whatever "
            "it is wired to.")
@@ -398,10 +401,10 @@ class Entity:
     name: str           # cleaned and cut: fit to say and to show
     state: str
     attrs: dict         # only the attributes in KEPT
-    words: frozenset    # of the name before the cut, up to MAX_JUDGED_CHARS
+    words: frozenset    # of the name up to its last word break in MAX_JUDGED_CHARS, else the id's
     where: frozenset    # the words of its area's name
-    squashed: str       # the name's words run together: "HeatPump" is "heat pump"
-    guarded: bool       # its first MAX_JUDGED_CHARS characters, not only the 40 shown, say alarm, lock or a way in
+    squashed: str       # those words run together: "HeatPump" is "heat pump"
+    guarded: bool       # its first MAX_JUDGED_CHARS characters say alarm, lock or a way in
 
     @property
     def domain(self) -> str:
@@ -426,13 +429,21 @@ def _name(text, token: str) -> str:
 
 
 def _judged(text, token: str) -> str:
-    """A name from the server for finding it and judging it, never to say. The cut for saying
-    would lose "garage door" from a long name and add the words of its "(9 more characters)"."""
+    """A name from the server for judging whether it needs a click, never to say. The cut for
+    saying would lose "garage door" from a long name and add the words of its
+    "(9 more characters)"."""
+    return _cleaned(text, token)[:MAX_JUDGED_CHARS]
+
+
+def _findable(text, token: str) -> str:
+    """The judged name backed up to the last place it splits into words, for finding it, never to
+    say. The start of a word split by the cut, "garage do", would be a word that finds it, and the
+    "Fan" of a joined "GarageFancy" would make a garage relay look like a fan."""
     whole = _cleaned(text, token)
-    if len(whole) <= MAX_JUDGED_CHARS or whole[MAX_JUDGED_CHARS] == " ":
-        return whole[:MAX_JUDGED_CHARS]
-    # the start of a word split by the cut, "garage do", would be a word that finds it
-    return whole[:MAX_JUDGED_CHARS].rsplit(" ", 1)[0]
+    cut = whole[:MAX_JUDGED_CHARS]
+    if len(whole) <= MAX_JUDGED_CHARS or WORD_BREAK.search(whole[len(cut) - 1:len(cut) + 1]):
+        return cut
+    return cut[:max((found.start() for found in WORD_BREAK.finditer(cut)), default=0)]
 
 
 def _kind(entity: Entity) -> str:
@@ -447,14 +458,16 @@ def _entity(raw, token: str, areas: dict) -> Entity | None:
         return None
     attrs = raw.get("attributes") if isinstance(raw.get("attributes"), dict) else {}
     friendly = attrs.get("friendly_name")
-    judged = _judged(friendly, token) or entity_id.partition(".")[2].replace("_", " ")
-    name = _name(friendly, token) or shown(judged, MAX_NAME_CHARS)
+    by_id = entity_id.partition(".")[2].replace("_", " ")
+    findable = _findable(friendly, token)
+    name = _name(friendly, token) or shown(by_id, MAX_NAME_CHARS)
     state = raw.get("state") if isinstance(raw.get("state"), str) else "unknown"
-    words = _words(judged)
+    words = _words(findable or by_id)
     where = frozenset(word for area in areas.get(entity_id, ()) for word in _words(area))
     kept = {key: attrs[key] for key in KEPT
             if key in attrs and (key not in WORDS_KEPT or isinstance(attrs[key], str))}
-    guarded = entity_id.partition(".")[0] in GUARDED_DOMAINS and _named_guarded(judged)
+    guarded = (entity_id.partition(".")[0] in GUARDED_DOMAINS
+               and _named_guarded(_judged(friendly, token), findable))
     return Entity(entity_id, name, state[:64], kept, frozenset(words), where, "".join(words), guarded)
 
 
@@ -483,7 +496,7 @@ def _areas(server: _Server) -> dict:
     for entry in listed if isinstance(listed, list) else []:
         if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[1], list):
             for entity_id in entry[1]:
-                if isinstance(entity_id, str) and (name := _judged(entry[0], server.token)):
+                if isinstance(entity_id, str) and (name := _findable(entry[0], server.token)):
                     found.setdefault(entity_id, []).append(name)
     return found
 
@@ -1021,11 +1034,18 @@ def _way_in(word: str) -> bool:
     return word in WAY_IN or word not in NOT_DOORS and bool(JOINED_WAY_IN.search(word))
 
 
-def _named_guarded(text: str) -> bool:
-    words = set(_words(re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)))
+def _guard_words(text: str) -> set:
+    return set(_words(CAMEL_BREAK.sub(" ", text)))
+
+
+def _named_guarded(text: str, whole_words: str | None = None) -> bool:
+    """Whether a name says alarm, lock or a way in. A word the cut split can add that but never
+    take it away, so a light or a fan only counts among the whole words, when they are given."""
+    words = _guard_words(text)
     if any(map(_works_a_lock, words)):
         return True
-    return any(map(_way_in, words)) and not words & HARMLESS
+    harmless = words if whole_words is None else _guard_words(whole_words)
+    return any(map(_way_in, words)) and not harmless & HARMLESS
 
 
 def _guarded(entity: Entity) -> bool:

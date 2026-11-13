@@ -900,6 +900,9 @@ class FindingIt(WithHome):
         self.add("switch.relay", "off", "y" * (homeassistant.MAX_JUDGED_CHARS - 4) + " garage")
         with self.subTest("a word the cut splits"):
             self.assertIn("anything called gar", self.said(self.status, name="gar"))
+        self.add("switch.joined", "off", "z" * (homeassistant.MAX_JUDGED_CHARS - 4) + "-garage")
+        with self.subTest("a word the cut splits, with no space before it"):
+            self.assertIn("anything called gar", self.said(self.status, name="gar"))
         raw = {"entity_id": "light.huge", "attributes": {"friendly_name": "word " * 1_000_000}}
         entity = homeassistant._entity(raw, TOKEN, {})
         self.assertLessEqual(len(entity.squashed), homeassistant.MAX_JUDGED_CHARS)
@@ -1855,6 +1858,42 @@ class Wired(WithHome):
         self.assertEqual(fancy[:homeassistant.MAX_JUDGED_CHARS][-4:], " fan")
         self.assertTrue(self.guarded("switch.relay_9", fancy), "the fan of fancy is no fan")
         self.assertTrue(self.guarded("switch.garage_door", "x" * 1_000_000), "the id still counts")
+
+    def test_a_joined_word_the_cut_splits_does_not_lift_the_card(self):
+        """With no space to back up to, the "Fan" of "Fancy" is still no fan."""
+        cut = homeassistant.MAX_JUDGED_CHARS
+        camel = "Relay" + "x" * 215 + "GarageDoor" + "x" * 22 + "Fancy"
+        joined = "x" * (cut - 11) + "_garage_fancy"
+        for name in (camel, joined):
+            with self.subTest(name[cut - 12:]):
+                self.assertTrue(name[:cut].casefold().endswith("fan"))
+                self.assertTrue(self.guarded("switch.relay_2", name))
+        whole = "x" * (cut - 6) + "GarageFan"
+        self.assertTrue(self.guarded("switch.relay_2", whole), "a word the cut ends on is kept")
+
+    def test_a_guard_word_the_cut_runs_past_still_asks(self):
+        """A name with no break to back up to is still judged on its first 255 characters."""
+        for name in ("x" * 60 + "doorlock" + "x" * 200, "x" * 100 + "garagedoor" + "x" * 200,
+                     "X" * 100 + "GARAGEDOOR" + "X" * 200,
+                     "Relay-" + "x" * 60 + "frontdoorlock" + "x" * 300):
+            with self.subTest(name[:20]):
+                self.assertTrue(self.guarded("switch.relay_2", name))
+                self.assertNotIn("door", homeassistant._findable(name, TOKEN).casefold())
+
+    def test_a_guard_word_the_cut_splits_still_asks(self):
+        """The part the cut leaves can add a card, though it never finds the thing."""
+        cut = homeassistant.MAX_JUDGED_CHARS
+        for head, tail in (("-doorlo", "ck"), ("_garagedo", "or"), ("-GarageÉcl", "airage"),
+                           ("-GarageFanc", "y")):
+            name = "Relay" + "x" * (cut - 5 - len(head)) + head + tail
+            with self.subTest(head):
+                self.assertTrue(name[:cut].endswith(head))
+                self.assertTrue(self.guarded("switch.relay_2", name))
+
+    def test_a_name_with_no_break_is_found_by_its_id(self):
+        entity = homeassistant._entity({"entity_id": "light.kitchen_lamp", "attributes":
+                                        {"friendly_name": "x" * 300}}, TOKEN, {})
+        self.assertEqual(entity.words, {"kitchen", "lamp"})
 
     def test_a_long_guarded_name_waits_for_a_click_whichever_way_it_is_switched(self):
         entity, name = self.LONG_GUARDED[0]
