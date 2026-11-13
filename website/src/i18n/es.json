@@ -3,7 +3,7 @@
   "title": "Tuxistant: habla con tu ordenador",
   "description": "Un asistente de voz para tu escritorio que funciona en tu propio equipo.",
   "tagline": "Habla con tu ordenador. Funciona en tu equipo, no en el de otros.",
-  "donate": "Donar", "language": "Idioma", "now": "Ya", "soon": "Pronto",
+  "donate": "Donar", "skills": "Habilidades", "language": "Idioma", "now": "Ya", "soon": "Pronto",
   "appearance": "Apariencia", "modes": { "auto": "Automático", "light": "Claro", "dark": "Oscuro" },
   "caps": [
     ["now", "Respuestas habladas en un segundo"], ["now", "Mantén una tecla y habla"], ["now", "27 voces para elegir"], ["now", "Cambia su aspecto con temas"], ["now", "Funciona en tu propia red"],

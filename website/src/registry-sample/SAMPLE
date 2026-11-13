@@ -1,0 +1,17 @@
+A SAMPLE registry, not a real one. The registry repo doesn't exist yet.
+
+The portal pages under /skills/ are built from this folder until it does. While this file is here,
+every portal page says it shows sample skills that can't be installed, and asks search engines not
+to index it.
+
+It holds what the registry publishes, in the formats of docs/REGISTRY-FORMAT.md: index.json,
+revocations.json and recipes/<sha256>.yaml with each one's .sig. All publishers are made up
+(example-*), and every host is under example.com, example.net or example.org. The first three
+recipes are the signed example from docs/examples/registry; the others were signed with throwaway
+keys, whose private halves were deleted. The index and revocations.json are left unsigned, as the
+portal doesn't read their signatures: Tux checks those itself and never trusts the site.
+
+To build the portal from a real registry, point REGISTRY_DIR at a folder with the same layout,
+without this file:
+
+    REGISTRY_DIR=/path/to/published python3 build.py

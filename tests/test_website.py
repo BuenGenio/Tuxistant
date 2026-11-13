@@ -24,6 +24,12 @@ def load_build():
     return build
 
 
+def front_pages(dist):
+    """One page per language. The skills portal has tests of its own in test_portal.py."""
+    return sorted(page for page in dist.glob("**/index.html")
+                  if "skills" not in page.relative_to(dist).parts)
+
+
 def dom_tree(html):
     """The page as tests/site_dom.mjs takes it: ["tag", {attributes}, [children]], text as strings."""
     from html.parser import HTMLParser
@@ -89,7 +95,7 @@ class BuiltSite(unittest.TestCase):
         build.DIST = Path(folder.name) / "dist"
         with contextlib.redirect_stdout(io.StringIO()):
             build.main()
-        cls.pages = sorted(build.DIST.glob("**/index.html"))
+        cls.pages = front_pages(build.DIST)
         cls.dist = build.DIST
         cls.build = build
 
@@ -121,7 +127,8 @@ class BuiltSite(unittest.TestCase):
     def test_nothing_starts_from_the_root_of_the_domain(self):
         for page in self.pages:
             self.assertNotRegex(page.read_text(), r"""(href|src)=["']/(?!/)""", page)
-        self.assertNotIn("'/'", (self.dist / "app.js").read_text())
+        for script in ("site.js", "app.js"):
+            self.assertNotIn("'/'", (self.dist / script).read_text(), script)
 
     def test_tux_is_credited_on_every_page(self):
         for page in self.pages:
@@ -558,7 +565,7 @@ class BuiltSite(unittest.TestCase):
 
     def test_the_accordion_folds_only_with_script_and_respects_motion_and_print(self):
         css = (self.dist / "style.css").read_text()
-        app = (self.dist / "app.js").read_text()
+        app = (self.dist / "site.js").read_text()     # every page's, as the portal folds too
         block = css[css.index("Accordion sections and their calls to action: start"):
                     css.index("Accordion sections and their calls to action: end")]
         self.assertRegex(block, r"\.acc-chev \{[^}]*display: none;", "no chevron without script")
@@ -770,7 +777,7 @@ class LocalPreview(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             build.main(["--preview", str(ROOT / "website/preview/upcoming.json")])
         cls.build = build
-        cls.pages = sorted(build.DIST_PREVIEW.glob("**/index.html"))
+        cls.pages = front_pages(build.DIST_PREVIEW)
         cls.upcoming = json.loads((ROOT / "website/preview/upcoming.json").read_text())
 
     def test_it_is_written_beside_the_real_site_not_into_it(self):
@@ -854,9 +861,10 @@ class HeroAndHeader(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             build.main()
         cls.build = build
-        cls.pages = sorted(build.DIST.glob("**/index.html"))
+        cls.pages = front_pages(build.DIST)
         cls.css = (build.DIST / "style.css").read_text()
-        cls.js = (build.DIST / "app.js").read_text()
+        # What a front page runs: site.js, every page's, then app.js.
+        cls.js = (build.DIST / "site.js").read_text() + (build.DIST / "app.js").read_text()
         plain = re.sub(r"/\*.*?\*/", "", cls.css, flags=re.S)
         # Innermost rules only: an @media or @supports wrapper drops out, its rules stay.
         cls.rules = [(selectors.strip(), body) for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", plain)]

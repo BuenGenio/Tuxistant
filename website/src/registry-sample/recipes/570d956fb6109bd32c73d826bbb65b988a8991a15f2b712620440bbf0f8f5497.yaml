@@ -1,0 +1,16 @@
+id: io.github.example-ada.tides
+name: Tides
+description: Says when the next high tide is
+version: "1.0.0"
+permissions:
+  network: [api.tides.example]
+actions:
+  tides.next:
+    description: Say when the next high tide is at a seaside town
+    params:
+      town: { type: text, max: 40, description: "The town, like Brighton" }
+    required: [town]
+    get: https://api.tides.example/v1/next?town={town}
+    pick:
+      time: [high, 0, time]
+    say: "The next high tide in {town} is at {time}."

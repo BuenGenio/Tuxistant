@@ -3,7 +3,7 @@
   "title": "Tuxistant：和你的电脑对话",
   "description": "运行在你自己硬件上的桌面语音助手。",
   "tagline": "和你的电脑对话。它运行在你自己的硬件上，而不是别人的服务器上。",
-  "donate": "捐赠", "language": "语言", "now": "现已支持", "soon": "即将推出",
+  "donate": "捐赠", "skills": "技能", "language": "语言", "now": "现已支持", "soon": "即将推出",
   "appearance": "外观", "modes": { "auto": "自动", "light": "浅色", "dark": "深色" },
   "caps": [
     ["now", "约一秒给出语音回答"], ["now", "按住按键即可说话"], ["now", "27 种声音可选"], ["now", "用主题更换外观"], ["now", "在你自己的网络中运行"],

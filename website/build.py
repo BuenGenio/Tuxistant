@@ -8,11 +8,15 @@ so the security policy is a meta tag in each page.
 
 --preview UPCOMING.json builds a local preview of planned releases into dist-preview/ instead, with a
 banner on every page. It is only for looking at: git ignores dist-preview/ and deploy.sh refuses it.
+
+The skills portal under skills/ is built by portal.py from REGISTRY_DIR, a folder laid out as the
+registry publishes it. Until the registry exists that is src/registry-sample, and its pages say so.
 """
 import argparse
 import base64
 import hashlib
 import html
+import importlib.util
 import json
 import os
 import re
@@ -26,6 +30,7 @@ DIST = HERE / "dist"
 DIST_PREVIEW = HERE / "dist-preview"     # --preview: local only, git ignores it, deploy.sh refuses it
 THEMES = HERE.parent / "themes"
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
+REGISTRY = Path(os.environ.get("REGISTRY_DIR") or SRC / "registry-sample")
 DONATE = "https://buymeacoffee.com/buengenio"
 THEME_ORDER = ["tux", "orb", "waves", "scanner"]
 OS_ORDER = [("linux", "Linux"), ("macos", "macOS"), ("windows", "Windows")]
@@ -71,6 +76,14 @@ MODE_ICONS = (
     '<svg class="i-dark" viewBox="0 0 24 24" aria-hidden="true">'
     '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
 )
+# On a phone the Skills link and the language menu become icon buttons, like the appearance switch.
+SKILLS_ICON = ('<svg class="bar-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" '
+               'height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/>'
+               '<rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" '
+               'width="6.5" height="6.5" rx="1.5"/></svg>')
+LANGUAGE_ICON = ('<svg class="bar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" '
+                 'r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.7 5.6 3.7 9s-1.2 6.4-3.7 9c-2.5-2.6-3.7-5.6-'
+                 '3.7-9s1.2-6.4 3.7-9z"/></svg>')
 # Runs before first paint on every page, so a stored choice never flashes the system's colours.
 # The js class tells the stylesheet a script will draw the hero, so the still drawing that stands
 # in without one never flashes first.
@@ -457,13 +470,68 @@ def cta_releases(strings, releases):
     return f'<a class="btn btn-cta btn-cta-alt" href="{esc(page)}">{esc(strings["ctaReleases"])}</a>'
 
 
+def site_header(root, strings, home, language_menu="", current=""):
+    """The same bar on every page. The portal is in English and has no language menu."""
+    skills = ' aria-current="page"' if current == "skills" else ""
+    modes = "".join(f'<option value="{m}">{esc(strings["modes"][m])}</option>' for m in MODES)
+    return f"""<header class="site-header" id="site-header">
+  <div class="nav-glass" aria-hidden="true"></div>
+  <div class="wrap bar">
+    <a class="brand" href="{home}">Tuxistant</a>
+    <a class="nav-link" href="{root}skills/"{skills}>{SKILLS_ICON}<span class="nav-text">{esc(strings['skills'])}</span></a>
+    {language_menu}
+    <span class="mode">{MODE_ICONS}<select id="mode" aria-label="{esc(strings['appearance'])}" title="{esc(strings['appearance'])}">{modes}</select></span>
+    <a class="btn btn-coffee" href="{DONATE}" rel="noopener">{esc(strings['donate'])}</a>
+  </div>
+</header>"""
+
+
+def head_html(policy, title, description, root, detect=""):
+    detect_tag = f"<script>{detect}</script>" if detect else ""
+    return f"""<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{policy}">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<script>{MODE_SCRIPT}</script>{detect_tag}
+<title>{esc(title)}</title>
+<meta name="description" content="{esc(description)}">
+<meta property="og:title" content="{esc(title)}">
+<meta property="og:description" content="{esc(description)}">
+<meta name="theme-color" content="#07080d">
+<link rel="icon" href="{root}favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="{root}style.css">"""
+
+
+def portal_shell(strings, policy):
+    """Wraps a portal body in the site's page, depth folders below the site's root."""
+    def shell(title, description, depth, body, sample):
+        root = "../" * depth
+        robots = '\n<meta name="robots" content="noindex">' if sample else ""
+        return f"""<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+{head_html(policy, f"{title} · Tuxistant skills", description, root)}{robots}
+</head>
+<body>
+{site_header(root, strings, root, current="skills")}
+<main>
+{body}
+</main>
+<footer class="foot wrap">Each skill is its publisher's work, under the licence it names. Review and signatures make a bad one rarer, and Tux's own checks and cards are what protect you if one gets through.</footer>
+<script src="{root}site.js"></script>
+<script src="{root}skills.js"></script>
+</body>
+</html>
+"""
+    return shell
+
+
 def page(code, strings, languages, releases, detect, policy):
     caps_a, caps_b = caps_html(strings)
     tabs, panels = panels_html(strings)
     options = "".join(
         f'<option value="{c}"{" selected" if c == code else ""}>{esc(s["name"])}</option>'
         for c, s in languages.items())
-    modes = "".join(f'<option value="{m}">{esc(strings["modes"][m])}</option>' for m in MODES)
     alternates = ""
     if SITE_URL:
         alternates = "".join(f'<link rel="alternate" hreflang="{c}" href="{SITE_URL}{path_for(c)}">'
@@ -477,36 +545,17 @@ def page(code, strings, languages, releases, detect, policy):
     data["releases"] = {os_id: releases[os_id] for os_id, _ in OS_ORDER}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"
-    head_script = f"<script>{MODE_SCRIPT}</script>"
-    if code == "en":
-        head_script += f"<script>{detect}</script>"
+    language_menu = (f'<span class="lang-pick">{LANGUAGE_ICON}<select class="lang" id="lang" '
+                     f'data-root="{root}" aria-label="{esc(strings["language"])}">{options}</select>'
+                     '</span>')
     return f"""<!doctype html>
 <html lang="{code}" dir="{strings['dir']}">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="{policy}">
-<meta name="referrer" content="strict-origin-when-cross-origin">
-{head_script}
-<title>{esc(strings['title'])}</title>
-<meta name="description" content="{esc(strings['description'])}">
-<meta property="og:title" content="{esc(strings['title'])}">
-<meta property="og:description" content="{esc(strings['description'])}">
-<meta name="theme-color" content="#07080d">
-<link rel="icon" href="{root}favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="{root}style.css">
+{head_html(policy, strings['title'], strings['description'], root, detect if code == "en" else "")}
 {alternates}
 </head>
 <body>
-<header class="site-header" id="site-header">
-  <div class="nav-glass" aria-hidden="true"></div>
-  <div class="wrap bar">
-    <a class="brand" href="./">Tuxistant</a>
-    <select class="lang" id="lang" data-root="{root}" aria-label="{esc(strings['language'])}">{options}</select>
-    <span class="mode">{MODE_ICONS}<select id="mode" aria-label="{esc(strings['appearance'])}" title="{esc(strings['appearance'])}">{modes}</select></span>
-    <a class="btn btn-coffee" href="{DONATE}" rel="noopener">{esc(strings['donate'])}</a>
-  </div>
-</header>
+{site_header(root, strings, "./", language_menu)}
 <main>{local_preview_html(strings)}
   <section class="hero" id="hero" data-theme="{THEME_ORDER[0]}">
     <canvas id="tux" aria-hidden="true"></canvas>
@@ -553,11 +602,20 @@ def page(code, strings, languages, releases, detect, policy):
 </main>
 <footer class="foot wrap">{esc(strings['credit'])} {esc(strings['trademarks'])}</footer>
 <script type="application/json" id="strings">{data_json}</script>
+<script src="{root}site.js"></script>
 <script src="{root}themes.js"></script>
 <script src="{root}app.js"></script>
 </body>
 </html>
 """
+
+
+def _portal():
+    """portal.py beside this file, loaded by path so the build runs from any folder."""
+    spec = importlib.util.spec_from_file_location("site_portal", HERE / "portal.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def themes_js():
@@ -602,7 +660,13 @@ def main(argv=()):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(page(code, strings, languages, releases, detect, policy))
     shutil.copy(SRC / "style.css", dist)
-    shutil.copy(SRC / "app.js", dist)
+    for script in ("site.js", "app.js", "skills.js"):
+        shutil.copy(SRC / script, dist)
+    portal = _portal()
+    try:
+        shown = portal.build(dist, REGISTRY, portal_shell(languages["en"], policy))
+    except portal.Refused as e:
+        raise SystemExit(f"The skills portal wasn't built from {REGISTRY}: {e}.") from None
     shutil.copy(SRC / "favicon.svg", dist)
     (dist / "themes.js").write_text(themes_js())
     (dist / ".nojekyll").touch()    # served as they are, with no Jekyll build first
@@ -610,7 +674,7 @@ def main(argv=()):
     if options.preview:     # deploy.sh refuses a folder holding this file
         (dist / "LOCAL-PREVIEW").write_text("A local preview of planned releases. Never deploy it.\n")
         (dist / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
-    print(f"built {len(languages)} languages into {dist}"
+    print(f"built {len(languages)} languages and {shown} skill pages into {dist}"
           + (" (a local preview, never to be deployed)" if options.preview else ""))
 
 

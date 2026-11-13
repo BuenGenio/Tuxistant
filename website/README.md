@@ -21,6 +21,21 @@ cd website/dist-preview && python3 -m http.server 8001 --bind 127.0.0.1
 
 This shows the site as it will look once the releases in `preview/upcoming.json` ship: they go on top of the releases list, marked Planned with their dates, the preview link names the newest, and their claims join the preview section's (`previewCaps`), all still Soon. Every page has a banner saying it is a local preview. It is never deployed: git ignores `dist-preview/`, and `deploy.sh` builds without `--preview` and refuses a `dist/` holding the preview's `LOCAL-PREVIEW` file. When a planned release ships, move its entry into `src/releases.json` and its claims into the language files, and take them out of `upcoming.json`.
 
+## The skills portal
+
+`skills/` is the registry's portal (step 3 of [docs/REGISTRY.md](../docs/REGISTRY.md)): browse by category and tag, search, and a page per skill with its risk and why, what each action does and whether it asks first, the description the model sees, install steps, the whole `recipe.yaml`, its versions with what changed, and a Report link. `portal.py` builds it from `REGISTRY_DIR`, a folder laid out as the registry publishes it (`index.json`, `revocations.json`, `recipes/<sha256>.yaml`; see [docs/REGISTRY-FORMAT.md](../docs/REGISTRY-FORMAT.md)):
+
+```sh
+REGISTRY_DIR=/path/to/published python3 build.py
+```
+
+Until the registry exists it uses `src/registry-sample/`, made-up skills whose `SAMPLE` file makes every portal page say so and ask not to be indexed.
+
+- **Everything in the registry is a stranger's text.** The index is checked against the format and the build stops if anything doesn't fit, or if a recipe isn't the size and hash the index gives. Strings are escaped in `portal.py`; hidden characters in a recipe show as their code; `skills.js` only hides and shows cards the build wrote.
+- **Recipes go through Tux's own loader**, so the build needs what the daemon imports (PyYAML and websockets).
+- **Revoked skills are hidden**, by the index's revocations and any newer ones in `revocations.json`, until the index lifts them. A suspended version of a skill that is still shown is listed with its reason.
+- The portal is in English only. The registry repo's name and its report form's field ids are guesses until they exist: `REGISTRY_REPO` and `report_url` in `portal.py`.
+
 ## Deploy
 
 Only when the owner asks.

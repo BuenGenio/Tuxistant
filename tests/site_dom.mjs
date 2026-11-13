@@ -1,5 +1,6 @@
-// Runs the site's app.js in Node against a small DOM made from a built page, as a given visitor's
-// browser would, and reports what the page then shows. tests/test_website.py drives it.
+// Runs the site's site.js and app.js in Node against a small DOM made from a built page, as a
+// given visitor's browser would, and reports what the page then shows. tests/test_website.py
+// drives it.
 //
 // usage: node site_dom.mjs INPUT.json REPORT.json (files, as a wrapper round node may print too)
 // INPUT: {"app": path to app.js, "pages": {name: tree}, "cases": [{"page", "userAgent", "platform",
@@ -204,7 +205,7 @@ function describe(element) {
   };
 }
 
-function run(app, themes, tree, { userAgent, platform, hash = '', beforematch = false, steps, probes }) {
+function run(site, app, themes, tree, { userAgent, platform, hash = '', beforematch = false, steps, probes }) {
   const document = documentFrom(tree);
   if (beforematch) document.body.onbeforematch = null;    // what 'onbeforematch' in body looks for
   const context = {
@@ -228,6 +229,7 @@ function run(app, themes, tree, { userAgent, platform, hash = '', beforematch = 
   context.window = context;
   try {
     vm.createContext(context);
+    vm.runInContext(site, context, { filename: 'site.js' });
     vm.runInContext(themes, context, { filename: 'themes.js' });
     vm.runInContext(app, context, { filename: 'app.js' });
     const special = { '#scrolled': () => document.scrolledTo, '#active': () => document.activeElement };
@@ -248,5 +250,6 @@ function run(app, themes, tree, { userAgent, platform, hash = '', beforematch = 
 const [inputPath, reportPath] = process.argv.slice(2);
 const input = JSON.parse(readFileSync(inputPath, 'utf8'));
 const app = readFileSync(input.app, 'utf8');
-const themes = readFileSync(new URL('themes.js', pathToFileURL(input.app)), 'utf8');
-writeFileSync(reportPath, JSON.stringify(input.cases.map(item => run(app, themes, input.pages[item.page], item))));
+const beside = name => readFileSync(new URL(name, pathToFileURL(input.app)), 'utf8');
+const [site, themes] = [beside('site.js'), beside('themes.js')];
+writeFileSync(reportPath, JSON.stringify(input.cases.map(item => run(site, app, themes, input.pages[item.page], item))));

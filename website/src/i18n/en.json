@@ -3,7 +3,7 @@
   "title": "Tuxistant: talk to your computer",
   "description": "A voice assistant for your desktop that runs on your own hardware.",
   "tagline": "Talk to your computer. It runs on your hardware, not someone else's.",
-  "donate": "Donate", "language": "Language", "now": "Now", "soon": "Soon",
+  "donate": "Donate", "skills": "Skills", "language": "Language", "now": "Now", "soon": "Soon",
   "appearance": "Appearance", "modes": { "auto": "Auto", "light": "Light", "dark": "Dark" },
   "caps": [
     ["now", "Spoken answers in about a second"], ["now", "Hold a key and talk"], ["now", "27 voices to choose from"], ["now", "Swap the look with themes"], ["now", "Runs on your own network"],

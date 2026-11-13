@@ -3,7 +3,7 @@
   "title": "Tuxistant: fale com o seu computador",
   "description": "Um assistente de voz para o seu computador que funciona no seu próprio hardware.",
   "tagline": "Fale com o seu computador. Funciona no seu hardware, não no de outros.",
-  "donate": "Doar", "language": "Idioma", "now": "Já", "soon": "Em breve",
+  "donate": "Doar", "skills": "Habilidades", "language": "Idioma", "now": "Já", "soon": "Em breve",
   "appearance": "Aparência", "modes": { "auto": "Automático", "light": "Claro", "dark": "Escuro" },
   "caps": [
     ["now", "Respostas faladas em um segundo"], ["now", "Segure uma tecla e fale"], ["now", "27 vozes para escolher"], ["now", "Mude o visual com temas"], ["now", "Funciona na sua própria rede"],

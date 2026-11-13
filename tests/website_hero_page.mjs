@@ -1,6 +1,7 @@
-// Runs the built site's app.js on a fake page just big enough for it: the elements it looks up, a
-// clock and animation frames that only move when a step says so, and a WebGL context that compiles
-// anything and records the uniforms of every frame drawn. tests/test_website.py drives it.
+// Runs the built site's site.js and app.js on a fake page just big enough for them: the elements
+// they look up, a clock and animation frames that only move when a step says so, and a WebGL
+// context that compiles anything and records the uniforms of every frame drawn.
+// tests/test_website.py drives it.
 //
 //   node tests/website_hero_page.mjs <dist> '<steps as JSON>'
 //
@@ -143,6 +144,7 @@ const page = {
 };
 page.window = page;
 vm.createContext(page);
+vm.runInContext(fs.readFileSync(`${dist}/site.js`, 'utf8'), page);
 vm.runInContext(fs.readFileSync(`${dist}/themes.js`, 'utf8'), page);
 vm.runInContext(fs.readFileSync(`${dist}/app.js`, 'utf8'), page);
 

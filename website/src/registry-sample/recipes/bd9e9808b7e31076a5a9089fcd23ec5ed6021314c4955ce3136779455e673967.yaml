@@ -1,0 +1,16 @@
+id: io.github.example-eve.weather-now
+name: Weather now
+description: Says the weather in a town
+version: "0.1"
+permissions:
+  network: [weather.example.com]
+actions:
+  weather.now:
+    description: Say the weather now in a town
+    params:
+      town: { type: text, max: 40, description: "The town" }
+    required: [town]
+    get: https://weather.example.com/now?town={town}
+    pick:
+      summary: [summary]
+    say: "In {town} it is {summary}."
