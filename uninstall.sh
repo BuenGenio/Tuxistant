@@ -1,6 +1,6 @@
 #!/bin/sh
 # Reverses install.sh, including the Fn helper when it is installed. Your settings, API key,
-# history and themes stay unless you pass --purge. Same environment as install.sh.
+# history, themes and what skills kept stay unless you pass --purge. Same environment as install.sh.
 set -eu
 
 PROJECT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
@@ -38,8 +38,8 @@ remove_fn_helper
 
 echo "Tuxistant is uninstalled. The running shell keeps the extension until you log out."
 if [ "$purge" = 1 ]; then
-    rm -rf "$CONFIG_DIR" "$USER_DATA_DIR"
-    echo "Removed your settings, API key, history and themes."
+    rm -rf "$CONFIG_DIR" "$USER_DATA_DIR" "$STATE_DIR"
+    echo "Removed your settings, API key, history, themes and what skills kept."
 else
-    echo "Kept $CONFIG_DIR and $USER_DATA_DIR (run with --purge to remove them)."
+    echo "Kept $CONFIG_DIR, $USER_DATA_DIR and $STATE_DIR (run with --purge to remove them)."
 fi

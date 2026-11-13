@@ -53,7 +53,7 @@ The installer puts a `tuxistant` command in `~/.local/bin`, the extension in `~/
 
 The `tuxistant` command runs from this folder, so keep it where it is. To update, run `git fetch --tags` and `git checkout` the newer tag, or unpack the newer download in its place, then run `./install.sh` again. Running it twice is harmless and keeps your settings.
 
-To remove everything, including the Fn helper, run `./uninstall.sh`. Your settings, API key, history and themes stay unless you add `--purge`.
+To remove everything, including the Fn helper, run `./uninstall.sh`. Your settings, API key, history, themes and what skills kept stay unless you add `--purge`.
 
 ## Use
 

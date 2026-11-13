@@ -4,6 +4,7 @@
 DESTDIR=${DESTDIR:-}
 DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
 CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
+STATE_HOME=${XDG_STATE_HOME:-$HOME/.local/state}
 BIN_HOME=${XDG_BIN_HOME:-$HOME/.local/bin}
 
 UUID=tuxistant@buengenio
@@ -13,6 +14,7 @@ USER_UNIT=$DESTDIR$DATA_HOME/systemd/user/tuxistant.service
 DBUS_SERVICE=$DESTDIR$DATA_HOME/dbus-1/services/org.tuxistant.Daemon.service
 CONFIG_DIR=$DESTDIR$CONFIG_HOME/tuxistant
 USER_DATA_DIR=$DESTDIR$DATA_HOME/tuxistant
+STATE_DIR=$DESTDIR$STATE_HOME/tuxistant  # each code skill's /state, see skillbox.py
 HELPER_DIR=$DESTDIR/usr/local/lib/tuxistant
 HELPER_UNIT=$DESTDIR/etc/systemd/system/tuxistant-fn.service
 
