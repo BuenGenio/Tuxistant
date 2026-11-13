@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from . import (calendars, files, homeassistant, knowledge, livedata, mail, media, phone,
+from . import (apps, calendars, files, homeassistant, knowledge, livedata, mail, media, phone,
                planner, research, shellgate, system, timers, translate, websearch)
 from .config import DEFAULTS
 from .gate import MAX_DETAIL_CHARS, Ask, Session, declined, shown
@@ -85,8 +85,8 @@ SET_UP = {"home.set": homeassistant.configured, "home.status": homeassistant.con
 HANDLERS = {"time.now": _time_now, "disk.usage": _disk_usage,
             "weather.forecast": _plain(livedata.weather),
             "news.headlines": _plain(livedata.headlines),
-            **calendars.HANDLERS, **files.HANDLERS, **mail.HANDLERS, **media.HANDLERS,
-            **timers.HANDLERS, **homeassistant.HANDLERS, **phone.HANDLERS,
+            **apps.HANDLERS, **calendars.HANDLERS, **files.HANDLERS, **mail.HANDLERS,
+            **media.HANDLERS, **timers.HANDLERS, **homeassistant.HANDLERS, **phone.HANDLERS,
             **shellgate.HANDLERS, **system.HANDLERS, **translate.HANDLERS, **websearch.HANDLERS,
             **research.HANDLERS, **knowledge.HANDLERS, **planner.HANDLERS}
 

@@ -74,10 +74,11 @@ class Runtime(unittest.TestCase):
         risks = {s["id"]: s["risk"] for s in self.skills.listing()}
         self.assertEqual(risks["org.tuxistant.disk"], "low")
         self.assertEqual(risks["org.tuxistant.time"], "low")
+        self.assertEqual(risks["org.tuxistant.apps"], "low")
 
     def test_tool_names_have_no_dots(self):
         names = [t["name"] for t in self.skills.tools()]
-        self.assertLessEqual({"disk_usage", "time_now"}, set(names))
+        self.assertLessEqual({"disk_usage", "time_now", "app_open"}, set(names))
         self.assertFalse([name for name in names if "." in name])
         self.assertEqual(self.skills.tools()[0]["parameters"]["type"], "object")
 

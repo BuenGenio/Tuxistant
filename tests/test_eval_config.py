@@ -21,7 +21,7 @@ from tools import eval_config
 from tools.eval_config import Refused, evaluation_server, on_this_computer, run_server
 from tools.eval_cutoffs import ACTIONS, install, owner, stand_ins
 from tests.test_realtime_live import CountingSkills
-from tuxistant import calendars, homeassistant, mail, mcp, media, phone, timers
+from tuxistant import apps, calendars, homeassistant, mail, mcp, media, phone, timers
 from tuxistant.config import DEFAULTS, Config
 from tuxistant.gate import Session
 from tuxistant.skillhost import BUNDLED, Offline
@@ -395,6 +395,13 @@ class EveryActionIsCutOff(unittest.TestCase):
             temp = tempfile.gettempdir()
             self.assertTrue(all(root.startswith(temp) for root in mail.ROOTS), mail.ROOTS)
             self.assertTrue(str(timers._attached.path).startswith(temp))
+            listed = apps._installed()
+            self.assertTrue(listed and all(app.path.startswith("/eval/") for app in listed))
+            self.assertEqual(apps._default_for("https"), "firefox.desktop")
+            printed = io.StringIO()
+            with contextlib.redirect_stdout(printed):
+                self.assertTrue(apps._launch("/eval/applications/firefox.desktop"))
+            self.assertIn("(would open firefox.desktop)", printed.getvalue())
 
     def test_eval_flows_installs_them_first_and_leaves_them_alone(self):
         """Read and never imported, as importing it would run it."""
