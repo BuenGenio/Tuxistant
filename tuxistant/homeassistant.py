@@ -126,16 +126,19 @@ UNSEEN = {"scene": "A scene can change anything in Home Assistant, a lock or a g
 # place, so "Garage light" and "Gate lamp", which say what they are, don't. The name and the id are
 # judged apart, since people rename a switch.porch_light "Garage door" when they rewire it.
 GUARDED_DOMAINS = {"switch", "input_boolean"}
-GUARDED_WORDS = {"alarm", "siren", "lock", "unlock", "security", "armed", "disarmed", "disarm",
-                 "arming", "disarming", "deadbolt"}
+# "Arm away" and "Arm home" are what home-made alarms call their helpers.
+GUARDED_WORDS = {"alarm", "siren", "lock", "unlock", "security", "arm", "armed", "disarmed",
+                 "disarm", "arming", "disarming", "deadbolt"}
 WAY_IN = {"garage", "door", "gate"}
-# Joined up, as ids and names often are: "doorlock", "SmartLock", "frontdoor", "drivewaygate".
-# Not a clock, a block, a doorbell or the lights outdoors, nor a network gateway.
+HARMLESS = {"light", "lamp", "bulb", "heater", "fan"}
+# Joined up, as ids and names often are: "doorlock", "SmartLock", "frontdoor", "drivewaygate",
+# "Garageopener". Not a clock, a block, a doorbell or the lights outdoors, nor a network gateway,
+# and a "Garagelight" says what it is as plainly as a "Garage light".
 JOINED_LOCK = re.compile(r"(?<![cb])lock")
 JOINED_WAY_IN = re.compile(r"door(?!bell)|(?:front|back|side|garden|drive|driveway|yard|main"
-                           r"|garage)gate|^gate(?!way)")
+                           r"|garage)gate|^gate(?!way)|^garage(?!(?:" + "|".join(HARMLESS)
+                           + r")s?$)")
 NOT_DOORS = {"indoor", "outdoor"}
-HARMLESS = {"light", "lamp", "bulb", "heater", "fan"}
 GUARDED_VERBS = {"turn_on": "Turn on", "turn_off": "Turn off", "toggle": "Toggle"}
 GUARDED = ("Its name says it may work an alarm, a lock or a door, and a switch does whatever "
            "it is wired to.")
