@@ -128,30 +128,40 @@ def user_skills() -> Path:
     return data_home / "tuxistant" / "skills"
 
 
-def sandbox_needs(config) -> dict[str, bool]:
-    """What is set up here that runs in the sandbox, as the doctor names it, and whether it
-    uses the network. User skills are the ones the daemon would load, read with no code run."""
+def offline_skills(config):
+    """The skills the daemon would load, read once, with no code run."""
     from .skillhost import offline
+    return offline(config, user=user_skills())
+
+
+def sandbox_needs(config, host=None) -> dict[str, bool]:
+    """What is set up here that runs in the sandbox, as the doctor names it, and whether it
+    uses the network."""
     from .skills import _tapo_account
     needs = {"your Tapo lights": True} if _tapo_account(config) else {}
-    own = user_skills()
-    for folder, entry in offline(config, user=own).running.items():
-        if Path(folder).is_relative_to(own):
-            needs[f"your skill {entry.manifest['name']}"] = bool(entry.manifest["permissions"].get("network"))
+    for entry in (host or offline_skills(config)).running.values():
+        if entry.manifest["source"] == "yours":     # two skills may share a name, not a flag
+            what = f"your skill {entry.manifest['name']}"
+            needs[what] = needs.get(what, False) or bool(entry.manifest["permissions"].get("network"))
     return needs
 
 
-def sandbox_ready(config) -> tuple[bool, str]:
+def _listed(things) -> str:
+    things = list(things)
+    return things[0] if len(things) == 1 else ", ".join(things[:-1]) + " and " + things[-1]
+
+
+def sandbox_ready(config, host=None) -> tuple[bool, str]:
     """Only fails when something set up needs it, and names what does and what is missing."""
     from . import skillbox
     from .shellgate import BWRAP, PRLIMIT, seccomp_program
-    needs = sandbox_needs(config)
+    needs = sandbox_needs(config, host)
     if skillbox.available():
         networked = [what for what, network in needs.items() if network]
         if not networked or skillbox.landlock_abi() >= skillbox.LANDLOCK_SCOPE_ABI:
             return True, "bubblewrap"
         # The sandbox allows the network only where Landlock can keep a skill off local sockets.
-        return False, f"Needed by {' and '.join(networked)}: Linux 6.12 or newer with Landlock on"
+        return False, f"{_listed(networked)} need Linux 6.12 or newer with Landlock on"
     if not os.access(BWRAP, os.X_OK):
         why = "install the bubblewrap package"
     elif not os.access(PRLIMIT, os.X_OK):
@@ -159,16 +169,15 @@ def sandbox_ready(config) -> tuple[bool, str]:
     elif seccomp_program() is None:
         why = "this computer's processor isn't supported, only x86_64 and aarch64 are"
     else:
-        why = "the skill kit is missing: install Tuxistant again"
+        why = "the skill kit is missing, so install Tuxistant again"
     if not needs:
         return True, "not available, so Tapo lights and your own skills can't run: " + why
-    return False, f"Needed by {' and '.join(needs)}: {why}"
+    return False, f"{_listed(needs)} need the sandbox: {why}"
 
 
-def skill_problems(config) -> dict[str, str]:
+def skill_problems(config, host=None) -> dict[str, str]:
     """Read from the files here, so it starts no skill and needs no daemon."""
-    from .skillhost import offline
-    return offline(config, user=user_skills()).problems
+    return (host or offline_skills(config)).problems
 
 
 def checks(config) -> list[tuple[bool, str, str]]:
@@ -193,8 +202,9 @@ def checks(config) -> list[tuple[bool, str, str]]:
     cards, cards_detail = extension_can("CanAsk")
     typing, typing_detail = extension_can("CanType")
     speech_to_text = config["transcribe_model"]
-    sandbox, sandbox_detail = sandbox_ready(config)
-    problems = skill_problems(config)
+    host = offline_skills(config)
+    sandbox, sandbox_detail = sandbox_ready(config, host)
+    problems = skill_problems(config, host)
     return [
         (True, "Python modules present", ""),
         (reachable, "server reachable", server),

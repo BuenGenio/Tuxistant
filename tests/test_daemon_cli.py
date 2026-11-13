@@ -182,7 +182,7 @@ class Doctor(unittest.TestCase):
             self.skill("mine")
             passed, detail = cli.sandbox_ready(self.config(9))
             self.assertFalse(passed)
-            self.assertIn("Needed by your skill Mine:", detail)
+            self.assertIn("your skill Mine need the sandbox:", detail)
             self.assertNotIn("Tapo", detail)
 
     def test_half_a_tapo_account_needs_no_sandbox(self):
@@ -204,8 +204,29 @@ class Doctor(unittest.TestCase):
             passed, detail = cli.sandbox_ready(config)
         self.assertFalse(passed)
         self.assertIn("6.12", detail)
-        self.assertIn("your Tapo lights and your skill Chatty", detail)
+        self.assertIn("your Tapo lights and your skill Chatty need Linux 6.12", detail)
         self.assertNotIn("Quiet", detail)
+
+    def test_a_shared_name_cannot_hide_the_network(self):
+        from tuxistant import skillbox
+        self.skill("a", "{ network: true }")
+        self.skill("b")
+        for folder in ("a", "b"):
+            path = self.folder / "data/tuxistant/skills" / folder / "skill.yaml"
+            path.write_text(path.read_text().replace(f"name: {folder.title()}", "name: Same"))
+        self.assertEqual(cli.sandbox_needs(self.config(9)), {"your skill Same": True})
+        with mock.patch.object(skillbox, "available", return_value=True), \
+                mock.patch.object(skillbox, "landlock_abi", return_value=4):
+            self.assertFalse(cli.sandbox_ready(self.config(9))[0])
+
+    def test_a_skills_folder_that_cannot_be_read_is_a_problem(self):
+        own = self.folder / "data/tuxistant/skills"
+        self.skill("mine")
+        own.chmod(0)
+        self.addCleanup(own.chmod, 0o755)
+        if os.access(own, os.R_OK):
+            self.skipTest("running as root, which reads anything")
+        self.assertIn(str(own), cli.skill_problems(self.config(9)))
 
     def test_skill_problems_are_listed(self):
         config = self.config(9)

@@ -506,8 +506,10 @@ class SkillHost:
 
     @staticmethod
     def _listing(root: Path, pattern: str, problems: dict) -> list[Path]:
+        # iterdir, not glob: since Python 3.14 glob finds nothing in a folder it can't read and
+        # says nothing, which would hide every skill there without a word.
         try:
-            return sorted(root.glob(pattern)) if root.is_dir() else []
+            return sorted(p for p in root.iterdir() if p.match(pattern)) if root.is_dir() else []
         except OSError as e:
             problems[str(root)] = f"This folder could not be read: {e.strerror or e}."
             return []
