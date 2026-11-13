@@ -7,8 +7,8 @@ from pathlib import Path
 from . import homeassistant
 from .livedata import DEFAULT_SOURCE, SOURCES
 
-CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tuxistant"
-DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "tuxistant"
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "tuxistant"   # empty is unset
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "tuxistant"
 
 DEFAULTS = {
     "server": "localhost:8080",      # LocalAI's own port; set yours in Settings

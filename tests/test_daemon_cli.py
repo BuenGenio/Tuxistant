@@ -156,8 +156,9 @@ class Doctor(unittest.TestCase):
         config = self.config(9)
         config.values.update(tapo_email="me@example.com", tapo_password="pw")
         for available in (True, False):
-            with self.subTest(available), mock.patch.object(skillbox, "available",
-                                                            return_value=available):
+            with self.subTest(available), \
+                    mock.patch.object(skillbox, "available", return_value=available), \
+                    mock.patch.object(skillbox, "landlock_abi", return_value=skillbox.LANDLOCK_SCOPE_ABI):
                 self.assertEqual(self.results(config)["skill sandbox ready"], available)
 
     def test_no_sandbox_is_no_failure_when_nothing_needs_it(self):
@@ -166,8 +167,32 @@ class Doctor(unittest.TestCase):
             passed, detail = cli.sandbox_ready(self.config(9))
             self.assertTrue(passed)
             self.assertIn("can't run", detail)
+            for ignored in (".git", "__pycache__"):
+                (self.folder / "data/tuxistant/skills" / ignored).mkdir(parents=True)
+            self.assertTrue(cli.sandbox_ready(self.config(9))[0])
             (self.folder / "data/tuxistant/skills/mine").mkdir(parents=True)
-            self.assertFalse(cli.sandbox_ready(self.config(9))[0])
+            passed, detail = cli.sandbox_ready(self.config(9))
+            self.assertFalse(passed)
+            self.assertIn("your skills in", detail)
+            self.assertNotIn("TP-Link", detail)
+
+    def test_half_a_tapo_account_needs_no_sandbox(self):
+        for email, password in (("me@example.com", ""), ("", "pw"), ("  ", "pw")):
+            config = self.config(9)
+            config.values.update(tapo_email=email, tapo_password=password)
+            with self.subTest(email=email, password=password):
+                self.assertEqual(cli.sandbox_needs(config), [])
+
+    def test_an_old_kernel_fails_when_lights_need_the_sandbox(self):
+        from tuxistant import skillbox
+        config = self.config(9)
+        config.values.update(tapo_email="me@example.com", tapo_password="pw")
+        with mock.patch.object(skillbox, "available", return_value=True), \
+                mock.patch.object(skillbox, "landlock_abi", return_value=4):
+            passed, detail = cli.sandbox_ready(config)
+        self.assertFalse(passed)
+        self.assertIn("6.12", detail)
+        self.assertIn("TP-Link", detail)
 
     def test_skill_problems_are_listed(self):
         config = self.config(9)

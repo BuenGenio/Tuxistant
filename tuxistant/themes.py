@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 BUNDLED = Path(__file__).resolve().parent.parent / "themes"
-USER = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "tuxistant/themes"
+USER = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "tuxistant/themes"
 MAX_SHADER_BYTES = 64 * 1024
 MAX_META_BYTES = 16 * 1024
 MAX_TEXT_CHARS = 100

@@ -123,13 +123,38 @@ def fn_helper(socket: str) -> tuple[bool, str]:
     return True, "not installed, so holding Fn does nothing"
 
 
+def user_skills() -> Path:
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    return data_home / "tuxistant" / "skills"
+
+
+def sandbox_needs(config) -> list[str]:
+    """What is set up here that runs in the sandbox, named as the doctor says it."""
+    from .skillhost import IGNORED_PARTS
+    needs = []
+    if all(str(config[k] or "").strip() for k in ("tapo_email", "tapo_password")):
+        needs.append("your TP-Link account")
+    own = user_skills()
+    try:
+        if own.is_dir() and any(p.is_dir() and not p.name.startswith(".") and p.name not in IGNORED_PARTS
+                                for p in own.iterdir()):
+            needs.append(f"your skills in {own}")
+    except OSError:
+        needs.append(f"your skills folder, which could not be read ({own})")
+    return needs
+
+
 def sandbox_ready(config) -> tuple[bool, str]:
-    """Only fails when something set up needs it: a TP-Link account, or a skill of your own."""
+    """Only fails when something set up needs it, and names what does and what is missing."""
     from . import skillbox
     from .shellgate import BWRAP, PRLIMIT, seccomp_program
+    needs = sandbox_needs(config)
     if skillbox.available():
-        return True, "bubblewrap"
-    if not os.access(BWRAP, os.X_OK):
+        if not needs or skillbox.landlock_abi() >= skillbox.LANDLOCK_SCOPE_ABI:
+            return True, "bubblewrap"
+        # Lights, and most skills, use the network, which the sandbox only allows with Landlock.
+        why = "a skill with the network needs Linux 6.12 or newer with Landlock on"
+    elif not os.access(BWRAP, os.X_OK):
         why = "install the bubblewrap package"
     elif not os.access(PRLIMIT, os.X_OK):
         why = "prlimit, which comes with util-linux, is missing"
@@ -137,20 +162,15 @@ def sandbox_ready(config) -> tuple[bool, str]:
         why = "this computer's processor isn't supported, only x86_64 and aarch64 are"
     else:
         why = "the skill kit is missing: install Tuxistant again"
-    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
-    own = data_home / "tuxistant" / "skills"
-    needed = (all(str(config[k] or "").strip() for k in ("tapo_email", "tapo_password"))
-              or (own.is_dir() and any(p.is_dir() for p in own.iterdir())))
-    if not needed:
+    if not needs:
         return True, "not available, so Tapo lights and your own skills can't run: " + why
-    return False, "Tapo lights and your own skills need it: " + why
+    return False, " and ".join(needs) + " need it: " + why
 
 
 def skill_problems(config) -> dict[str, str]:
     """Read from the files here, so it starts no skill and needs no daemon."""
     from .skillhost import offline
-    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
-    return offline(config, user=data_home / "tuxistant" / "skills").problems
+    return offline(config, user=user_skills()).problems
 
 
 def checks(config) -> list[tuple[bool, str, str]]:
