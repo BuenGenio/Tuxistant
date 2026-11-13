@@ -161,38 +161,51 @@ class Doctor(unittest.TestCase):
                     mock.patch.object(skillbox, "landlock_abi", return_value=skillbox.LANDLOCK_SCOPE_ABI):
                 self.assertEqual(self.results(config)["skill sandbox ready"], available)
 
+    def skill(self, name, permissions="{}"):
+        folder = self.folder / "data/tuxistant/skills" / name
+        folder.mkdir(parents=True)
+        (folder / "skill.yaml").write_text(
+            f"id: org.example.{name}\nname: {name.title()}\ndescription: d\n"
+            f"run: [python3, main.py]\npermissions: {permissions}\n"
+            f"actions: {{ {name}.go: {{ description: d }} }}\n")
+        (folder / "main.py").write_text("")
+
     def test_no_sandbox_is_no_failure_when_nothing_needs_it(self):
         from tuxistant import skillbox
         with mock.patch.object(skillbox, "available", return_value=False):
             passed, detail = cli.sandbox_ready(self.config(9))
             self.assertTrue(passed)
             self.assertIn("can't run", detail)
-            for ignored in (".git", "__pycache__"):
+            for ignored in (".git", "__pycache__", "no-manifest"):
                 (self.folder / "data/tuxistant/skills" / ignored).mkdir(parents=True)
             self.assertTrue(cli.sandbox_ready(self.config(9))[0])
-            (self.folder / "data/tuxistant/skills/mine").mkdir(parents=True)
+            self.skill("mine")
             passed, detail = cli.sandbox_ready(self.config(9))
             self.assertFalse(passed)
-            self.assertIn("your skills in", detail)
-            self.assertNotIn("TP-Link", detail)
+            self.assertIn("Needed by your skill Mine:", detail)
+            self.assertNotIn("Tapo", detail)
 
     def test_half_a_tapo_account_needs_no_sandbox(self):
         for email, password in (("me@example.com", ""), ("", "pw"), ("  ", "pw")):
             config = self.config(9)
             config.values.update(tapo_email=email, tapo_password=password)
             with self.subTest(email=email, password=password):
-                self.assertEqual(cli.sandbox_needs(config), [])
+                self.assertEqual(cli.sandbox_needs(config), {})
 
-    def test_an_old_kernel_fails_when_lights_need_the_sandbox(self):
+    def test_an_old_kernel_fails_only_what_uses_the_network(self):
         from tuxistant import skillbox
+        self.skill("quiet")
         config = self.config(9)
-        config.values.update(tapo_email="me@example.com", tapo_password="pw")
         with mock.patch.object(skillbox, "available", return_value=True), \
                 mock.patch.object(skillbox, "landlock_abi", return_value=4):
+            self.assertEqual(cli.sandbox_ready(config), (True, "bubblewrap"))
+            self.skill("chatty", "{ network: true }")
+            config.values.update(tapo_email="me@example.com", tapo_password="pw")
             passed, detail = cli.sandbox_ready(config)
         self.assertFalse(passed)
         self.assertIn("6.12", detail)
-        self.assertIn("TP-Link", detail)
+        self.assertIn("your Tapo lights and your skill Chatty", detail)
+        self.assertNotIn("Quiet", detail)
 
     def test_skill_problems_are_listed(self):
         config = self.config(9)
