@@ -37,7 +37,7 @@ def describe(error: Exception) -> str:
     """What to show the user for a failure."""
     if isinstance(error, FileNotFoundError) and error.filename:
         return f"{error.filename} is not installed"
-    if isinstance(error, (RealtimeError, OSError)):
+    if isinstance(error, (RealtimeError, OSError)) and str(error):    # a bare TimeoutError has none
         log.warning("turn failed: %s", error)   # the screen shows it too, but a terminal has no screen
         return str(error)
     log.error("turn failed", exc_info=error)
@@ -561,15 +561,16 @@ class Controller:
                 self._run(lambda: self._say(text, voice or self.config["voice"])))
             return self.job
 
-    async def say_when_free(self, text: str, lead: bytes = b"") -> asyncio.Task | None:
+    async def say_when_free(self, text: str, lead: bytes = b"",
+                            heard=None) -> asyncio.Task | None:
         """For a timer or a reminder. Unlike say(), it never stops a turn, a card or dictation
         to speak: None means not now, and the caller asks again. lead is a sound for before
-        the words."""
+        the words, and heard() is called once words have gone to the speaker."""
         async with self.lock:
             if self.locked or self.active:
                 return None
             self.job = asyncio.create_task(
-                self._run(lambda: self._say(text, self.config["voice"], lead)))
+                self._run(lambda: self._say(text, self.config["voice"], lead, heard)))
             return self.job
 
     async def sound(self, pcm: bytes) -> None:
@@ -613,36 +614,42 @@ class Controller:
             self.set_state("idle")
             self.set_presence(False)
 
-    async def _say(self, text: str, voice: str, lead: bytes = b""):
+    async def _say(self, text: str, voice: str, lead: bytes = b"", heard=None):
         self.set_presence(True)
         self.set_state("thinking")
         speaker = None
         try:
             self.emit("Reply", text)
             if lead:    # heard at once, and even if the server can't be reached for the words
-                speaker = self.new_speaker()
-                await speaker.start()
-                self.set_state("speaking")
+                speaker = await self._speaking()
                 speaker.write(lead)
             for sentence in sentences(text):
                 try:
                     pcm = await speech(self.config, sentence, voice)
-                except RealtimeError:
-                    if lead and speaker:
+                except Exception:
+                    # What was handed over plays to its end: stop() would cut the chime, or
+                    # the sentence before, as it clears the buffer. A key press still cuts it,
+                    # as a cancel is no Exception.
+                    if speaker:
                         await speaker.drain()
                         speaker = None
                     raise
-                if speaker is None:
-                    speaker = self.new_speaker()
-                    await speaker.start()
-                    self.set_state("speaking")
+                speaker = speaker or await self._speaking()
                 speaker.write(pcm)
+                if heard:
+                    heard()
             if speaker:
                 await speaker.drain()
                 speaker = None
         finally:
             if speaker:
                 await speaker.stop()
+
+    async def _speaking(self):
+        speaker = self.new_speaker()
+        await speaker.start()
+        self.set_state("speaking")
+        return speaker
 
     async def _sound(self, pcm: bytes):
         speaker = self.make_speaker(on_level=lambda _value: None)    # no blob to move

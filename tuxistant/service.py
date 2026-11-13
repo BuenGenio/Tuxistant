@@ -46,6 +46,7 @@ SHIELD_XML = f"""<node><interface name="{SHIELD_INTERFACE}">
 <signal name="ActiveChanged"><arg type="b"/></signal>
 </interface></node>"""
 START_GRACE_S = 15      # at login the sound server and the shell are still coming up
+RESTART_S = 5           # after the scheduler fails. Sooner would be a loop if it fails again
 
 
 class Daemon(ServiceInterface):
@@ -360,10 +361,18 @@ async def tick(store, crier, lock_known) -> None:
     starts on a locked screen with a reminder overdue would otherwise say it aloud. And what
     came due while the daemon was away waits a little longer, so that at login there is
     something to play it and something to show its notification."""
-    await lock_known
+    await asyncio.wait({lock_known})    # however it ended: its own failure is not the timers'
+    if not lock_known.cancelled() and lock_known.exception():
+        log.error("The screen lock check failed", exc_info=lock_known.exception())
     if store.due(time.time()):
         await asyncio.sleep(START_GRACE_S)
-    await timers.run(store, crier.announce, note=crier.note)
+    while True:
+        try:
+            await timers.run(store, crier.announce, note=crier.note)
+        except Exception:   # a timer nobody hears for the rest of the session is no timer
+            log.exception("The timer scheduler failed, so it starts again in %s seconds",
+                          RESTART_S)
+            await asyncio.sleep(RESTART_S)
 
 
 def _timers_stopped(task):
