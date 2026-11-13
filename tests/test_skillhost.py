@@ -227,6 +227,33 @@ class Refused(Case):
         self.assertLess(time.monotonic() - started, 0.5)
         self.assertIn("nested more than 16 levels", problems[str(folder)])
 
+    def test_aliases_are_refused_at_once(self):
+        """A few KB of aliases built a graph the params check walked for minutes, on the event
+        loop, as a depth cap doesn't see an alias."""
+        width = 380
+        params = ("who: {type: string, description: \"Who\", enum: [&l0 ["
+                  + ", ".join(["x"] * width) + "], &l1 [" + ", ".join(["*l0"] * width)
+                  + "], &l2 [" + ", ".join(["*l1"] * width) + "], [*l2]]}")
+        text = MANIFEST.format(id="org.example.demo", action="demo.hello", permissions="{}",
+                               config="[]", timeout=15)
+        text = text.replace('who: { type: string, description: "Who to greet" }', params)
+        self.assertIn(params, text)
+        self.assertTrue(4_500 < len(text) < 6_000, len(text))
+        folder = write_skill(self.user, "skill", text=text)
+        started = time.monotonic()
+        problems = self.host.reload()
+        self.assertLess(time.monotonic() - started, 0.5)
+        self.assertIn("anchor or alias", problems[str(folder)])
+        self.assertEqual(self.processes, [])
+
+    def test_one_anchor_refuses_a_skill_you_add_but_not_one_that_ships(self):
+        text = MANIFEST.format(id="org.example.demo", action="demo.hello", permissions="{}",
+                               config="[]", timeout=15).replace("name: Demo", "name: &n Demo")
+        self.assertIn("anchor or alias", self.problem(text=text))
+        bundled = text.replace("org.example.demo", "org.tuxistant.demo")
+        write_skill(self.bundled, "demo", text=bundled.replace("demo.hello", "demo.shipped"))
+        self.assertNotIn(str(self.bundled / "demo"), self.host.reload())
+
     def test_bad_ids_and_action_names(self):
         for manifest in ({"id": "../../etc"}, {"id": "Org.Example"}, {"id": "noprefix"},
                          {"action": "Demo.Hello"}, {"action": "nodot"}):

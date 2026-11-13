@@ -65,6 +65,7 @@ USER_IDLE_S = 300
 IGNORED_PARTS = frozenset({"__pycache__"})
 GRANTS = "skill-grants.json"    # next to the skills folder, so tests that move it move this too
 CODE_DIR = "skill-code"         # the checked copies that skills really run from
+LOADED = "skills-loaded.json"   # yours that were loaded, by name, so a restart keeps their place
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
 ACTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+")
 PARAM = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}")
@@ -98,6 +99,19 @@ class Bounded(yaml.SafeLoader):
             self.depth -= 1
 
 
+class Unaliased(Bounded):
+    """A few hundred bytes of aliases grow to gigabytes once anything walks what they built, and
+    a cap on depth doesn't see them, as an alias isn't composed again. Refused as each node is
+    reached, so nothing reads the file twice. Recipes and the code skills you add use this."""
+
+    def compose_node(self, parent, index):
+        event = self.peek_event()
+        if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
+            raise ValueError("It uses a YAML anchor or alias, & or *, which a skill you add "
+                             "can't.")
+        return super().compose_node(parent, index)
+
+
 def load_yaml(text: str, loader=Bounded):
     reader = loader(text)
     try:
@@ -106,13 +120,13 @@ def load_yaml(text: str, loader=Bounded):
         reader.dispose()
 
 
-def _read_yaml(file: Path) -> dict:
+def _read_yaml(file: Path, loader=Bounded) -> dict:
     if file.is_symlink():
         raise ValueError(f"Its {file.name} is a link. It has to be a real file.")
     try:
         if file.stat().st_size > MAX_MANIFEST_BYTES:
             raise ValueError(f"Its {file.name} is too big.")
-        data = load_yaml(file.read_text())
+        data = load_yaml(file.read_text(), loader)
     except FileNotFoundError:
         raise ValueError(f"It has no {file.name}.") from None
     except UnicodeDecodeError:
@@ -302,7 +316,7 @@ def _timeout(manifest: dict) -> float:
 
 def load_code_manifest(folder: Path, bundled: bool) -> dict:
     """A code skill's skill.yaml, checked. Raises ValueError with a reason fit to be spoken."""
-    manifest = _read_yaml(folder / MANIFEST)
+    manifest = _read_yaml(folder / MANIFEST, Bounded if bundled else Unaliased)
     unknown = set(manifest) - FIELDS
     if unknown:
         raise ValueError(f"Its {MANIFEST} has fields Tuxistant doesn't know: "
@@ -459,14 +473,38 @@ class _Grants:
         if not self._dirty or not self.writable:
             return
         try:
-            self.file.parent.mkdir(parents=True, exist_ok=True)
-            fd, temp = tempfile.mkstemp(prefix=".grants-", dir=self.file.parent)
-            with os.fdopen(fd, "w") as out:
-                json.dump(self.records, out, indent=1, sort_keys=True)
-            os.replace(temp, self.file)
+            _write_json(self.file, self.records)
             self._dirty = False
         except OSError as e:
             log.warning("could not save what skills were allowed: %s", e)
+
+
+def _write_json(file: Path, data) -> None:
+    """Whole or not at all, so a crash halfway leaves the last copy."""
+    file.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(prefix=f".{file.stem}-", dir=file.parent)
+    try:
+        with os.fdopen(fd, "w") as out:
+            json.dump(data, out, indent=1, sort_keys=True)
+        os.replace(temp, file)
+    except BaseException:
+        Path(temp).unlink(missing_ok=True)
+        raise
+
+
+def _read_names(file: Path) -> set[str]:
+    try:
+        data = json.loads(file.read_text())
+    except FileNotFoundError:
+        return set()
+    except (OSError, ValueError):
+        log.warning("could not read %s, so the skills you added load in name order", file)
+        return set()
+    return {name for name in data if _plain_name(name)} if isinstance(data, list) else set()
+
+
+def _plain_name(name) -> bool:
+    return isinstance(name, str) and name not in ("", ".", "..") and "/" not in name
 
 
 @dataclass
@@ -490,7 +528,11 @@ class SkillHost:
         self.launcher = launcher or self._launch
         self.on_change = on_change
         self.problems: dict[str, str] = {}
-        self.offered: set[str] = set()              # keys of what the last reload loaded
+        self.loaded = self.user.parent / LOADED
+        self.saved = _read_names(self.loaded)
+        # keys of what keeps its place in the budget: what the last reload loaded, or at start
+        # yours that loaded before the restart
+        self.offered: set[str] = {str(self.user / name) for name in self.saved}
         self.running: dict[str, _Running] = {}      # by folder
         self.last_good: dict[str, _Found] = {}      # by folder or file
         self.stopping: set[asyncio.Task] = set()
@@ -553,7 +595,20 @@ class SkillHost:
             return dict(problems)
         self._swap(skills, running)
         self.problems, self.offered = problems, offered
+        self._save_loaded()
         return dict(problems)
+
+    def _save_loaded(self) -> None:
+        """The order of the budget has to outlast a restart, or a skill refused for being one too
+        many would take the place of one that worked, at the next login."""
+        names = {Path(key).name for key in self.offered if Path(key).parent == self.user}
+        if names == self.saved or not self.grants.writable:
+            return
+        try:
+            _write_json(self.loaded, sorted(names))
+            self.saved = names
+        except OSError as e:
+            log.warning("could not save which skills were loaded: %s", e)
 
     # Reading what is on disk
 
@@ -697,8 +752,8 @@ class SkillHost:
     # Building and swapping
 
     def _build(self, chosen: list[_Found], problems: dict, sandbox_problem: str):
-        """The new Skills, the processes it uses and the keys of what it offers. Nothing is
-        swapped yet."""
+        """The new Skills, the processes it uses and the keys of what keeps its place in the
+        budget. Nothing is swapped yet."""
         running, proxies = {}, {}
         manifests, offered = [], set()
         for item in chosen:
@@ -710,8 +765,9 @@ class SkillHost:
                     continue
                 try:
                     entry = self._process_for(item)
-                except Exception as e:
+                except Exception as e:     # it still counts, so it keeps its place too
                     problems[item.key] = f"It could not be started: {e}"
+                    offered.add(item.key)
                     continue
                 running[item.key] = entry
                 for name in item.manifest["actions"]:

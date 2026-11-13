@@ -895,6 +895,77 @@ class Host(Case):
         self.assertEqual(self.host.reload(), {})
         self.assertIn("alarm.ring", self.host.current().actions)
 
+    def restart(self, **kwargs) -> SkillHost:
+        """Another daemon on the same folders, as after a login or a restart."""
+        return SkillHost(CONFIG, self.builtin, self.bundled, self.user,
+                         launcher=lambda *_: None, **kwargs)
+
+    async def test_the_order_outlasts_a_restart(self):
+        self.example("work.yaml", "coins.yaml", "deskstrip.yaml", "notes.yaml")    # 6
+        alarm = {"description": "Say it is time to get up", "say": "Time to get up."}
+        self.add("alarm.yaml", recipe(id="org.example.alarm", permissions={},
+                                      actions={"alarm.ring": alarm}))
+        refused = {str(self.user / "alarm.yaml"): skillhost.OVER_BUDGET}
+        self.assertEqual(self.host.reload(), refused)
+        again = self.restart()
+        self.assertEqual(again.reload(), refused, "alarm sorts first, but work was working")
+        self.assertIn("work.chat", again.current().actions)
+        self.assertNotIn("alarm.ring", again.current().actions)
+        (self.user / "notes.yaml").unlink()
+        self.assertEqual(again.reload(), {})
+        (self.user / "notes.yaml").write_text((EXAMPLES / "notes.yaml").read_text())
+        third = self.restart()
+        self.assertEqual(third.reload(), {str(self.user / "notes.yaml"): skillhost.OVER_BUDGET},
+                         "notes was put back after alarm took its place")
+        self.assertIn("alarm.ring", third.current().actions)
+        saved = json.loads((self.user.parent / skillhost.LOADED).read_text())
+        self.assertEqual(saved, ["alarm.yaml", "coins.yaml", "deskstrip.yaml", "work.yaml"])
+
+    async def test_a_code_skill_that_failed_to_start_keeps_its_place(self):
+        failing = []
+
+        class Process:
+            async def stop(self, graceful=True):
+                pass
+
+        def launch(manifest, folder):
+            if failing:
+                raise OSError("no such file")
+            return Process()
+
+        host = self.restart()
+        host.launcher = launch
+        self.example("work.yaml", "coins.yaml", "deskstrip.yaml")                  # 5
+        folder = self.user / "zz-code"
+        folder.mkdir()
+        (folder / "skill.yaml").write_text(
+            "id: org.example.code\nname: Code\ndescription: Code\nrun: [python3, m.py]\n"
+            "actions:\n  code.a:\n    description: A\n")
+        (folder / "m.py").write_text("")
+        self.assertEqual(host.reload(), {})
+        failing.append(True)
+        (folder / "m.py").write_text("# changed\n")
+        self.assertIn("could not be started", host.reload()[str(folder)])
+        failing.clear()
+        self.add("alarm.yaml", recipe(id="org.example.alarm", permissions={}, actions={
+            "alarm.ring": {"description": "Say it is time to get up", "say": "Get up."}}))
+        self.assertEqual(host.reload(), {str(self.user / "alarm.yaml"): skillhost.OVER_BUDGET})
+
+    async def test_a_check_or_a_damaged_list_changes_nothing(self):
+        self.example("coins.yaml")
+        loaded = self.user.parent / skillhost.LOADED
+        self.assertEqual(json.loads(loaded.read_text()), ["coins.yaml"])
+        loaded.unlink()
+        skillhost.offline(CONFIG, builtin=self.builtin, bundled=self.bundled, user=self.user)
+        self.assertFalse(loaded.exists(), "a check saves nothing")
+        for damaged in ('["../../x", 7, "coins.yaml"]', "[broken", '{"coins.yaml": 1}'):
+            with self.subTest(damaged):
+                loaded.write_text(damaged)
+                self.assertEqual(self.restart().reload(), {})
+        self.assertEqual(json.loads(loaded.read_text()), ["coins.yaml"])
+        self.assertEqual({p.name for p in self.user.parent.iterdir()},
+                         {"b", skillhost.GRANTS, skillhost.LOADED, "skills"}, "no temp file left")
+
     async def test_code_skills_that_cant_run_use_none_of_the_budget(self):
         folder = self.user / "aa-code"
         folder.mkdir()

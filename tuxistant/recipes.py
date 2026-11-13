@@ -26,7 +26,7 @@ import yaml
 
 from . import apps, webfetch
 from .gate import APP_SAYS, MAX_DETAIL_CHARS, Ask, Speak, shown
-from .skillhost import (HOST, MAX_ACTION_TEXT, MAX_MANIFEST_BYTES, PARAM, Bounded, _bracketed,
+from .skillhost import (HOST, MAX_ACTION_TEXT, MAX_MANIFEST_BYTES, PARAM, Unaliased, _bracketed,
                         _schema_ok, _text, action_description, action_name, load_yaml, skill_id)
 
 FIELDS = {"id", "name", "description", "version", "permissions", "actions"}
@@ -112,7 +112,7 @@ def _read(file: Path) -> dict:
     try:
         if file.stat().st_size > MAX_MANIFEST_BYTES:
             raise ValueError(f"{file.name} is too big.")
-        data = load_yaml(file.read_text(), _Unaliased)
+        data = load_yaml(file.read_text(), Unaliased)
     except FileNotFoundError:
         raise ValueError(f"{file.name} has gone.") from None
     except UnicodeDecodeError:
@@ -126,17 +126,6 @@ def _read(file: Path) -> dict:
     if not isinstance(data, dict):
         raise ValueError(f"{file.name} has to be a mapping of fields.")
     return data
-
-
-class _Unaliased(Bounded):
-    """A few hundred bytes of aliases grow to gigabytes once anything walks what they built.
-    Refused as each node is reached, so nothing reads the file twice."""
-
-    def compose_node(self, parent, index):
-        event = self.peek_event()
-        if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
-            raise ValueError("It uses a YAML anchor or alias, & or *, which a recipe can't.")
-        return super().compose_node(parent, index)
 
 
 def _hosts(permissions) -> list[str]:
