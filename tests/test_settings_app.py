@@ -32,7 +32,7 @@ with mock.patch.dict(os.environ):
     if not INNER:
         os.environ.pop("DISPLAY", None)
         os.environ["WAYLAND_DISPLAY"] = "tuxistant-test-no-display"
-    from tuxistant import settings_app as sa
+    from tuxistant import calendars, settings_app as sa
     from tuxistant import voices
     from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk
 
@@ -280,6 +280,16 @@ class Logic(unittest.TestCase):
         self.assertEqual(pick(devices, ""), {"": "Automatic", "Pixel": "Pixel", "Tab": "Tab"})
         self.assertEqual(pick([], ""), {"": "Automatic"})
         self.assertEqual(pick(None, ""), {"": "Automatic"})
+
+    def test_calendar_listing_takes_the_daemons_reason(self):
+        family = {"id": "c1", "name": "Family", "account": "me@example.org"}
+        self.assertEqual(sa.calendar_listing([family]), ([family], ""))
+        self.assertEqual(sa.calendar_listing([]), ([], ""))
+        with mock.patch.object(calendars, "_backend", side_effect=ValueError(calendars.NO_EDS)):
+            reply = json.loads(json.dumps(calendars.writable()))
+        self.assertEqual(sa.calendar_listing(reply), ([], calendars.NO_EDS))
+        self.assertEqual(sa.calendar_listing({}), ([], sa.NO_CALENDARS))
+        self.assertEqual(sa.calendar_listing("nonsense"), ([], ""))
 
     def test_calendar_choices(self):
         family = {"id": "c1", "name": "Family", "account": "me@example.org"}
@@ -1403,6 +1413,38 @@ class Inner(unittest.TestCase):
         self.assertEqual(saved(), [], "a change from the daemon is not sent back to it")
         control("Change", "calendar_add_to", '""', signature="ss")
         wait(lambda: page.calendar.get_selected() == 0, "the reset")
+
+    def test_25_calendar_without_accounts_points_to_online_accounts(self):
+        page = self.win.general
+        self.list_calendars_as([], sa.NO_CALENDARS)
+        self.assertIn("Online Accounts", page.calendar.get_subtitle())
+        self.assertEqual(page.calendar_labels, ["Automatic"])
+
+    def test_25_calendar_without_evolution_data_server_names_the_packages(self):
+        page = self.win.general
+        self.list_calendars_as({"problem": calendars.NO_EDS}, calendars.NO_EDS)
+        self.assertIn("gir1.2-ecal-2.0", page.calendar.get_subtitle())
+        self.assertNotIn("Online Accounts", page.calendar.get_subtitle())
+        self.assertEqual(page.calendar_labels, ["Automatic"])
+        settle()
+        self.assertEqual(saved(), [], "a missing calendar service is not a choice")
+        shot(self.win, "calendar-no-eds")
+
+    def list_calendars_as(self, reply, subtitle):
+        """Have the fake daemon send this reply and wait for the row to show it. Afterwards the
+        real list comes back, on the fake and on the page."""
+        page = self.win.general
+        wait(lambda: page.calendars is not None, "the calendar list")
+        self.addCleanup(self.load_calendars, page.calendars, sa.CALENDAR_NOTE)
+        self.load_calendars(reply, subtitle)
+
+    def load_calendars(self, reply, subtitle):
+        page = self.win.general
+        control("SetCalendars", json.dumps(reply), signature="s")
+        forget()
+        page.load()
+        wait(lambda: calls("ListCalendars"), "a fresh calendar list")
+        wait(lambda: page.calendar.get_subtitle() == subtitle, "the calendar note")
 
     def test_25_news_lists_the_sources_and_saves_the_choice(self):
         page = self.win.general

@@ -42,7 +42,7 @@ Methods:
 | `ListSkills` | `() -> s` | `Skills.listing()` of the skills loaded now. Each entry has `source`: `built-in`, `bundled` (a code skill that ships with Tuxistant) or `yours` |
 | `ReloadSkills` | `() -> s` | Read the skills again now, as the folder watcher does on its own. Returns `{path: problem}` as JSON, `{}` if all loaded. A skill that fails keeps its last version that worked. Emits `SkillsChanged` |
 | `ListPhones` | `() -> s` | `phone.devices()`: `[{"id", "name", "type", "connected", "paired"}]`, empty without GSConnect |
-| `ListCalendars` | `() -> s` | `calendars.writable()`: `[{"id", "name", "account"}]` for each calendar an event can be added to, empty without Evolution Data Server. It connects to each calendar, so allow 30 seconds |
+| `ListCalendars` | `() -> s` | `calendars.writable()`: `[{"id", "name", "account"}]` for each calendar an event can be added to. Without Evolution Data Server or its Python bindings it sends `{"problem": text}` instead, the same sentence the voice says (`calendars.NO_EDS`), and Settings shows that text in place of the advice to add an account. It connects to each calendar, so allow 30 seconds |
 | `Hello` | `(i level) -> ()` | From the extension when the daemon comes online: `level` is 1 if it can draw approval cards, 2 if it can also type dictated text. 0 on the way out, which also stops dictation |
 | `CanAsk` | `() -> b` | Whether an extension has said level 1. Without one, `Controller.ask` refuses at once and the user hears why |
 | `CanType` | `() -> b` | Whether an extension has said level 2. Without one, dictation says why and never opens the microphone |

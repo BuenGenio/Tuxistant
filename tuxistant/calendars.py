@@ -450,15 +450,16 @@ def add(args: dict, config, _session=None, now: datetime | None = None) -> Ask:
                f"{shown(title, 300)}\n{when}\nCalendar: {_named(calendar)}", run)
 
 
-def writable(_config=None) -> list[dict]:
-    """For Settings: the calendars an event can be added to."""
+def writable(_config=None) -> list[dict] | dict:
+    """For Settings: the calendars an event can be added to. Without Evolution Data Server it says
+    why instead, as an empty list would send people to Online Accounts, which won't help."""
     try:
         with _lock:
             backend = _backend()
             return [{"id": c["id"], "name": c["name"], "account": c["account"]}
                     for c in backend.calendars() if backend.writable(c["id"])]
     except ValueError:
-        return []
+        return {"problem": NO_EDS}
 
 
 def available() -> bool:
