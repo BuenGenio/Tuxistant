@@ -41,7 +41,7 @@ METHODS = {
     "GetState": ("", "s"), "GetConfig": ("", "s"), "SetConfig": ("ss", ""),
     "ListVoices": ("", "s"), "PreviewVoice": ("s", ""), "Say": ("s", ""),
     "ListThemes": ("", "s"), "PreviewTheme": ("s", ""), "ListSkills": ("", "s"),
-    "ReloadSkills": ("", "s"),
+    "ReloadSkills": ("", "s"), "SkillProblems": ("", "s"),
     "GetHistory": ("i", "s"), "ClearHistory": ("", ""), "OpenSettings": ("", ""),
     "ListPhones": ("", "s"), "ListCalendars": ("", "s"),
     "Hello": ("i", ""), "CanAsk": ("", "b"), "Answer": ("sb", ""),

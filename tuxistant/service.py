@@ -113,6 +113,9 @@ class Daemon(ServiceInterface):
     def reload_skills(self) -> str:
         return json.dumps(self.host.reload() if self.host else {})
 
+    def skill_problems(self) -> str:
+        return json.dumps(self.host.problems if self.host else {})
+
     def skills_changed(self):
         self.SkillsChanged()
 
@@ -203,6 +206,10 @@ class Daemon(ServiceInterface):
     @method()
     def ReloadSkills(self) -> "s":
         return self.reload_skills()
+
+    @method()
+    def SkillProblems(self) -> "s":
+        return self.skill_problems()
 
     @method()
     async def ListPhones(self) -> "s":

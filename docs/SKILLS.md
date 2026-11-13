@@ -57,7 +57,7 @@ Lights controls Tapo bulbs such as the L530 on your own network. It is a code sk
 
 <img src="images/settings-skills.png" width="640" alt="The Skills page in Settings: each skill with what it can do, what it is allowed to do and its risk.">
 
-A built-in skill is a YAML manifest whose actions have Python handlers in `HANDLERS` in `tuxistant/skills.py`. A code skill brings its own program and runs in a sandbox, like Lights. You can add your own code skills in `~/.local/share/tuxistant/skills/`, and they load while Tux is running. See "Code skills" below.
+A built-in skill is a YAML manifest whose actions have Python handlers in `HANDLERS` in `tuxistant/skills.py`. A code skill brings its own program and runs in a sandbox, like Lights. You can add your own code skills in `~/.local/share/tuxistant/skills/`, and they load while Tux is running. See "Code skills" below. A recipe is simpler: one YAML file in the same folder, with no code, that asks a host it names for something, opens an app or says a sentence. See "Recipe skills" below.
 
 ## Manifest format
 
@@ -236,7 +236,9 @@ skill.run()
 
 A handler returns a dict. If it raises, its message is spoken, so write a plain sentence. Print to stderr if you need to: stdout carries the protocol.
 
-**What it can't do.** A skill you add can't ask for `shell`, `files_read`, `files_write` or `clipboard`. It can't use an id starting `org.tuxistant.`, or an action name another skill already has, so it can't stand in for a built-in action. Each of these refuses the skill with a reason, and the others still load.
+**What it can't do.** A skill you add can't ask for `shell`, `files_read`, `files_write` or `clipboard`. It can't use an id starting `org.tuxistant.`, or an action name another skill already has, so it can't stand in for a built-in action. Nor can an action of it start like a built-in or bundled one, such as `file.delete` beside `file.find`, as the model would see `file_delete` and take it for Tux's own. Each of these refuses the skill with a reason, and the others still load.
+
+**Six actions in all.** Every tool the small model is offered costs it some of its other answers, so the skills you add, code skills and recipes together, bring at most six actions. They are counted in the order the folder sorts by name, and a skill that would go past six is refused whole, with a reason, until you take another out. Built-in skills and the code skills that come with Tuxistant, such as Lights, don't count.
 
 Each action's description, and every text in its `params`, is at most 200 characters with nothing hidden in it, such as control or direction-changing characters. The model reads them all on every turn. A `<` or `>` in them, or in the skill's name, description or version, refuses the skill with a reason.
 
@@ -254,12 +256,112 @@ Each action's description, and every text in its `params`, is at most 200 charac
 
 **What still needs a restart.** Built-in skills are Python inside the daemon. Their YAML reloads live, but a change to their code, or a new built-in action, needs `systemctl --user restart tuxistant`. A change to `skillkit.py` reaches a skill the next time its process starts. Only a skill's top folder is watched, so a change deeper down, such as `lib/x.py`, is picked up at the next change to its top folder or a `tuxistant skills reload`.
 
+## Recipe skills
+
+A recipe is one YAML file, `<anything>.yaml`, put straight into `~/.local/share/tuxistant/skills/`, beside any code skill folders. It has no code and no folder: the file is all there is to read before you add it. Tux does what it says with code of its own, in `tuxistant/recipes.py`, and a recipe can do only three things:
+
+- **Ask a host it names**, with `get` or `post`, and say something from the answer.
+- **Open** one installed app or one GNOME Settings page, named in the file.
+- **Say** a sentence written in the file.
+
+It has no shell, no files, no clipboard, no D-Bus and no headers, so it can't run anything, carry a key or reach the desktop's own services. Five examples are in [docs/examples/recipes/](examples/recipes/). They load, change and go while Tux is running, like code skills, and Settings lists them as "A recipe you added."
+
+```yaml
+id: org.example.tides
+name: Tides
+description: Says when the next high tide is
+version: "1.0.0"
+permissions:
+  network: [api.tides.example]
+actions:
+  tides.next:
+    description: Say when the next high tide is at a seaside town
+    params:
+      town: { type: text, max: 40, description: "The town, like Brighton" }
+    required: [town]
+    get: https://api.tides.example/v1/next?town={town}
+    pick:
+      time: [high, 0, time]
+    say: "The next high tide in {town} is at {time}."
+```
+
+| Field | Rule |
+|---|---|
+| `id` | Reverse-domain, in small letters. `org.tuxistant.` and the ids of built-in skills are refused |
+| `name`, `description`, `version` | Shown in Settings. At most 100, 1000 and 40 characters, with nothing hidden and no `<` or `>`. Put the version in quotes, as YAML reads `1.0` as a number |
+| `permissions` | `{}`, or `network:` with a list of 1 to 4 hosts. `network: true`, `shell`, `files_read`, `files_write`, `clipboard`, `config` and anything else are refused |
+| `actions` | 1 to 4 actions |
+
+Any other field, such as `run`, `config`, `timeout_s` or `risk`, refuses the recipe with a reason.
+
+Each action has:
+
+| Field | Rule |
+|---|---|
+| `description` | Required. What the model picks the action by, so name what people say and what it isn't for. At most 200 characters on one line, with no `<` or `>`. 120 or fewer is better |
+| `params` | Up to 4, by name, each with a type, see below |
+| `required` | Names of params that must be given. A param with a `default` can't be one |
+| `get` or `post` | An address on a host the permissions name |
+| `json` or `text` | A body, with `post` only, and one or the other |
+| `pick` | Up to 4 values to take from the answer, each a list of up to 6 keys and positions. `[]` is the whole answer, when it is plain text or a single JSON value |
+| `say` | With `get` or `post`, said after a good answer. On its own, what the action does. Not with `open`, which already says "Opening ..." |
+| `open` | `{app: <desktop id>}`, with or without `.desktop`, or `{settings: <page>}`, such as `sound`, `bluetooth`, `display`, `wifi` or `power`. It takes no params |
+
+Each action has exactly one of `get`, `post` and `open`, or `say` alone. Every host in the permissions has to be used by an action, and every host an action uses has to be in the permissions, so Settings shows exactly what a recipe reaches. A host is a name or an address written as four numbers. `localhost`, loopback, link-local, multicast and the like are refused when the file loads, and the rest is checked again before each request.
+
+**Params.** The daemon writes the schema the model sees from these, and an author can't add to it.
+
+| Type | Rule | What the model sends that won't do |
+|---|---|---|
+| `text` | `max` from 1 to 200, 60 if left out, and a `description`. Hidden characters, line breaks and `<` `>` become spaces, and it is cut at a word under `max` | "I need the town for that." |
+| `number` | Whole numbers, with `min` and `max` both required. `"5"`, `5.0` and `"1,000"` are taken, and a number out of range is moved into it | "Say a number from 0 to 255." |
+| `choice` | `of:` a list of 1 to 20 short words. Matched without caring about case or a full stop | "Say one of: bitcoin or ethereum." |
+
+A param left out uses its `default`, which has to fit its type. One with no default that a template uses refuses the recipe. Arguments the model makes up are ignored. YAML reads an unquoted `on`, `off`, `yes` or `no` as true or false, so a choice or a `json` key like that refuses the recipe with a reason: write `"on"`.
+
+**Templates.** In an address, a `json` string, a `text` body and a `say` line, `{name}` is a param's value, and in `say` a pick's too. That is the only syntax: no expressions or conditions, and a value holding `{town}` stays as it is. A `{` or `}` that isn't a placeholder refuses the recipe. In an address, a placeholder may only come after the first `/` of the path, in a path segment or a query value, never in the scheme, the host, the port, a query name or after a `#`. A value in the path is percent-encoded with nothing left as it is, so `/`, `?`, `#`, `&` and `%` can't move the request, and `.` or `..` as a whole segment is refused. In a `json` body, a string that is exactly `"{level}"` becomes the value itself, so a number stays a number, and keys are as written. A body is at most 2,000 characters, and an address 500 before its values go in.
+
+**What needs a card.**
+
+| The request | Card |
+|---|---|
+| `say` | Never |
+| `open`, a packaged app or a Settings page | Never, as for "Open Firefox" |
+| `open`, an entry from your home folder or elsewhere | The apps card, with the command it runs |
+| `get` to a host on the internet, with only `choice` and `number` values in it | None in a fresh conversation |
+| `get` with a `text` value in it | Always |
+| `post` | Always |
+| Anything to a device on your local network | Always, with the address dialled |
+| Anything with a host, after the conversation read something private | The usual card for reaching out first, then the recipe's own card if its row above asks for one |
+
+The card names the host, says whether it is on the internet or your local network with the addresses it found, and shows the method, the whole address and the exact body that will be sent. Tux writes it from the request, and only the recipe's id comes from the file. Allow sends that request to those addresses and nothing else. A card too long to show whole is never cut: Tux says "That request is too long to show on a card, so I left it alone."
+
+**Where a request may go.** Tux looks the host up once and connects to the addresses it checked. All of them have to be on the open internet, or all of them on your local network (private ranges, `fc00::/7`, and `100.64.0.0/10` as Tailscale uses). It refuses loopback, link-local, this computer's own addresses, the servers this install talks to, Home Assistant included, and a name that answers with a mix of both. Plain `http` is only for your local network: to the internet it has to be `https`, and the certificate is checked. No redirect is followed, nothing goes through a proxy, and the only headers are `User-Agent: Tuxistant`, `Accept` and, with a body, its type and length. Nothing from the recipe or the model ever goes in a header, so there is no way to send a key.
+
+**What the model sees.** Nothing a recipe reads. The answer is a stranger's text, so Tux takes the picks from it, cleans them as it cleans web pages, cuts each to 80 characters, puts them into the recipe's `say` line, cut to 300 characters, and says that itself. The model is told only that the app is answering, or gets an error Tux wrote about its arguments. So it can't answer a follow-up about what was said, as with research. What Tux says when it goes wrong:
+
+| What happened | What Tux says |
+|---|---|
+| A good answer, every pick found | The `say` line, or "Done." without one |
+| No answer, too slow, or a redirect | "api.tides.example didn't answer." |
+| An error from the host | "api.tides.example said no to that." |
+| An answer that isn't JSON or plain text, won't parse, is compressed, is over 64 KB, or lacks a pick | "api.tides.example sent an answer I couldn't read." |
+| A host it won't send to | "That recipe's host, api.tides.example, isn't somewhere I'll send to." |
+| Plain `http` to the internet | "api.tides.example is on the internet, and that recipe would send to it without encryption, so I didn't." |
+
+An answer is only read when the action picks something from it. The same request a second time within 5 seconds, which the small model often sends, does nothing.
+
+**Risk and what it was allowed.** Risk comes from the permissions as for any skill: medium with hosts, low without. A recipe never marks the conversation as having read something private. What it was first allowed is kept by its id and its hosts. A new version that names a host it didn't have is refused, and the last version that worked carries on, until you take the file out of the folder, wait a moment, and put it back. A broken edit keeps the last version that worked too, and Settings lists the problem under "Skills with problems".
+
 ## Planned
 
 None of this exists yet.
 
-- **Recipe skills.** Declarative steps with no code of their own. These are the ones meant to be shared, because what they do can be read from the manifest.
+- **Desktop actions for recipes.** A fixed table in the daemon, such as a notification, locking the screen, Do Not Disturb or Night Light, each with its own card rule, which a recipe names by entry. Never a bus, path or method in a manifest: a D-Bus method name doesn't say what a call will do, so no card could be honest about it.
+- **Secrets for recipes.** A token kept in Settings or the keyring, sent only over https to the host the recipe names. Until then a recipe has no headers at all.
+- **Recipes that call built-in actions,** such as "movie time", through `Skills.execute`, from a list without the shell, tasks, files or mail, with one card for all the steps.
+- **Recipe switch in Settings.** Turning a recipe off, and "don't ask again" for one, instead of a card every time for a device at home.
 - **Network by host.** A code skill that names hosts gets the whole network today. Holding it to those hosts needs a proxy in front of the sandbox.
 - **Process and CPU limits.** A cgroup for each skill, with a limit on its tasks and its CPU time.
 - **Approving on a card.** A skill that asks for more than it had should show a card, rather than need taking out and putting back.
-- **Sharing.** Code skills stay local to the machine. They are not for sharing.
+- **Sharing.** Code skills stay local to the machine. They are not for sharing. Recipes are the ones meant for sharing, as what one does can be read from its file and checked by the same loader, but there is no registry yet.

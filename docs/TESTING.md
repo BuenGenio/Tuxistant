@@ -106,6 +106,8 @@ All of these really happened:
 Also:
 
 - `tests/test_realtime_live.py` installs the same stand-ins as `tools/eval_flows.py` and gives every action but the clock an error. `tools/eval_cutoffs.py` names every action and what it meets in an evaluation, and `tests/test_eval_config.py` fails when a new action is not named there. Code skills get no process in either.
+- Recipes send, open and say nothing in an evaluation or in `tuxistant doctor`: `skillhost.offline()` gives them handlers that only answer that they aren't running. `tools/eval_routing.py` and `tools/eval_flows.py` never read your own skills folder: they get an empty one from `eval_skills()` in `tools/eval_config.py`, or the two recipes in `tests/recipes/` with `TUX_EVAL_RECIPES=1`, so their numbers are the same on every computer.
+- Recipe tests use `tests/fakeweb.py`'s `Web`: names come from a table, every connection goes to one server on loopback, and TLS is swapped for plain words to it. `webfetch.this_computer` is patched to made-up addresses, and the app list and the launcher are stand-ins, as in `tests/test_apps.py`.
 - Use a temporary `HOME` for anything that changes files. Fake `gio` with a script on `PATH` to test real launching.
 - If a test leaves `Directory not empty` in a temp folder, a real app may have written there. Check for stray processes before carrying on.
 - Never run `gsettings set` or `systemctl --user start` in a test, even in a sandbox you believe holds.

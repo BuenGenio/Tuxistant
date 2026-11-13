@@ -6,6 +6,9 @@ hop is checked, and the connection goes to the address that was checked rather t
 looked up a second time, a name can answer differently.
 
 What comes back is other people's text. clean() is what stands between it and a model.
+
+A recipe's request goes through place() and send() instead: to a host its file names, which may
+be a device at home but never this computer or the servers this install talks to.
 """
 import codecs
 import html
@@ -36,6 +39,12 @@ TEXT_TYPES = {"text/html", "text/plain", "application/xhtml+xml"}
 REDIRECTS = {301, 302, 303, 307, 308}
 USER_AGENT = "Mozilla/5.0 (compatible; Tuxistant)"
 NAT64 = ipaddress.ip_network("64:ff9b::/96")
+# A device in the house: private ranges, and Tailscale's or a carrier's shared range.
+LOCAL_NETS = tuple(map(ipaddress.ip_network, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                                              "100.64.0.0/10", "fc00::/7")))
+MAX_REPLY_BYTES = 64 * 1024
+RECIPE_AGENT = "Tuxistant"
+RECIPE_ACCEPT = "application/json, text/plain;q=0.9"
 # A page names its own codec, and punycode took 101 seconds over 1 MB. So only what the web really
 # uses, and everything else is read as UTF-8.
 CHARSETS = re.compile(r"utf[-_]8|ascii|iso8859-\d+|cp125\d|koi8[-_][ru]|shift_jis|euc_jp|euc_kr|"
@@ -69,6 +78,18 @@ class Target(NamedTuple):
 class Page(NamedTuple):
     url: str        # where it ended up, after any redirects
     text: str
+
+
+class Place(NamedTuple):
+    """Where a recipe's request may go: the checked addresses, and whether they are at home."""
+    addresses: list[str]
+    local: bool
+
+
+class Reply(NamedTuple):
+    status: int
+    kind: str
+    data: bytes | None      # None: compressed, or more than MAX_REPLY_BYTES
 
 
 def clean(text: str, limit: int) -> str:
@@ -134,7 +155,7 @@ def own_servers(config) -> tuple[set[str], set[str]]:
     """Names and addresses of the servers this install talks to. A page has no business reaching
     them, even if they are on the open internet. A name that won't resolve is still refused."""
     names, addresses = set(), set()
-    for key in ("server", "translate_server", "search_server"):
+    for key in ("server", "translate_server", "search_server", "ha_server"):
         host = _server_host(config[key]) if config[key] else None
         if host:
             names.add(_name(host))
@@ -143,6 +164,65 @@ def own_servers(config) -> tuple[set[str], set[str]]:
             except PageError:
                 pass
     return names, addresses
+
+
+def _read_proc(path: str) -> str:
+    try:
+        with open(path, encoding="ascii", errors="replace") as file:
+            return file.read()
+    except OSError:
+        return ""
+
+
+def this_computer() -> set[str]:
+    """What the kernel says this computer's interfaces hold. A port Docker or adb publishes
+    answers on every one of them, not only on loopback."""
+    found, last = set(), None
+    for line in _read_proc("/proc/net/fib_trie").splitlines():
+        if line.strip().startswith("|-- "):
+            last = line.strip()[4:]
+        elif "/32 host LOCAL" in line and last:
+            found.add(last)
+    for line in _read_proc("/proc/net/if_inet6").splitlines():
+        packed = (line.split() or [""])[0]
+        if len(packed) == 32:
+            found.add(":".join(packed[i:i + 4] for i in range(0, 32, 4)))
+    return {_same(address) for address in found if _is_address(address)}
+
+
+def _is_address(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _local(address: str) -> bool:
+    """A device on the local network. An IPv6 form that wraps an IPv4 address isn't one, so a
+    mapped or translated private address is refused rather than judged by what it wraps."""
+    try:
+        ip = ipaddress.ip_address(address.partition("%")[0])
+    except ValueError:
+        return False
+    return any(ip in net for net in LOCAL_NETS if net.version == ip.version)
+
+
+def place(host: str, port: int, own: tuple[set[str], set[str]]) -> Place:
+    """Where a recipe may send: all on the open internet, or all in the house. Never this computer,
+    the servers this install talks to, or a name that answers with a mix of the two."""
+    names, own_addresses = own
+    if _name(host) in names:
+        raise PageError(NOT_ALLOWED)
+    addresses = _resolve(host, port)
+    same = set(map(_same, addresses))
+    if not addresses or same & own_addresses or same & this_computer():
+        raise PageError(NOT_ALLOWED)
+    if all(map(public, addresses)):
+        return Place(addresses, False)
+    if all(map(_local, addresses)):
+        return Place(addresses, True)
+    raise PageError(NOT_ALLOWED)
 
 
 def _path(parts) -> str:
@@ -237,10 +317,12 @@ def _read(reply: http.client.HTTPResponse) -> tuple[str, str]:
     return kind, _decode(reply.read(MAX_BYTES), reply.headers.get_content_charset())
 
 
-def _get(target: Target, deadline: float) -> tuple[str | None, str, str]:
-    """One request: (redirect, type, text). A timeout on the socket only bounds each read, so a
-    server dripping a byte at a time would go on for ever. Hanging up at the deadline ends it
-    wherever it has got to, including the TLS handshake, which is why it holds its own handle."""
+def _exchange(target: Target, method: str, body: bytes | None, headers: dict, deadline: float,
+              read):
+    """One request, with read(reply) run while the connection is open. A timeout on the socket
+    only bounds each read, so a server dripping a byte at a time would go on for ever. Hanging up
+    at the deadline ends it wherever it has got to, including the TLS handshake, which is why it
+    holds its own handle."""
     raw = _connect(target, deadline)
     watch = raw.dup()
     timer = threading.Timer(max(deadline - time.monotonic(), 0), _hang_up, [watch])
@@ -249,12 +331,8 @@ def _get(target: Target, deadline: float) -> tuple[str | None, str, str]:
     raw.settimeout(CONNECT_S)
     timer.start()
     try:
-        connection.request("GET", target.path, headers={
-            "User-Agent": USER_AGENT, "Accept": "text/html,text/plain;q=0.9"})
-        reply = connection.getresponse()
-        if reply.status in REDIRECTS:
-            return reply.getheader("Location") or "", "", ""
-        return None, *_read(reply)
+        connection.request(method, target.path, body=body, headers=headers)
+        return read(connection.getresponse())
     except (OSError, ValueError, http.client.HTTPException):
         raise PageError(UNREADABLE) from None
     finally:
@@ -262,6 +340,37 @@ def _get(target: Target, deadline: float) -> tuple[str | None, str, str]:
         connection.close()
         raw.close()
         watch.close()
+
+
+def _get(target: Target, deadline: float) -> tuple[str | None, str, str]:
+    """One request: (redirect, type, text)."""
+    def read(reply):
+        if reply.status in REDIRECTS:
+            return reply.getheader("Location") or "", "", ""
+        return None, *_read(reply)
+    return _exchange(target, "GET", None, {
+        "User-Agent": USER_AGENT, "Accept": "text/html,text/plain;q=0.9"}, deadline, read)
+
+
+def _reply(reply: http.client.HTTPResponse) -> Reply:
+    kind = (reply.getheader("Content-Type") or "").partition(";")[0].strip().lower()
+    encoding = (reply.getheader("Content-Encoding") or "identity").strip().lower()
+    if encoding != "identity":      # nothing here asked for it, and it can unpack to gigabytes
+        return Reply(reply.status, kind, None)
+    data = reply.read(MAX_REPLY_BYTES + 1)
+    return Reply(reply.status, kind, data if len(data) <= MAX_REPLY_BYTES else None)
+
+
+def send(where: Place, scheme: str, host: str, port: int, path: str, method: str,
+         body: bytes | None = None, content_type: str | None = None,
+         seconds: float = TOTAL_S) -> Reply:
+    """A recipe's one request, to the addresses place() checked, or PageError if nothing answers.
+    No redirect is followed and nothing but these headers goes: no cookie, key or referrer."""
+    headers = {"User-Agent": RECIPE_AGENT, "Accept": RECIPE_ACCEPT}
+    if body is not None:
+        headers["Content-Type"] = content_type or "application/octet-stream"
+    target = Target(scheme, host, port, path, list(where.addresses))
+    return _exchange(target, method, body, headers, time.monotonic() + seconds, _reply)
 
 
 class _Text(HTMLParser):

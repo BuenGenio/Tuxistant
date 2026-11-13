@@ -25,7 +25,7 @@ import websockets
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tools.eval_config import evaluation_server  # noqa: E402
+from tools.eval_config import eval_skills, evaluation_server  # noqa: E402
 from tools.eval_cutoffs import install  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.gate import APP_SAYS, Session  # noqa: E402
@@ -43,7 +43,7 @@ cfg.values["mail_search"] = True    # here only: nothing is saved
 cfg.values["ha_server"], cfg.values["ha_token"] = "eval.invalid:8123", "eval"
 cfg.values["tapo_email"], cfg.values["tapo_password"] = "eval@example.test", "eval"   # the same
 KEY = cfg["api_key"]
-skills = offline(cfg).current()     # no code skill runs, so no light is reached
+skills = offline(cfg, user=eval_skills()).current()   # no code skill or recipe runs
 ASKS = sys.argv[1:] or [
     "Find my tax return for 2024 and send it to my phone",
     "Find my CV and send it to my phone",

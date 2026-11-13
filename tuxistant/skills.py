@@ -226,5 +226,6 @@ class Skills:
     def listing(self) -> list[dict]:
         return [{"id": s["id"], "name": s["name"], "description": s["description"],
                  "risk": s["risk"], "permissions": s.get("permissions") or {},
-                 "actions": sorted(s["actions"]), "source": s["source"]}
+                 "actions": sorted(s["actions"]), "source": s["source"],
+                 "recipe": bool(s.get("recipe"))}
                 for s in self.skills.values()]

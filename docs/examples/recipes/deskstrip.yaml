@@ -1,0 +1,16 @@
+# A device on your own network. A request there always shows a card first, with the address.
+id: org.example.deskstrip
+name: Desk strip
+description: Sets the brightness of the LED strip on my desk
+version: "1.0.0"
+permissions:
+  network: [192.168.1.40]
+actions:
+  deskstrip.brightness:
+    description: Set the brightness of the LED strip on the desk, from 0 to 255
+    params:
+      level: { type: number, min: 0, max: 255, description: "Brightness" }
+    required: [level]
+    post: http://192.168.1.40/json/state
+    json: { "on": true, bri: "{level}" }   # "on" in quotes, or YAML reads it as true
+    say: "The desk strip is at {level}."

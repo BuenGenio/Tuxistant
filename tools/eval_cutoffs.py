@@ -50,6 +50,9 @@ ACTIONS = {
     # Code skills: offered, but no process is ever started, so no bulb is reached.
     "lights.set": ("mcp.SkillProcess",), "lights.status": ("mcp.SkillProcess",),
 }
+# Recipes are not named here: the evaluations read no folder of yours, and with
+# TUX_EVAL_RECIPES=1 the two in tests/recipes get offline()'s handlers, which send and open
+# nothing, so no recipe action ever runs in an evaluation.
 
 
 def blocked(*_args, **_kwargs):

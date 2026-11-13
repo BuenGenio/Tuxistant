@@ -489,6 +489,7 @@ class FakeHost:
     def __init__(self):
         self.served = []
         self.changed = []
+        self.problems = {"/somewhere/x.yaml": "It asks for shell."}
 
     def current(self):
         self.served.append(Skills())
@@ -536,6 +537,8 @@ class Daemon(unittest.IsolatedAsyncioTestCase):
         daemon = Service(self.config, self.history, host)
         self.assertEqual(json.loads(daemon.reload_skills()),
                          {"/somewhere": "It has no skill.yaml."})
+        self.assertEqual(json.loads(daemon.skill_problems()),
+                         {"/somewhere/x.yaml": "It asks for shell."})
         daemon.set_config("tapo_email", "me@example.org")
         await asyncio.gather(*daemon.children)
         self.assertEqual(host.changed, ["tapo_email"])
@@ -549,6 +552,7 @@ class Daemon(unittest.IsolatedAsyncioTestCase):
         from tuxistant.service import Daemon as Service
         daemon = Service(self.config, self.history, Skills())
         self.assertEqual(daemon.reload_skills(), "{}")
+        self.assertEqual(daemon.skill_problems(), "{}")
 
 
 class Command(unittest.TestCase):

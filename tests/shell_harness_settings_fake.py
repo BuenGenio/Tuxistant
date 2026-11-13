@@ -50,7 +50,14 @@ EXTRA_SKILLS = [
      "permissions": {"shell": True, "files_write": ["~/Documents"], "clipboard": True,
                      "camera": True},
      "actions": ["shell.run"]},
+    {"id": "org.example.tides", "name": "Tides", "description": "Says when the next high tide is",
+     "permissions": {"network": ["api.tides.example"]}, "actions": ["tides.next"],
+     "source": "yours", "recipe": True},
 ]
+SKILL_PROBLEMS = {
+    "/home/tux/.local/share/tuxistant/skills/broken.yaml":
+        "It asks for shell, and a recipe may only name the hosts it reaches.",
+}
 
 
 CALENDARS = [{"id": "cal-family", "name": "Family", "account": "me@example.org"},
@@ -132,6 +139,11 @@ class Daemon(ServiceInterface):
         await self.enter("ListSkills")
         extra = [{**s, "risk": risk_of(s["permissions"])} for s in EXTRA_SKILLS]
         return json.dumps(Skills().listing() + extra)
+
+    @dbus_method()
+    async def SkillProblems(self) -> "s":
+        await self.enter("SkillProblems")
+        return json.dumps(SKILL_PROBLEMS)
 
     @dbus_method()
     async def ListPhones(self) -> "s":

@@ -17,7 +17,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
 from . import BUS_NAME, BUS_PATH, homeassistant, themes  # noqa: E402
-from .config import DEFAULTS, clean_server  # noqa: E402
+from .config import DATA_DIR, DEFAULTS, clean_server  # noqa: E402
 from .gate import MAX_TITLE_CHARS, printable  # noqa: E402
 from .livedata import DEFAULT_SOURCE, SOURCES  # noqa: E402
 
@@ -51,6 +51,7 @@ PERMISSION_WORDS = {
     "home_control": "control devices through Home Assistant",
     "home_read": "read the state of your home",
 }
+SKILLS_FOLDER = DATA_DIR / "skills"   # where your skills and recipes go, as skillhost.USER_DIR
 HOME_SERVER = "home"        # a network permission naming the server this install talks to
 SHELL_ACTION = "shell.run"
 KEY_SET = {"api_key": "api_key_set", "cloud_api_key": "cloud_key_set",   # never come back
@@ -1210,20 +1211,44 @@ class AppearancePage(Adw.PreferencesPage):
         self.win.daemon.call("PreviewTheme", (theme_id,), "s")
 
     def on_open_folder(self, _button):
-        try:
-            themes.USER.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            self.win.toast(f"Could not create the themes folder: {e.strerror}")
-            return
-        launcher = Gtk.FileLauncher.new(Gio.File.new_for_path(str(themes.USER)))
-        launcher.launch(self.win, None, self.on_folder_opened)
+        open_folder(self.win, themes.USER, "themes", self.on_folder_opened)
 
     def on_folder_opened(self, launcher, result):
-        try:
-            launcher.launch_finish(result)
-        except GLib.Error as e:
-            if not e.matches(Gtk.DialogError.quark(), Gtk.DialogError.DISMISSED):
-                self.win.toast(f"Could not open the themes folder: {e.message}")
+        folder_opened(self.win, "themes", launcher, result)
+
+
+def open_folder(win, folder: Path, what: str, done):
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        win.toast(f"Could not create the {what} folder: {e.strerror}")
+        return
+    launcher = Gtk.FileLauncher.new(Gio.File.new_for_path(str(folder)))
+    launcher.launch(win, None, done)
+
+
+def folder_opened(win, what: str, launcher, result):
+    try:
+        launcher.launch_finish(result)
+    except GLib.Error as e:
+        if not e.matches(Gtk.DialogError.quark(), Gtk.DialogError.DISMISSED):
+            win.toast(f"Could not open the {what} folder: {e.message}")
+
+
+def skill_subtitle(skill: dict) -> str:
+    """Whose it is comes first, as a skill you added was written by anyone at all."""
+    whose = ""
+    if skill.get("source") == "yours":
+        whose = "A recipe you added. " if skill.get("recipe") else "A skill you added. "
+    return f"{whose}{skill['description']}\n{permission_words(skill['permissions'])}"
+
+
+def skill_problems(problems) -> list[tuple[str, str, str]]:
+    """(title, problem, full path) for each skill that didn't load, from SkillProblems."""
+    if not isinstance(problems, dict):
+        return []
+    return [(Path(str(path)).name or str(path), str(problem), str(path))
+            for path, problem in sorted(problems.items())]
 
 
 class SkillsPage(Adw.PreferencesPage):
@@ -1231,13 +1256,21 @@ class SkillsPage(Adw.PreferencesPage):
         super().__init__()
         self.win = win
         self.rows = []
+        self.problem_rows = []
+        open_skills = Gtk.Button(label="Open skills folder", valign=Gtk.Align.CENTER)
+        open_skills.connect("clicked", self.on_open_folder)
         self.group = Adw.PreferencesGroup(
-            title="Skills",
+            title="Skills", header_suffix=open_skills,
             description="What Tux can do for you. Risk follows from what a skill is allowed to do")
+        self.problems = Adw.PreferencesGroup(
+            title="Skills with problems",
+            description="These skills can't be used until they are fixed", visible=False)
         self.add(self.group)
+        self.add(self.problems)
 
     def load(self):
         self.win.daemon.fetch("ListSkills", self.fill)
+        self.win.daemon.fetch("SkillProblems", self.fill_problems, fail=lambda _error: None)
 
     def fill(self, skills):
         for row in self.rows:
@@ -1246,9 +1279,25 @@ class SkillsPage(Adw.PreferencesPage):
         for row in self.rows:
             self.group.add(row)
 
+    def fill_problems(self, problems):
+        for row in self.problem_rows:
+            self.problems.remove(row)
+        self.problem_rows = []
+        for title, problem, path in skill_problems(problems):
+            row = plain_row(title, problem, tooltip_text=path)
+            row.add_prefix(Gtk.Image(icon_name="dialog-warning-symbolic", css_classes=["warning"]))
+            self.problem_rows.append(row)
+            self.problems.add(row)
+        self.problems.set_visible(bool(self.problem_rows))
+
+    def on_open_folder(self, _button):
+        open_folder(self.win, SKILLS_FOLDER, "skills", self.on_folder_opened)
+
+    def on_folder_opened(self, launcher, result):
+        folder_opened(self.win, "skills", launcher, result)
+
     def make_row(self, skill):
-        row = plain_row(skill["name"],
-                        f"{skill['description']}\n{permission_words(skill['permissions'])}")
+        row = plain_row(skill["name"], skill_subtitle(skill))
         risk = skill["risk"]
         row.add_suffix(Gtk.Label(
             label=risk_label(risk), valign=Gtk.Align.CENTER,

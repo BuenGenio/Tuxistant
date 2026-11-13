@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tests.test_webfetch import PUBLIC, WORDS, Web  # noqa: E402
+from tests.fakeweb import PUBLIC, WORDS, Web  # noqa: E402
 from tests.test_websearch import Clicks, FakeSearx  # noqa: E402
 from tests.test_websearch import hit as search_hit  # noqa: E402
 from tuxistant import realtime, research, webfetch, websearch  # noqa: E402

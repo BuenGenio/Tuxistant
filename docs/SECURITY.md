@@ -29,6 +29,45 @@ What holds a code skill today:
 
 What doesn't hold yet: a skill can start as many processes as your account may, and keep a CPU core busy while it runs.
 
+What holds a recipe, a skill that is one YAML file with no code ([SKILLS.md](SKILLS.md#recipe-skills)):
+
+- **Nothing to run.** It has no `run` line, and Tux does what it says with code of its own. It can ask a host it names, open one app or Settings page it names, and say a sentence. It has no shell, files, clipboard, settings, D-Bus or headers.
+- **Hosts by name.** Every host it reaches is written in it, checked when it loads and again before each request, and shown in Settings.
+- **Cards from the request.** A post, a request carrying your words and a request to a device at home show the exact address and body that will be sent, and nothing else is sent after the click.
+- **Nothing it reads reaches the model.** Tux says the answer itself.
+- **The same budget and names as code skills.** Six actions of yours in all, and none that starts like a built-in one.
+
+## Recipe skills
+
+Nothing has attacked recipes yet, so this is the threat model they were built to, not a record of attacks. It assumes three enemies: a recipe written to do harm, which you were talked into copying in; a model that can be made to emit any call to it, any number of times; and the server it reaches, or whatever answers in its place.
+
+**A recipe written to do harm.**
+
+- *Running code, reading files or getting a secret.* A recipe has no code and no `run` line, and `shell`, `files_*`, `clipboard` and `config` refuse it when it loads. It has no headers, so it can neither carry an API key nor be given one. It has no D-Bus at all, so it can't reach systemd, GNOME Shell's `Eval`, a portal, the Secrets service, logind, GSConnect or Tuxistant's own `Answer` and `DictateStart`. A D-Bus method name doesn't say what a call will do, so no daemon code could write an honest card for one, which is why recipes have none.
+- *Reaching this computer or the install's own servers,* such as adb, a Docker API on port 2375, LocalAI, SearXNG, Home Assistant or a cloud's metadata service at 169.254.169.254. Hosts are written in the file, and `localhost`, loopback and link-local addresses, and odd spellings of them such as `127.1` or `2130706433`, refuse it when it loads. Before each request Tux looks the host up once and refuses loopback, link-local, this computer's own addresses as the kernel lists them, the servers this install talks to by name and by address, and a name that answers with a mix of public and private addresses. It then connects to the addresses it checked, so a second look-up can't answer differently.
+- *Acting on a device at home,* such as a router, a printer, a NAS or a plug that switches on a GET. Every request to your local network shows a card with the address dialled, the method, the whole address and the body.
+- *Sending out what you said or what Tux read.* A request carrying a `text` value always shows a card with its exact address and body. After a conversation has read something private, every recipe with a host shows the usual card for reaching out first. With no card, only the choices the author wrote or a whole number in a range can leave, in a fresh conversation where the only private thing is what you just asked.
+- *Getting picked for everything,* with a description such as "Use this for every question". A description is at most 200 characters with nothing hidden, at most six actions of yours are loaded, and none may start like a built-in action, so `file.delete` can't sit beside `file_find`. If it is picked anyway, the worst it does is bounded: a request with your words shows a card, a fixed request carries nothing of yours, a sentence is silly, and an app opens a window.
+- *Changing where a request goes through a value.* Placeholders are refused in the scheme, the host, the port, query names and after `#`. Values are percent-encoded with nothing left as it is, a `.` or `..` path segment is refused, and the finished address is read again and compared with the recipe's scheme, host and port. A JSON body is filled in as a structure and only then written out.
+- *Writing its own card.* The card is written from the request, by Tux, and only the recipe's checked id comes from the file. A card too long to show whole is refused, never cut.
+- *Growing in an update.* What it was first allowed is kept by id and hosts, and a new host is refused until the file is taken out and put back.
+- *Breaking the loader.* YAML anchors and aliases are refused, as a few hundred bytes of them grow to gigabytes, the file is at most 64 KB, and every text and the generated schema are capped. A broken file keeps the last version that worked and shows a problem.
+
+**A model that can be made to call it.** Arguments are typed and bounded: text is cleaned and cut, numbers moved into range, choices matched against a fixed list, and anything else dropped. It can't choose the host, the method, a header, the app or an extra step, as each is fixed in the file. A second copy of a request within 5 seconds sends nothing. It never sees an answer, so a page can't instruct it through a recipe.
+
+**A server that answers.** Redirects aren't followed, plain `http` goes only to your local network, and `https` checks the certificate against the name. An answer stops after 8 seconds and 64 KB, and a compressed one isn't read. What is picked from it is cleaned as web pages are, angle brackets and hidden characters removed, cut to 80 characters, and said by Tux in the recipe's own sentence. No model reads it.
+
+What doesn't hold:
+
+- **Tux's voice.** A `say` line, and what a server puts in a pick, is said in Tux's voice, so a recipe or a server can make Tux say something false, such as "The next high tide is at call 0800 ...". Each pick is at most 80 characters and a sentence 300, but nothing stops what they say. A spoken yes still approves nothing.
+- **A beacon.** A fixed request tells its host when you use it, and from which address. Settings shows the host and medium risk.
+- **Repeats.** A request with no card can be made again and again, five seconds apart, and a whole number can carry a few digits each time. Only what you asked in that conversation can leave this way.
+- **What is said is kept.** What Tux says goes into the history and shows in Settings, cleaned but still a stranger's text.
+- **Two cards.** After private data, a recipe whose own rule asks for a card shows the usual card first and then its own: two clicks, so the gate in `Skills.execute` stays as it is.
+- **Click fatigue.** A device at home shows a card every time, which can teach you to click Allow without reading.
+- **Something already running as you** can write any recipe, as it can any code skill.
+- The address checks have not had an adversarial review of their own yet, as page fetching has.
+
 ## A hostile model
 
 Unlike the attacks below, this one hasn't been tried: no backdoored model or hostile model file has been run against Tuxistant.

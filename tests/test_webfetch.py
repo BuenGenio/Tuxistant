@@ -4,7 +4,6 @@ No test here reaches a real network. _dial is the only way out, and it either re
 server on loopback, and names come from a table. Numeric forms use the real resolver, which parses
 them without asking anyone.
 """
-import http.server
 import json
 import os
 import socket
@@ -20,11 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tuxistant import webfetch  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.webfetch import PageError, clean, public  # noqa: E402
+from tests.fakeweb import PUBLIC, WORDS, Web  # noqa: E402
 
-PUBLIC = "93.184.216.34"
 PUBLIC6 = "2606:4700:4700::1111"
 CLOCK_S = 0.5
-WORDS = "This sentence is long enough to count as a line of real page text. " * 6
 CONFIG = {**DEFAULTS, "server": "tuxserver:8080", "api_key": "sk-never-send-me",
           "translate_server": "translator.lan:5000", "search_server": "searx.lan:8888"}
 
@@ -32,68 +30,6 @@ CONFIG = {**DEFAULTS, "server": "tuxserver:8080", "api_key": "sk-never-send-me",
 def answers(*addresses):
     return [(socket.AF_INET6 if ":" in a else socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 80))
             for a in addresses]
-
-
-class Quiet(http.server.ThreadingHTTPServer):
-    def handle_error(self, *_):     # the guard hangs up on purpose
-        pass
-
-
-class Web:
-    """A pretend internet: names from a table, every connection to one loopback server."""
-
-    def __init__(self, test, names=None):
-        self.names = {"example.com": [PUBLIC], "tuxserver": ["192.168.1.20"],
-                      "translator.lan": ["192.168.1.157"], "searx.lan": ["192.168.1.158"],
-                      **(names or {})}
-        self.dialled, self.lookups, self.requests = [], [], []
-        self.routes = {}
-        web = self
-
-        class Handler(http.server.BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
-
-            def log_message(self, *_):
-                pass
-
-            def do_GET(self):
-                web.requests.append((self.path, dict(self.headers.items())))
-                route = web.routes.get(self.path, (200, {"Content-Type": "text/html"}, WORDS))
-                status, headers, body = route
-                body = body.encode() if isinstance(body, str) else body
-                self.send_response(status)
-                for key, value in headers.items():
-                    self.send_header(key, value)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-        self.http = Quiet(("127.0.0.1", 0), Handler)
-        self.port = self.http.server_address[1]
-        threading.Thread(target=self.http.serve_forever, args=(0.01,), daemon=True).start()
-        test.addCleanup(self.close)
-        for name, new in (("_dial", self.dial), ("_resolve", self.resolve)):
-            patcher = mock.patch.object(webfetch, name, new)
-            patcher.start()
-            test.addCleanup(patcher.stop)
-
-    def close(self):
-        self.http.shutdown()
-        self.http.server_close()
-
-    def resolve(self, host, port):
-        self.lookups.append(host)
-        found = self.names.get(host.rstrip(".").lower())
-        if found is None:
-            raise PageError("no such name")
-        return list(found.pop(0) if found and isinstance(found[0], list) else found)
-
-    def dial(self, address, _port, seconds):
-        self.dialled.append(address)
-        return socket.create_connection(("127.0.0.1", self.port), timeout=seconds)
-
-    def paths(self):
-        return [path for path, _ in self.requests]
 
 
 class Addresses(unittest.TestCase):
@@ -545,6 +481,71 @@ class Dripping(unittest.TestCase):
                 yield b"\x00"
         self.serve(drip())
         self.stops_on_time("https://example.com/")
+
+
+class Places(unittest.TestCase):
+    """Where a recipe may send: all public, all at home, or nowhere."""
+
+    def setUp(self):
+        self.web = Web(self)
+        patcher = mock.patch.object(webfetch, "this_computer", return_value={"192.168.1.77"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def place(self, *addresses, own=(set(), set())):
+        self.web.names["device.example"] = list(addresses)
+        return webfetch.place("device.example", 80, own)
+
+    def test_public_and_local(self):
+        self.assertEqual(self.place(PUBLIC, PUBLIC6), webfetch.Place([PUBLIC, PUBLIC6], False))
+        for address in ("192.168.1.40", "10.0.0.2", "172.16.5.5", "100.64.0.1", "100.127.1.1",
+                        "fc00::1", "fd7a:115c::5"):
+            with self.subTest(address):
+                self.assertTrue(self.place(address).local)
+
+    def test_refused(self):
+        for addresses in (["127.0.0.1"], ["169.254.169.254"], ["0.0.0.0"], ["224.0.0.1"],
+                          ["fe80::1"], ["::1"], ["192.168.1.77"], [PUBLIC, "192.168.1.40"],
+                          ["::ffff:192.168.1.40"], ["64:ff9b::c0a8:128"], ["2002:c0a8:128::"],
+                          ["2001:0:4136:e378:8000:63bf:3fff:fdd2"]):
+            with self.subTest(addresses), self.assertRaises(PageError) as caught:
+                self.place(*addresses)
+            self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+
+    def test_own_servers_by_name_and_address(self):
+        own = ({"device.example"}, set())
+        with self.assertRaises(PageError):
+            self.place(PUBLIC, own=own)
+        with self.assertRaises(PageError):
+            self.place("192.168.1.40", own=(set(), {"192.168.1.40"}))
+
+    def test_home_assistant_is_one_of_them(self):
+        config = {**CONFIG, "ha_server": "http://ha.lan:8123"}
+        self.web.names["ha.lan"] = ["192.168.1.30"]
+        names, addresses = webfetch.own_servers(config)
+        self.assertIn("ha.lan", names)
+        self.assertIn("192.168.1.30", addresses)
+
+    def test_send_posts_the_body_to_the_checked_address(self):
+        where = webfetch.Place(["192.168.1.40"], True)
+        self.web.routes["/state"] = (201, {"Content-Type": "application/json"}, '{"ok": 1}')
+        reply = webfetch.send(where, "http", "device.example", 80, "/state", "POST", b'{"a": 1}',
+                              "application/json")
+        self.assertEqual(reply, webfetch.Reply(201, "application/json", b'{"ok": 1}'))
+        method, path, headers, body = self.web.sent[0]
+        self.assertEqual((method, path, body), ("POST", "/state", b'{"a": 1}'))
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertEqual(headers["Content-Length"], "8")
+        self.assertEqual(self.web.dialled, ["192.168.1.40"])
+        self.assertEqual(self.web.lookups, [], "the name is never looked up again")
+
+    def test_send_reads_no_more_than_its_limit(self):
+        where = webfetch.Place([PUBLIC], False)
+        self.web.routes["/big"] = (200, {"Content-Type": "text/plain"}, "x" * (64 * 1024 + 1))
+        self.web.routes["/zip"] = (200, {"Content-Encoding": "gzip"}, "x")
+        for path in ("/big", "/zip"):
+            with self.subTest(path):
+                self.assertIsNone(webfetch.send(where, "http", "a.example", 80, path, "GET").data)
 
 
 class Text(unittest.TestCase):
