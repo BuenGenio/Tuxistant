@@ -2,13 +2,14 @@
 # End to end in an isolated headless GNOME Shell: the real daemon, the extension as installed by
 # install.sh, the real Settings app and Fn helper, the live server, and scripted audio.
 #
-#   TUXISTANT_API_KEY=... [TUXISTANT_SERVER=host:8080] tests/shell_harness/e2e.sh <out-dir>
+#   TUXISTANT_API_KEY=... TUXISTANT_SERVER=host:8080 tests/shell_harness/e2e.sh <out-dir>
 #
 # Writes report.json and PNGs to <out-dir>. Exit 0: every check passed and the shell log is clean.
 # 2: the checks passed but the shell log has errors. 1: a check failed.
 #
 # Environment:
-#   TUXISTANT_SERVER  the LocalAI server, default the daemon's own default, localhost:8080
+#   TUXISTANT_SERVER  the LocalAI server, always named: the key never goes to a default that
+#                     anything on this computer could be listening on (tools/eval_config.py)
 #   TUX_KEEP       set to keep the temp folder, minus the API key
 #   TUX_TIMEOUT    seconds for the whole run, default 480
 #   TUX_ONLY       comma separated scenario steps, default all
@@ -49,9 +50,10 @@ if [ "${1:-}" = --inner ]; then
 fi
 
 if [ $# -ne 1 ] || [ -z "${TUXISTANT_API_KEY:-}" ]; then
-    sed -n '2,12p' "$0" | cut -c3-
+    sed -n '2,13p' "$0" | cut -c3-
     exit 1
 fi
+server=$(cd "$root" && python3 -B -m tools.eval_config) || exit 1
 out=$(realpath -m "$1")
 mkdir -p "$out"
 
@@ -134,10 +136,9 @@ import json, os, sys
 path = sys.argv[1]
 config = json.load(open(path))
 config["api_key"] = os.environ["TUXISTANT_API_KEY"]
-if os.environ.get("TUXISTANT_SERVER"):
-    config["server"] = os.environ["TUXISTANT_SERVER"]
+config["server"] = sys.argv[2]
 with os.fdopen(os.open(path, os.O_WRONLY | os.O_TRUNC), "w") as f:
-    json.dump(config, f)' "$work/config/tuxistant/config.json"
+    json.dump(config, f)' "$work/config/tuxistant/config.json" "$server"
 
 env -i PATH="$PATH" "${isolated[@]}" USER="${USER:-tux}" LOGNAME="${LOGNAME:-tux}" LANG=C.UTF-8 \
     XDG_RUNTIME_DIR="$work/run" GSETTINGS_BACKEND=keyfile XDG_CURRENT_DESKTOP=GNOME \
