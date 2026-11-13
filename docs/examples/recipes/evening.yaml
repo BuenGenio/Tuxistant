@@ -1,0 +1,23 @@
+# No network: low risk. Night Light and a notification need no card. Do Not Disturb shows one
+# when it turns on, and locking the screen always does: see "Desktop actions" in docs/SKILLS.md.
+id: org.example.evening
+name: Evening
+description: Night Light, quiet time and locking up for the evening
+version: "1.0.0"
+permissions: {}
+actions:
+  evening.nightlight:
+    description: Turn Night Light on or off
+    params:
+      turn: { type: choice, of: ["on", "off"], description: "On or off" }
+    required: [turn]
+    desktop: { action: night_light, turn: "{turn}" }
+  evening.quiet:
+    description: Turn on Do Not Disturb for the evening
+    desktop: { action: do_not_disturb, turn: on }
+  evening.away:
+    description: Lock the screen because I'm leaving the computer
+    desktop: { action: lock_screen }
+  evening.stretch:
+    description: Put a reminder to stretch on the screen
+    desktop: { action: notify, text: "Time to stand up and stretch." }

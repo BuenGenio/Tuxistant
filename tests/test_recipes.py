@@ -1,7 +1,8 @@
 """Recipe skills: one YAML file, no code. Nothing here reaches a real network, resolver, desktop
 or bus: names come from tests/fakeweb.py's table and every connection goes to its loopback
 server, this computer's addresses are made up, the app list is made up and nothing is launched,
-and every skill folder is a temporary one."""
+desktop actions meet stand-ins for gsettings and the session bus, and every skill folder is a
+temporary one."""
 import inspect
 import ipaddress
 import json
@@ -19,7 +20,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.fakeweb import PUBLIC, Web, slow_server  # noqa: E402
 from tests.test_apps import made  # noqa: E402
-from tuxistant import apps, recipes, skillhost, webfetch  # noqa: E402
+from tuxistant import apps, desktop, recipes, skillhost, webfetch  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.gate import APP_SAYS, Ask, Session  # noqa: E402
 from tuxistant.skillhost import SkillHost  # noqa: E402
@@ -63,6 +64,23 @@ def with_action(**changes) -> dict:
     return recipe(actions={"tides.next": action(**changes)})
 
 
+class OffTheDesktop:
+    """In place of what desktop.py reaches the desktop with: any use fails the test."""
+
+    def __init__(self, case, name):
+        self.case, self.name = case, name
+
+    def __getattr__(self, attribute):
+        if attribute in ("DEVNULL", "SubprocessError"):
+            return getattr(__import__("subprocess"), attribute)
+        self.case.reached.append(f"{self.name}.{attribute}")
+        raise AssertionError(f"a test reached the real desktop through {self.name}.{attribute}")
+
+    def __call__(self, *_args, **_kwargs):
+        self.case.reached.append(self.name)
+        raise AssertionError(f"a test reached the real desktop through {self.name}")
+
+
 class PlainTls(webfetch._Plain):
     default_port = 443      # so the Host header is what TLS would send
 
@@ -85,6 +103,12 @@ class Case(unittest.IsolatedAsyncioTestCase):
             self.addCleanup(patcher.stop)
         recipes._recent.clear()
         apps._launched.clear()
+        self.reached = []   # checked after the test, as execute turns a failure into an error
+        self.addCleanup(lambda: self.assertEqual(self.reached, [], "reached the real desktop"))
+        for name in ("subprocess", "MessageBus"):     # nothing below these reaches the desktop
+            patcher = mock.patch.object(desktop, name, OffTheDesktop(self, name))
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.host = SkillHost(CONFIG, self.builtin, self.bundled, self.user,
                               launcher=lambda *_: None)
         self.asked: list[Ask] = []
@@ -1076,6 +1100,332 @@ class Host(Case):
         self.example("coins.yaml")
         self.assertTrue(inspect.iscoroutinefunction(
             self.host.current().handlers["coins.price"]))
+
+
+def evening(**actions) -> dict:
+    """The evening example as data, its actions replaced by these."""
+    data = yaml.safe_load((EXAMPLES / "evening.yaml").read_text())
+    if actions:
+        data["actions"] = actions
+    return data
+
+
+class DesktopLoading(Case):
+    def test_the_example_names_entries_and_nothing_else(self):
+        self.assertEqual(self.example("evening.yaml"), {})
+        actions = self.host.current().actions
+        self.assertEqual({name: (a["plan"].entry, a["plan"].settings)
+                          for name, a in actions.items() if name.startswith("evening.")}, {
+            "evening.nightlight": ("night_light", (("turn", "turn"),)),
+            "evening.quiet": ("do_not_disturb", (("turn", True),)),
+            "evening.away": ("lock_screen", ()),
+            "evening.stretch": ("notify", (("text", ("Time to stand up and stretch.",)),))})
+        skill = next(s for s in self.host.current().listing() if s["source"] == "yours")
+        self.assertEqual(skill["risk"], "low")
+        manifest = recipes.load(EXAMPLES / "evening.yaml")
+        self.assertEqual(manifest["desktop"],
+                         ["do_not_disturb", "lock_screen", "night_light", "notify"])
+        self.assertEqual(manifest["permissions"], {})
+
+    def test_turn_is_on_or_off_however_it_is_written(self):
+        for written, turned in ((True, True), (False, False), ("on", True), ("OFF", False),
+                                ("yes", True), ("no", False)):
+            with self.subTest(written):
+                manifest = self.loaded({"description": "Night Light",
+                                        "desktop": {"action": "night_light", "turn": written}})
+                plan = manifest["actions"]["evening.x"]["plan"]
+                self.assertEqual(plan.settings, (("turn", turned),))
+
+    def loaded(self, action: dict, params=None) -> dict:
+        if params:
+            action = {**action, "params": params}
+        file = self.add("evening.yaml", evening(**{"evening.x": action}))
+        return recipes.load(file)
+
+
+class DesktopRefused(Case):
+    def refused(self, desktop_spec, words: str, **more):
+        action = {"description": "Do a desktop thing", "desktop": desktop_spec, **more}
+        problem = self.problem(evening(**{"evening.x": action}))
+        self.assertIn(words, problem)
+        return problem
+
+    def test_an_entry_tux_doesnt_have(self):
+        problem = self.refused({"action": "reboot"}, "names a desktop action Tux doesn't have")
+        self.assertIn("reboot. It has notify, do_not_disturb, night_light, dark_style and "
+                      "lock_screen.", problem)
+        self.refused({"action": ["night_light"]}, "doesn't have")
+
+    def test_never_a_bus_a_path_a_method_or_a_setting(self):
+        self.refused({"bus": "session", "dest": "org.gnome.Shell", "path": "/org/gnome/Shell",
+                      "method": "org.gnome.Shell.Eval", "args": ["global.reexec_self()"]},
+                     "has to be a mapping with an action")
+        for extra in ({"method": "Eval"}, {"interface": "org.gnome.Shell"},
+                      {"schema": "org.gnome.desktop.interface"}, {"key": "color-scheme"},
+                      {"value": "'prefer-dark'"}):
+            with self.subTest(extra):
+                self.refused({"action": "night_light", "turn": "on", **extra},
+                             "takes only turn, not")
+        self.refused({"action": "lock_screen", "path": "/org/gnome/ScreenSaver"},
+                     "takes nothing but its name")
+        self.refused("org.gnome.ScreenSaver.Lock", "has to be a mapping with an action")
+
+    def test_fields_it_needs(self):
+        self.refused({"action": "night_light"}, "needs turn")
+        self.refused({"action": "notify"}, "needs text")
+
+    def test_an_unquoted_on_as_a_field(self):
+        problem = self.refused({"action": "night_light", True: True}, "YAML read as true")
+        self.assertIn("Write turn: on or turn: off.", problem)
+
+    def test_turn_has_to_be_on_or_off(self):
+        self.refused({"action": "dark_style", "turn": "maybe"}, "has to be on or off")
+        self.refused({"action": "dark_style", "turn": 1}, "has to be on or off")
+        self.refused({"action": "dark_style", "turn": "{level}"}, "has to be on or off",
+                     params={"level": {"type": "choice", "of": ["low", "high"]}})
+        self.refused({"action": "dark_style", "turn": "{level}"}, "has to be on or off",
+                     params={"level": {"type": "choice", "of": ["on", "off", "dim"]}})
+        self.refused({"action": "dark_style", "turn": "{level}"}, "has to be on or off",
+                     params={"level": {"type": "text", "description": "Level"}})
+        self.refused({"action": "dark_style", "turn": "{nothing}"}, "has to be on or off")
+        self.refused({"action": "dark_style", "turn": {"turn": None}}, "in quotes",
+                     params={"turn": {"type": "choice", "of": ["on", "off"]}})
+
+    def test_a_notification_holds_no_text_param(self):
+        self.refused({"action": "notify", "text": "Note: {note}"}, "a text param",
+                     params={"note": {"type": "text", "description": "A note"}})
+        self.refused({"action": "notify", "text": "Hi {who}"}, "doesn't declare")
+        self.refused({"action": "notify", "text": "<b>Update now</b>"}, "< or >")
+        self.refused({"action": "notify", "text": "x" * 201}, "at most 200")
+        self.refused({"action": "notify", "text": "Back in {minutes}"}, "optional and has no",
+                     params={"minutes": {"type": "number", "min": 1, "max": 60}})
+
+    def test_one_effect_and_no_say_line(self):
+        self.refused({"action": "lock_screen"}, "Tux already says", say="Bye.")
+        self.refused({"action": "lock_screen"}, "more than one of get, post, open and desktop",
+                     open={"settings": "sound"})
+        self.refused({"action": "lock_screen"}, "only get and post have", pick={"a": []})
+
+
+class DesktopRuns(Case):
+    def setUp(self):
+        super().setUp()
+        self.changed, self.called = [], []
+        self.fail_with = None
+        for name, new in (("_gsettings", self.gsettings), ("_bus", self.bus)):
+            patcher = mock.patch.object(desktop, name, new)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def gsettings(self, schema, key, value):
+        if self.fail_with:
+            raise desktop.DesktopError("")
+        self.changed.append((schema, key, value))
+
+    def bus(self, target, member, signature="", body=()):
+        if self.fail_with:
+            raise desktop.DesktopError("")
+        self.called.append((target, member, signature, list(body)))
+        return []
+
+    def with_actions(self, **actions):
+        self.add("evening.yaml", evening(**actions))
+        self.assertEqual(self.host.reload(), {})
+
+    async def test_night_light_from_a_choice_with_no_card(self):
+        self.example("evening.yaml")
+        result, said = await self.call("evening_nightlight", {"turn": "On."})
+        self.assertEqual((result, said), ({APP_SAYS: True}, ["Night Light is on."]))
+        _, said = await self.call("evening_nightlight", {"turn": "off"})
+        self.assertEqual(said, ["Night Light is off."])
+        self.assertEqual(self.changed, [
+            ("org.gnome.settings-daemon.plugins.color", "night-light-enabled", "true"),
+            ("org.gnome.settings-daemon.plugins.color", "night-light-enabled", "false")])
+        self.assertEqual(self.asked, [])
+
+    async def test_a_bad_choice_changes_nothing(self):
+        self.example("evening.yaml")
+        result, said = await self.call("evening_nightlight", {"turn": "dim"})
+        self.assertEqual((result, said), ({"error": "Say one of: on or off."}, []))
+        self.assertEqual(self.changed, [])
+
+    async def test_dark_style(self):
+        self.with_actions(**{
+            "evening.dark": {"description": "Dark style on", "desktop": {
+                "action": "dark_style", "turn": "on"}},
+            "evening.light": {"description": "Dark style off", "desktop": {
+                "action": "dark_style", "turn": False}}})
+        _, said = await self.call("evening_dark")
+        _, said2 = await self.call("evening_light")
+        self.assertEqual(said + said2, ["Dark style is on.", "Dark style is off."])
+        self.assertEqual(self.changed, [
+            ("org.gnome.desktop.interface", "color-scheme", "'prefer-dark'"),
+            ("org.gnome.desktop.interface", "color-scheme", "'default'")])
+        self.assertEqual(self.asked, [])
+
+    async def test_do_not_disturb_on_shows_a_card(self):
+        self.example("evening.yaml")
+        self.allow = False
+        result, said = await self.call("evening_quiet", {"turn": "off"})
+        self.assertTrue(result["declined"])
+        self.assertEqual((self.changed, said), ([], []))
+        self.assertEqual(self.asked[0].title, "Turn on Do Not Disturb?")
+        self.assertEqual(self.asked[0].detail.splitlines(), [
+            "From the recipe org.example.evening, which you added.",
+            "Notifications, reminders and calls included, stop popping up until Do Not "
+            "Disturb is turned off. They still go to the list."])
+        self.allow = True
+        recipes._recent.clear()
+        _, said = await self.call("evening_quiet")
+        self.assertEqual(said, ["Do Not Disturb is on."])
+        self.assertEqual(self.changed, [
+            ("org.gnome.desktop.notifications", "show-banners", "false")])
+
+    async def test_do_not_disturb_off_needs_no_card(self):
+        self.with_actions(**{"evening.loud": {"description": "Do Not Disturb off", "desktop": {
+            "action": "do_not_disturb", "turn": "off"}}})
+        _, said = await self.call("evening_loud")
+        self.assertEqual(said, ["Do Not Disturb is off."])
+        self.assertEqual(self.changed, [
+            ("org.gnome.desktop.notifications", "show-banners", "true")])
+        self.assertEqual(self.asked, [])
+
+    async def test_the_card_follows_the_value_the_model_chose(self):
+        self.with_actions(**{"evening.dnd": {
+            "description": "Do Not Disturb on or off",
+            "params": {"turn": {"type": "choice", "of": ["on", "off"]}}, "required": ["turn"],
+            "desktop": {"action": "do_not_disturb", "turn": "{turn}"}}})
+        await self.call("evening_dnd", {"turn": "off"})
+        self.assertEqual(self.asked, [])
+        await self.call("evening_dnd", {"turn": "on"})
+        self.assertEqual([a.title for a in self.asked], ["Turn on Do Not Disturb?"])
+
+    async def test_locking_the_screen_always_shows_a_card(self):
+        self.example("evening.yaml")
+        self.allow = False
+        result, said = await self.call("evening_away")
+        self.assertTrue(result["declined"])
+        self.assertEqual((self.called, said), ([], []))
+        self.assertEqual(self.asked[0].title, "Lock the screen?")
+        self.assertIn("From the recipe org.example.evening, which you added.",
+                      self.asked[0].detail)
+        self.assertIn("takes your password to get back", self.asked[0].detail)
+        self.allow = True
+        _, said = await self.call("evening_away")
+        self.assertEqual(said, ["Locking the screen."])
+        self.assertEqual(self.called, [(desktop.SCREENSAVER, "Lock", "", [])])
+        self.assertEqual(len(self.asked), 2)
+
+    async def test_a_notification_under_the_recipes_name(self):
+        self.with_actions(**{"evening.break": {
+            "description": "Remind me to take a break",
+            "params": {"minutes": {"type": "number", "min": 1, "max": 60},
+                       "kind": {"type": "choice", "of": ["short", "long"], "default": "short"}},
+            "required": ["minutes"],
+            "desktop": {"action": "notify", "text": "Take a {kind} break in {minutes} minutes."}}})
+        result, said = await self.call("evening_break", {"minutes": "500", "title": "Update"})
+        self.assertEqual((result, said), ({APP_SAYS: True}, ["Done."]))
+        self.assertEqual(self.called, [(desktop.NOTIFICATIONS, "Notify", "susssasa{sv}i", [
+            "Tuxistant", 0, "", "From the recipe org.example.evening",
+            "Take a short break in 60 minutes.", [], {}, -1])])
+        self.assertEqual(self.asked, [])
+
+    async def test_a_desktop_that_says_no(self):
+        self.example("evening.yaml")
+        self.fail_with = True
+        _, said = await self.call("evening_nightlight", {"turn": "on"})
+        self.assertEqual(said, ["I couldn't change Night Light on this desktop."])
+        _, said = await self.call("evening_stretch")
+        self.assertEqual(said, ["The notification didn't show. This desktop may not have a "
+                                "notification service."])
+        self.fail_with = None
+        _, said = await self.call("evening_nightlight", {"turn": "on"})   # tried again
+        self.assertEqual(said, ["Night Light is on."])
+        self.assertEqual(len(self.changed), 1)
+
+    async def test_the_same_call_twice_does_it_once(self):
+        self.example("evening.yaml")
+        session = self.session()
+        await self.call("evening_stretch", session=session)
+        await self.call("evening_stretch", session=session)
+        _, said = await self.call("evening_stretch")
+        self.assertEqual(len(self.called), 1)
+        self.assertEqual(said, ["Done."])
+
+    async def test_offline_a_desktop_recipe_does_nothing(self):
+        shutil.copy(EXAMPLES / "evening.yaml", self.user / "evening.yaml")
+        host = skillhost.offline(CONFIG, builtin=self.builtin, bundled=self.bundled,
+                                 user=self.user)
+        session = Session(host.current(), confirm=self.confirm)
+        for tool in ("evening_nightlight", "evening_away", "evening_stretch"):
+            _, result = await host.current().execute(tool, json.dumps({"turn": "on"}), session)
+            self.assertEqual(result, {"error": "Evening is not running here."})
+        self.assertEqual((self.changed, self.called, self.asked), ([], [], []))
+
+
+class DesktopWaysOut(unittest.TestCase):
+    """The two functions that reach the desktop, with what they reach replaced."""
+
+    def test_gsettings_is_one_command_with_no_shell(self):
+        runs = []
+
+        def run(argv, **kwargs):
+            runs.append((argv, kwargs))
+            return mock.Mock(returncode=0)
+        with mock.patch.object(desktop.subprocess, "run", run):
+            desktop._gsettings("org.gnome.desktop.interface", "color-scheme", "'default'")
+        argv, kwargs = runs[0]
+        self.assertEqual(argv, ["gsettings", "set", "org.gnome.desktop.interface",
+                                "color-scheme", "'default'"])
+        self.assertNotIn("shell", kwargs)
+        self.assertEqual(kwargs["timeout"], desktop.TOOL_S)
+        with mock.patch.object(desktop.subprocess, "run", lambda *_, **__: mock.Mock(
+                returncode=1)):
+            with self.assertRaises(desktop.DesktopError):
+                desktop._gsettings("org.gnome.nothing", "key", "true")
+
+    def test_the_bus_call_is_typed_and_never_starts_a_service(self):
+        sent, closed = [], []
+
+        class Connection:
+            async def connect(self):
+                return self
+
+            async def call(self, message):
+                sent.append(message)
+                return mock.Mock(message_type=desktop.MessageType.METHOD_RETURN, body=[7])
+
+            def disconnect(self):
+                closed.append(True)
+        with mock.patch.object(desktop, "MessageBus", Connection):
+            self.assertEqual(desktop._bus(desktop.SCREENSAVER, "Lock"), [7])
+        message = sent[0]
+        self.assertEqual((message.destination, message.path, message.interface, message.member),
+                         ("org.gnome.ScreenSaver", "/org/gnome/ScreenSaver",
+                          "org.gnome.ScreenSaver", "Lock"))
+        self.assertTrue(message.flags & desktop.MessageFlag.NO_AUTOSTART)
+        self.assertEqual(closed, [True])
+
+    def test_an_error_from_the_bus_is_a_desktop_error(self):
+        class Connection:
+            async def connect(self):
+                return self
+
+            async def call(self, _message):
+                return mock.Mock(message_type=desktop.MessageType.ERROR, body=[])
+
+            def disconnect(self):
+                pass
+        with mock.patch.object(desktop, "MessageBus", Connection):
+            with self.assertRaises(desktop.DesktopError):
+                desktop._bus(desktop.SCREENSAVER, "Lock")
+
+    def test_no_session_bus_is_a_desktop_error(self):
+        def no_bus():
+            raise ValueError("no session bus address")
+        with mock.patch.object(desktop, "MessageBus", no_bus):
+            with self.assertRaises(desktop.DesktopError):
+                desktop._bus(desktop.NOTIFICATIONS, "Notify")
 
 
 if __name__ == "__main__":

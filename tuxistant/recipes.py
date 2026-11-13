@@ -1,8 +1,10 @@
 """Recipe skills: one YAML file in your skills folder, and no code.
 
-A recipe can do three things, each built here: ask a host it names for something over HTTP, open
-one installed app or Settings page, and say a sentence. It has no shell, files, clipboard, D-Bus or
-headers, so nothing it holds can carry a key or reach the desktop's own services.
+A recipe can do four things, each built here: ask a host it names for something over HTTP, open
+one installed app or Settings page, do one of the named desktop actions in tuxistant/desktop.py,
+and say a sentence. It has no shell, files, clipboard, D-Bus or headers, so nothing it holds can
+carry a key or reach the desktop's own services except through an entry written and described
+there.
 
 Everything a recipe reads is a stranger's text, so none of it goes back to the model: picked
 values are cleaned, put into the author's sentence and said by the app, and the model is told
@@ -24,14 +26,14 @@ from pathlib import Path
 
 import yaml
 
-from . import apps, webfetch
+from . import apps, desktop, webfetch
 from .gate import APP_SAYS, MAX_DETAIL_CHARS, Ask, Speak, shown
 from .skillhost import (HOST, MAX_ACTION_TEXT, MAX_MANIFEST_BYTES, PARAM, Unaliased, _bracketed,
                         _schema_ok, _text, action_description, action_name, load_yaml, skill_id)
 
 FIELDS = {"id", "name", "description", "version", "permissions", "actions"}
-ACTION_FIELDS = {"description", "params", "required", "get", "post", "open", "json", "text",
-                 "pick", "say"}
+ACTION_FIELDS = {"description", "params", "required", "get", "post", "open", "desktop", "json",
+                 "text", "pick", "say"}
 PARAM_FIELDS = {"type", "description", "max", "min", "of", "default"}
 MAX_ACTIONS = 4
 MAX_PARAMS = 4
@@ -103,6 +105,7 @@ def load(file: Path) -> dict:
             "description": _text(data, "description"),
             "version": _text(data, "version", required=False),
             "permissions": {"network": hosts} if hosts else {}, "config": [],
+            "desktop": sorted({a["plan"].entry for a in actions.values() if a["plan"].entry}),
             "actions": actions, "source": "yours", "recipe": True}
 
 
@@ -199,7 +202,7 @@ class Plan:
     action: str
     params: tuple
     required: tuple
-    effect: str                 # "get", "post", "open" or "say"
+    effect: str                 # "get", "post", "open", "desktop" or "say"
     scheme: str = ""
     host: str = ""
     port: int = 0
@@ -212,6 +215,8 @@ class Plan:
     app: str = ""
     page: str = ""
     free_text: bool = False     # a text param goes into the request
+    entry: str = ""             # a name in desktop.DESKTOP
+    settings: tuple = ()        # (field, a bool, a choice param's name, or template parts)
 
 
 def _owned(plan: Plan, owner: str) -> Plan:
@@ -255,6 +260,8 @@ def _plan(name: str, action: dict, hosts: set) -> Plan:
         if params:
             raise ValueError(f"The action {name} opens one thing, so it takes no params.")
         fields.update(_opened(name, action["open"]))
+    elif effect == "desktop":
+        fields.update(_desktop(name, action["desktop"], by_name))
     picks = dict(fields.get("picks", ()))
     if "say" in action:
         fields["say"] = _template(name, "say line", action["say"], MAX_SAY_CHARS,
@@ -264,12 +271,12 @@ def _plan(name: str, action: dict, hosts: set) -> Plan:
 
 
 def _effect(name: str, action: dict) -> str:
-    effects = [key for key in ("get", "post", "open") if key in action]
+    effects = [key for key in ("get", "post", "open", "desktop") if key in action]
     if len(effects) > 1:
-        raise ValueError(f"The action {name} has more than one of get, post and open.")
+        raise ValueError(f"The action {name} has more than one of get, post, open and desktop.")
     if not effects and "say" not in action:
-        raise ValueError(f"The action {name} does nothing. Give it one of get, post, open or "
-                         "say.")
+        raise ValueError(f"The action {name} does nothing. Give it one of get, post, open, "
+                         "desktop or say.")
     effect = effects[0] if effects else "say"
     if effect != "post" and ("json" in action or "text" in action):
         raise ValueError(f"The action {name} has a body, which only post can send.")
@@ -279,6 +286,9 @@ def _effect(name: str, action: dict) -> str:
     if effect == "open" and "say" in action:
         raise ValueError(f"The action {name} opens something and says something. Opening "
                          "already says what it opens.")
+    if effect == "desktop" and "say" in action:
+        raise ValueError(f"The action {name} has a desktop action and a say line. Tux already "
+                         "says what the desktop action did.")
     return effect
 
 
@@ -585,6 +595,72 @@ def _opened(name: str, target) -> dict:
     return {"page": page}
 
 
+def _desktop(name: str, spec, params: dict) -> dict:
+    """One entry of desktop.DESKTOP and its fields. A recipe never names a bus, a method or a
+    setting: the entry's code holds those, and its card rule."""
+    where = f"The desktop action of {name}"
+    if _unquoted(spec) or not isinstance(spec, dict) or "action" not in spec:
+        raise ValueError(f"{where} has to be a mapping with an action, such as "
+                         "{action: night_light, turn: on}.")
+    for key in spec:
+        if isinstance(key, bool):   # YAML 1.1 reads an unquoted on or off as true or false
+            raise ValueError(f"{where} has a field YAML read as {str(key).lower()}. Write "
+                             "turn: on or turn: off.")
+    entry = spec["action"]
+    if not isinstance(entry, str) or entry not in desktop.DESKTOP:
+        raise ValueError(f"The action {name} names a desktop action Tux doesn't have: "
+                         f"{shown(entry, 40)}. It has {desktop.listed()}.")
+    fields = dict(desktop.DESKTOP[entry].fields)
+    unknown = sorted(map(str, set(spec) - {"action"} - set(fields)))
+    if unknown:
+        takes = f"only {' and '.join(fields)}" if fields else "nothing but its name"
+        raise ValueError(f"The desktop action {entry} of {name} takes {takes}, not "
+                         f"{shown(', '.join(unknown), 60)}.")
+    missing = [field for field in fields if field not in spec]
+    if missing:
+        raise ValueError(f"The desktop action {entry} of {name} needs {' and '.join(missing)}.")
+    settings = tuple((field, _switch(name, entry, spec[field], params) if kind == "switch"
+                      else _words(name, spec[field], params))
+                     for field, kind in fields.items())
+    return {"entry": entry, "settings": settings}
+
+
+def _switch(name: str, entry: str, value, params: dict):
+    """True or False as written, or the name of a choice param whose every choice is a way of
+    saying on or off."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.casefold() in desktop.ON_WORDS + desktop.OFF_WORDS:
+        return value.casefold() in desktop.ON_WORDS
+    if _unquoted(value):
+        raise ValueError(f"The turn of {entry} in {name} isn't text. "
+                         f"{_quote_it(_unquoted(value))}")
+    found = PLACEHOLDER.fullmatch(value) if isinstance(value, str) else None
+    param = params.get(found.group(1)) if found else None
+    if param and param.kind == "choice" and all(
+            option.casefold() in desktop.ON_WORDS + desktop.OFF_WORDS for option in param.options):
+        return param.name
+    raise ValueError(f"The turn of {entry} in {name} has to be on or off, or a choice param of "
+                     'on and off, in quotes, like "{turn}".')
+
+
+def _words(name: str, value, params: dict) -> tuple:
+    """A notification's text: the author's words, with only choices and numbers in them. A text
+    value could be anything, and on screen under Tux's name it could pass for the system."""
+    if isinstance(value, str):
+        for placeholder in PLACEHOLDER.findall(value):
+            if placeholder in params and params[placeholder].kind == "text":
+                raise ValueError(f"The notification of {name} uses {{{placeholder}}}, a text "
+                                 "param. Only choice and number params can go in one.")
+    return _template(name, "notification text", value, desktop.MAX_NOTE_CHARS, set(params))
+
+
+def _setting_names(value) -> set:
+    if isinstance(value, str):
+        return {value}
+    return _names(value) if isinstance(value, tuple) else set()
+
+
 def _page(name) -> str:
     """A Settings page by its title, a word app.open knows it by, or its file's name, in any
     case: appearance, Wi-Fi, universal-access. The file's name is what open_entry takes."""
@@ -603,7 +679,8 @@ def _defaults_cover(name: str, fields: dict, params: dict, required: tuple) -> N
                        *(_names(v) for _, _, v in fields.get("query", ())),
                        _json_names(fields.get("body")) if fields.get("body_kind") == "json"
                        else _names(fields.get("body") or ()),
-                       _names(fields.get("say") or ()))
+                       _names(fields.get("say") or ()),
+                       *(_setting_names(value) for _, value in fields.get("settings", ())))
     for param in used & set(params):
         if param not in required and params[param].default is None:
             raise ValueError(f"The action {name} uses {param}, which is optional and has no "
@@ -816,6 +893,8 @@ async def _call(plan: Plan, args: dict, config, session):
             return _say(session, config, _sentence(plan.say, found, {}))
         if plan.effect == "open":
             return await asyncio.to_thread(apps.open_entry, plan.app, plan.page, config, session)
+        if plan.effect == "desktop":
+            return await _desktop_call(plan, found, config, session)
         request = build(plan, found)
     except ArgumentError as e:
         return {"error": str(e)}
@@ -842,6 +921,39 @@ async def _call(plan: Plan, args: dict, config, session):
     return Ask(_card_title(request), detail,
                lambda: _send_and_say(plan, request, where, found, config, session),
                timeout_s=CARD_S)
+
+
+def _settings(plan: Plan, found: dict) -> dict:
+    values = {}
+    for field, value in plan.settings:
+        if isinstance(value, bool):
+            values[field] = value
+        elif isinstance(value, str):
+            values[field] = str(found[value]).casefold() in desktop.ON_WORDS
+        else:
+            text = _filled(value, found, lambda v: _clean(v))
+            values[field] = _cut(" ".join(text.split()), desktop.MAX_NOTE_CHARS)
+    return values
+
+
+async def _desktop_call(plan: Plan, found: dict, config, session):
+    """The entry's own card rule decides the card, from the values it will really be given."""
+    entry = desktop.DESKTOP[plan.entry]
+    settings = _settings(plan, found)
+    key = (plan.skill, plan.action, "desktop", plan.entry, tuple(sorted(settings.items())))
+    said = _again(key)
+    if said is not None:
+        return _echo(session, config, said)
+
+    def act() -> dict:
+        done, said = desktop.run(entry, settings, plan.skill)
+        if done:
+            _remember(key, said)
+        return _say(session, config, said)
+    card = entry.card(settings, plan.skill)
+    if card is None:
+        return await asyncio.to_thread(act)
+    return Ask(card[0], card[1], act, timeout_s=CARD_S)
 
 
 def _place(request: Request, config) -> webfetch.Place:
