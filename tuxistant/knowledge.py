@@ -96,14 +96,16 @@ ROOMS = ("room|bedroom|kitchen|bathroom|hall|hallway|office|study|lounge|basemen
 ENDS = ("is|are|was|were|has|have|had|will|would|can|could|in|of|and|or|to|from|than|for|with|at"
         "|on|by|that|which|like|as|compared|versus")
 # What everyone shares: "our solar system" is no more private than "the solar system". The noun
-# has to end the phrase, as "our sun cream" is this home's. After "did our" or the like, the verb
-# that ends the question may follow it, as in "What did our early ancestors eat?".
+# must not start the name of a thing, as "our sun cream" and "our galaxy tab" are this home's, so
+# it is freed unless one of the words in HOUSEHOLD follows it. "What is our sun made of?" is a fact.
 SHARED = ("solar system|galaxy|sun|moon|planet|world|universe|species|ancestors|forebears|earth"
           "|star|stars")
-AUX = "did|does|do|can|could|will|would|should|might|may|must"
-OURS = re.compile(rf"\b(?P<aux>(?:{AUX}) )?our (?=(?:(?:own|nearest|closest|early|earliest|home) )?"
-                  rf"(?:{SHARED})(?:'s\b|$| (?:{ENDS})\b|(?(aux) \w+$|(?!)))"
-                  rf"|own(?:$| (?:{ENDS})\b))")
+HOUSEHOLD = ("cream|lotion|screen|block|hat|lounger|bed|shade|umbrella|glasses|visor|room|deck"
+             "|porch|lamp|light|chart|sign|jar|projector|sticker|map|globe|atlas|cup|clock|tab"
+             "|tablet|phone|watch|buds|charger|boot|pie|fruit|model|poster|mobile|puzzle|book|toy"
+             "|game|set|kit|ticket|trip|tour|fitness|wars|trek")
+OURS = re.compile(rf"\bour (?=(?:(?:own|nearest|closest|early|earliest|home) )?"
+                  rf"(?:{SHARED})(?:'s\b|$| (?!(?:{HOUSEHOLD})s?\b))|own(?:$| (?:{ENDS})\b))")
 DEVICE = r"(?:thermostat|countdown|timers?)"
 READING = ("set|at|on|off|up|over|done|finished|left|going|gone|running|ringing|reading|say|says"
            "|show|shows|showing|read|reads|go|ring|rings|beep|beeping|got|temperature|mode|setting")
@@ -111,10 +113,16 @@ READING = ("set|at|on|off|up|over|done|finished|left|going|gone|running|ringing|
 # is a pomodoro timer set for?" and "How does a thermostat read the temperature?" are facts, and
 # "Is there a timer set?" is not.
 STATE = "set|on|off|up|over|done|finished|left|going|gone|running|ringing|go|went|beeping"
+# Where one here is or whether it works: "Is the thermostat working?" is this home's, and "Who is
+# the countdown host?" is a quiz show.
+WORKING = rf"{STATE}|in|working|broken|stuck|paused|stopped|ticking|counting"
 OWNED = r"(?:the|my|our|this|that)"
 # "the front door of 10 Downing Street" is somebody else's, and so is "the House of Commons", but
 # "the front door of the flat" is this home's.
 ELSEWHERE = rf"(?! of (?!(?:the|my|our|this) (?:{ROOMS}|home)\b))"
+HOME_ROOM = rf"(?:(?:living|dining|sitting|front|spare|guest|utility|games|play|tv) )?(?:{ROOMS})"
+# Asked of one that may be here: the state is the end of it, or a room or a meal follows.
+HERE_AFTER = rf"(?: off)?(?:$| (?:in|on) (?:the|my|our) {HOME_ROOM}\b| for (?:the|my|our) \w+$)"
 LAMP = (rf"(?:(?:\w+ ){{0,2}}(?:lamp|bulb)|(?:(?:\w+ )?(?:{ROOMS}|desk|ceiling|porch|bedside) )?"
         rf"light)s?")
 HERE = re.compile(r"\b(?:" + "|".join((
@@ -131,25 +139,32 @@ HERE = re.compile(r"\b(?:" + "|".join((
     r"reminders?",
     # "Who invented the egg timer?" is a fact, and "Is the oven timer done?" is not.
     rf"{OWNED} (?:\w+ )?{DEVICE}(?:'s| is| are| was)? (?:{READING})",
-    rf"(?:^(?:is|are)|there|got|have|had|did) (?:a|any) (?:\w+ )?{DEVICE} (?:{STATE})",
-    rf"^(?:\w+ )?{DEVICE}(?: (?:{READING}))?$",
+    rf"(?:^(?:is|are)|there|got|has|have|had|did) (?:a|any) (?:\w+ )?{DEVICE} (?:{STATE})"
+    rf"{HERE_AFTER}",
+    # "Final Countdown?" is a song, so a word before the device alone counts only for these two.
+    rf"^(?:(?:\w+ )?(?:timers?|thermostat)|countdown)(?: (?:{READING}))?$",
     rf"(?:'s|is|are|on|at|of|for|in) {OWNED} (?:\w+ )?{DEVICE}$",
-    rf"(?:'s|is|are) {OWNED} (?:\w+ )?{DEVICE} \w+$",
+    rf"(?:'s|is|are) {OWNED} (?:\w+ )?{DEVICE} (?:{WORKING})$",
     r"(?<!invented )(?:any|what|which|how many|all|the) (?:\w+ )?timers?"
     r"(?! (?:was |were )?invented)(?! work)",
-    r"(?:set|put|start|cancel|stop|pause|reset) (?:a |an )?(?:\w+ ){0,2}(?:timer|countdown)",
-    # "Who left on the Mayflower?" went somewhere, and "What's left on the timer?" is a wait.
-    r"(?:time|minutes|seconds|long) (?:is |are )?left|(?:'s|is|are|much|anything|time) left on"
-    r"|left on$",
+    r"(?:set|put|start|cancel|stop|pause|reset) (?:a |an )?(?:\w+ ){0,2}timer",
+    # "Why did mission control stop the countdown?" is history, so a countdown is only a request.
+    r"^(?:(?:can|could|will|would) you |please )?(?:set|start|cancel|stop|pause|reset)"
+    r" (?:a |an |the |my )?(?:\w+ ){0,2}countdown",
+    # "Who left on the Mayflower?" has the shape of "Who left on the lights?", so privacy wins.
+    r"(?:time|minutes|seconds|long) (?:is |are )?left|left on",
     # "How much longer is the Nile than the Amazon?" compares, and a wait doesn't.
-    r"how much longer(?![\w' ]* than\b)",
+    r"how much longer(?: (?:on|for|till|until|left|now|to go|before|is left)\b|(?:[\w' ]* (?:take"
+    r"|takes|need|needs|cook|cooking|run|running|left|done|ready))?$"
+    rf"| (?:is|are) {OWNED} [\w']+(?: [\w']+)?$)",
     r"(?:until|till) [\w' ]*(?:done|ready|finished|cooked)",
     r"will (?:the |my )?[\w ]+ be (?:done|ready|cooked)",
     r"(?<!-)locked(?!-)|unlocked|switched (?:on|off)|turned (?:on|off)|lights? (?:on|off)",
     r"(?:lock|unlock) the (?:\w+ )?(?:door|gate|car|house|shed)s?",
     r"(?:doors?|windows?|gates?|garage|blinds?|curtains?) (?:open|closed|shut)",
-    # "a back door" in software is nobody's, and "the garage rock revival" is music.
-    rf"(?<!\ba )(?:front|back|garage) door{ELSEWHERE}",
+    # "a back door in computing" is nobody's, and "the garage rock revival" is music.
+    rf"(?:front|back|garage) door{ELSEWHERE}(?! (?:in|into) (?:computing|computers|software"
+    rf"|cryptography|encryption|programming|computer security|hacking|malware)\b)",
     r"the garage(?! (?:rock|punk|band|music)s?\b)|the heating|the alarm(?! clock)",
     r"alarm (?:is )?(?:set|armed|disarmed|on|off)",
     rf"in the house{ELSEWHERE}|at home|home assistant|(?:any|some|every|no)(?:one|body) (?:at )?home",
@@ -158,7 +173,7 @@ HERE = re.compile(r"\b(?:" + "|".join((
     r"(?:temperature|humidity) inside|(?:indoor|inside|room) (?:temperature|humidity)",
     # A lamp, light or bulb of this home: "the light from a red dwarf" and "a sodium lamp" are not.
     rf"(?:colou?r|brightness|bright|dim)(?:'s| is| are| of) (?:the|this|that) {LAMP}"
-    rf"(?:$| (?:in|on) (?:the|my|our) (?:\w+ )?(?:{ROOMS})\b| (?:set|now|at)\b)",
+    rf"(?:$| (?:in|on) (?:the|my|our) {HOME_ROOM}\b| set\b| (?:right )?now$| at the moment$)",
     # "Is the kettle on?": asked of a thing as a whole question, it's a thing in this house.
     r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running|done|finished|ready)$",
 )) + r")\b")
@@ -288,7 +303,7 @@ def _plain(heard: str) -> str:
 
 def about_here(heard: str) -> bool:
     """Whether the words are about this computer, its music or timers, or the home."""
-    return bool(HERE.search(OURS.sub(r"\g<aux>the ", _plain(TITLED.sub("title", heard)))))
+    return bool(HERE.search(OURS.sub("the ", _plain(TITLED.sub("title", heard)))))
 
 
 def never_a_fact(heard: str) -> bool:

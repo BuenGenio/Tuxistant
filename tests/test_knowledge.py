@@ -71,7 +71,15 @@ HERE_SHAPES = (
     "Where is our sun cream?", "Is our world cup sweepstake paid?", "Did our sun cream arrive?",
     # A lamp's colour or brightness, worded with a room after it, "set to" or "how bright".
     "How bright is the lamp?", "How bright are the lights?",
-    "What colour is the lamp in the bedroom?", "What colour is the kitchen light set to?")
+    "What colour is the lamp in the bedroom?", "What colour is the kitchen light set to?",
+    # Something left on, a key for this home's back door, and a wait compared with another.
+    "Have I left on the hob?", "Who left on the lights?", "Has someone left on the heater?",
+    "How long have we got left on the rice?", "Do we have a back door key?",
+    "Is there a back door key under the mat?", "Did anyone come to a back door?",
+    "How much longer than the rice does the pasta need?",
+    # Our things named after a shared noun, a timer that went off, and a lamp now.
+    "Did our sun visor arrive?", "Where's our galaxy tab?", "Has a timer gone off?",
+    "Is there a timer set for the pasta?", "How bright is the bedroom lamp now?")
 # Not private but never a fact: what is true only now, and questions about Tux itself.
 NOT_FACT_SHAPES = (
     "Which day of the week is it today?", "Is it a holiday tomorrow?", "What happened yesterday?",
@@ -107,14 +115,29 @@ SHARED_WORDS = (
     "Who sang The Final Countdown?", "What can you do with baking soda?",
     "How many bones are in your hand?", "Who sang Your Song?",
     # The same words where they aren't about a lock, a door, a garage, a timer or a lamp here.
-    "What is locked-in syndrome?", "Who left on the Mayflower?", "What is a back door in computing?",
+    "What is locked-in syndrome?", "What is a back door in computing?",
     "When did the garage rock revival begin?", "How long is a pomodoro timer set for?",
     "What is a thermostat?", "How does a thermostat read the temperature?",
     "How bright is the light from a supernova?", "What colour are the Northern Lights?",
     # Our, with a word before the shared noun, or the verb that ends the question after it.
     "Which galaxy is closest to our own?", "How far is our nearest galaxy?",
     "What did our early ancestors eat?", "How did our universe begin?",
-    "What is our planet's atmosphere made of?")
+    "What is our planet's atmosphere made of?",
+    # Our, with a predicate or a verb of more than one word after the shared noun.
+    "What is our galaxy called?", "What is our sun made of?", "Is our universe infinite?",
+    "Is our sun a star?", "Why is our moon grey?", "When will our sun burn out?",
+    "When did our species leave Africa?", "Where did our moon come from?",
+    "What is our world population?",
+    # A thermostat, countdown or wait that is not one here.
+    "What is the thermostat for?", "Who is the countdown host?", "Final Countdown?",
+    "Is there a countdown on New Year's Eve?", "Did a timer go off before the Challenger launch?",
+    "Why did mission control stop the countdown for Apollo 13?",
+    "How much longer is the Nile compared to the Amazon?", "How much longer will the sun last?",
+    "How much longer is a year on Mars?",
+    # A light that is not a lamp here, at a place or a time.
+    "What colour is the light at the top of the Empire State Building?",
+    "How bright is the light at the end of the tunnel?",
+    "What colour is the light in the operating room?")
 
 
 def reply(text):
