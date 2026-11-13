@@ -268,12 +268,73 @@ class Labels(unittest.TestCase):
 
 class Keeping(InTemp, unittest.TestCase):
     def test_huge_numbers_and_deep_json_do_not_stop_startup(self):
-        self.assertFalse(timers._number(10 ** 400))
-        for payload in ('{"items": [], "next": ' + '9' * 400 + '}', '[' * 100000 + ']' * 100000):
-            self.store.path.write_text(payload)
-            store = timers.Store(self.store.path)
-            self.assertEqual(store.pending(), [])
+        spare = self.folder / "timers.json.broken"
+        for payload in ('[' * 100000 + ']' * 100000, '{"items": ' + '[' * 100000 + ']' * 100000 + '}',
+                        '{"items": [], "next": ' + '9' * 5000 + '}'):
+            with self.subTest(payload[:20]):
+                self.path.write_text(payload)
+                with self.assertLogs("tuxistant", "WARNING"):
+                    store = timers.Store(self.path)     # neither RecursionError nor ValueError
+                self.assertEqual(store.pending(), [])
+                self.assertEqual(spare.read_text(), payload, "set aside like any damaged file")
 
+    def test_a_number_too_big_to_be_true_costs_its_row_and_nothing_else(self):
+        good = {"id": 4, "kind": "timer", "label": "pasta", "due": T0 + 60, "made": T0}
+        huge = 10 ** 400        # past a float: math.isfinite would raise OverflowError
+        rows = [good, {**good, "id": huge}, {**good, "id": 5, "due": huge},
+                {**good, "id": 6, "made": huge}, {**good, "id": 7, "rung": huge},
+                {**good, "id": 8, "ended": -huge}, {**good, "id": 9, "due": 1e300},
+                {**good, "id": 2 ** 60}, {**good, "id": 10, "label": [[[[]]]]}]
+        self.path.write_text(json.dumps({"next": huge, "items": rows}))
+        store = timers.Store(self.path)
+        self.assertEqual([i.id for i in store.pending()], [4])
+        self.assertEqual(store.add("timer", "", T0 + 5, T0).id, 5, "the counter was not believed")
+        self.assertEqual(sorted(i.id for i in timers.Store(self.path).pending()), [4, 5])
+
+    def test_a_counter_at_the_top_never_hands_out_an_id_the_next_start_drops(self):
+        top = timers.MAX_ID
+        for counter, rows in ((top, []), (1, [{"id": top, "kind": "timer", "label": "z",
+                                                "due": T0 + 60, "made": T0}])):
+            with self.subTest(counter=counter, rows=len(rows)):
+                self.path.write_text(json.dumps({"next": counter, "items": rows}))
+                store = timers.Store(self.path)
+                made = [store.add("timer", label, T0 + 5, T0).label for label in ("a", "b")]
+                again = timers.Store(self.path)
+                self.assertEqual(sorted(i.label for i in again.pending()),
+                                 sorted(made + [r["label"] for r in rows]), "all survive")
+                self.assertTrue(all(i.id <= top for i in again.pending()))
+                self.assertEqual(len({i.id for i in again.pending()}), len(again.pending()))
+                again.add("timer", "c", T0 + 5, T0)     # and the count goes on from there
+                self.assertEqual(len(timers.Store(self.path).pending()), len(rows) + 3)
+
+    def test_after_the_count_starts_again_it_steps_over_ids_in_use(self):
+        rows = [{"id": n, "kind": "timer", "label": str(n), "due": T0 + 60, "made": T0}
+                for n in (1, 3, timers.MAX_ID)]
+        self.path.write_text(json.dumps({"next": timers.MAX_ID + 1, "items": rows}))
+        store = timers.Store(self.path)
+        self.assertEqual([store.add("timer", "", T0 + 5, T0).id for _ in range(3)], [2, 4, 5])
+
+    def test_the_last_time_kept_can_be_listed_in_every_time_zone(self):
+        row = {"kind": "reminder", "label": "far", "made": T0}
+        rows = [{**row, "id": 1, "due": timers.LAST_S}, {**row, "id": 2, "due": timers.LAST_S + 1},
+                {"id": 3, "kind": "timer", "label": "pasta", "due": T0 + 60, "made": T0}]
+        self.path.write_text(json.dumps({"next": 4, "items": rows}))
+        self.addCleanup(self.zone, "UTC")
+        for zone in ("UTC", "EAST-14", "WEST+12"):     # POSIX: east of UTC has the minus sign
+            with self.subTest(zone):
+                self.zone(zone)
+                timers.attach(timers.Store(self.path))
+                self.assertEqual([i["id"] for i in timers.listing(T0)], [3, 1])
+                said = timers.list_timers({}, None, now=NOW.astimezone())["timers"]
+                self.assertIn("pasta", said)
+                self.assertIn("far", said)
+                pending = timers._store().pending()
+                self.assertEqual(timers._matching(pending, ["10", "pm"]), [], "by its time")
+
+    @staticmethod
+    def zone(name):
+        os.environ["TZ"] = name
+        system_time.tzset()
 
     def test_add_list_and_due(self):
         later = self.store.add("reminder", "call mum", T0 + 3600, T0)
@@ -1089,16 +1150,19 @@ class Desk:
         self.clock = clock
         self.locked = self.busy = False
         self.chime_wanted = True
+        self.failing, self.partly = None, False     # what goes wrong, and if words were heard first
         self.spoken, self.sounds, self.notified = [], [], []
         self.crier = timers.Announcer(self.say, self.sound, self.notify, lambda: self.locked,
                                       lambda: self.chime_wanted, clock.now)
 
-    async def say(self, text, lead):
+    async def say(self, text, lead, heard):
         if self.locked or self.busy:
             return None
         self.spoken.append((text, lead))
+        if self.failing is None or self.partly:
+            heard()
         job = asyncio.get_running_loop().create_future()
-        job.set_result(None)
+        job.set_result(self.failing)
         return job
 
     async def sound(self, pcm):
@@ -1220,6 +1284,63 @@ class ComingDue(InTemp, unittest.IsolatedAsyncioTestCase):
         desk.locked = False
         await desk.crier.announce(item(label="pasta"))
         self.assertEqual((desk.sounds, desk.spoken), ([], [("Your pasta timer is done.", b"")]))
+
+    async def test_words_that_fail_before_any_is_heard_wait_and_are_tried_again(self):
+        desk = Desk(Clock())
+        desk.failing = "Cannot reach the server at 127.0.0.1:8080"
+        due = item(label="pasta")
+        with self.assertLogs("tuxistant", "WARNING"):
+            self.assertIs(await desk.crier.announce(due), False, "not said, so still owed")
+        self.assertEqual(desk.spoken, [("Your pasta timer is done.", timers.chime())])
+        desk.clock.jump(timers.FAILED_WAIT_S - 1)
+        self.assertIs(await desk.crier.announce(due), False)
+        self.assertEqual(len(desk.spoken), 1, "not tried again at once: each try shows an error")
+        desk.failing = None
+        desk.clock.jump(1)
+        self.assertIs(await desk.crier.announce(due), True)
+        self.assertEqual(desk.spoken[1], ("Your pasta timer finished 1 minute ago.", b""),
+                         "a minute on it is late, so the chime is not heard twice")
+
+    async def test_words_that_keep_failing_wait_longer_each_time_and_are_then_missed(self):
+        desk = Desk(Clock())
+        desk.failing = "Cannot reach the server at 127.0.0.1:8080"
+        due, tried = item(label="pasta"), []
+        with self.assertLogs("tuxistant", "WARNING"):
+            for _ in range(timers.FAILED_TRIES - 1):
+                self.assertIs(await desk.crier.announce(due), False)
+                tried.append(desk.clock.time)
+                desk.clock.jump(desk.crier.failed[due.id][1] - desk.clock.time)
+        with self.assertRaisesRegex(RuntimeError, "Cannot reach"):
+            await desk.crier.announce(due)
+        self.assertEqual([b - a for a, b in zip(tried, tried[1:] + [desk.clock.time])],
+                         [60, 120, 240])
+        self.assertEqual(len(desk.spoken), timers.FAILED_TRIES)
+        self.assertEqual(desk.crier.failed, {}, "nothing is kept for one that is over")
+
+    async def test_words_that_fail_after_some_were_heard_count_as_said(self):
+        desk = Desk(Clock())
+        desk.failing, desk.partly = "The server stopped responding", True
+        self.assertIs(await desk.crier.announce(item(label="pasta")), True, "not said twice")
+        self.assertEqual(desk.crier.failed, {})
+
+    async def test_with_speech_down_it_stays_pending_and_is_said_once_it_is_back(self):
+        clock = Clock()
+        desk = Desk(clock)
+        desk.failing = "Cannot reach the server at 127.0.0.1:8080"
+        self.store.add("timer", "pasta", T0 + 10, T0)
+        task = asyncio.create_task(timers.run(self.store, desk.crier.announce, clock.now,
+                                              clock.sleep, desk.crier.note))
+        self.addAsyncCleanup(asyncio.gather, task, return_exceptions=True)
+        self.addCleanup(task.cancel)
+        with self.assertLogs("tuxistant", "WARNING"):
+            await clock.pass_(30)
+        self.assertEqual((len(desk.spoken), len(self.store.pending())), (1, 1))
+        desk.failing = None
+        await clock.pass_(timers.FAILED_WAIT_S + timers.RETRY_S)
+        self.assertEqual([text for text, _ in desk.spoken],
+                         ["Your pasta timer is done.", "Your pasta timer finished 1 minute ago."])
+        self.assertEqual(self.store.kept()[0].state, "done")
+        self.assertEqual(len(desk.notified), 1)
 
     def test_what_a_screen_would_list(self):
         self.assertEqual(timers.listing(T0), [], "with no store there is nothing to show")

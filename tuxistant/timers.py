@@ -19,6 +19,7 @@ import array
 import asyncio
 import difflib
 import functools
+import itertools
 import json
 import logging
 import math
@@ -44,6 +45,12 @@ MAX_PENDING = 50            # more than anyone sets by voice, and where a model 
 MAX_KEPT = 50               # said, missed and cancelled ones, kept as a record
 MAX_LABEL_CHARS = 60        # a label is a few words; a longer one is the model rambling
 MAX_AHEAD_S = 366 * 86400   # a year. Further off is the model inventing a date
+# What a saved file may hold. Past these a number is damage. A time in the last days of the year
+# 9999 can't be shown in a time zone east of UTC, and one bad row would stop every listing, so
+# the last time is two days short of that: 9999-12-29 00:00 UTC. An id past what JSON keeps
+# exact would be lost on the next start.
+LAST_S = 253402041600
+MAX_ID = 2 ** 53
 MAX_SPOKEN = 6              # a small model reads out all it is given
 LATE_AFTER_S = 60           # under a minute late isn't worth mentioning
 # How long after it was due an item is still worth saying aloud. A timer is about something
@@ -55,6 +62,12 @@ STALE_AFTER_S = {"timer": 3600, "reminder": 86400}
 # the wall clock being set. So no sleep is longer than this before the time is looked at again.
 MAX_NAP_S = 30
 RETRY_S = 2                 # how soon to offer an item again after announce said not now
+# When speech fails before a word is heard, as with the speech server down, the item waits this
+# long to be tried again, twice as long each time, and after FAILED_TRIES it is missed. Each try
+# shows an error, so trying every RETRY_S would flash one every two seconds. The first wait is
+# a minute, so a second try says it is late and has no chime.
+FAILED_WAIT_S = 60
+FAILED_TRIES = 4
 NOTE_WAIT_S = 10            # a note that takes longer than this is given up on
 NOTIFY_WAIT_S = 3           # the desktop answers a notification at once, or isn't going to
 TWICE_S = 10                # the same thing set again this soon is the model repeating itself
@@ -149,11 +162,18 @@ class Full(ValueError):
     """The cap on pending items was reached. Its text is a sentence to say."""
 
 
-def _number(value) -> bool:
-    try:
-        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-    except OverflowError:
-        return False
+def _number(value, top: float = math.inf) -> bool:
+    """A real number from 0 to top. A huge integer is compared, never turned into a float."""
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and 0 <= value <= top)
+
+
+def _count(value) -> bool:
+    return isinstance(value, int) and _number(value, MAX_ID)
+
+
+def _instant(value) -> bool:
+    return _number(value, LAST_S)
 
 
 def _item(row) -> Item | None:
@@ -162,10 +182,9 @@ def _item(row) -> Item | None:
         item = Item(**row)
     except TypeError:
         return None
-    sound = (isinstance(item.id, int) and _number(item.id) and _number(item.due)
-             and _number(item.made) and isinstance(item.label, str) and item.kind in KINDS
-             and item.state in STATES
-             and all(when is None or _number(when) for when in (item.rung, item.ended)))
+    sound = (_count(item.id) and _instant(item.due) and _instant(item.made)
+             and isinstance(item.label, str) and item.kind in KINDS and item.state in STATES
+             and all(when is None or _instant(when) for when in (item.rung, item.ended)))
     return item if sound else None
 
 
@@ -202,7 +221,7 @@ class Store:
             return self._set_aside()
         self.items = list({item.id: item for item in map(_item, rows) if item}.values())
         counter = saved.get("next")
-        self.next_id = max([int(counter) if _number(counter) else 1,
+        self.next_id = max([counter if _count(counter) else 1,
                             *(item.id + 1 for item in self.items)])
 
     def _set_aside(self) -> None:
@@ -258,9 +277,17 @@ class Store:
             if len(self.pending()) >= MAX_PENDING:
                 raise Full(f"You already have {MAX_PENDING} timers and reminders. "
                            "Cancel one first.")
-            item = Item(self.next_id, kind, label, due, now)
-            self._save([*self.items, item], self.next_id + 1)
+            item = Item(self._fresh_id(), kind, label, due, now)
+            self._save([*self.items, item], item.id + 1)
             return item
+
+    def _fresh_id(self) -> int:
+        """The next id, never one in use and never past MAX_ID, which the next start would
+        drop. Only a damaged file gets the count that high, and then it starts again at 1."""
+        used = {i.id for i in self.items}
+        start = self.next_id if self.next_id <= MAX_ID else 1
+        ids = itertools.chain(range(start, MAX_ID + 1), itertools.count(1))
+        return next(n for n in ids if n not in used)
 
     def pending(self) -> list[Item]:
         """What is still to be said, soonest first."""
@@ -761,8 +788,10 @@ def chime() -> bytes:
 class Announcer:
     """The scheduler's two callbacks, in terms of four things a daemon can do.
 
-    say(text, lead) starts speaking, after the sound lead, and returns its job to wait for. It
-    returns None when it must not speak now: Tux is in a turn, or the screen is locked.
+    say(text, lead, heard) starts speaking, after the sound lead, and returns its job to wait
+    for, whose result is what went wrong, if anything. It calls heard() once words have gone to
+    the speaker. It returns None when it must not speak now: Tux is in a turn, or the screen is
+    locked.
     sound(pcm) plays a sound with no words, locked or not. notify(item) leaves a notification.
     locked() says whether the screen is locked, and chimes() whether the chime is wanted.
     """
@@ -770,6 +799,7 @@ class Announcer:
     def __init__(self, say, sound, notify, locked, chimes=lambda: True, now=epoch):
         self.say, self.sound, self.notify = say, sound, notify
         self.locked, self.chimes, self.now = locked, chimes, now
+        self.failed = {}        # item id: (tries that failed, when the next may start)
 
     async def note(self, item: Item) -> None:
         """At the moment it is due: the trace. On a locked screen the chime too, as the words
@@ -783,15 +813,34 @@ class Announcer:
 
     async def announce(self, item: Item) -> bool:
         """Says it if Tux is free, and reports whether it was. Said late, it needs no chime: the
-        person has just come back."""
+        person has just come back. One whose words failed before any was heard is not said: it
+        waits and is tried again, and raises when it has failed FAILED_TRIES times."""
+        tries, after = self.failed.get(item.id, (0, 0))
+        if self.now() < after:
+            return False
         on_time = self.now() - item.due < LATE_AFTER_S
-        job = await self.say(words(item, self.now()), chime() if on_time and self.chimes() else b"")
+        heard = []
+        job = await self.say(words(item, self.now()),
+                             chime() if on_time and self.chimes() else b"",
+                             lambda: heard.append(True))
         if job is None:
             return False
         await asyncio.wait({job})   # the next one must not start over this. Not ours to cancel
-        if not job.cancelled() and job.result():
-            raise RuntimeError(job.result())
-        return True
+        problem = None if job.cancelled() else job.result()
+        if problem is None or heard:    # some was heard: saying it again would say it twice
+            self.failed.pop(item.id, None)
+            return True
+        return self._failed(item, tries + 1, problem)
+
+    def _failed(self, item: Item, tries: int, problem: str) -> bool:
+        if tries >= FAILED_TRIES:
+            self.failed.pop(item.id, None)
+            raise RuntimeError(problem)
+        wait = FAILED_WAIT_S * 2 ** (tries - 1)
+        self.failed[item.id] = (tries, self.now() + wait)
+        log.warning("timers: could not say item %s, trying again in %d seconds: %s",
+                    item.id, wait, problem)
+        return False
 
 
 _attached: Store | None = None

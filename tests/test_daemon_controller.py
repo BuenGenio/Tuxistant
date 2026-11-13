@@ -1172,6 +1172,44 @@ class WhenFree(Case):
         self.assertEqual(len(rig.of("Error")), 1)
         self.assertEqual(rig.ctl.state, "idle")
 
+    async def test_whatever_fails_the_words_the_lead_and_what_came_before_play_to_the_end(self):
+        """stop() clears the buffer, so only a drain lets the chime be heard. Not only a server
+        error: a refused connection, a timeout or a bug in between end the words the same way."""
+        rig = self.rig(self.fake().port)
+        said = []
+        failures = (ConnectionRefusedError("refused"), TimeoutError(), KeyError("voice"))
+        for failure in failures:
+            async def speech(_config, sentence, _voice):
+                if sentence.startswith("Then"):
+                    raise failure
+                return tone(0.1)
+
+            with self.subTest(type(failure).__name__), \
+                    mock.patch.object(controller, "speech", speech), \
+                    mock.patch.object(controller, "ERROR_HOLD_S", 0.01):
+                for text, lead, heard in (("Then nothing.", LEAD, False),
+                                          ("First this. Then nothing.", b"", True)):
+                    said.clear()
+                    job = await rig.ctl.say_when_free(text, lead, lambda: said.append(True))
+                    self.assertTrue(await job, "what went wrong, and never empty: empty is fine")
+                    speaker = rig.speakers[-1]
+                    self.assertEqual(bytes(speaker.written), lead or tone(0.1))
+                    self.assertTrue(speaker.drained, "it was cut off")
+                    self.assertFalse(speaker.stopped)
+                    self.assertEqual(bool(said), heard, "heard is for words, not the chime")
+
+    async def test_a_key_press_still_cuts_the_chime_while_the_words_are_awaited(self):
+        async def speech(*_args):
+            await asyncio.Event().wait()
+
+        rig = self.rig(self.fake().port)
+        with mock.patch.object(controller, "speech", speech):
+            await rig.ctl.say_when_free("Your pasta timer is done.", LEAD)
+            await rig.state("speaking")
+            await rig.ctl.toggle()
+        self.assertTrue(rig.speakers[0].stopped)
+        self.assertFalse(rig.speakers[0].drained)
+
 
 class Notes:
     """Where timers.notify would send a notification. Nothing is on the other end."""
@@ -1232,6 +1270,59 @@ class TimersComeDue(Case):
         with self.assertLogs(service.log, level="WARNING"):
             await service.watch_lock(bus, ctl)
         ctl.set_locked.assert_awaited_once_with(True)
+
+    async def test_a_lock_check_that_fails_in_its_setup_keeps_speech_locked(self):
+        bus = mock.Mock()
+        bus.get_proxy_object.side_effect = RuntimeError("test setup failure")
+        ctl = mock.Mock(set_locked=mock.AsyncMock())
+        with self.assertLogs(service.log, level="WARNING"):
+            await service.watch_lock(bus, ctl)
+        ctl.set_locked.assert_awaited_once_with(True)
+
+    async def test_when_the_lock_setup_fails_the_timers_notify_and_say_nothing(self):
+        broken = mock.Mock()
+        broken.get_proxy_object.return_value.get_interface.side_effect = RuntimeError("test")
+        await self.silent_after(lambda ctl: service.watch_lock(broken, ctl))
+
+    async def test_when_the_lock_task_fails_the_timers_notify_and_say_nothing(self):
+        async def lock_then_fail(controller):   # as if set_locked's own cancel had failed
+            await controller.set_locked(True)
+            raise RuntimeError("test lock failure")
+        await self.silent_after(lock_then_fail)
+
+    async def silent_after(self, check):
+        with self.assertLogs(service.log, level="WARNING"):
+            rig = self.wired(lock=check)
+            self.due_now()
+            await self.until(lambda: self.notes.sent)
+            await asyncio.sleep(0.2)        # several retries' worth
+        self.assertTrue(rig.ctl.locked)
+        self.assertEqual((rig.speakers, self.tts.requests), ([], []), "nothing is heard")
+        self.assertEqual(len(self.store.pending()), 1, "still owed its words")
+        self.assertFalse(self.ticking.done(), "the timers go on")
+
+    async def test_the_scheduler_starts_again_after_a_failure(self):
+        runs = []
+
+        async def run(*_args, **_kwargs):
+            runs.append(True)
+            if len(runs) == 1:
+                raise RuntimeError("test scheduler failure")
+            await asyncio.Event().wait()
+
+        known = asyncio.get_running_loop().create_future()
+        known.set_exception(RuntimeError("test lock failure"))  # not a DBusError, and not fatal
+        with mock.patch.object(service.timers, "run", run), \
+                mock.patch.object(service, "RESTART_S", 0), \
+                self.assertLogs(service.log, level="ERROR") as logged:
+            store = mock.Mock(due=lambda _now: [])
+            ticking = asyncio.create_task(service.tick(store, mock.Mock(), known))
+            await self.until(lambda: len(runs) == 2)
+        self.assertFalse(ticking.done(), "the timers go on")
+        ticking.cancel()
+        await asyncio.gather(ticking, return_exceptions=True)
+        self.assertIn("test lock failure", " ".join(logged.output))
+        self.assertIn("test scheduler failure", " ".join(logged.output))
 
     async def test_scheduler_failure_is_logged(self):
         task = asyncio.get_running_loop().create_future()
@@ -1357,16 +1448,32 @@ class TimersComeDue(Case):
         await asyncio.sleep(0.1)
         self.assertEqual(len(rig.of("Reply")), 1, "and it is not said again")
 
-    async def test_with_the_server_down_the_error_shows_once_and_it_is_not_repeated(self):
+    async def test_with_the_server_down_it_waits_shows_the_error_once_and_is_said_later(self):
         rig = self.wired()
         rig.config.values["server"] = f"127.0.0.1:{free_port()}"    # nothing listens there
-        with mock.patch.object(controller, "ERROR_HOLD_S", 0.01):
+        with mock.patch.object(controller, "ERROR_HOLD_S", 0.01), \
+                mock.patch.object(timers, "FAILED_WAIT_S", 0.5), self.assertLogs(timers.log):
+            self.due_now()
+            await self.until(lambda: rig.of("Error"))
+            await asyncio.sleep(0.2)
+            self.assertEqual(len(rig.of("Error")), 1, "not every two seconds")
+            self.assertEqual(len(self.store.pending()), 1, "nothing was said, so it is still owed")
+            rig.config.values["server"] = f"127.0.0.1:{self.tts.port}"    # back again
+            await self.until(lambda: not self.store.pending())
+        self.assertEqual(self.store.kept()[0].state, "done")
+        self.assertEqual(rig.of("Reply"), ["Your pasta timer is done."] * 2)
+        self.assertEqual(len(self.tts.requests), 1)
+        self.assertEqual(self.notes.sent, ["Pasta timer is done"], "one notification")
+
+    async def test_with_the_server_down_for_good_it_is_missed_in_the_end(self):
+        rig = self.wired()
+        rig.config.values["server"] = f"127.0.0.1:{free_port()}"
+        with mock.patch.object(controller, "ERROR_HOLD_S", 0.01), \
+                mock.patch.object(timers, "FAILED_WAIT_S", 0.02), self.assertLogs(timers.log):
             self.due_now()
             await self.until(lambda: not self.store.pending())
-            await asyncio.sleep(0.2)
-        self.assertEqual(len(rig.of("Error")), 1, "not every two seconds")
-        self.assertEqual(self.notes.sent, ["Pasta timer is done"])
         self.assertEqual(self.store.kept()[0].state, "missed")
+        self.assertEqual(len(rig.of("Error")), timers.FAILED_TRIES)
 
     async def test_started_on_a_locked_screen_with_one_overdue_it_waits_to_know(self):
         learned = asyncio.Event()
