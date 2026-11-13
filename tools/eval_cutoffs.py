@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from tests.mail_index import PROVIDER, SAMPLE, build
-from tuxistant import homeassistant, mail, media, timers
+from tuxistant import apps, homeassistant, mail, media, timers
 from tuxistant.skillhost import Offline
 
 # Every action, and the stand-ins its real handler meets here. An empty entry is let run, and
@@ -34,6 +34,8 @@ ACTIONS = {
     # Reads which phones KDE Connect knows and their battery. Nothing is sent to one.
     "phone.battery": (), "phone.ring": ("phone._activate",),
     "file.open": ("files._launch",),
+    # Opens a window with no card: the list is made up, and nothing is started.
+    "app.open": ("apps._installed", "apps._default_for", "apps._launch"),
     "calendar.events": ("calendars.Eds", "calendars._backend"),
     "calendar.add": ("calendars.Eds", "calendars._backend"),
     "mail.search": ("mail.ROOTS",),
@@ -56,6 +58,32 @@ def blocked(*_args, **_kwargs):
 
 def _open_file(path):
     print(f"   (would open {path.name})")
+    return True
+
+
+def _made_up_app(desktop_id, name, kind="system", shown=True, generics=()) -> apps.App:
+    return apps.App(desktop_id, name, f"/eval/applications/{desktop_id}", name.lower(), kind,
+                    shown, apps._forms([name, apps._id_word(desktop_id)]), apps._forms(generics),
+                    frozenset())
+
+
+# Never the owner's list. "Backup now" is a home-folder shortcut, so it gets a card, declined here.
+MADE_UP_APPS = [
+    _made_up_app("firefox.desktop", "Firefox", generics=["Web Browser"]),
+    _made_up_app("com.spotify.Client.desktop", "Spotify", "Flatpak"),
+    _made_up_app("org.gnome.Ptyxis.desktop", "Terminal", generics=["Terminal"]),
+    _made_up_app("org.gnome.Nautilus.desktop", "Files", generics=["File Manager"]),
+    _made_up_app("org.gnome.Calculator.desktop", "Calculator", generics=["Calculator"]),
+    _made_up_app("backup.desktop", "Backup now", "home"),
+    _made_up_app(apps.SETTINGS_ID, "Settings", shown=False),
+    _made_up_app("gnome-bluetooth-panel.desktop", "Bluetooth", shown=False),
+    _made_up_app("gnome-display-panel.desktop", "Displays", shown=False),
+    _made_up_app("gnome-sound-panel.desktop", "Sound", shown=False),
+]
+
+
+def _open_app(path):
+    print(f"   (would open {Path(path).name})")
     return True
 
 
@@ -185,6 +213,9 @@ def stand_ins(folder: Path) -> dict:
 
     return {
         "files._launch": _open_file,
+        "apps._installed": lambda: list(MADE_UP_APPS),
+        "apps._default_for": lambda scheme: "firefox.desktop" if scheme == "https" else None,
+        "apps._launch": _open_app,
         "phone._activate": blocked,
         "calendars.Eds": blocked,
         "calendars._backend": NoCalendars,
