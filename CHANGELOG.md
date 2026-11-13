@@ -1,5 +1,7 @@
 # Changelog
 
+## Not yet released
+
 ## 0.3.0, a preview
 
 A preview. Most of what is new here has run only in tests and in evaluations against a real model, not yet on the owner's own desktop. Mail search was asked four times there: two answers, and two turns cut short. Web search, facts, your own skills, media, timers and Home Assistant have not yet been tried by voice on a real desktop, and Home Assistant has never been used with a real home.
