@@ -172,6 +172,8 @@ class EvaluationServer(unittest.TestCase):
             with self.assertRaises(Refused) as stopped:
                 run_server(["e2e"])
             self.assertIn("TUXISTANT_SERVER", str(stopped.exception))
+            self.assertNotIn("--server", str(stopped.exception))
+            self.assertIn(eval_config.NOTHING_SENT, str(stopped.exception))
             self.assertEqual(asked.call_args.args[0]["server"], DEFAULTS["server"])
         self.assertEqual(run_server(["e2e", "--server", "localhost:8080"]), "localhost:8080")
         with patch.dict("os.environ", {"TUXISTANT_SERVER": "http://model.example.test:8080/"}):
@@ -207,6 +209,16 @@ class EvaluationServer(unittest.TestCase):
                         step.index('set_config("server", "127.0.0.1:9")'))
         self.assertLess(step.index('set_config("server", server)'),
                         step.index('set_config("api_key", key)'))
+
+    def test_the_rejected_key_step_really_sends_a_wrong_key(self):
+        """The daemon drops the key when the server changes, so it goes in again after."""
+        source = (ROOT / "tests" / "shell_harness" / "e2e_scenario.py").read_text()
+        step = source[source.index("async def step_errors"):source.index("async def step_cli(")]
+        restored = step.index('set_config("server", server)')
+        wrong = step.rindex('set_config("api_key", "not-the-key")')
+        self.assertLess(restored, wrong)
+        self.assertLess(wrong, step.rindex('call("Toggle")'))
+        self.assertLess(step.rindex('call("Toggle")'), step.index("errors: rejected key shown"))
 
     def test_each_tool_asks_before_it_reads_the_key(self):
         """Read and never imported: importing one would run it."""

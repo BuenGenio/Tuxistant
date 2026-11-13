@@ -111,8 +111,13 @@ def _refuse(config, why: str):
     raise Refused(f"{why} {NOTHING_SENT}")
 
 
-def evaluation_server(config, argv: list | None = None) -> str:
-    """The server this run may send the key to, set in config in memory only, or SystemExit."""
+UNSET = f"No model server is set up. Name one for this run with {ENV} or {FLAG}."
+RUN_UNSET = f"Name the model server for this run with {ENV}."
+
+
+def evaluation_server(config, argv: list | None = None, unset: str = UNSET) -> str:
+    """The server this run may send the key to, set in config in memory only, or SystemExit.
+    unset is the refusal when no server is named and none is saved."""
     named = _named(sys.argv if argv is None else argv)
     if named is not None:
         server = clean_server(named)
@@ -122,8 +127,7 @@ def evaluation_server(config, argv: list | None = None) -> str:
         return server
     saved = clean_server(str(config["server"] or ""))
     if saved is None or saved == DEFAULTS["server"]:
-        _refuse(config, f"No model server is set up. Name one for this run with {ENV} "
-                        f"or {FLAG}.")
+        _refuse(config, unset)
     if on_this_computer(saved):
         _refuse(config, f"The saved server is on this computer, which gets the key only when "
                         f"named for this run. Use {ENV} or {FLAG}.")
@@ -142,8 +146,9 @@ class _RunOnly:
 
 def run_server(argv: list | None = None) -> str:
     """For a run handed its own key, like tests/shell_harness/e2e.sh: the server named for it,
-    or Refused. Settings are never read, so the default is never taken."""
-    return evaluation_server(_RunOnly(), argv)
+    or Refused. Settings are never read, so the default is never taken. The refusal names only
+    TUXISTANT_SERVER, as e2e.sh and test_e2e_live pass no arguments."""
+    return evaluation_server(_RunOnly(), argv, RUN_UNSET)
 
 
 if __name__ == "__main__":
