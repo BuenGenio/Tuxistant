@@ -32,7 +32,7 @@ Steps 1 to 3 of the plan below are built, and most of step 4. Step 5, recipe ski
 | Server kit | In `server/`, copied from the owner's working server with its host name and user id made general. That general copy has not yet set up a second machine |
 | Local code skills and their sandbox | Built and tested: your own skills load, change and go while the daemon runs, each in bubblewrap. Lights now runs this way. Not yet tried on the real desktop |
 | Recipe skills | Built for 0.5.0 and tested with a pretend internet, a made-up app list and temporary folders. Not yet tried on the real desktop, and the four fixture recipes have not been run through `eval_routing` (checks 23 to 26) |
-| Community registry | Not started |
+| Community registry | Planned, not built: [REGISTRY.md](REGISTRY.md) is the plan the owner agreed on 2026-11-13 |
 
 The code is public under GPL-3.0.
 
@@ -46,7 +46,7 @@ The owner approved this order.
 4. **Under way: more built-in skills.** Calendar is built. General web search, research, facts answered from Wikipedia, mail search for Thunderbird, media control, timers and reminders, and Home Assistant are done, pending real-desktop checks. Opening apps and Settings pages is built, pending real-desktop checks. Still to come: journal, and mail for people who don't use Thunderbird, through GNOME's Online Accounts.
 5. **Built, pending real-desktop checks: recipe skills.** One YAML file in your skills folder with no code of its own, which asks a host it names over HTTP, opens an app or a Settings page, or says a sentence, through daemon code that writes its cards. They load, change and go with the code skills, and share their budget of six actions. Non-built-in skills are refused `shell`. D-Bus is left out: a method name doesn't say what a call will do, so no card could be honest about it. Named desktop actions, written and described by the daemon, are the planned way instead. See "Recipe skills" in [SKILLS.md](SKILLS.md).
 6. **Built, pending real-desktop checks: code skill sandbox.** A skill with its own code runs as an MCP server in a bubblewrap sandbox with only the access it declared, and loads, changes and unloads while the daemon runs. See "Code skills" in [SKILLS.md](SKILLS.md). Local only. The only warning so far is a line on the card, "It is a skill you added.", shown when the taint rule asks.
-7. **Community registry.** A reviewed Git repo first, like Flathub: skills arrive as pull requests, and a static index is built from them onto the same GitHub Pages site. Signing means the host doesn't have to be trusted, so no server is needed. Logins, ratings or uploads would need one, as a small API beside the site rather than instead of it.
+7. **Community registry.** Agreed with the owner on 2026-11-13; [REGISTRY.md](REGISTRY.md) has the whole plan. A reviewed Git repo and a static site on GitHub Pages, with no server: recipes arrive as pull requests, CI checks them with Tux's own loader, and a signed index is built from them. Recipes only at first. Publishers are GitHub accounts and sign with SSH keys, skill ids are `io.github.<user>.<skill>`, and Tux checks every signature and pinned hash itself, so the site is never trusted. Tags grouped into categories, a Browse page in Settings like GNOME's Extension Manager, a revocation list in the index, and a moderation screen for reports (suspend a skill, suspend or ban an author, contact them). MIT or CC0. The owner reviews every pull request at first, and nothing is announced until the first skills have been through it.
 
 ### Rules for shared skills
 
