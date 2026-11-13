@@ -28,14 +28,17 @@ MAX_CHOICES = 3
 CLOSE_ENOUGH = 0.85     # difflib ratio for a misheard name
 AGAIN_S = 5             # a 4B often sends the same call twice in one reply
 SETTINGS_ID = "org.gnome.Settings.desktop"
+GROUP = "Desktop Entry"
 FILLER = {"the", "my", "a", "an", "for", "of", "in"}    # stripped from the front only
 VERBS = {"open", "launch", "start", "show", "me"}       # the 4B often passes the whole request
 TAIL = {"app", "application", "program"}                # stripped from the end, if more is left
 SETTINGS_WORDS = {"setting", "preference", "option", "page", "panel"}   # as _words() leaves them
 SETTINGS_PHRASES = ("control center", "control centre", "control panel")
-KINDS = {"flatpak": "Flatpak", "snap": "Snap", "system": "system", "home": "home"}
+KINDS = {"flatpak": "Flatpak", "snap": "Snap", "system": "system", "home": "home",
+         "other": "other"}
+PACKAGED = {"system", "Flatpak", "Snap"}
 KIND_SAID = {"Flatpak": "a Flatpak", "Snap": "a Snap", "system": "one from the system",
-             "home": "one added in your home folder"}
+             "home": "one added in your home folder", "other": "one from another folder"}
 # An Exec basename that says nothing about the app.
 LAUNCHERS = {"flatpak", "snap", "env", "sh", "bash", "python", "python3", "java", "wine", "gjs",
              "electron", "apprun", "gio", "gtk-launch", "pkexec", "sudo"}
@@ -51,7 +54,7 @@ WHICH = "Which one: {names}?"
 MORE = "Several apps match that, such as {names}. Which one?"
 TWINS = "There's more than one {name}: {kinds}. Say {choices}."
 OPENING = "Opening {name}."
-OPENING_PAGE = "Opening the {title} settings."
+OPENING_PAGE = "Opening {title} in Settings."
 OPENING_SETTINGS = "Opening Settings."
 WONT_OPEN = "{name} wouldn't open."
 NO_SETTINGS = "GNOME Settings isn't installed on this computer."
@@ -59,8 +62,12 @@ NO_PAGE_HERE = "Settings on this computer has no {title} page."
 NO_SUCH_PAGE = ("Settings has no page called {name}. It has pages such as Bluetooth, display, "
                 "sound, Wi-Fi, network and power.")
 CHANGED = "That app's shortcut changed after the card was shown, so I've left it alone."
-CARD_WHY = ("It was added in your home folder, not installed as a package, so it can run any "
-            "command.")
+UNREADABLE = "I can't read that app's shortcut, so I've left it alone."
+CARD_WHY = {"home": "It was added in your home folder, not installed as a package, so it can run "
+                    "any command.",
+            "other": "It isn't from an installed package, so it can run any command."}
+OVER_DBUS = "It may be started over D-Bus by a service of its own, not by this command."
+IN_TERMINAL = "It runs in a terminal."
 
 
 def _single(word: str) -> str:
@@ -105,56 +112,56 @@ def _panel_row(desktop: str, title: str, *words: str) -> Panel:
 # out, as it belongs to the Clocks app.
 PANELS = (
     _panel_row("gnome-bluetooth-panel.desktop", "Bluetooth", "bluetooth"),
-    _panel_row("gnome-display-panel.desktop", "display", "display", "displays", "screen",
+    _panel_row("gnome-display-panel.desktop", "Displays", "display", "displays", "screen",
                "monitor", "resolution", "night light", "scaling"),
-    _panel_row("gnome-sound-panel.desktop", "sound", "sound", "audio", "volume", "speaker",
+    _panel_row("gnome-sound-panel.desktop", "Sound", "sound", "audio", "volume", "speaker",
                "microphone", "headphones", "sound output", "sound input"),
     _panel_row("gnome-wifi-panel.desktop", "Wi-Fi", "wifi", "wi fi", "wireless", "hotspot"),
-    _panel_row("gnome-network-panel.desktop", "network", "network", "ethernet", "wired", "vpn",
+    _panel_row("gnome-network-panel.desktop", "Network", "network", "ethernet", "wired", "vpn",
                "proxy"),
-    _panel_row("gnome-background-panel.desktop", "appearance", "appearance", "background",
+    _panel_row("gnome-background-panel.desktop", "Appearance", "appearance", "background",
                "wallpaper", "dark mode", "dark style", "theme", "accent colour", "accent color"),
-    _panel_row("gnome-notifications-panel.desktop", "notification", "notifications",
+    _panel_row("gnome-notifications-panel.desktop", "Notifications", "notifications",
                "do not disturb"),
-    _panel_row("gnome-power-panel.desktop", "power", "power", "battery", "sleep", "suspend",
+    _panel_row("gnome-power-panel.desktop", "Power", "power", "battery", "sleep", "suspend",
                "power saving", "energy"),
-    _panel_row("gnome-keyboard-panel.desktop", "keyboard", "keyboard", "keyboard shortcuts",
+    _panel_row("gnome-keyboard-panel.desktop", "Keyboard", "keyboard", "keyboard shortcuts",
                "shortcuts", "input sources", "typing"),
-    _panel_row("gnome-mouse-panel.desktop", "mouse and touchpad", "mouse", "touchpad", "trackpad",
+    _panel_row("gnome-mouse-panel.desktop", "Mouse and Touchpad", "mouse", "touchpad", "trackpad",
                "mouse and touchpad"),
-    _panel_row("gnome-printers-panel.desktop", "printer", "printer", "printers", "printing"),
-    _panel_row("gnome-online-accounts-panel.desktop", "online accounts", "online accounts",
+    _panel_row("gnome-printers-panel.desktop", "Printers", "printer", "printers", "printing"),
+    _panel_row("gnome-online-accounts-panel.desktop", "Online Accounts", "online accounts",
                "accounts", "google account", "microsoft account", "nextcloud"),
-    _panel_row("gnome-privacy-panel.desktop", "privacy and security", "privacy", "security",
+    _panel_row("gnome-privacy-panel.desktop", "Privacy and Security", "privacy", "security",
                "privacy and security", "screen lock", "lock screen", "location"),
-    _panel_row("gnome-sharing-panel.desktop", "sharing", "sharing", "file sharing",
+    _panel_row("gnome-sharing-panel.desktop", "Sharing", "sharing", "file sharing",
                "media sharing"),
-    _panel_row("gnome-multitasking-panel.desktop", "multitasking", "multitasking", "workspaces",
+    _panel_row("gnome-multitasking-panel.desktop", "Multitasking", "multitasking", "workspaces",
                "hot corner"),
-    _panel_row("gnome-search-panel.desktop", "search", "search"),
-    _panel_row("gnome-applications-panel.desktop", "apps", "apps", "applications", "default apps",
+    _panel_row("gnome-search-panel.desktop", "Search", "search"),
+    _panel_row("gnome-applications-panel.desktop", "Apps", "apps", "applications", "default apps",
                "default applications", "app permissions"),
-    _panel_row("gnome-universal-access-panel.desktop", "accessibility", "accessibility",
+    _panel_row("gnome-universal-access-panel.desktop", "Accessibility", "accessibility",
                "universal access", "large text", "screen reader", "zoom"),
-    _panel_row("gnome-color-panel.desktop", "colour", "colour", "color", "colour management",
+    _panel_row("gnome-color-panel.desktop", "Colour", "colour", "color", "colour management",
                "color management", "colour profile", "color profile"),
-    _panel_row("gnome-wacom-panel.desktop", "graphics tablet", "graphics tablet",
+    _panel_row("gnome-wacom-panel.desktop", "Graphics Tablet", "graphics tablet",
                "drawing tablet", "tablet", "wacom", "stylus"),
-    _panel_row("gnome-wwan-panel.desktop", "mobile network", "mobile network", "mobile data",
+    _panel_row("gnome-wwan-panel.desktop", "Mobile Network", "mobile network", "mobile data",
                "mobile broadband", "sim"),
-    _panel_row("gnome-wellbeing-panel.desktop", "wellbeing", "wellbeing", "screen time",
+    _panel_row("gnome-wellbeing-panel.desktop", "Wellbeing", "wellbeing", "screen time",
                "break reminders"),
-    _panel_row("gnome-system-panel.desktop", "system", "system", "remote desktop",
+    _panel_row("gnome-system-panel.desktop", "System", "system", "remote desktop",
                "remote login"),
-    _panel_row("gnome-about-panel.desktop", "about", "about", "about this computer",
+    _panel_row("gnome-about-panel.desktop", "About", "about", "about this computer",
                "system details"),
-    _panel_row("gnome-datetime-panel.desktop", "date and time", "date and time", "date", "time",
+    _panel_row("gnome-datetime-panel.desktop", "Date and Time", "date and time", "date", "time",
                "time zone", "timezone"),
-    _panel_row("gnome-region-panel.desktop", "region and language", "region", "language",
+    _panel_row("gnome-region-panel.desktop", "Region and Language", "region", "language",
                "region and language", "formats"),
-    _panel_row("gnome-users-panel.desktop", "users", "users", "user accounts", "password",
+    _panel_row("gnome-users-panel.desktop", "Users", "users", "user accounts", "password",
                "fingerprint", "login", "automatic login"),
-    _panel_row("gnome-ubuntu-panel.desktop", "Ubuntu desktop", "ubuntu desktop", "ubuntu", "dock"),
+    _panel_row("gnome-ubuntu-panel.desktop", "Ubuntu Desktop", "ubuntu desktop", "ubuntu", "dock"),
 )
 
 
@@ -163,12 +170,15 @@ class App:
     id: str
     name: str               # as said and shown: _said(get_name())
     path: str               # absolute, from Gio's own list
-    commandline: str        # for the card only
-    kind: str               # "system", "Flatpak", "Snap" or "home"
+    kind: str               # "system", "Flatpak", "Snap", "home" or "other"
     shown: bool             # NoDisplay entries are reached only by id: Settings pages, a default
-    names: frozenset        # these three in _words() form
+    names: frozenset        # the names shown, translated or not; these five in _words() form
     generics: frozenset
     keywords: frozenset
+    # Matched only exactly and only when no name fits: every Steam game's shortcut runs "steam",
+    # and every Chrome web app runs "google-chrome" from an id starting "chrome-".
+    id_name: str = ""
+    program: str = ""
 
 
 def _gio():
@@ -179,6 +189,12 @@ def _gio():
     except (ImportError, ValueError):
         raise RuntimeError(NO_LIST) from None
     return Gio
+
+
+def _glib():
+    _gio()
+    from gi.repository import GLib
+    return GLib
 
 
 def _installed() -> list[App]:
@@ -204,15 +220,14 @@ def _app(info) -> App:
     path = info.get_filename()
     desktop_id = info.get_id() or Path(path).name
     names = [info.get_name(), info.get_string("Name"), info.get_string("X-GNOME-FullName"),
-             info.get_locale_string("X-GNOME-FullName"), _id_word(desktop_id)]
+             info.get_locale_string("X-GNOME-FullName")]
     program = Path(info.get_executable() or "").name
-    if program.casefold() not in LAUNCHERS:
-        names.append(program)
     keywords = [*(info.get_keywords() or ()), *(info.get_string("Keywords") or "").split(";")]
-    return App(desktop_id, _said(info.get_name() or desktop_id), path,
-               info.get_commandline() or "", _kind(path), bool(info.should_show()),
-               _forms(names), _forms([info.get_generic_name(), info.get_string("GenericName")]),
-               _forms(keywords))
+    return App(desktop_id, _said(info.get_name() or desktop_id), path, _kind(path),
+               bool(info.should_show()), _forms(names),
+               _forms([info.get_generic_name(), info.get_string("GenericName")]),
+               _forms(keywords), _words(_id_word(desktop_id)),
+               "" if program.casefold() in LAUNCHERS else _words(program))
 
 
 def _kind(path: str) -> str:
@@ -221,14 +236,17 @@ def _kind(path: str) -> str:
 
 def _where(real: str) -> str:
     """Judged by where the file really is, as Gio runs whatever a link points at."""
-    data = os.path.realpath(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    home = os.path.realpath(Path.home())
+    data = os.path.realpath(os.environ.get("XDG_DATA_HOME") or f"{home}/.local/share")
     if real.startswith(("/var/lib/flatpak/", f"{data}/flatpak/app/")):
         return "Flatpak"
     if real.startswith(("/var/lib/snapd/", "/snap/")):
         return "Snap"
     if real.startswith(("/usr/", "/nix/store/")):
         return "system"
-    return "home"
+    if real.startswith((f"{home}/", f"{data}/")):
+        return "home"
+    return "other"      # /opt, /etc/xdg, Guix, an extra Flatpak installation: no package vouches
 
 
 def _without_tail(query: str) -> str:
@@ -282,7 +300,11 @@ def _close(squashed: str, entries: list[App]) -> tuple[int | None, list[App]]:
     scored = [(score(entry), entry) for entry in entries]
     found = [entry for value, entry in sorted(scored, key=lambda pair: -pair[0])
              if value >= CLOSE_ENOUGH]
-    return (4, found) if found else (None, [])
+    return (6, found) if found else (None, [])
+
+
+def _is(query: str, forms) -> bool:
+    return query in forms or _squash(query) in {_squash(form) for form in forms}
 
 
 def _matching(query: str, entries: list[App]) -> tuple[int | None, list[App]]:
@@ -291,16 +313,17 @@ def _matching(query: str, entries: list[App]) -> tuple[int | None, list[App]]:
         chosen = [entry for entry in entries if entry.id == wanted]
         if chosen:      # even NoDisplay: the user picked it as their default
             return 1, chosen[:1]
-    squashed = _squash(query)
-    tiers = (lambda e: query in e.names or squashed in {_squash(n) for n in e.names},
+    tiers = (lambda e: _is(query, e.names),
              lambda e: query in e.generics,
              lambda e: any(f" {query} " in f" {name} " for name in e.names),
+             lambda e: _is(query, {e.id_name} - {""}),
+             lambda e: _is(query, {e.program} - {""}),
              lambda e: query in e.keywords)
     shown_ones = [entry for entry in entries if entry.shown]
     for tier, test in enumerate(tiers):
         if found := [entry for entry in shown_ones if test(entry)]:
             return tier, found
-    return _close(squashed, shown_ones)
+    return _close(_squash(query), shown_ones)
 
 
 def _matching_kind(query: str, entries: list[App]) -> tuple[int | None, list[App]]:
@@ -362,44 +385,95 @@ def _open_by_id(desktop_id: str, text: str, entries: list[App], config, session)
 
 
 def _start(app: App, text: str, config, session) -> dict | Ask:
-    if app.kind != "home":
+    if app.kind in PACKAGED:
         return _launch_and_say(app, text, config, session)
-    digest = _digest(app.path)
+    # The card is made from the very bytes whose digest is checked after the click.
+    data = _read(app.path)
+    keys = _keyfile(data) if data is not None else None
+    if keys is None:
+        return _say(session, config, UNREADABLE)
+    digest = hashlib.sha256(data).hexdigest()
 
     def run() -> dict:
         if _digest(app.path) != digest:
             return _say(session, config, CHANGED)
         return _launch_and_say(app, text, config, session)
 
-    return Ask(f"Open {app.name}?",
-               f"{CARD_WHY}\nRuns: {shown(app.commandline, MAX_COMMAND)}\n"
-               f"File: {shown(_tilde(Path(app.path)))}", run)
+    return Ask(f"Open {app.name}?", _card(app, keys), run)
+
+
+def _card(app: App, keys) -> str:
+    lines = [CARD_WHY[app.kind]]
+    if command := _value(keys, "Exec"):
+        lines.append(f"Runs: {shown(command, MAX_COMMAND)}")
+    if _flag(keys, "DBusActivatable"):
+        lines.append(OVER_DBUS)
+    if _flag(keys, "Terminal"):
+        lines.append(IN_TERMINAL)
+    if folder := _value(keys, "Path"):
+        lines.append(f"In folder: {shown(folder)}")
+    lines.append(f"File: {shown(_tilde(Path(app.path)))}")
+    return "\n".join(lines)
+
+
+def _keyfile(data: bytes):
+    GLib = _glib()
+    keys = GLib.KeyFile()
+    try:
+        keys.load_from_bytes(GLib.Bytes.new(data), GLib.KeyFileFlags.NONE)
+    except GLib.Error:
+        return None
+    return keys if keys.has_group(GROUP) else None
+
+
+def _value(keys, key: str) -> str:
+    try:
+        return keys.get_string(GROUP, key) or ""
+    except _glib().Error:
+        return ""
+
+
+def _flag(keys, key: str) -> bool:
+    try:
+        return bool(keys.get_boolean(GROUP, key))
+    except _glib().Error:
+        return False
 
 
 def _launch_and_say(app: App, text: str, config, session) -> dict:
-    if not _again(app.id) and not _launch(app.path):
-        text = WONT_OPEN.format(name=app.name)
+    if not _again(app.id):
+        if not _launch(app.path):
+            return _say(session, config, WONT_OPEN.format(name=app.name))
+        _remember(app.id)
     return _say(session, config, text)
 
 
+# Only launches that worked, so a duplicate call after a failure tries again rather than
+# claiming the app is opening.
 _launched: dict[str, float] = {}
 _launched_lock = threading.Lock()
 
 
 def _again(desktop_id: str) -> bool:
-    now = time.monotonic()
     with _launched_lock:
-        if now - _launched.get(desktop_id, -AGAIN_S) < AGAIN_S:
-            return True
-        _launched[desktop_id] = now
-        return False
+        return time.monotonic() - _launched.get(desktop_id, -AGAIN_S) < AGAIN_S
+
+
+def _remember(desktop_id: str) -> None:
+    with _launched_lock:
+        _launched[desktop_id] = time.monotonic()
+
+
+def _read(path: str) -> bytes | None:
+    try:
+        return Path(path).read_bytes()
+    except OSError:
+        return None
 
 
 def _digest(path: str) -> str:
-    try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    except OSError:
-        return ""
+    data = _read(path)
+    return "" if data is None else hashlib.sha256(data).hexdigest()
 
 
 def _scope(desktop_id: str) -> list[str]:
@@ -429,7 +503,7 @@ def open_app(args: dict, config, session):
     if not query and not settings:
         raise ValueError(NO_NAME)
     entries = _installed()
-    if not query:
+    if not query or (settings and query == "gnome"):     # "GNOME Settings", "GNOME Control Center"
         return _open_by_id(SETTINGS_ID, OPENING_SETTINGS, entries, config, session)
     # An app named exactly this wins ("Terminal", "Clocks"), then a page named exactly this
     # ("Bluetooth" is the page, not Blueman), then looser app matches. "Firefox settings" opens

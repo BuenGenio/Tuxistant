@@ -2,7 +2,7 @@
 
 ## Not yet released
 
-- Tux opens apps and Settings pages: "Open Firefox", "Open Spotify", "Open the Bluetooth settings", "Open the display settings". It opens only what is installed, and asks which one when several match. A shortcut someone added in your home folder, rather than an app installed as a package, shows a card first with the command it runs. "Open Spotify" no longer presses play. Not yet tried on a real desktop.
+- Tux opens apps and Settings pages: "Open Firefox", "Open Spotify", "Open the Bluetooth settings", "Open the display settings". It opens only what is installed, and asks which one when several match. A shortcut that isn't from an installed package, such as one added in your home folder, shows a card first with the command it runs, and says when it starts over D-Bus, in a terminal or in another folder. Whether the model sends "Open Spotify" here rather than pressing play is not yet measured. Not yet tried on a real desktop.
 
 ## 0.3.0, a preview
 

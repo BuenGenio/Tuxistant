@@ -63,7 +63,7 @@ The model can be made to emit any tool call, so it is assumed to ask for anythin
 - **An invented name.** A name that matches nothing gets "I can't find an app called ...". A near miss can open the wrong app, which is a window you close.
 - **A conversation that has read a web page or a mail.** It may have been talked into opening something, but opening sends nothing out, and which app was opened can't carry anything private, so the rule that nothing leaves the house after private data is untouched. Apps installed as packages and Settings pages still open with no card.
 - **A terminal.** It is dangerous only through what is typed into it. Tux can't type into it: dictation starts only on your own key press, and no tool can start it. So a terminal opens with no card. An app that needs root brings its own password prompt.
-- **An entry that does something as soon as it starts.** A desktop file in your home folder can run any command, and is often a script, a sync or a game that acts straight away. Tux can't prove that harmless, which is the shell's rule, and its name may have been written by a web page. So an entry whose real file is outside the system folders, the Flatpak app folders and Snap shows a card with the command it runs and the file it comes from.
+- **An entry that does something as soon as it starts.** A desktop file in your home folder can run any command, and is often a script, a sync or a game that acts straight away. Tux can't prove that harmless, which is the shell's rule, and its name may have been written by a web page. So an entry whose real file is outside the system folders, the Flatpak app folders and Snap shows a card with the command it runs and the file it comes from. The card is built from the same bytes whose digest is checked after the click, so the command shown is the one checked. It also says when the entry may start over D-Bus, where the command is not what runs and a service file in your home folder can hold anything, and when it runs in a terminal or in another folder.
 - **A shadow.** A file in your home folder with the same id as a packaged app or a Settings page is what Gio would run, so it is judged as a home folder entry and gets the card.
 - **The file changing while the card is up.** It is read again after the click, and if it is not the same, Tux leaves it alone.
 - **A name written to be read out.** App names can come from a web page, so a reply naming an app is said by the app and never returned to the model, with angle brackets removed and hidden characters shown as escapes.
@@ -73,7 +73,8 @@ What doesn't hold:
 - A packaged app that does something as soon as it starts opens with no card, even after web text.
 - A remote-desktop app can be opened with no card.
 - The file is checked after the click, but `gio launch` reads it a moment later, so a process already running as you could swap it in between.
-- No review has tried to break it yet.
+- When the entry may start over D-Bus, the card says so, but the D-Bus service file that then runs is neither shown nor checked.
+- One review has read it. It found a card that said "your home folder" for files in `/opt` and `/etc/xdg`, a card that left out D-Bus, Terminal and Path, and a command shown from a different read of the file than the one checked. All three are fixed. No one has tried to break it on a real desktop.
 
 ## Attacks
 

@@ -62,12 +62,13 @@ def _open_file(path):
 
 
 def _made_up_app(desktop_id, name, kind="system", shown=True, generics=()) -> apps.App:
-    return apps.App(desktop_id, name, f"/eval/applications/{desktop_id}", name.lower(), kind,
-                    shown, apps._forms([name, apps._id_word(desktop_id)]), apps._forms(generics),
-                    frozenset())
+    return apps.App(desktop_id, name, f"/eval/applications/{desktop_id}", kind, shown,
+                    apps._forms([name]), apps._forms(generics), frozenset(),
+                    apps._words(apps._id_word(desktop_id)))
 
 
-# Never the owner's list. "Backup now" is a home-folder shortcut, so it gets a card, declined here.
+# Never the owner's list. "Backup now" is a home-folder shortcut whose file isn't there, so it is
+# left alone with no card.
 MADE_UP_APPS = [
     _made_up_app("firefox.desktop", "Firefox", generics=["Web Browser"]),
     _made_up_app("com.spotify.Client.desktop", "Spotify", "Flatpak"),

