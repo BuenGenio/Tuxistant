@@ -33,7 +33,9 @@ cfg = Config()
 evaluation_server(cfg)
 KEY = cfg["api_key"]
 HOME = os.environ.get("TUX_EVAL_HOME") == "1"
-SET_UP = {"ha_server": "eval.invalid:8123", "ha_token": "eval", "tapo_email": "eval@example.test"} if HOME else {}
+# Lights are offered only with a TP-Link account. Made up too, and no code skill is started.
+SET_UP = {"tapo_email": "eval@example.test", "tapo_password": "eval",
+          **({"ha_server": "eval.invalid:8123", "ha_token": "eval"} if HOME else {})}
 # The tools the daemon offers, code skills too, and mail search, which is off until turned on.
 skills = offline({**DEFAULTS, "mail_search": True, **SET_UP}).current()
 REPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3

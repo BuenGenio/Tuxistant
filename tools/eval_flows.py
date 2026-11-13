@@ -189,6 +189,7 @@ cfg.values["mail_search"] = True    # here only: nothing is saved
 # Its tools are offered only when it is set up, and they are to be evaluated whether the owner
 # has one or not. Made-up values, so the real address and token are not in what Skills is given.
 cfg.values["ha_server"], cfg.values["ha_token"] = "eval.invalid:8123", "eval"
+cfg.values["tapo_email"], cfg.values["tapo_password"] = "eval@example.test", "eval"   # the same
 KEY = cfg["api_key"]
 skills = offline(cfg).current()     # no code skill runs, so no light is reached
 ASKS = sys.argv[1:] or [

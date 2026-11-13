@@ -7,8 +7,13 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
+from tuxistant.skillhost import offline  # noqa: E402
 from tuxistant.skills import Skills, risk_of  # noqa: E402
+
+HOME = {"ha_server": "homeassistant.local:8123", "ha_token": "made-up-token"}
+TAPO = {"tapo_email": "fake@example.test", "tapo_password": "made up"}
 
 
 class Risk(unittest.TestCase):
@@ -133,6 +138,36 @@ class Built(unittest.TestCase):
         self.assertTrue(result["declined"])
         self.assertTrue(asked[0].title.startswith("Let org.tuxistant.weather reach "))
         self.assertNotIn("\nAction: time.now", asked[0].detail)
+
+
+class Offered(unittest.TestCase):
+    """Lights and Home Assistant, each told to the model only once Settings holds its account,
+    so neither costs the model accuracy for nothing, and Tapo can't take "the light" from a
+    house that has no bulbs of its own. No folder of the user's is read and no skill starts."""
+
+    def offered(self, **settings) -> set[str]:
+        with tempfile.TemporaryDirectory() as folder:
+            host = offline({**DEFAULTS, **settings}, user=Path(folder) / "skills")
+            return {tool["name"] for tool in host.current().tools()}
+
+    def test_each_is_offered_only_with_its_own_account(self):
+        lights, home = {"lights_set", "lights_status"}, {"home_set", "home_status"}
+        for settings, wanted in (({}, set()), (HOME, home), (TAPO, lights),
+                                 ({**HOME, **TAPO}, lights | home)):
+            with self.subTest(sorted(settings)):
+                self.assertEqual(self.offered(**settings) & (lights | home), wanted)
+
+    def test_half_an_account_is_none(self):
+        for settings in ({"tapo_email": "fake@example.test"}, {"tapo_password": "made up"},
+                         {**TAPO, "tapo_email": "  "}, {**TAPO, "tapo_password": ""}):
+            with self.subTest(sorted(settings)):
+                self.assertNotIn("lights_set", self.offered(**HOME, **settings))
+
+    def test_not_offered_it_is_still_registered(self):
+        with tempfile.TemporaryDirectory() as folder:
+            skills = offline(dict(DEFAULTS), user=Path(folder) / "skills").current()
+        self.assertLessEqual({"lights.set", "lights.status"}, set(skills.actions))
+        self.assertFalse(skills.offered("lights.set") or skills.offered("lights.status"))
 
 
 if __name__ == "__main__":

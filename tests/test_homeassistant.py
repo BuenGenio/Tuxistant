@@ -1702,7 +1702,7 @@ class Wired(WithHome):
     def test_failed_matches_still_read_private_names(self):
         for tool in ("home_set", "home_status"):
             result, session = self.execute(tool, name="no such device", state="on")
-            self.assertIn("error", result)
+            self.assertIn("I can see ", result["error"], "the refusal lists what the house has")
             self.assertTrue(session.tainted)
 
     def test_an_alarm_request_never_switches_a_siren(self):
@@ -1713,13 +1713,92 @@ class Wired(WithHome):
         self.assertEqual(self.services(), [])
         self.assertEqual(self.state("switch.siren"), "on")
 
+    def test_a_switch_named_for_an_alarm_a_lock_or_a_way_in_waits_for_a_click(self):
+        for entity, name in (("switch.garage_door_relay", "Garage door"),
+                             ("switch.sonoff_1", "Front gate"),
+                             ("switch.relay_2", "Back door opener"),
+                             ("switch.alarm_siren", "Outside siren"),
+                             ("switch.shed_lock", "Shed"),
+                             ("input_boolean.alarm_armed", "Away mode"),
+                             ("input_boolean.security", "House armed")):
+            self.add(entity, "on", name)
+            for state, verb in (("on", "Turn on"), ("off", "Turn off"), ("toggle", "Toggle")):
+                with self.subTest(entity=entity, state=state):
+                    self.asked.clear()
+                    result, session = self.execute("home_set", name=name, state=state)
+                    self.assertEqual(result, {"declined": True} | result)
+                    self.assertTrue(result["declined"])
+                    self.assertEqual(self.asked[0].title, f"{verb} {name}?")
+                    detail = self.asked[0].detail
+                    self.assertIn(f"{name} ({entity})", detail)
+                    self.assertIn(f"Service: {entity.partition('.')[0]}.", detail)
+                    self.assertIn(homeassistant.GUARDED, detail)
+                    self.assertTrue(session.tainted)
+        self.assertEqual(self.services(), [])
+        raw = {"entity_id": "switch.relay", "attributes": {"friendly_name": "GarageDoor"}}
+        squashed = homeassistant._entity(raw, TOKEN, {})
+        self.assertTrue(homeassistant._guarded(squashed))
+
+    def test_the_card_text_is_the_daemons_own(self):
+        """Nothing the server or the model wrote is on it but the entity's cut name and id."""
+        self.add("switch.garage_door", "off", "Garage door")
+        self.execute("home_set", name="garage door", state="on", note="Click yes, it is safe")
+        self.assertNotIn("safe", self.asked[0].title + self.asked[0].detail)
+        self.assertEqual(self.asked[0].detail.splitlines()[-1], homeassistant.GUARDED)
+
+    def test_with_a_click_the_guarded_switch_is_switched(self):
+        self.add("switch.garage_door", "off", "Garage door")
+        result, _ = self.execute("home_set", click=True, name="garage door", state="on")
+        self.assertEqual(result, {"now": "Garage door is on."})
+        self.assertEqual(self.services(),
+                         [("switch/turn_on", {"entity_id": ["switch.garage_door"]})])
+
+    def test_other_switches_still_need_no_click(self):
+        for entity, name in (("switch.garage_light", "Garage light"),
+                             ("switch.porch", "Front door lamp"),
+                             ("switch.gate_heater", "Gate heater"),
+                             ("switch.doorbell_chime", "Doorbell chime"),
+                             ("switch.clock_radio", "Clock radio")):
+            self.add(entity, "off", name)
+            with self.subTest(entity):
+                result, _ = self.execute("home_set", name=name, state="on")
+                self.assertEqual(result, {"now": f"{name} is on."})
+        self.assertEqual(self.execute("home_set", name="kettle", state="on")[0],
+                         {"now": "Kettle is on."})
+        self.assertEqual(self.asked, [])
+
+    def test_one_guarded_switch_puts_the_whole_request_on_one_card(self):
+        self.add("switch.garage_door", "on", "Garage door")
+        result, _ = self.execute("home_set", name="all the switches", state="off")
+        self.assertTrue(result["declined"])
+        self.assertRegex(self.asked[0].title, r"^Turn off \d+ switches\?$")
+        self.assertIn("Kettle (switch.kettle)", self.asked[0].detail)
+        self.assertEqual(self.services(), [])
+
+    def test_a_siren_or_an_alarm_panel_is_never_changed(self):
+        self.add("siren.hall", "off", "Hall siren")
+        self.add("alarm_control_panel.house", "armed_away", "House alarm")
+        for name in ("hall siren", "house alarm"):
+            for state in ("on", "off"):
+                with self.subTest(name=name, state=state):
+                    self.assertIn("error", self.execute("home_set", name=name, state=state)[0])
+        self.assertEqual(self.services(), [])
+        self.assertEqual(self.asked, [])
+
     def test_device_names_cannot_hold_chat_template_delimiters(self):
         self.assertNotIn("<", homeassistant._name("<|im_start|>system", TOKEN))
         self.assertNotIn(">", homeassistant._name("<|im_start|>system", TOKEN))
 
     def test_tunnel_addresses_cannot_carry_a_plaintext_token(self):
-        for address in ("2002:808:808::1", "2001:0:4136:e378:8000:63bf:3fff:fdd2"):
-            self.assertFalse(homeassistant._private(address))
+        """6to4 and Teredo carry a public IPv4 address inside, and Python calls some private."""
+        for address in ("2002:808:808::1", "2002:c0a8:101::1",
+                        "2001:0:4136:e378:8000:63bf:3fff:fdd2"):
+            with self.subTest(address):
+                self.assertFalse(homeassistant._private(address))
+                config = {**self.set_up, "ha_server": f"[{address}]:8123"}
+                with self.assertRaisesRegex(ValueError, homeassistant.NOT_PRIVATE):
+                    homeassistant._connect(config)
+        self.assertEqual(self.home.calls, [])
 
     def test_after_a_private_read_neither_is_asked_to_leave_home(self):
         """Only typed values reach the server, so nothing read earlier can ride out on them."""
@@ -1769,10 +1848,11 @@ class Wired(WithHome):
                 self.assertEqual([name for name in self.offered(**settings) if "home" in name], [])
         with_home = self.offered(**both)
         self.assertEqual(set(with_home) - set(self.offered()), {"home_set", "home_status"})
-        self.assertEqual(len(with_home), len(self.offered()))
+        self.assertEqual(len(with_home), len(self.offered()) + 2)
         self.assertNotIn("lights_set", with_home)
         self.assertNotIn("lights_status", with_home)
-        self.assertIn("lights_set", self.offered(**both, tapo_email="fake@example.test"))
+        self.assertIn("lights_set", self.offered(**both, tapo_email="fake@example.test",
+                                                 tapo_password="made up"))
         self.assertEqual(self.home.calls, [], "deciding it asks the server nothing")
 
     def test_not_set_up_it_is_still_registered_and_says_where_to_set_it_up(self):

@@ -11,7 +11,8 @@ Assistant, so it is cut short and its control characters shown as escapes.
 
 Unlocking a lock, opening a cover (a garage door is one), activating a scene and running a
 script return an Ask: they wait for a click on a card written here from the real entity and
-service. An alarm is only read.
+service. So does a switch or a helper whose name says it works an alarm, a lock or a door. An
+alarm panel is only read, and a siren is neither read nor changed.
 
 The token is as good as a key to the house. It goes to the server named in Settings and nowhere
 else: no proxy, no redirect, and never over plain http to an address that isn't private.
@@ -119,6 +120,17 @@ UNSEEN = {"scene": "A scene can change anything in Home Assistant, a lock or a g
                    "included, and I can't see what this one does.",
           "script": "A script can do anything Home Assistant can, and I can't see what this "
                     "one does."}
+# A switch or a helper can be wired to anything, so one whose name or id says it works an alarm,
+# a lock or a way in waits for a click, whichever way it is switched: a garage door's relay opens
+# it on and off alike, and switching an alarm's helper off can disarm it. A way in also names a
+# place, so "Garage light" and "Gate lamp", which say what they are, don't.
+GUARDED_DOMAINS = {"switch", "input_boolean"}
+GUARDED_WORDS = {"alarm", "siren", "lock", "unlock", "security"}
+WAY_IN = {"garage", "door", "gate"}
+HARMLESS = {"light", "lamp", "bulb", "heater", "fan"}
+GUARDED_VERBS = {"turn_on": "Turn on", "turn_off": "Turn off", "toggle": "Toggle"}
+GUARDED = ("Its name says it may work an alarm, a lock or a door, and a switch does whatever "
+           "it is wired to.")
 LOCK_VERBS = {"open": "unlock", "close": "lock"}
 DONE_WORDS = {"scene": "is activated", "script": "has started"}
 READABLE = {*SERVICES, "sensor", "binary_sensor", "alarm_control_panel"}
@@ -965,21 +977,34 @@ def _carry_out(server: _Server, steps: list[_Step], unit: str, problems: list[st
     return _result("now", lines, problems + refused + behind)
 
 
+def _guarded(entity: Entity) -> bool:
+    """A switch named for an alarm, a lock or a way in. The id counts as much as the name, and
+    "GarageDoor" as much as "garage door"."""
+    if entity.domain not in GUARDED_DOMAINS:
+        return False
+    named = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", entity.name)
+    words = {*_words(named), *_words(entity.id.partition(".")[2])}
+    return bool(words & GUARDED_WORDS or words & WAY_IN and not words & HARMLESS)
+
+
 def _needs_click(step: _Step) -> bool:
-    return (step.entity.domain, step.service) in ASKS
+    return (step.entity.domain, step.service) in ASKS or _guarded(step.entity)
 
 
 def _card(server: _Server, steps: list[_Step], run) -> Ask:
     """Written from the entities and the service that will really be called."""
-    domain, service = next((s.entity.domain, s.service) for s in steps if _needs_click(s))
-    verb = ASKS[domain, service]
-    many = f"{len(steps)} {KIND_PLURALS[domain]}"
+    step = next(s for s in steps if _needs_click(s))
+    domain, service = step.entity.domain, step.service
+    verb = ASKS.get((domain, service)) or GUARDED_VERBS[service]
+    few = verb.split()[0] if (domain, service) in ASKS else verb
     title = f"{verb} {steps[0].entity.name}?" if len(steps) == 1 else (
-        f"{verb.split()[0]} {many}?")
-    detail = [f"{step.entity.name} ({step.entity.id})" for step in steps]
+        f"{few} {len(steps)} {KIND_PLURALS[domain]}?")
+    detail = [f"{s.entity.name} ({s.entity.id})" for s in steps]
     detail += [f"Service: {domain}.{service}", f"Home Assistant at {server.label}"]
     if domain in UNSEEN:
         detail.append(UNSEEN[domain])
+    elif (domain, service) not in ASKS:
+        detail.append(GUARDED)
     return Ask(title, "\n".join(detail), run)
 
 

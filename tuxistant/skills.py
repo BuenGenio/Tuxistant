@@ -70,14 +70,15 @@ REACHES = {"news.headlines": livedata.news_hosts}
 # some of its other answers, and this one is off until asked for. The handler checks again.
 SWITCHED = {"mail.search": "mail_search"}
 # Offered only once Settings holds what it needs, for the same reason: on a computer with no Home
-# Assistant the model's list is what it was without these. Each is asked with the config. The
+# Assistant the model's list is what it was without these, and Tapo's tools would take "the
+# light" from Home Assistant without a bulb to show for it. Each is asked with the config. The
 # action stays registered, and its handler says where to set things up if the model names it.
-def _tapo_offered(config):
-    return bool(str(config["tapo_email"] or "").strip()) or not homeassistant.configured(config)
+def _tapo_account(config) -> bool:
+    return all(str(config[key] or "").strip() for key in ("tapo_email", "tapo_password"))
 
 
 SET_UP = {"home.set": homeassistant.configured, "home.status": homeassistant.configured,
-          "lights.set": _tapo_offered, "lights.status": _tapo_offered}
+          "lights.set": _tapo_account, "lights.status": _tapo_account}
 
 # A handler takes (args, config, session) and returns a dict, or an Ask. One defined with async
 # def runs on the event loop and may use the session's confirm, busy, selection and execute.
