@@ -7,7 +7,7 @@ A preview. Most of what is new here has run only in tests and in evaluations aga
 Three changes reach what 0.2.0 already did:
 
 - Every Fn hold is now turned into words first, and a separate model call decides whether it is a question of fact, before the voice model hears it. Apart from the four mail questions, which may have gone this way, it has not run on a real desktop.
-- Tapo lights, which worked in 0.2.0, now run in the skill sandbox. That needs `bwrap` and `prlimit`, an x86_64 or aarch64 computer, and Linux 6.12 or newer with Landlock on. Lights needed none of this in 0.2.0, so without it they stop working after the update. They have not been tried on a real desktop since the move.
+- Tapo lights, which worked in 0.2.0, now run in the skill sandbox. That needs `bwrap` and `prlimit`, an x86_64 or aarch64 computer, and Linux 6.12 or newer with Landlock on. Lights needed none of this in 0.2.0, so without it they stop working after the update. As a skill with the network, they also now ask for a click when the conversation has already read something private, such as your calendar or a file, which 0.2.0 never did. They have not been tried on a real desktop since the move.
 - The daemon now starts at login on every install, not only with the Fn helper. That changes nothing for an install with the Fn helper, and has not been tried without one.
 
 After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. Until then the old version keeps running. For only what has been seen working, stay on 0.2.0.

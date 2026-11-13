@@ -18,7 +18,7 @@ from .shellgate import (BWRAP, PRLIMIT, SANDBOX_MEMORY_BYTES, SANDBOX_TMP_BYTES,
                         seccomp_program)
 
 SKILLKIT = Path(__file__).with_name("skillkit.py")
-STATE_HOME = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+STATE_HOME = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
 STATE_ROOT = STATE_HOME / "tuxistant" / "skills"
 SKILL_AT, STATE_AT, KIT_AT = "/skill", "/state", "/run/tuxistant"
 PYTHON, NODE = "/usr/bin/python3", "/usr/bin/node"

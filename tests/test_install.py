@@ -283,7 +283,7 @@ class Uninstall(Prefix):
         self.assertFalse(self.staged(self.state / "tuxistant").exists())
 
     def test_state_dir_is_where_code_skills_keep_their_state(self):
-        for xdg in ({"XDG_STATE_HOME": str(self.state)}, {}):
+        for xdg in ({"XDG_STATE_HOME": str(self.state)}, {}, {"XDG_STATE_HOME": ""}):
             env = {"HOME": str(self.home), "PATH": os.environ["PATH"], **xdg}
             shell = subprocess.run(
                 ["sh", "-c", '. "$PROJECT/packaging/paths.sh" && printf %s "$STATE_DIR"'],
@@ -295,7 +295,8 @@ class Uninstall(Prefix):
                 cwd=self.tmp, capture_output=True, text=True, timeout=60)
             self.assertEqual(python.returncode, 0, python.stderr)
             expected = Path(shell.stdout) / "skills" / "lights"
-            self.assertTrue(expected.is_relative_to(self.state if xdg else self.home), expected)
+            self.assertTrue(expected.is_relative_to(self.state if xdg.get("XDG_STATE_HOME") else self.home),
+                            expected)
             self.assertEqual(python.stdout.split(), [str(expected)] * 2)
 
     def test_idempotent_and_safe_on_a_clean_system(self):

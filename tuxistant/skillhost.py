@@ -306,7 +306,7 @@ def fingerprint(folder: Path) -> str:
 
 
 def _state_dir(skill_id: str) -> Path:
-    home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+    home = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")   # empty is unset, as in paths.sh
     return home / "tuxistant" / "skills" / skill_id
 
 

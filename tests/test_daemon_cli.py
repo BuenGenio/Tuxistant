@@ -153,10 +153,21 @@ class Doctor(unittest.TestCase):
 
     def test_the_skill_sandbox_is_checked(self):
         from tuxistant import skillbox
+        config = self.config(9)
+        config.values.update(tapo_email="me@example.com", tapo_password="pw")
         for available in (True, False):
             with self.subTest(available), mock.patch.object(skillbox, "available",
                                                             return_value=available):
-                self.assertEqual(self.results(self.config(9))["skill sandbox ready"], available)
+                self.assertEqual(self.results(config)["skill sandbox ready"], available)
+
+    def test_no_sandbox_is_no_failure_when_nothing_needs_it(self):
+        from tuxistant import skillbox
+        with mock.patch.object(skillbox, "available", return_value=False):
+            passed, detail = cli.sandbox_ready(self.config(9))
+            self.assertTrue(passed)
+            self.assertIn("can't run", detail)
+            (self.folder / "data/tuxistant/skills/mine").mkdir(parents=True)
+            self.assertFalse(cli.sandbox_ready(self.config(9))[0])
 
     def test_skill_problems_are_listed(self):
         config = self.config(9)

@@ -39,7 +39,7 @@ It speaks a request, and prints what was heard, the tool call and the reply.
 | Name | Does | GPU memory |
 |---|---|---|
 | `silero-vad-ggml` | Notices when you are speaking | about 0.4 GB, shared with Whisper |
-| `whisper-large-turbo-q5_0` | Speech to text, any language. Dictation uses it too | about 0.9 GB |
+| `whisper-large-turbo-q5_0` | Speech to text, any language. Dictation and, from 0.3.0, every Fn hold use it too | about 0.9 GB |
 | `parakeet-cpp-realtime_eou_120m-v1` | Speech to text for `tux-realtime-eou`, English only | about 0.35 GB |
 | `tux-brain` | Qwen3-4B, the model that answers and picks tools | about 5 GB |
 | `tux-voice` | Kokoro, the voice | about 0.85 GB |

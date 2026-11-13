@@ -123,11 +123,27 @@ def fn_helper(socket: str) -> tuple[bool, str]:
     return True, "not installed, so holding Fn does nothing"
 
 
-def sandbox_ready() -> tuple[bool, str]:
+def sandbox_ready(config) -> tuple[bool, str]:
+    """Only fails when something set up needs it: a TP-Link account, or a skill of your own."""
     from . import skillbox
+    from .shellgate import BWRAP, PRLIMIT, seccomp_program
     if skillbox.available():
         return True, "bubblewrap"
-    return False, "skills with code of their own need bubblewrap: install the bubblewrap package"
+    if not os.access(BWRAP, os.X_OK):
+        why = "install the bubblewrap package"
+    elif not os.access(PRLIMIT, os.X_OK):
+        why = "prlimit, which comes with util-linux, is missing"
+    elif seccomp_program() is None:
+        why = "this computer's processor isn't supported, only x86_64 and aarch64 are"
+    else:
+        why = "the skill kit is missing: install Tuxistant again"
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    own = data_home / "tuxistant" / "skills"
+    needed = (all(str(config[k] or "").strip() for k in ("tapo_email", "tapo_password"))
+              or (own.is_dir() and any(p.is_dir() for p in own.iterdir())))
+    if not needed:
+        return True, "not available, so Tapo lights and your own skills can't run: " + why
+    return False, "Tapo lights and your own skills need it: " + why
 
 
 def skill_problems(config) -> dict[str, str]:
@@ -159,7 +175,7 @@ def checks(config) -> list[tuple[bool, str, str]]:
     cards, cards_detail = extension_can("CanAsk")
     typing, typing_detail = extension_can("CanType")
     speech_to_text = config["transcribe_model"]
-    sandbox, sandbox_detail = sandbox_ready()
+    sandbox, sandbox_detail = sandbox_ready(config)
     problems = skill_problems(config)
     return [
         (True, "Python modules present", ""),
