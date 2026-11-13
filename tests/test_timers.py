@@ -1112,6 +1112,16 @@ class ThroughTheRuntime(InTemp, unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.asked, [], "nothing here needs a click")
         self.assertEqual(self.runtime.skills["org.tuxistant.timers"]["risk"], "low")
 
+    async def test_an_unlabelled_one_listed_or_cancelled_is_private_too(self):
+        """A time alone still comes from an earlier conversation, so after it nothing leaves
+        without a click."""
+        for tool in ("timer_list", "timer_cancel"):
+            with self.subTest(tool):
+                await self.act("timer_set", duration="10 minutes")
+                self.session = Session(self.runtime, self.confirm)
+                self.assertNotIn("error", (await self.act(tool))[1])
+                self.assertTrue(self.session.tainted)
+
     async def test_a_mistake_reaches_the_model_as_words(self):
         for args, why in (({"duration": "a while"}, "didn't understand how long a while is"),
                           ({"day": "yesterday"}, "already passed"), ({}, "Say how long")):

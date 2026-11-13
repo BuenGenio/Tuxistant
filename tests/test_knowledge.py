@@ -191,6 +191,62 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
                                                  {**CONFIG, "fact_lookup": False}))
         self.assertEqual(web.model, [])
 
+    async def test_music_timers_and_the_home_go_the_normal_way_without_the_model(self):
+        """Called a fact, each would be asked of Wikipedia with no click, and answered wrong."""
+        web = Web(self, says=["FACT"] * 40)
+        for heard in ("Who sings this?", "How long is left on the pasta?",
+                      "Is the front door locked?", "What song is this?", "Who\u2019s singing?",
+                      "What album is this from?", "What's playing right now?",
+                      "How many minutes left on the timer?", "When is my dentist reminder?",
+                      "Is the kitchen light on?", "Are the lights off?", "Is the garage open?",
+                      "Is the heating on?", "What is the thermostat set to?",
+                      "Is the alarm armed?", "Is anyone at home?", "WHO SINGS THIS",
+                      "How much time is left?", "Who sang that?", "Is the house alarm set?",
+                      "Is the kettle on?", "Is the oven on?", "Is the oven still on?",
+                      "What's the temperature in the living room?",
+                      "What is the humidity in the bathroom?", "Is anyone home?",
+                      "How cold is it in the house?", "What's the indoor temperature?"):
+            with self.subTest(heard):
+                self.assertFalse(await knowledge.is_fact(heard, CONFIG))
+        self.assertEqual(web.model, [])
+
+    async def test_facts_that_share_their_words_still_reach_the_sorter(self):
+        facts = ("Who wrote Hamlet?", "Who invented the light bulb?", "What is the speed of light?",
+                 "When was the alarm clock invented?", "Who sings Bohemian Rhapsody?",
+                 "Who invented the padlock?", "When did the Golden Gate Bridge open?",
+                 "How long is the Nile?", "What is the House of Lords?",
+                 "What is the temperature in the core of the Sun?", "Who sang Yesterday?",
+                 "Is Pluto a planet?", "How long did the Hundred Years War last?")
+        web = Web(self, says=["FACT"] * len(facts))
+        for heard in facts:
+            with self.subTest(heard):
+                self.assertFalse(knowledge.about_here(heard))
+                self.assertTrue(await knowledge.is_fact(heard, CONFIG))
+        self.assertEqual(len(web.model), len(facts))
+
+    def test_the_sorter_is_told_about_music_timers_and_the_home(self):
+        for word in ("music", "timers", "reminders", "home", "lights", "doors", "locks"):
+            self.assertIn(word, knowledge.SORT)
+        shown = dict(knowledge.SORTED)
+        for said in ("Who is singing right now?", "How long until my eggs are done?",
+                     "Is the back door shut?"):
+            self.assertEqual(shown[f'Message: "{said}"'], "OTHER")
+            self.assertTrue(knowledge.about_here(said), "and they never get as far as the model")
+
+    def test_the_sorter_examples_are_not_the_evaluations_own(self):
+        """An example copied from an evaluation makes that evaluation pass by construction. The
+        music, timer and home ones are checked, as the evaluations measure leaks with those."""
+        root = Path(__file__).resolve().parent.parent
+        evals = "".join((root / "tools" / name).read_text()
+                        for name in ("eval_routing.py", "eval_flows.py", "eval_facts.py"))
+        shown = [message.removeprefix('Message: "').removesuffix('"')
+                 for message, _ in knowledge.SORTED]
+        here = [said for said in shown if knowledge.about_here(said)]
+        self.assertGreaterEqual(len(here), 3)
+        for said in here:
+            with self.subTest(said):
+                self.assertNotIn(said, evals)
+
     async def test_sums_stay_exact_with_the_switch_off(self):
         self.assertTrue(await knowledge.is_fact("What's 7 times 8?",
                                                 {**CONFIG, "fact_lookup": False}))

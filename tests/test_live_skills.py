@@ -212,8 +212,10 @@ class Live(unittest.IsolatedAsyncioTestCase):
             await self.start()
             folder = (BUNDLED / "lights").resolve()
             declared = yaml.safe_load((folder / "skill.yaml").read_text())["actions"]
-            self.assertLessEqual({"lights_set", "lights_status"}, self.tools())
             skills = self.host.current()
+            self.assertLessEqual({"lights.set", "lights.status"}, set(skills.actions))
+            self.assertFalse({"lights_set", "lights_status"} & self.tools(),
+                             "with no TP-Link account the model isn't told of them")
             self.assertEqual(skills.skills["org.tuxistant.lights"]["source"], "bundled")
             self.assertEqual(skills.skills["org.tuxistant.lights"]["risk"], "medium")
             for name, action in declared.items():
@@ -222,6 +224,9 @@ class Live(unittest.IsolatedAsyncioTestCase):
             self.assertEqual({tool["name"] for tool in served}, set(declared))
             result = await self.act("lights_status")
             self.assertIn("TP-Link email and password", result["error"])
+            # Only what the model is told changes: the bulbs stay out of reach in this test.
+            self.config.values.update(tapo_email="fake@example.test", tapo_password="made up")
+            self.assertLessEqual({"lights_set", "lights_status"}, self.tools())
         self.assertEqual(asked, [{"network": True}])
 
 

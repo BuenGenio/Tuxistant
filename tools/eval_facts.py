@@ -94,6 +94,13 @@ UNSEEN_OTHER = [
     "What's on my screen?", "Remind me to call mum", "Email my boss", "Good morning", "I'm tired",
     "Never mind", "How do I install Steam?", "Why is my computer slow?", "What's the latest iPhone?",
     "What's the German word for tree?",
+    # Music, timers and the home, in wordings neither the sorter's examples nor the word filter in
+    # knowledge.py were written from. Keep it that way: don't tune either on these.
+    "Who's this band?", "What's this one called?", "Which artist is on?",
+    "How long till the eggs are done?", "When does the oven timer go off?",
+    "Has the laundry timer finished?", "Did I leave the garage open?",
+    "Are the blinds down in the bedroom?", "Is the back porch light still on?",
+    "How warm is the nursery?", "Is the dishwasher done?", "Who's on the speaker?",
 ]
 SUMS = [
     ("What's 15 percent of 80?", "12"), ("What's seven times eight?", "56"),
