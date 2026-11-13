@@ -823,8 +823,12 @@ async def _call(plan: Plan, args: dict, config, session):
     if said is not None:
         return _echo(session, config, said)
     session.busy(CARD_S)    # a name can take seconds to look up, and nothing has been said yet
+    # The install's own servers first, for webfetch.OWN_WAIT_S at most: a slow one, such as
+    # homeassistant.local away from home, then leaves the host all of SEND_S.
+    own = await asyncio.to_thread(webfetch.own_servers, config)
     try:    # waited for from out here: nothing stops a name lookup from inside the thread
-        where = await asyncio.wait_for(asyncio.to_thread(_place, request, config), SEND_S)
+        where = await asyncio.wait_for(
+            asyncio.to_thread(webfetch.place, request.host, request.port, own), SEND_S)
     except TimeoutError:
         return _say(session, config, NO_ANSWER.format(host=request.host))
     except webfetch.PageError as e:
@@ -842,10 +846,6 @@ async def _call(plan: Plan, args: dict, config, session):
     return Ask(_card_title(request), detail,
                lambda: _send_and_say(plan, request, where, found, config, session),
                timeout_s=CARD_S)
-
-
-def _place(request: Request, config) -> webfetch.Place:
-    return webfetch.place(request.host, request.port, webfetch.own_servers(config))
 
 
 def _card_title(request: Request) -> str:

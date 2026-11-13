@@ -11,6 +11,7 @@ A recipe's request goes through place() and send() instead: to a host its file n
 be a device at home but never this computer or the servers this install talks to.
 """
 import codecs
+import concurrent.futures
 import html
 import http.client
 import ipaddress
@@ -49,9 +50,11 @@ NOT_DEVICES = tuple(map(ipaddress.ip_network, ("100.100.100.100/32", "fd7a:115c:
                                                "fd00:ec2::254/128")))
 SYS_NET = "/sys/class/net"
 ROUTES = "/proc/net/route"
-ADDRESSES6 = "/proc/net/if_inet6"
+ROUTES6 = "/proc/net/ipv6_route"
 IFF_TAP = 0x0002
+IFF_VNET_HDR = 0x4000    # virtio headers: QEMU's tap has them, a VPN's doesn't
 OWN_S = 60              # how long the addresses of the install's own servers are kept
+OWN_WAIT_S = 3          # the most a call waits for them, so a slow one leaves it its own time
 MAX_REPLY_BYTES = 64 * 1024
 RECIPE_AGENT = "Tuxistant"
 RECIPE_ACCEPT = "application/json, text/plain;q=0.9"
@@ -163,7 +166,8 @@ def _server_host(server: str) -> str | None:
 
 OWN_KEYS = ("server", "translate_server", "search_server", "ha_server")
 _own_lock = threading.Lock()
-_own_addresses: dict[tuple, tuple[float, frozenset]] = {}
+_own_addresses: dict[tuple, tuple[float, frozenset, frozenset]] = {}
+_own_pending: dict[str, concurrent.futures.Future] = {}
 
 
 def own_servers(config) -> tuple[set[str], set[str]]:
@@ -171,7 +175,9 @@ def own_servers(config) -> tuple[set[str], set[str]]:
     them, even if they are on the open internet. A name that won't resolve is still refused.
     The names come from the settings every time. The addresses are kept for a minute, as Home
     Assistant away from home, or at homeassistant.local, can take seconds to fail, and every page
-    and recipe call would wait for it."""
+    and recipe call would wait for it. They are looked up together, and waited for OWN_WAIT_S at
+    most: a name still being looked up is refused by name, and its addresses join those kept
+    when its lookup ends."""
     hosts = [host for key in OWN_KEYS if config[key] and (host := _server_host(config[key]))]
     names = {_name(host) for host in hosts}
     key = tuple(config[k] for k in OWN_KEYS)
@@ -179,20 +185,58 @@ def own_servers(config) -> tuple[set[str], set[str]]:
         kept = _own_addresses.get(key)
     if kept and time.monotonic() < kept[0]:
         return names, set(kept[1])
+    lookups = {host: _own_lookup(host) for host in dict.fromkeys(hosts)}
+    concurrent.futures.wait(lookups.values(), timeout=OWN_WAIT_S)
     addresses = set()
-    for host in hosts:
-        try:
-            addresses.update(map(_same, _resolve(host, 0)))
-        except PageError:
-            pass
+    for lookup in lookups.values():
+        if lookup.done():
+            addresses.update(lookup.result())
     with _own_lock:
-        _own_addresses[key] = (time.monotonic() + OWN_S, frozenset(addresses))
-    return names, addresses
+        _own_addresses[key] = (time.monotonic() + OWN_S, frozenset(addresses), frozenset(hosts))
+    for host, lookup in lookups.items():     # one that ended since the wait, before the store
+        if lookup.done():
+            _own_found(host, lookup)
+    with _own_lock:
+        kept = _own_addresses.get(key)
+    return names, set(kept[1]) if kept else addresses
+
+
+def _own_lookup(host: str) -> concurrent.futures.Future:
+    """One lookup of a name at a time: a call that finds it still running waits on that one."""
+    with _own_lock:
+        lookup = _own_pending.get(host)
+        started = lookup is None
+        if started:
+            lookup = _own_pending[host] = concurrent.futures.Future()
+    if started:     # a daemon thread: a lookup can't be stopped, and a hung one mustn't hold exit
+        lookup.add_done_callback(lambda done: _own_found(host, done))
+        threading.Thread(target=_own_resolve, args=(host, lookup), daemon=True).start()
+    return lookup
+
+
+def _own_resolve(host: str, lookup: concurrent.futures.Future):
+    try:
+        found = frozenset(map(_same, _resolve(host, 0)))
+    except Exception:   # anything: a lookup that never ended would make every call wait for it
+        found = frozenset()
+    lookup.set_result(found)
+
+
+def _own_found(host: str, lookup: concurrent.futures.Future):
+    """A lookup has ended: its addresses join every kept list that names it."""
+    found = lookup.result()
+    with _own_lock:
+        if _own_pending.get(host) is lookup:
+            del _own_pending[host]
+        for key, (until, addresses, hosts) in list(_own_addresses.items()):
+            if host in hosts and not found <= addresses:
+                _own_addresses[key] = (until, addresses | found, hosts)
 
 
 def forget_own_servers():
     with _own_lock:
         _own_addresses.clear()
+        _own_pending.clear()
 
 
 def _read_proc(path: str) -> str:
@@ -223,9 +267,20 @@ def _sys(path: str) -> str:
     return _read_proc(path).strip()
 
 
-def _guest_port(root: str, name: str) -> bool:
-    """A tap or a veth: its other end is a virtual machine or a container on this computer. A
-    physical card, or a VLAN or bond stacked on one, isn't."""
+def _devtype(path: str) -> str:
+    """What the kernel calls the device, if anything: bridge, vlan, vxlan, wlan, wireguard and
+    the like. A veth and a tap have none."""
+    for line in _read_proc(os.path.join(path, "uevent")).splitlines():
+        if line.startswith("DEVTYPE="):
+            return line[8:].strip()
+    return ""
+
+
+def _guest_port(root: str, name: str, bridged: bool) -> bool:
+    """A veth, whose other end is a container on this computer, or a virtual machine's tap. A
+    physical card, a VLAN or bond stacked on one, a VXLAN or other tunnel, and a VPN aren't.
+    A tap in a bridge is a virtual machine's. One on its own is a VPN's, such as ZeroTier's or
+    an OpenVPN tap, unless it carries virtio headers, as QEMU's does: a VPN has no use for them."""
     path = os.path.join(root, name)
     if os.path.exists(os.path.join(path, "device")) or os.path.isdir(os.path.join(path, "bridge")):
         return False
@@ -237,10 +292,11 @@ def _guest_port(root: str, name: str) -> bool:
     tun = _sys(os.path.join(path, "tun_flags"))
     if tun:
         try:
-            return bool(int(tun, 16) & IFF_TAP)
+            flags = int(tun, 16)
         except ValueError:
             return False
-    if _sys(os.path.join(path, "type")) != "1":     # Ethernet: not an IP tunnel or a VPN
+        return bool(flags & IFF_TAP) and (bridged or bool(flags & IFF_VNET_HDR))
+    if _devtype(path) or _sys(os.path.join(path, "type")) != "1":   # 1: Ethernet, not IP-only
         return False
     link = _sys(os.path.join(path, "iflink"))      # a veth's peer, in the container's namespace
     return link not in ("", "0") and link != _sys(os.path.join(path, "ifindex"))
@@ -248,8 +304,8 @@ def _guest_port(root: str, name: str) -> bool:
 
 def _guest_interfaces(root: str = SYS_NET) -> set[str]:
     """Docker's and Podman's bridges, libvirt's virbr0, LXD's and the like: a bridge none of whose
-    ports is a physical card, and a tap or veth on its own. A bridge with the house's card in it
-    is the house."""
+    ports is a physical card, and a veth or QEMU's tap on its own. A bridge with the house's card
+    in it is the house."""
     try:
         names = os.listdir(root)
     except OSError:
@@ -261,9 +317,9 @@ def _guest_interfaces(root: str = SYS_NET) -> set[str]:
                 ports = os.listdir(os.path.join(root, name, "brif"))
             except OSError:
                 ports = []
-            if all(_guest_port(root, port) for port in ports):
+            if all(_guest_port(root, port, True) for port in ports):
                 found.add(name)
-        elif _guest_port(root, name):
+        elif _guest_port(root, name, False):
             found.add(name)
     return found
 
@@ -272,45 +328,61 @@ def _little_endian(hexed: str) -> ipaddress.IPv4Address:
     return ipaddress.IPv4Address(bytes.fromhex(hexed)[::-1])
 
 
-def guest_networks(root: str = SYS_NET, routes: str = ROUTES,
-                   addresses6: str = ADDRESSES6) -> list:
-    """The networks this computer's containers and virtual machines live on. Their addresses
-    look like the house's, but what answers there runs on this computer, and a container's port
-    is reachable there even when Docker publishes it only on 127.0.0.1."""
+class Route(NamedTuple):
+    net: ipaddress.IPv4Network | ipaddress.IPv6Network
+    guest: bool     # straight onto a network of this computer's containers or virtual machines
+
+
+def kernel_routes(root: str = SYS_NET, routes: str = ROUTES, routes6: str = ROUTES6) -> list:
+    """The kernel's routes, each marked by whether it leads straight onto a container's or
+    virtual machine's network. Their addresses look like the house's, but what answers there runs
+    on this computer, and a container's port is reachable there even when Docker publishes it
+    only on 127.0.0.1. IPv4 is the main table; IPv6 lists every table."""
     guests, found = _guest_interfaces(root), []
     for line in _read_proc(routes).splitlines()[1:]:
         fields = line.split()
-        if len(fields) < 8 or fields[0] not in guests or fields[2] != "00000000":
+        if len(fields) < 8:
             continue
         try:
             net = ipaddress.IPv4Network(
                 f"{_little_endian(fields[1])}/{_little_endian(fields[7])}", strict=False)
         except ValueError:
             continue
-        if net.prefixlen:
-            found.append(net)
-    for line in _read_proc(addresses6).splitlines():
+        found.append(Route(net, fields[0] in guests and fields[2] == "00000000"
+                           and net.prefixlen > 0))
+    for line in _read_proc(routes6).splitlines():
         fields = line.split()
-        if len(fields) < 6 or fields[5] not in guests or fields[3] != "00":   # 00: global scope
+        if len(fields) < 10:
             continue
         packed = fields[0]
         try:
             net = ipaddress.IPv6Network(
-                ":".join(packed[i:i + 4] for i in range(0, 32, 4)) + f"/{int(fields[2], 16)}",
+                ":".join(packed[i:i + 4] for i in range(0, 32, 4)) + f"/{int(fields[1], 16)}",
                 strict=False)
         except ValueError:
             continue
-        if net.prefixlen:
-            found.append(net)
+        found.append(Route(net, fields[9] in guests and set(fields[4]) == {"0"}
+                           and net.prefixlen > 0))
     return found
 
 
-def _not_a_device(address: str, guests: list) -> bool:
+def _guest(ip, routes: list) -> bool:
+    """Whether the kernel would send to ip onto a guest network: its most specific route says.
+    So a home network inside a wider range a Docker network was given elsewhere is the house.
+    When equally specific routes disagree, it's a guest."""
+    matching = [route for route in routes if route.net.version == ip.version and ip in route.net]
+    if not matching:
+        return False
+    longest = max(route.net.prefixlen for route in matching)
+    return any(route.guest for route in matching if route.net.prefixlen == longest)
+
+
+def _not_a_device(address: str, routes: list) -> bool:
     try:
         ip = ipaddress.ip_address(address.partition("%")[0])
     except ValueError:
         return True
-    return any(ip in net for net in (*NOT_DEVICES, *guests) if net.version == ip.version)
+    return any(ip in net for net in NOT_DEVICES if net.version == ip.version) or _guest(ip, routes)
 
 
 def _is_address(text: str) -> bool:
@@ -342,8 +414,8 @@ def place(host: str, port: int, own: tuple[set[str], set[str]]) -> Place:
     same = set(map(_same, addresses))
     if not addresses or same & own_addresses or same & this_computer():
         raise PageError(NOT_ALLOWED)
-    guests = guest_networks()
-    if any(_not_a_device(address, guests) for address in same):
+    routes = kernel_routes()
+    if any(_not_a_device(address, routes) for address in same):
         raise PageError(NOT_ALLOWED)
     if all(map(public, addresses)):
         return Place(addresses, False)

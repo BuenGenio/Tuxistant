@@ -591,6 +591,40 @@ class OwnServers(unittest.TestCase):
             webfetch.fetch("http://homeassistant.local/", self.config, CLOCK_S)
 
 
+    def test_a_lookup_still_running_is_refused_by_name_and_its_address_kept_when_it_ends(self):
+        """A slow name is waited for OWN_WAIT_S at most. Until its lookup ends it is refused by
+        name, and then by the addresses it gave too, with no second lookup."""
+        release, real = threading.Event(), self.web.resolve
+        self.addCleanup(release.set)
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
+        self.web.names["ha-by-number.example"] = ["192.168.1.30"]
+
+        def hung(host, port):
+            if host == "homeassistant.local":
+                release.wait(5)
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", hung), \
+                mock.patch.object(webfetch, "OWN_WAIT_S", 0.2, create=True), \
+                mock.patch.object(webfetch, "this_computer", return_value=set()):
+            started = time.monotonic()
+            names, addresses = own = webfetch.own_servers(self.config)
+            self.assertLess(time.monotonic() - started, 0.9)
+            self.assertIn("homeassistant.local", names)
+            self.assertIn("192.168.1.20", addresses, "the others were waited for")
+            self.assertNotIn("192.168.1.30", addresses)
+            with self.assertRaises(PageError):
+                webfetch.place("homeassistant.local", 8123, own)
+            webfetch.own_servers(self.config)
+            release.set()
+            for _ in range(100):
+                if "192.168.1.30" in webfetch.own_servers(self.config)[1]:
+                    break
+                time.sleep(0.02)
+            with self.assertRaises(PageError):
+                webfetch.place("ha-by-number.example", 80, webfetch.own_servers(self.config))
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
+
+
 def _hex(address: str) -> str:
     return bytes(reversed(socket.inet_aton(address))).hex().upper()
 
@@ -604,12 +638,15 @@ class Guests(unittest.TestCase):
         self.routes, self.six = [], []
 
     def card(self, name, index, kind="1", link=None, physical=False, tun=None, lower=None,
-             ports=None, route=None, six=None):
+             ports=None, route=None, six=None, devtype=None):
         path = self.net / name
         path.mkdir(parents=True)
         for file, value in (("type", kind), ("ifindex", str(index)),
                             ("iflink", str(index if link is None else link))):
             (path / file).write_text(value + "\n")
+        devtype = devtype or ("bridge" if ports is not None else None)
+        (path / "uevent").write_text((f"DEVTYPE={devtype}\n" if devtype else "")
+                                     + f"INTERFACE={name}\nIFINDEX={index}\n")
         if physical:
             (path / "device").mkdir()
         if tun is not None:
@@ -622,27 +659,37 @@ class Guests(unittest.TestCase):
             for port in ports:
                 (path / "brif" / port).mkdir()
         if route:
-            net, mask = route.split("/")
-            netmask = str(ipaddress.IPv4Network(f"0.0.0.0/{mask}").netmask)
-            self.routes.append(f"{name}\t{_hex(net)}\t00000000\t0001\t0\t0\t0\t"
-                               f"{_hex(netmask)}\t0\t0\t0")
-        for address, length, scope in six or ():
-            packed = socket.inet_pton(socket.AF_INET6, address).hex()
-            self.six.append(f"{packed} {index:02x} {length:02x} {scope} 80 {name}")
+            self.route(name, route)
+        for net, length in six or ():
+            self.route6(name, net, length)
 
-    def found(self):
+    def route(self, name, net, gateway="0.0.0.0"):
+        address, length = net.split("/")
+        netmask = str(ipaddress.IPv4Network(f"0.0.0.0/{length}").netmask)
+        self.routes.append(f"{name}\t{_hex(address)}\t{_hex(gateway)}\t0001\t0\t0\t0\t"
+                           f"{_hex(netmask)}\t0\t0\t0")
+
+    def route6(self, name, net, length, gateway="::"):
+        packed = socket.inet_pton(socket.AF_INET6, net).hex()
+        hop = socket.inet_pton(socket.AF_INET6, gateway).hex()
+        self.six.append(f"{packed} {length:02x} {'0' * 32} 00 {hop} 00000100 00000001 "
+                        f"00000000 00000001 {name:>8}")
+
+    def kernel_routes(self):
         (self.root / "route").write_text(
             "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\t"
             "IRTT\n" + "\n".join(self.routes) + "\n")
-        (self.root / "if_inet6").write_text("\n".join(self.six) + "\n")
-        return {str(net) for net in webfetch.guest_networks(
-            str(self.net), str(self.root / "route"), str(self.root / "if_inet6"))}
+        (self.root / "ipv6_route").write_text("\n".join(self.six) + "\n")
+        return webfetch.kernel_routes(str(self.net), str(self.root / "route"),
+                                      str(self.root / "ipv6_route"))
+
+    def found(self):
+        return {str(route.net) for route in self.kernel_routes() if route.guest}
 
     def test_what_counts_as_a_guest(self):
         self.card("eth0", 2, physical=True, route="192.168.1.0/24",
-                  six=[("2a00:1450::5", 64, "00"), ("fe80::1", 64, "20")])
-        self.card("docker0", 4, ports=[], route="172.17.0.0/16",
-                  six=[("fd00:dead::1", 64, "00"), ("fe80::2", 64, "20")])
+                  six=[("2a00:1450::", 64), ("fe80::", 64)])
+        self.card("docker0", 4, ports=[], route="172.17.0.0/16", six=[("fd00:dead::", 64)])
         self.card("br-1234", 5, ports=["veth1"], route="172.18.0.0/16")
         self.card("veth1", 20, link=2)
         self.card("virbr0", 6, ports=["vnet0"], route="192.168.122.0/24")
@@ -652,20 +699,51 @@ class Guests(unittest.TestCase):
         self.card("ve-box", 23, link=2, route="10.0.0.0/28")       # systemd-nspawn
         self.card("br0", 8, ports=["eth1", "eth0.10"], route="192.168.50.0/24")
         self.card("eth1", 9, physical=True)
-        self.card("eth0.10", 10, link=2, lower="eth0", route="192.168.10.0/24")
+        self.card("eth0.10", 10, link=2, lower="eth0", route="192.168.10.0/24", devtype="vlan")
         self.card("tailscale0", 11, kind="65534", tun="0x5001", route="100.64.0.0/10",
-                  six=[("fd7a:115c:a1e0::1", 128, "00")])
-        self.card("wg0", 12, kind="65534", route="10.6.0.0/24")
+                  six=[("fd7a:115c:a1e0::", 48)])
+        self.card("wg0", 12, kind="65534", route="10.6.0.0/24", devtype="wireguard")
         self.card("tun9", 13, kind="776", link=0, route="10.9.0.0/24")
-        self.routes.append(f"eth0\t00000000\t{_hex('192.168.1.1')}\t0003\t0\t0\t600\t"
-                           f"00000000\t0\t0\t0")
+        self.route("eth0", "0.0.0.0/0", gateway="192.168.1.1")
+        self.route("docker0", "10.99.0.0/16", gateway="172.17.0.5")   # through a container
         self.routes.append("docker0\tnot hex\t00000000\t0001\t0\t0\t0\tzz\t0\t0\t0")
+        self.six.append("not hex at all")
         self.assertEqual(self.found(), {"172.17.0.0/16", "fd00:dead::/64", "172.18.0.0/16",
                                         "192.168.122.0/24", "10.88.0.0/16", "10.0.0.0/28"})
 
+    def test_a_vpn_on_a_tap_or_a_vxlan_is_not_a_guest(self):
+        """ZeroTier and an OpenVPN tap reach other computers, as Tailscale does, and so does a
+        VXLAN or GENEVE tied to a card. QEMU's tap on its own carries virtio headers."""
+        self.card("zt5u4ry", 2, tun="0x1002", route="10.147.17.0/24",
+                  six=[("fd80:56c2:e21c::", 88)])
+        self.card("tap0", 3, tun="0x1002", route="10.8.0.0/24")             # OpenVPN
+        self.card("vxlan100", 4, link=9, route="10.20.0.0/24", devtype="vxlan")
+        self.card("flannel.1", 5, link=9, route="10.244.1.0/24", devtype="vxlan")
+        self.card("gnv0", 6, link=0, route="10.30.0.0/24", devtype="geneve")
+        self.card("tap-vm", 7, tun="0x5002", route="192.168.100.0/24")       # QEMU's own
+        self.card("tun0", 8, kind="65534", tun="0x1001", route="10.7.0.0/24")
+        self.assertEqual(self.found(), {"192.168.100.0/24"})
+
+    def test_the_most_specific_route_decides(self):
+        """A Docker network made on another network can hold the house's range: the kernel
+        sends to the house by its narrower route, and so does this."""
+        self.card("wlan0", 2, physical=True, devtype="wlan", route="192.168.1.0/24",
+                  six=[("fd00:dead:0:5::", 64)])
+        self.card("br-old", 3, ports=[], route="192.168.0.0/20", six=[("fd00:dead::", 48)])
+        self.card("br-same", 4, ports=[], route="10.1.0.0/24")
+        self.route("wlan0", "10.1.0.0/24")      # the same width: refused, as either could win
+        self.route("wlan0", "0.0.0.0/0", gateway="192.168.1.1")
+        routes = self.kernel_routes()
+        for address, guest in (("192.168.1.40", False), ("192.168.3.4", True),
+                               ("192.168.0.9", True), ("192.168.16.2", False),
+                               ("fd00:dead:0:5::9", False), ("fd00:dead:0:6::2", True),
+                               ("10.1.0.5", True), ("8.8.8.8", False), ("2a00::1", False)):
+            with self.subTest(address):
+                self.assertEqual(webfetch._not_a_device(address, routes), guest)
+
     def test_nothing_to_read_is_no_guests(self):
-        self.assertEqual(webfetch.guest_networks(str(self.root / "none"), str(self.root / "x"),
-                                                 str(self.root / "y")), [])
+        self.assertEqual(webfetch.kernel_routes(str(self.root / "none"), str(self.root / "x"),
+                                                str(self.root / "y")), [])
 
 
 class Places(unittest.TestCase):
@@ -710,6 +788,14 @@ class Places(unittest.TestCase):
         for address in ("192.168.1.40", "172.18.0.9", "100.100.100.101", "fd7a:115c:a1e0::5"):
             with self.subTest(address):
                 self.assertTrue(self.place(address).local)
+        self.assertEqual(self.web.dialled, [])
+
+    def test_a_home_network_inside_an_old_docker_range_is_the_house(self):
+        self.web.guests = [ipaddress.ip_network("192.168.0.0/20")]
+        self.web.house = [ipaddress.ip_network("192.168.1.0/24")]
+        self.assertTrue(self.place("192.168.1.40").local)
+        with self.assertRaises(PageError):
+            self.place("192.168.3.4")
         self.assertEqual(self.web.dialled, [])
 
     def test_own_servers_by_name_and_address(self):

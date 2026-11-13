@@ -9,6 +9,7 @@ import socket
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -603,6 +604,40 @@ class Cards(Case):
                 recipes._recent.clear()
                 await self.call("coins_price", {"coin": coin})
         self.assertEqual(self.web.lookups.count("ha.lan"), 1)
+
+    def hung_home_assistant(self):
+        """ha.lan takes as long as homeassistant.local can away from home."""
+        release, real = threading.Event(), self.web.resolve
+        self.addCleanup(release.set)
+
+        def hung(host, port):
+            if host == "ha.lan":
+                release.wait(5)
+            return real(host, port)
+        for module, name, new in ((webfetch, "_resolve", hung), (webfetch, "OWN_WAIT_S", 0.2),
+                                  (recipes, "SEND_S", 0.5)):
+            # create: so this runs on code from before OWN_WAIT_S, and fails there
+            patcher = mock.patch.object(module, name, new, create=True)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    async def test_a_slow_home_assistant_leaves_the_host_its_time(self):
+        """On a cold cache the install's own servers are waited for OWN_WAIT_S at most, before
+        the host's SEND_S starts, so a healthy host isn't said not to answer."""
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        self.hung_home_assistant()
+        result, said = await self.call("coins_price", {"coin": "bitcoin"})
+        self.assertEqual(said, ["One bitcoin is 2 dollars."])
+        self.assertEqual(self.web.dialled, [PUBLIC])
+
+    async def test_a_home_assistant_still_being_looked_up_is_refused_by_name(self):
+        self.hung_home_assistant()
+        text = (EXAMPLES / "coins.yaml").read_text().replace("api.coins.example", "ha.lan")
+        started = time.monotonic()
+        await self.refused_unsent("That recipe's host, ha.lan, isn't somewhere I'll send to.",
+                                  {"ha.lan": [PUBLIC]}, text=text)
+        self.assertLess(time.monotonic() - started, 0.9)
 
     async def test_an_answer_cut_short_is_not_said(self):
         """The deadline hangs up and http.client takes that for the end of the answer: 12345 of
