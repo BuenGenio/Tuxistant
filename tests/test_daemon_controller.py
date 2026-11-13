@@ -1271,6 +1271,36 @@ class TimersComeDue(Case):
             await service.watch_lock(bus, ctl)
         ctl.set_locked.assert_awaited_once_with(True)
 
+    async def test_a_lock_check_that_fails_in_its_setup_keeps_speech_locked(self):
+        bus = mock.Mock()
+        bus.get_proxy_object.side_effect = RuntimeError("test setup failure")
+        ctl = mock.Mock(set_locked=mock.AsyncMock())
+        with self.assertLogs(service.log, level="WARNING"):
+            await service.watch_lock(bus, ctl)
+        ctl.set_locked.assert_awaited_once_with(True)
+
+    async def test_when_the_lock_setup_fails_the_timers_notify_and_say_nothing(self):
+        broken = mock.Mock()
+        broken.get_proxy_object.return_value.get_interface.side_effect = RuntimeError("test")
+        await self.silent_after(lambda ctl: service.watch_lock(broken, ctl))
+
+    async def test_when_the_lock_task_fails_the_timers_notify_and_say_nothing(self):
+        async def lock_then_fail(controller):   # as if set_locked's own cancel had failed
+            await controller.set_locked(True)
+            raise RuntimeError("test lock failure")
+        await self.silent_after(lock_then_fail)
+
+    async def silent_after(self, check):
+        with self.assertLogs(service.log, level="WARNING"):
+            rig = self.wired(lock=check)
+            self.due_now()
+            await self.until(lambda: self.notes.sent)
+            await asyncio.sleep(0.2)        # several retries' worth
+        self.assertTrue(rig.ctl.locked)
+        self.assertEqual((rig.speakers, self.tts.requests), ([], []), "nothing is heard")
+        self.assertEqual(len(self.store.pending()), 1, "still owed its words")
+        self.assertFalse(self.ticking.done(), "the timers go on")
+
     async def test_the_scheduler_starts_again_after_a_failure(self):
         runs = []
 

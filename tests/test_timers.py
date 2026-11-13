@@ -291,6 +291,51 @@ class Keeping(InTemp, unittest.TestCase):
         self.assertEqual(store.add("timer", "", T0 + 5, T0).id, 5, "the counter was not believed")
         self.assertEqual(sorted(i.id for i in timers.Store(self.path).pending()), [4, 5])
 
+    def test_a_counter_at_the_top_never_hands_out_an_id_the_next_start_drops(self):
+        top = timers.MAX_ID
+        for counter, rows in ((top, []), (1, [{"id": top, "kind": "timer", "label": "z",
+                                                "due": T0 + 60, "made": T0}])):
+            with self.subTest(counter=counter, rows=len(rows)):
+                self.path.write_text(json.dumps({"next": counter, "items": rows}))
+                store = timers.Store(self.path)
+                made = [store.add("timer", label, T0 + 5, T0).label for label in ("a", "b")]
+                again = timers.Store(self.path)
+                self.assertEqual(sorted(i.label for i in again.pending()),
+                                 sorted(made + [r["label"] for r in rows]), "all survive")
+                self.assertTrue(all(i.id <= top for i in again.pending()))
+                self.assertEqual(len({i.id for i in again.pending()}), len(again.pending()))
+                again.add("timer", "c", T0 + 5, T0)     # and the count goes on from there
+                self.assertEqual(len(timers.Store(self.path).pending()), len(rows) + 3)
+
+    def test_after_the_count_starts_again_it_steps_over_ids_in_use(self):
+        rows = [{"id": n, "kind": "timer", "label": str(n), "due": T0 + 60, "made": T0}
+                for n in (1, 3, timers.MAX_ID)]
+        self.path.write_text(json.dumps({"next": timers.MAX_ID + 1, "items": rows}))
+        store = timers.Store(self.path)
+        self.assertEqual([store.add("timer", "", T0 + 5, T0).id for _ in range(3)], [2, 4, 5])
+
+    def test_the_last_time_kept_can_be_listed_in_every_time_zone(self):
+        row = {"kind": "reminder", "label": "far", "made": T0}
+        rows = [{**row, "id": 1, "due": timers.LAST_S}, {**row, "id": 2, "due": timers.LAST_S + 1},
+                {"id": 3, "kind": "timer", "label": "pasta", "due": T0 + 60, "made": T0}]
+        self.path.write_text(json.dumps({"next": 4, "items": rows}))
+        self.addCleanup(self.zone, "UTC")
+        for zone in ("UTC", "EAST-14", "WEST+12"):     # POSIX: east of UTC has the minus sign
+            with self.subTest(zone):
+                self.zone(zone)
+                timers.attach(timers.Store(self.path))
+                self.assertEqual([i["id"] for i in timers.listing(T0)], [3, 1])
+                said = timers.list_timers({}, None, now=NOW.astimezone())["timers"]
+                self.assertIn("pasta", said)
+                self.assertIn("far", said)
+                pending = timers._store().pending()
+                self.assertEqual(timers._matching(pending, ["10", "pm"]), [], "by its time")
+
+    @staticmethod
+    def zone(name):
+        os.environ["TZ"] = name
+        system_time.tzset()
+
     def test_add_list_and_due(self):
         later = self.store.add("reminder", "call mum", T0 + 3600, T0)
         sooner = self.store.add("timer", "pasta", T0 + 480, T0)

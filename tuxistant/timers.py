@@ -19,6 +19,7 @@ import array
 import asyncio
 import difflib
 import functools
+import itertools
 import json
 import logging
 import math
@@ -44,9 +45,11 @@ MAX_PENDING = 50            # more than anyone sets by voice, and where a model 
 MAX_KEPT = 50               # said, missed and cancelled ones, kept as a record
 MAX_LABEL_CHARS = 60        # a label is a few words; a longer one is the model rambling
 MAX_AHEAD_S = 366 * 86400   # a year. Further off is the model inventing a date
-# What a saved file may hold. Past these a number is damage: a time after the year 9999 can't be
-# said or shown, and an id past what JSON keeps exact would be lost on the next start.
-LAST_S = 253402300799
+# What a saved file may hold. Past these a number is damage. A time in the last days of the year
+# 9999 can't be shown in a time zone east of UTC, and one bad row would stop every listing, so
+# the last time is two days short of that: 9999-12-29 00:00 UTC. An id past what JSON keeps
+# exact would be lost on the next start.
+LAST_S = 253402041600
 MAX_ID = 2 ** 53
 MAX_SPOKEN = 6              # a small model reads out all it is given
 LATE_AFTER_S = 60           # under a minute late isn't worth mentioning
@@ -274,9 +277,17 @@ class Store:
             if len(self.pending()) >= MAX_PENDING:
                 raise Full(f"You already have {MAX_PENDING} timers and reminders. "
                            "Cancel one first.")
-            item = Item(self.next_id, kind, label, due, now)
-            self._save([*self.items, item], self.next_id + 1)
+            item = Item(self._fresh_id(), kind, label, due, now)
+            self._save([*self.items, item], item.id + 1)
             return item
+
+    def _fresh_id(self) -> int:
+        """The next id, never one in use and never past MAX_ID, which the next start would
+        drop. Only a damaged file gets the count that high, and then it starts again at 1."""
+        used = {i.id for i in self.items}
+        start = self.next_id if self.next_id <= MAX_ID else 1
+        ids = itertools.chain(range(start, MAX_ID + 1), itertools.count(1))
+        return next(n for n in ids if n not in used)
 
     def pending(self) -> list[Item]:
         """What is still to be said, soonest first."""
