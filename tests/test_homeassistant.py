@@ -897,6 +897,9 @@ class FindingIt(WithHome):
     def test_words_are_judged_only_so_far_into_a_name(self):
         self.add("light.attic", "off", "y" * homeassistant.MAX_JUDGED_CHARS + " attic")
         self.assertIn("anything called attic", self.said(self.status, name="attic"))
+        self.add("switch.relay", "off", "y" * (homeassistant.MAX_JUDGED_CHARS - 4) + " garage")
+        with self.subTest("a word the cut splits"):
+            self.assertIn("anything called gar", self.said(self.status, name="gar"))
         raw = {"entity_id": "light.huge", "attributes": {"friendly_name": "word " * 1_000_000}}
         entity = homeassistant._entity(raw, TOKEN, {})
         self.assertLessEqual(len(entity.squashed), homeassistant.MAX_JUDGED_CHARS)
@@ -1848,6 +1851,9 @@ class Wired(WithHome):
                 self.assertNotIn(name.split()[-1].casefold(), cut)
                 self.assertTrue(self.guarded(entity, name))
         self.assertTrue(self.guarded("switch.relay_9", "x" * 200 + " garage door"))
+        fancy = "x" * (homeassistant.MAX_JUDGED_CHARS - 11) + " garage fancy"
+        self.assertEqual(fancy[:homeassistant.MAX_JUDGED_CHARS][-4:], " fan")
+        self.assertTrue(self.guarded("switch.relay_9", fancy), "the fan of fancy is no fan")
         self.assertTrue(self.guarded("switch.garage_door", "x" * 1_000_000), "the id still counts")
 
     def test_a_long_guarded_name_waits_for_a_click_whichever_way_it_is_switched(self):

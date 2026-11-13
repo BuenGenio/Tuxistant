@@ -428,7 +428,11 @@ def _name(text, token: str) -> str:
 def _judged(text, token: str) -> str:
     """A name from the server for finding it and judging it, never to say. The cut for saying
     would lose "garage door" from a long name and add the words of its "(9 more characters)"."""
-    return _cleaned(text, token)[:MAX_JUDGED_CHARS]
+    whole = _cleaned(text, token)
+    if len(whole) <= MAX_JUDGED_CHARS or whole[MAX_JUDGED_CHARS] == " ":
+        return whole[:MAX_JUDGED_CHARS]
+    # the start of a word split by the cut, "garage do", would be a word that finds it
+    return whole[:MAX_JUDGED_CHARS].rsplit(" ", 1)[0]
 
 
 def _kind(entity: Entity) -> str:

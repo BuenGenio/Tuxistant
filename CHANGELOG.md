@@ -2,7 +2,7 @@
 
 ## Not yet released
 
-- Home Assistant finds a device by any word of its name, not only the first 40 characters. "Garage door" now finds a switch named "Shelly relay channel one outside wall garage door", and the words of "(9 more characters)" no longer find anything. Areas work the same way. What Tux says and the card still show the name cut to 40 characters.
+- Home Assistant finds a device by any word in the first 255 characters of its name, not only the first 40. "Garage door" now finds a switch named "Shelly relay channel one outside wall garage door", and the words of "(9 more characters)" no longer find anything. Areas work the same way. What Tux says and the card still show the name cut to 40 characters.
 
 ## 0.3.0, a preview
 
