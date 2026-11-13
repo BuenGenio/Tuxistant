@@ -10,6 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tuxistant import system  # noqa: E402
+from tuxistant.config import DEFAULTS, EDITABLE, Config  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
 
@@ -48,6 +49,73 @@ class Facts(unittest.TestCase):
 
     def test_a_missing_tool_is_empty_not_a_crash(self):
         self.assertEqual(system._tool("/no/such/tool"), "")
+
+
+ROUTE = json.dumps([{"prefsrc": "192.168.1.7", "dev": "wlan0"}])
+TAILNET = json.dumps([{"ifname": "tailscale0", "addr_info": [{"local": "100.101.102.103"}]}])
+
+
+def fake_ip(*command):
+    return TAILNET if "tailscale0" in command else ROUTE if "route" in command else ""
+
+
+class Tailscale(unittest.TestCase):
+    def ask(self, config):
+        with mock.patch.object(system, "_tool", side_effect=fake_ip) as tool:
+            found = system.info({"about": "ip"}, config)["ip"]
+        return found, [call.args for call in tool.call_args_list]
+
+    def test_off_as_installed(self):
+        self.assertIs(DEFAULTS["say_tailscale_address"], False)
+        self.assertIs(EDITABLE["say_tailscale_address"], bool)
+
+    def test_off_it_is_never_looked_up_or_said(self):
+        cases = {"no config": None, "installed": DEFAULTS, "an older config": {},
+                 "written by hand": {**DEFAULTS, "say_tailscale_address": "true"}}
+        for case, config in cases.items():
+            with self.subTest(case):
+                found, calls = self.ask(config)
+                self.assertEqual(found, {"address": "192.168.1.7", "connection": "wlan0"})
+                self.assertNotIn("tailscale", json.dumps(found).casefold())
+                self.assertFalse([c for c in calls if "tailscale0" in c], "ip was run for it")
+
+    def test_every_fact_at_once_leaves_it_out_too(self):
+        with mock.patch.object(system, "_tool", side_effect=fake_ip) as tool:
+            self.assertNotIn("tailscale", json.dumps(system.info({}, DEFAULTS)).casefold())
+        self.assertFalse([c for c in tool.call_args_list if "tailscale0" in c.args])
+
+    def test_on_it_is_said(self):
+        found, calls = self.ask({**DEFAULTS, "say_tailscale_address": True})
+        self.assertEqual(found, {"address": "192.168.1.7", "connection": "wlan0",
+                                 "tailscale": "100.101.102.103"})
+        self.assertIn(("ip", "-j", "-4", "addr", "show", "tailscale0"), calls)
+
+    def test_on_without_tailscale_says_nothing_about_it(self):
+        with mock.patch.object(system, "_tool", side_effect=[ROUTE, ""]):
+            found = system.info({"about": "ip"}, {**DEFAULTS, "say_tailscale_address": True})["ip"]
+        self.assertEqual(found, {"address": "192.168.1.7", "connection": "wlan0"})
+
+    def test_the_tool_the_model_calls_follows_the_switch(self):
+        for on in (False, True):
+            with self.subTest(on=on), mock.patch.object(system, "_tool", side_effect=fake_ip):
+                skills = Skills(config={**DEFAULTS, "say_tailscale_address": on})
+                _, result = asyncio.run(skills.execute("system_info", '{"about": "ip"}', Session()))
+                self.assertIs("tailscale" in result["ip"], on)
+
+    def test_the_switch_reaches_the_tool_through_the_saved_config(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.json"
+            config = Config(path)
+            self.assertIs(config["say_tailscale_address"], False)
+            config.set("say_tailscale_address", True)
+            self.assertIs(Config(path)["say_tailscale_address"], True)
+            found, _ = self.ask(Config(path))
+            self.assertEqual(found["tailscale"], "100.101.102.103")
+            config.set("say_tailscale_address", False)
+            self.assertNotIn("say_tailscale_address", json.loads(path.read_text()),
+                             "the default is not written down")
+            with self.assertRaises(TypeError):
+                config.set("say_tailscale_address", "yes")
 
 
 class Running(unittest.TestCase):

@@ -769,6 +769,16 @@ class Inner(unittest.TestCase):
         row.set_active(False)
         wait(lambda: self.win.config["timer_chime"] is False, "the switch to come back")
 
+    def test_06_zzzz_the_tailscale_address_is_off_until_switched_on(self):
+        row = self.win.general.switches["say_tailscale_address"]
+        self.assertFalse(row.get_active(), "an address on your tailnet is said only when asked for")
+        self.assertEqual(row.get_title(), "Say my Tailscale address")
+        row.set_active(True)
+        wait(lambda: saved() == [["say_tailscale_address", "true"]], "the switch to save")
+        wait(lambda: self.win.config["say_tailscale_address"] is True, "the change to come back")
+        row.set_active(False)
+        wait(lambda: self.win.config["say_tailscale_address"] is False, "the switch to come back")
+
     def test_07_hold_rows_follow_the_switch(self):
         page = self.win.general
         hold, duration = page.switches["fn_hold_enabled"], page.spins["fn_hold_ms"][0]
@@ -1582,7 +1592,7 @@ class Inner(unittest.TestCase):
         page = self.win.general
         new = ("phone_device", "translate_server", "search_server", "fact_lookup", "cloud_enabled",
                "cloud_model", "cloud_key_set", "tapo_email", "tapo_password_set", "mail_search",
-               "timer_chime", "ha_server", "ha_token_set")
+               "timer_chime", "ha_server", "ha_token_set", "say_tailscale_address")
         current = dict(self.win.config)
         self.win.apply_config({key: value for key, value in current.items() if key not in new})
         self.assertFalse(page.cloud.get_active())
