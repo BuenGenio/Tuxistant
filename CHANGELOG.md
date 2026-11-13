@@ -1,6 +1,10 @@
 # Changelog
 
-## Not yet released
+## 0.3.0, a preview
+
+A preview. Most of what is new here has run only in tests and in evaluations against a real model, not yet on the owner's own desktop. Mail search was asked four times there: two answers, and two turns cut short. Web search, facts, your own skills, media, timers and Home Assistant have not yet been tried by voice on a real desktop, and Home Assistant has never been used with a real home. For only what has been seen working, stay on 0.2.0.
+
+How well the model picks the right tool with all of this offered is measured in [docs/TESTING.md](docs/TESTING.md), with what it still gets wrong, such as "Open Spotify" pressing play.
 
 - **Your own skills, with code.** A skill can bring its own program, which runs in a bubblewrap sandbox and may ask for the network and nothing else. Put one in `~/.local/share/tuxistant/skills/` and it loads, changes and goes while Tux runs, with no restart. [docs/SKILLS.md](docs/SKILLS.md#code-skills) shows how to write one. Tapo lights now run this way, and find their bulbs again with a broadcast the first time after updating.
 - **Home Assistant.** "Turn off the kitchen light", "Is the front door locked?" and "Set the heating to 21". It controls and reads lights, plugs, fans, heating, blinds, locks, scenes and scripts by the names they have in Home Assistant. Unlocking, opening, activating a scene and running a script show a card first. Add the address and a long-lived access token in Settings. Until both are set the model isn't offered it, so nothing changes for anyone without one. The token is never handed back, and a new address clears it.

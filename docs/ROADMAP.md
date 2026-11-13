@@ -294,5 +294,6 @@ Move site claims from Soon to Now only after the matching check passes.
 - **Done 2026-11-10, after 0.1.0:** the news source is a choice in Settings.
 - **Done 2026-11-10:** `v0.1.0` is tagged as a preview, and the site's download button points at the tarball GitHub builds for the tag. [CHANGELOG.md](../CHANGELOG.md) has the text of the release page.
 - **Done 2026-11-13:** `v0.2.0` is tagged as the first stable release, from branch `stable-0.2`: 0.1.0 with the calendar, the choice of news source, and tests that pass on a fresh clone. Only what had worked on the real desktop went in. The rest is for 0.3.
+- **Done 2026-11-13:** `v0.3.0` is tagged as a preview (a GitHub prerelease): web search and facts, mail search, your own skills, media, timers and Home Assistant, after four rounds of fixes and review. Only mail search has been asked on the real desktop. The site's download stays on 0.2.0 until the new parts have been seen working there.
 - Have native speakers check the site's translations, including the Auto/Light/Dark words. Five languages now, 25 to 30 later.
 - Replace the favicon, which is still the old penguin.

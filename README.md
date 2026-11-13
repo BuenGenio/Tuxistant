@@ -30,6 +30,8 @@ cd Tuxistant
 
 Or take the download from the website or the [releases page](https://github.com/BuenGenio/Tuxistant/releases), and skip `git`: `tar xzf Tuxistant-0.2.0.tar.gz && cd Tuxistant-0.2.0`.
 
+To try the 0.3.0 preview instead, which adds media, timers, Home Assistant, mail and web search and your own skills, clone with `--branch v0.3.0`. Most of it has only run in tests so far; [CHANGELOG.md](CHANGELOG.md) says which parts.
+
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
 ```sh
