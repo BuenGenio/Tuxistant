@@ -16,11 +16,18 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 - PipeWire with `pw-record` and `pw-cat`
 - `glib-compile-schemas`
 - A LocalAI server with a realtime pipeline (`tux-realtime` by default) and a voice model (`tux-voice`). [server/](server/README.md) has a script that sets one up on a computer with an 8 GB NVIDIA GPU
-- For the skills, all optional: `bwrap` for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, Thunderbird for mail search, `wpctl`, which comes with WirePlumber, for the volume, a Home Assistant of your own for the smart home, a SearXNG server for web search and research, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
+- For the skills, all optional: `bwrap` (bubblewrap) for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, Thunderbird for mail search, `wpctl`, which comes with WirePlumber, for the volume, a Home Assistant of your own for the smart home, and a LibreTranslate server for translation with Piper voices on LocalAI to hear it spoken, both of which [server/](server/README.md) covers
+- For Tapo lights and your own skills, from 0.3.0: the skill sandbox, which needs `bwrap` and `prlimit` on an x86_64 or aarch64 computer, and Linux 6.12 or newer with Landlock on for lights and any skill that uses the network. 0.2.0 ran the lights without it, so without these they stop working after the update
+- For web search, research and the web fallback for facts, from 0.3.0: a SearXNG server of your own, which server/ doesn't set up. Tuxistant looks for it on port 8888 of the voice server unless Settings names another, and it needs JSON output turned on (`formats: [html, json]` under `search:` in its settings.yml)
 
 ## Install
 
-On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code:
+There are two releases to choose from:
+
+- **0.2.0**, the stable release. What it added to 0.1.0 has all worked on the owner's own desktop, and it is what the website offers.
+- **0.3.0**, a preview. It adds media, timers, Home Assistant, mail and web search and your own skills. Most of it has only run in tests so far; [CHANGELOG.md](CHANGELOG.md) says which parts.
+
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.2.0; for the preview, use `--branch v0.3.0` instead:
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
@@ -28,9 +35,7 @@ git clone --branch v0.2.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
 
-Or take the download from the website or the [releases page](https://github.com/BuenGenio/Tuxistant/releases), and skip `git`: `tar xzf Tuxistant-0.2.0.tar.gz && cd Tuxistant-0.2.0`.
-
-To try the 0.3.0 preview instead, which adds media, timers, Home Assistant, mail and web search and your own skills, clone with `--branch v0.3.0`. Most of it has only run in tests so far; [CHANGELOG.md](CHANGELOG.md) says which parts.
+Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.2.0 from the website, and skip `git`: `tar xzf Tuxistant-0.2.0.tar.gz && cd Tuxistant-0.2.0`, or `tar xzf Tuxistant-0.3.0.tar.gz && cd Tuxistant-0.3.0` for the preview.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
@@ -51,7 +56,7 @@ On a new account `~/.local/bin` isn't on your `PATH` until you log back in. Unti
 
 The installer puts a `tuxistant` command in `~/.local/bin`, the extension in `~/.local/share/gnome-shell/extensions`, a systemd user unit and a D-Bus activation file in `~/.local/share`, and creates `~/.config/tuxistant/config.json`. It sets the daemon to start when you log in. Set the server and API key in Settings under General. The server starts as `localhost:8080`, which is right when LocalAI runs on the same computer. To have the installer fetch the key, set `TUXISTANT_KEY_COMMAND` to a command that prints it.
 
-The `tuxistant` command runs from this folder, so keep it where it is. To update, run `git fetch --tags` and `git checkout` the newer tag, or unpack the newer download in its place, then run `./install.sh` again. Running it twice is harmless and keeps your settings.
+The `tuxistant` command runs from this folder, so keep it where it is. To update a clone, run `git fetch --tags`, `git checkout` the newer tag, and run `./install.sh` again. To update from a download, unpack the newer one, which makes a new folder beside the old one, run `./install.sh` from the new folder, and then delete the old one. Don't unpack it over the old folder, because files the new version removed would stay behind. Either way, restart the daemon afterwards with `systemctl --user restart tuxistant`, or log out and back in. Until then the old version keeps running. Running the installer twice is harmless and keeps your settings.
 
 To remove everything, including the Fn helper, run `./uninstall.sh`. Your settings, API key, history and themes stay unless you add `--purge`.
 
@@ -93,9 +98,9 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 | "Move everything in Downloads older than a year to the Trash" | Shows how many files and how much space, and waits for your click. Nothing is deleted outright |
 | "What's on my calendar tomorrow?", "Add dentist on Friday at 3pm" | Reads your calendars, and adds an event once you click to allow it. It uses the calendars GNOME Calendar shows: add the account once in GNOME Settings under Online Accounts. So far reading has been tried on Google and adding on a local calendar. CalDAV and Microsoft, which also needs the `evolution-ews` package, have not been tried yet |
 | "When did I book the flights?", "What did my landlord say about the rent?" | Finds the answer in the mail Thunderbird keeps on this computer and says who it was from and when. Off until you turn on "Search my mail" in Settings |
-| "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account in Settings under General |
+| "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account in Settings under General. From 0.3.0 this needs the skill sandbox: bubblewrap and Linux 6.12 or newer (see Requirements) |
 | "Turn off the kitchen light", "Is the front door locked?", "Set the heating to 21" | Controls and reads your Home Assistant by the names you gave things there: lights, plugs, fans, heating, blinds, locks and scenes. Unlocking, opening, activating a scene and running a script wait for a click. Add the address and a long-lived access token in Settings under General. Until both are there, Tux doesn't offer it |
-| "Pause the music", "Skip this song", "Turn it up", "What's playing?" | Pauses, resumes and skips whatever is playing in Spotify, VLC, a browser or any other player that speaks MPRIS, tells you the song and who it is by, and sets the volume, never above 100 percent |
+| "Pause the music", "Skip this song", "Turn it up", "What's playing?" | Pauses, resumes and skips whatever is playing in a player that speaks MPRIS, such as Spotify, VLC or a browser, tells you the song and who it is by, and sets the volume, never above 100 percent |
 | "Set a pasta timer for 8 minutes", "Remind me at 5pm to call mum", "How long is left on the pasta?" | Tux says it out loud when it is due and leaves a notification. Timers and reminders are kept through a restart. "Cancel the pasta timer" or "cancel my timers" removes them. Each is said once, with no snooze, and the computer has to be on with you logged in |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "How many chemical elements are there?", "What's 15 percent of 80?" | Looks it up instead of guessing: Wikipedia first, then web search, and it says so if neither clearly answers. Sums are worked out on this computer |
@@ -178,7 +183,7 @@ flowchart LR
   - Web search and research send what you asked for to those search engines, and research opens a few of the pages from this computer.
 - Cloud is the one exception to all of that, and it is off unless you turn it on. Translation stays on your own server, and a request that is only a sum stays on this computer.
 - Calendar events are read on this computer and go only to your own server, as part of the conversation. Tuxistant never holds a calendar account's password: GNOME does, and an event you add goes to that calendar's account the way one added in GNOME Calendar would.
-- Mail search is off until you turn it on. It reads the search index Thunderbird keeps on this computer, and never changes it. What a mail says goes to your own server to be read and nowhere else, and Tuxistant holds no mail password. Junk and Trash are never read, and sign-in codes and passwords are hidden from a mail before it is.
+- Mail search is off until you turn it on. It reads the search index Thunderbird keeps on this computer, and never changes it. What a mail says goes to your own server to be read and nowhere else, and Tuxistant holds no mail password. Junk and Trash are skipped, and sign-in codes and passwords are hidden from a mail before it is read. Both go by Thunderbird's marks and by lists of words and shapes, so some can get past ([docs/ROADMAP.md](docs/ROADMAP.md) says which).
 - Home Assistant is only talked to once you add its address and a long-lived access token in Settings. The token is as good as a key to the house. It lives in `~/.config/tuxistant/config.json`, readable only by you, is never sent over D-Bus to the extension or to Settings, and goes to that one address and nowhere else: no proxy, no redirect, and never over plain http to an address that isn't on a private network. Changing the address clears it. What you call a thing is matched on this computer, so your words never reach Home Assistant, only which thing and what to do. What it answers, such as whether a door is locked, goes to your own server as part of the conversation. With Cloud on, sending these results to Claude needs a separate approval card.
 - Once a conversation has read your files, command output, selected text, calendar, mail or the state of your home, anything reaching past your own server needs a click.
 - History stays on this machine in `~/.local/share/tuxistant/history.db`, readable only by you. You can clear it in Settings.
@@ -237,9 +242,11 @@ flowchart LR
 | First build | Requirements, shell, security, daemon | 36 problems confirmed, some of them duplicates |
 | Skills, shell and approval cards | Attacker, integration | 22 problems reproduced, none rated critical, and 26 attacks and checks that held |
 | Dictation | Security | Numbers 5 and 6 below |
-| Web search, research and facts | Attacker, turn logic | 11 problems and 4 tests that proved nothing, all reproduced, and over 4,000 orderings of a turn that held. See [docs/SECURITY.md](docs/SECURITY.md) |
+| Web search, research and facts | Attacker, turn logic | 11 problems and 4 tests that proved nothing, all reproduced, and over 4,000 orderings of a turn that held. [docs/SECURITY.md](docs/SECURITY.md) writes up the problems that mattered most, but doesn't hold these counts |
 
-All eight of these really happened in this project. Each one has a test or a code fix behind it, except number 7, which is written up in [docs/TESTING.md](docs/TESTING.md). [docs/SECURITY.md](docs/SECURITY.md) keeps the list as it grows.
+Later rounds, on mail search, your own skills, media, timers and Home Assistant, are written up in [docs/SECURITY.md](docs/SECURITY.md) rather than counted here.
+
+All eight below really happened in this project. Each one has a test or a code fix behind it, except number 7, which is written up in [docs/TESTING.md](docs/TESTING.md). [docs/SECURITY.md](docs/SECURITY.md) keeps the list as it grows.
 
 1. **The file name that forges the approval card.** An attacker names a file `a.tmp`, then a line break, then `only-this-harmless-file.tmp`. When you ask to delete `*.tmp`, the card looks as if it lists one harmless file, while the real list is hidden. Tuxistant shows line breaks, tabs, escape codes and text-direction characters as visible codes, so a name can't draw its own line.
 2. **The repository that runs code when you look at it.** A downloaded Git repository can name a "filter" program in its own config, and plain `git status` will run it. Each attack in the test suite is first shown working on ordinary Git in the same sandbox, so a pass proves the defence stopped it. Tuxistant runs Git with hooks and filters turned off.
