@@ -398,7 +398,7 @@ async def _serve_until_stopped(daemon) -> int:
     crier = timers.Announcer(
         say=controller.say_when_free, sound=controller.sound,
         notify=lambda item: timers.notify(bus, item),
-        locked=lambda: controller.locked, chimes=lambda: config["timer_chime"])
+        locked=lambda: controller.locked, chimes=lambda: daemon.config["timer_chime"])
     fn = asyncio.create_task(FnClient(
         daemon.config, controller.hold_start, controller.hold_end,
         on_dictate_start=controller.dictate_start, on_dictate_end=controller.dictate_end,

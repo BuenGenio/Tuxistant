@@ -128,7 +128,7 @@ class Doctor(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), self.assertRaises(SystemExit):
             cli.main(["--version"])
-        self.assertRegex(out.getvalue(), r"^tuxistant \d+\.\d+\.\d+\n$")
+        self.assertRegex(out.getvalue(), r"^tuxistant \d+\.\d+\.\d+(\.dev\d+)?\n$")
 
     def test_missing_pipewire_tools(self):
         with mock.patch.dict(os.environ, {"PATH": str(self.folder)}):
