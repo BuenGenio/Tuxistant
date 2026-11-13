@@ -8,8 +8,8 @@ model hears it (see Turn._ask in controller.py), and a fact never reaches that m
 Whatever isn't sorted as a fact goes the normal way, and words about the music playing, the
 timers or the home go that way before the sorter is asked, as a private question called a fact
 would be sent to Wikipedia with no click. So do words that only make sense today, or that ask
-about Tux itself. The tool refuses the private ones too, as the voice model can pick it on a turn
-that was never sorted.
+about Tux itself. The tool refuses the private ones too, as the voice model can pick it on any
+turn it answers: one from the shortcut, or a hold turn not sorted as a fact.
 
 Wikipedia goes first, as its answers were never wrong. Its search matches words, though, so
 "the rarest element" finds lists and never reaches Astatine. Web search finds that sort of thing,
@@ -84,13 +84,22 @@ SORTED = tuple((f'Message: "{said}"', label) for said, label in (
 ))
 # What only this computer or this house can answer: the music playing, the timers, the home. Sent
 # to Wikipedia these would be a wrong answer and a private question asked of a stranger, with no
-# click, so they go the normal way without asking the model. Missing a fact costs far less.
+# click, so they go the normal way without asking the model, and the tool refuses them. That makes
+# a miss cost more than it looks: a fact these catch is never looked up on any turn, so a noun
+# that facts use too, such as thermostat or timer, counts only with the words of a reading.
 # Each is a shape rather than a phrase, as people word these a hundred ways. None may be written
 # from tools/eval_facts.py, or its leak count would pass by construction.
 ROOMS = ("room|bedroom|kitchen|bathroom|hall|hallway|office|study|lounge|basement|attic|cellar"
          "|loft|house|flat|garage|upstairs|downstairs")
+# What everyone shares: "our solar system" is no more private than "the solar system".
+OURS_ALONE = ("solar system|galaxy|sun|moon|planet|world|universe|species|ancestors|earth"
+              "|nearest star|closest star|star")
+DEVICE = r"(?:thermostat|countdown|timers?)"
+READING = ("set|at|on|off|up|over|done|finished|left|going|gone|running|ringing|reading|say|says"
+           "|show|shows|showing|read|reads|go|ring|rings|beep|beeping")
+OWNED = r"(?:the|my|our|this|that)"
 HERE = re.compile(r"\b(?:" + "|".join((
-    r"my|our|mine|ours",
+    rf"my|mine|ours|our(?! (?:{OURS_ALONE})\b)",
     r"(?:this|that|the current) (?:song|track|tune|album|record|artist|band|singer|music|video"
     r"|podcast|episode|playlist|station)",
     r"(?:song|track|tune|album|music) (?:is (?:this|that|playing|on)|playing)",
@@ -100,32 +109,50 @@ HERE = re.compile(r"\b(?:" + "|".join((
     r"^who(?:'s| is| are| was) the (?:artist|singer|singers|band|group|performer)$",
     r"name of (?:the|this|that) (?:song|track|tune|album|band|artist|singer|record)$",
     r"(?:who|what)(?:'s| is| was) (?:singing|playing)",
-    r"timers?|reminders?|countdown",
-    r"(?:time|minutes|seconds|long) (?:is |are )?left|left on|how much longer",
+    r"reminders?",
+    # "Who invented the egg timer?" is a fact, and "Is the oven timer done?" is not.
+    rf"{OWNED} (?:\w+ )?{DEVICE}(?:'s| is| are| was)? (?:{READING})",
+    rf"(?:is|are|on|at|of|for|in) {OWNED} (?:\w+ )?{DEVICE}$",
+    r"(?<!invented )(?:any|what|which|how many|all|the) (?:\w+ )?timers?"
+    r"(?! (?:was |were )?invented)(?! work)",
+    r"(?:set|start|cancel|stop|pause|reset) (?:a |an )?(?:\w+ )?timer",
+    r"(?:time|minutes|seconds|long) (?:is |are )?left|left on",
+    # "How much longer is the Nile than the Amazon?" compares, and a wait doesn't.
+    r"how much longer(?: (?:on|for|till|until|left|now|to go|before|is left)\b|(?:[\w' ]* (?:take"
+    r"|takes|need|needs|cook|cooking|run|running|left|done|ready))?$)",
     r"(?:until|till) [\w' ]*(?:done|ready|finished|cooked)",
     r"will (?:the |my )?[\w ]+ be (?:done|ready|cooked)",
     r"locked|unlocked|switched (?:on|off)|turned (?:on|off)|lights? (?:on|off)",
     r"(?:lock|unlock) the (?:\w+ )?(?:door|gate|car|house|shed)s?",
     r"(?:doors?|windows?|gates?|garage|blinds?|curtains?) (?:open|closed|shut)",
-    r"front door|back door|garage door|the garage|the heating|thermostat|the alarm(?! clock)",
+    # "the front door of 10 Downing Street" is somebody else's, and so is "the House of Commons".
+    r"(?:front|back|garage) door(?! of)|the garage|the heating|the alarm(?! clock)",
     r"alarm (?:is )?(?:set|armed|disarmed|on|off)",
-    r"in the house|at home|home assistant|(?:any|some|every|no)(?:one|body) (?:at )?home",
+    r"in the house(?! of)|at home|home assistant|(?:any|some|every|no)(?:one|body) (?:at )?home",
     rf"(?:temperature|humidity|warm|cold|hot|humid)(?: is it| it is| is)?(?: in| inside)?"
-    rf"(?: the)? (?:\w+ )?(?:{ROOMS})",
+    rf"(?: the)? (?:\w+ )?(?:{ROOMS})(?! of)",
     r"(?:temperature|humidity) inside|(?:indoor|inside|room) (?:temperature|humidity)",
     rf"(?:colou?r|brightness) (?:is|are|of) (?:the|this|that) (?:(?:\w+ )?(?:lamp|bulb)"
     rf"|(?:(?:{ROOMS}|desk|ceiling|porch|bedside) )?light)s?$",
     # "Is the kettle on?": asked of a thing as a whole question, it's a thing in this house.
     r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running|done|finished|ready)$",
 )) + r")\b")
+# Spoken words come out in lower case after the first, so "Who sang My Way?" names a song.
+TITLED = re.compile(r"(?<=.)\b(?:My|Our|Mine|Ours)\b")
 # Not private, but never a fact: what is true only now, and questions about Tux itself. The sorter
 # called some of these a fact every time it was asked, so they skip it. The tool may look them up.
 # Matched in lower case only: "Who sang Yesterday?" names a song, and titles have capitals.
+ABOUT_TUX = ("name|names|skills?|abilities|ability|features?|powers?|limits|purpose|job|creator"
+             "|maker|makers|model|version|age|birthday|favou?rite")
 NOT_FACT = re.compile(r"\b(?:" + "|".join((
     r"today|tonight|tomorrow|yesterday|right now|at the moment|so far this",
     r"this (?:morning|afternoon|evening|week|weekend|month|year)",
     r"latest|newest|most recent|currently",
-    r"yourself|^what (?:else )?(?:can|could|do) you (?:do|help(?: me)?(?: with)?)$",
+    # "What can you do with baking soda?" is a fact, so a question to Tux has to end there.
+    rf"yourself|your (?:{ABOUT_TUX})\b|you able to (?:do|help)",
+    r"(?:skills?|abilities|features|powers|tricks) (?:have|do) you",
+    r"(?:can|could|will|would) you (?:do|help)(?: me)?(?: (?:with|for me))?$",
+    r"^(?:who|what) (?:are|made|built|created|trained) you$",
 )) + r")\b")
 GROUNDED = (
     "Answer the question in one short plain sentence using only the search results below. If "
@@ -234,7 +261,7 @@ def _plain(heard: str) -> str:
 
 def about_here(heard: str) -> bool:
     """Whether the words are about this computer, its music or timers, or the home."""
-    return bool(HERE.search(_plain(heard)))
+    return bool(HERE.search(_plain(TITLED.sub("title", heard))))
 
 
 def never_a_fact(heard: str) -> bool:

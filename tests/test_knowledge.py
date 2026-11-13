@@ -38,7 +38,7 @@ HERE_ASKED = (
     "What's playing right now?", "How many minutes left on the timer?",
     "When is my dentist reminder?", "Is the kitchen light on?", "Are the lights off?",
     "Is the garage shut?", "Is the heating on?", "What is the thermostat set to?",
-    "Is the alarm armed?", "Is anyone at home?", "WHO SINGS THIS", "How much time is left?",
+    "Is the alarm armed?", "Is anyone at home?", "WHO SINGS THIS", "Is there much time left?",
     "Who sang that?", "Is the house alarm set?", "Is the kettle on?", "Is the oven on?",
     "Is the oven still on?", "What's the temperature in the living room?",
     "What is the humidity in the bathroom?", "Is anyone home?", "How cold is it in the house?",
@@ -53,15 +53,45 @@ HERE_SHAPES = (
     "Did I lock the door?", "Did you lock the shed?", "Can you unlock the side gate?",
     "How cold is the bedroom?", "How hot is it upstairs?", "How warm is it downstairs?",
     "How hot is the kitchen?", "Is the washing machine finished?", "Is the dryer ready?",
-    "Which colour are the bedroom lights?", "What's the brightness of the porch light?",
-    "What colour is that bulb?")
+    "Which colour are the bedroom lights?", "What's the brightness of the desk light?",
+    "What colour is that bulb?", "What does the thermostat say?", "What's our thermostat at?",
+    "Is the countdown over?", "Cancel the egg timer", "Which timers are going?",
+    "How much longer will the bread take?", "How much longer for the lasagne?",
+    "Who is in the house?", "Is Our side door locked?")
 # Not private but never a fact: what is true only now, and questions about Tux itself.
 NOT_FACT_SHAPES = (
     "Which day of the week is it today?", "Is it a holiday tomorrow?", "What happened yesterday?",
     "Is there rain tonight?", "Which Android version is newest?", "What's the most recent Firefox?",
     "Who is currently top of the league?", "Is the shop open at the moment?",
     "What films are out this week?", "Describe yourself", "What else can you help me with?",
-    "What could you do?")
+    "Who built you?", "What's your purpose?", "Are you able to help?",
+    "Which features have you got?")
+
+# Facts that share words with those, which must still be looked up: the tool refuses whatever
+# about_here() catches, so a fact caught there is never looked up on any turn.
+SHARED_WORDS = (
+    "Who wrote Hamlet?", "Who invented the light bulb?", "When was the alarm clock invented?",
+    "Who sings Bohemian Rhapsody?", "Who invented the padlock?",
+    "When did the Golden Gate Bridge open?", "How long is the Nile?", "What is the House of Lords?",
+    "What is the temperature in the core of the Sun?", "Who sang Yesterday?", "Is Pluto a planet?",
+    "How long did the Hundred Years War last?", "Who is the artist behind Guernica?",
+    "Which band sang Wonderwall?", "Who performed at Live Aid?", "How hot is the surface of Venus?",
+    "When was the Hoover Dam finished?", "How cold is it in Antarctica?",
+    "How long until the next solar eclipse?", "Who was the lead singer of Queen?",
+    "What colour is a sodium lamp?", "What colour is the light from a red dwarf?",
+    "When was the lava lamp invented?", "What can you make from milk?",
+    "On what day did Apollo 11 land?", "Who directed The Day After Tomorrow?",
+    "Who sang Be Yourself?",
+    # Our, my, thermostat, timer, countdown and the rest, where they aren't this home's.
+    "How old is our galaxy?", "Which star is closest to our planet?", "How far away is our moon?",
+    "Who came up with the thermostat?", "When was the thermostat patented?",
+    "Who invented the kitchen timer?", "How does an egg timer work?",
+    "How much longer is a marathon than a half marathon?",
+    "How many members sit in the House of Representatives?",
+    "What number is on the front door of the White House?", "Who first hosted Countdown?",
+    "Who recorded My Generation?", "Who wrote the song Our House?", "Who wrote My Antonia?",
+    "Who sang The Final Countdown?", "What can you do with baking soda?",
+    "How many bones are in your hand?", "Who sang Your Song?")
 
 
 def reply(text):
@@ -71,7 +101,7 @@ def reply(text):
 ROOT = Path(__file__).resolve().parent.parent
 # Words any question has, which say nothing about what it is asking.
 COMMON = knowledge.FILLER | set("i me my you your it it's this that to for and be has have will "
-                                "can now still".split())
+                                "can could would now still".split())
 
 
 def _shown() -> list[str]:
@@ -86,14 +116,37 @@ def _never_seen() -> list[str]:
             for case in ast.literal_eval(node.value)]
 
 
-def _content(said: str) -> set[str]:
-    words = set(re.findall(r"[a-z']+", said.casefold().replace("\u2019", "'"))) - COMMON
+def _strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings(item)
+
+
+def _evaluated() -> list[str]:
+    """Every request in eval_facts.py. The answers it expects are patterns, with no spaces."""
+    tree = ast.parse((ROOT / "tools" / "eval_facts.py").read_text())
+    return [said for node in tree.body if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.List) for said in _strings(ast.literal_eval(node.value))
+            if " " in said and said[:1].isupper()]
+
+
+def _words(said: str, leave=frozenset()) -> set[str]:
+    words = set(re.findall(r"[a-z']+", said.casefold().replace("\u2019", "'"))) - leave
     return {word.removesuffix("s") if len(word) > 3 else word for word in words}
 
 
+def _content(said: str) -> set[str]:
+    return _words(said, COMMON)
+
+
 def _near(said: str, case: str) -> bool:
-    """Whether half the words that say what is being asked are the same."""
+    """Whether half the words that say what is being asked are the same. A question made only of
+    common words is compared on all of them, or "What could you do?" would pass for new."""
     mine, theirs = _content(said), _content(case)
+    if not (mine or theirs):
+        mine, theirs = _words(said), _words(case)
     return len(mine & theirs) >= 0.5 * max(1, len(mine | theirs))
 
 class Web:
@@ -270,26 +323,12 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(web.model, [])
 
     async def test_facts_that_share_their_words_still_reach_the_sorter(self):
-        facts = ("Who wrote Hamlet?", "Who invented the light bulb?", "What is the speed of light?",
-                 "When was the alarm clock invented?", "Who sings Bohemian Rhapsody?",
-                 "Who invented the padlock?", "When did the Golden Gate Bridge open?",
-                 "How long is the Nile?", "What is the House of Lords?",
-                 "What is the temperature in the core of the Sun?", "Who sang Yesterday?",
-                 "Is Pluto a planet?", "How long did the Hundred Years War last?",
-                 "Who is the artist behind Guernica?", "Which band sang Wonderwall?",
-                 "Who performed at Live Aid?", "How hot is the surface of Venus?",
-                 "When was the Hoover Dam finished?", "How cold is it in Antarctica?",
-                 "How long until the next solar eclipse?", "Who was the lead singer of Queen?",
-                 "What colour is a sodium lamp?", "What colour is the light from a red dwarf?",
-                 "When was the lava lamp invented?", "What can you make from milk?",
-                 "What day did the Titanic sink?", "Who directed The Day After Tomorrow?",
-                 "Who sang Be Yourself?")
-        web = Web(self, says=["FACT"] * len(facts))
-        for heard in facts:
+        web = Web(self, says=["FACT"] * len(SHARED_WORDS))
+        for heard in SHARED_WORDS:
             with self.subTest(heard):
                 self.assertFalse(knowledge.never_a_fact(heard))
                 self.assertTrue(await knowledge.is_fact(heard, CONFIG))
-        self.assertEqual(len(web.model), len(facts))
+        self.assertEqual(len(web.model), len(SHARED_WORDS))
 
     def test_the_sorter_is_told_about_music_timers_and_the_home(self):
         for word in ("music", "timers", "reminders", "home", "lights", "doors", "locks"):
@@ -314,15 +353,22 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
         """A near copy leaks as much as a copy: "How long until my eggs are done?" in the sorter's
         examples made "How long till the eggs are done?" easy. The filter's own tests count too,
         as wordings tuned to pass them end up in its patterns."""
-        unseen = _never_seen()
-        self.assertGreater(len(unseen), 30)
-        for said in (*_shown(), *HERE_ASKED, *HERE_SHAPES, *NOT_FACT_SHAPES):
-            for case in unseen:
+        self.assertGreater(len(_never_seen()), 30)
+        evaluated = _evaluated()
+        self.assertGreater(len(evaluated), 150)
+        for said in _shown():
+            for case in _never_seen():
+                with self.subTest(said=said, case=case):
+                    self.assertFalse(_near(said, case))
+        # The sorter's examples may come from the tuned lists, but nothing the filter is tested on.
+        for said in (*HERE_ASKED, *HERE_SHAPES, *NOT_FACT_SHAPES, *SHARED_WORDS):
+            for case in evaluated:
                 with self.subTest(said=said, case=case):
                     self.assertFalse(_near(said, case))
 
     def test_a_near_copy_is_caught(self):
         self.assertTrue(_near("How long until my eggs are done?", "How long till the eggs are done?"))
+        self.assertTrue(_near("What could you do?", "What can you do?"))
         self.assertFalse(_near("How much longer on the rice?", "How long till the eggs are done?"))
 
     async def test_sums_stay_exact_with_the_switch_off(self):
@@ -535,10 +581,12 @@ class WhatGoesWhere(Base):
         self.assertNotRegex(knowledge.NOT_HERE, r"[_<>{}]")
 
     async def test_a_fact_that_shares_their_words_is_still_looked_up(self):
-        web = Web(self, says=["Linus Yale."])
-        said, _ = await self.ask("Who invented the padlock?")
-        self.assertEqual(said, "Linus Yale.")
-        self.assertEqual(len(web.opened), 1)
+        web = Web(self, says=["It was so."] * len(SHARED_WORDS))
+        for heard in SHARED_WORDS:
+            with self.subTest(heard):
+                said, _ = await self.ask(heard)
+                self.assertEqual(said, "It was so.")
+        self.assertEqual(len(web.opened), len(SHARED_WORDS))
 
     async def test_a_sum_never_leaves_this_computer(self):
         web = Web(self)

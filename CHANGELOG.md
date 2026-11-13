@@ -2,8 +2,8 @@
 
 ## Not yet released
 
-- The facts lookup now refuses questions about the music playing, timers and the home, such as "Is the front door locked?", on every turn. When the voice model picks it on a turn from the shortcut, the question no longer goes to Wikipedia or web search: Tux says it didn't look it up, or the model uses the right tool.
-- On an Fn hold, questions that only hold now, with words such as today, tomorrow, latest or currently, and questions about Tux itself, such as "What can you do?", now go the normal way without being sorted. So do questions about the colour or brightness of a lamp, light or bulb, which the facts lookup refuses as well. A title with a capital, such as the song Yesterday, is still sorted.
+- The facts lookup now refuses questions about the music playing, timers and the home, such as "Is the front door locked?", on every turn. When the voice model picks it, on a turn from the shortcut or a hold turn not sorted as a fact, the question no longer goes to Wikipedia or web search: Tux says it didn't look it up, or the model uses the right tool. Facts that share their words are still looked up, such as "How many planets are in our solar system?", "Who invented the egg timer?" or a title such as My Way.
+- On an Fn hold, questions that only hold now, with words such as today, tomorrow, latest or currently, and questions about Tux itself, such as "What are your skills?" or "How can you help me?", now go the normal way without being sorted. So do questions about the colour or brightness of a lamp, light or bulb, which the facts lookup refuses as well. A title with a capital, such as the song Yesterday, is still sorted.
 
 ## 0.3.0, a preview
 
