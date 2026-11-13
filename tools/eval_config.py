@@ -2,13 +2,15 @@
 
 The key goes to a server named for this run, by TUXISTANT_SERVER or --server, or to the one in
 Settings when that is not the default. The default is localhost:8080, and on a machine where
-something else listens there, that something would be handed the key. So the default, and any
-address on this computer that wasn't named for the run, never gets it.
+something else listens there, that something would be handed the key. So the default, and a
+saved address on this computer, get it only when named for the run.
 
-"On this computer" is judged by how the address is written, with nothing looked up: loopback and
-unspecified addresses in every form the resolver takes (127.1, 2130706433, 0x7f000001,
-::ffff:127.0.0.1), the localhost names /etc/hosts gives by convention, and this computer's own
-name, which Debian and Ubuntu map to 127.0.1.1.
+"On this computer" is judged with no name looked up: loopback and unspecified addresses in every
+form the resolver takes (127.1, 2130706433, 0x7f000001, ::ffff:127.0.0.1), the localhost names
+/etc/hosts gives by convention, this computer's own name with or without .local, which Debian and
+Ubuntu map to 127.0.1.1 and mDNS answers, and the addresses its own network interfaces hold, as
+the kernel lists them in /proc (LAN, docker0). Other names /etc/hosts maps to this computer are
+not caught.
 """
 import ipaddress
 import os
@@ -47,37 +49,61 @@ def _host(server: str) -> str:
     return rest.rpartition(":")[0] if rest.count(":") == 1 else rest
 
 
-def _local_ipv4(host: str) -> bool | None:
-    """inet_aton reads the short and number forms the way getaddrinfo will; ipaddress does not."""
+def _address(host: str) -> str | None:
+    """One spelling of the address the resolver would read, or None for a name. inet_aton reads
+    the short and number forms the way getaddrinfo will; ipaddress does not."""
     try:
-        packed = socket.inet_aton(host)
+        return socket.inet_ntoa(socket.inet_aton(host))
     except (OSError, ValueError):
-        return None
-    return packed[0] == 127 or packed == bytes(4)
-
-
-def _local_ip(host: str) -> bool:
+        pass
     try:
         address = ipaddress.ip_address(host.partition("%")[0])
     except ValueError:
-        return False
-    if address.version == 6 and address.ipv4_mapped:
-        address = address.ipv4_mapped
-    return address.is_loopback or address.is_unspecified
+        return None
+    return str(address.ipv4_mapped or address) if address.version == 6 else str(address)
 
 
 def _own_names() -> set:
     name = socket.gethostname().rstrip(".").casefold()
-    return {name, name.partition(".")[0]} - {""}
+    short = name.partition(".")[0]
+    return {name, short, f"{short}.local"} - {"", ".local"}
+
+
+def _read(path: str) -> str:
+    try:
+        with open(path, encoding="ascii", errors="replace") as file:
+            return file.read()
+    except OSError:
+        return ""
+
+
+def _interface_addresses() -> set:
+    """What the kernel says this computer's interfaces hold. A port Docker publishes answers on
+    every one of them, not only on loopback."""
+    found, last = set(), None
+    for line in _read("/proc/net/fib_trie").splitlines():
+        if line.strip().startswith("|-- "):
+            last = line.strip()[4:]
+        elif "/32 host LOCAL" in line and last:
+            found.add(last)
+    for line in _read("/proc/net/if_inet6").splitlines():
+        packed = (line.split() or [""])[0]
+        if len(packed) == 32:
+            found.add(":".join(packed[i:i + 4] for i in range(0, 32, 4)))
+    return {_address(address) for address in found} - {None}
 
 
 def on_this_computer(server: str) -> bool:
-    """Whether the address is this computer, by how it is written. Nothing is looked up."""
+    """Whether the address is this computer, by how it is written and what the interfaces
+    hold. No name is looked up."""
     host = _host(server).rstrip(".").casefold()
     if host in LOCAL_NAMES or host.endswith(".localhost") or host in _own_names():
         return True
-    ipv4 = _local_ipv4(host)
-    return ipv4 if ipv4 is not None else _local_ip(host)
+    address = _address(host)
+    if address is None:
+        return False
+    ip = ipaddress.ip_address(address)
+    return ip.is_loopback or ip.is_unspecified or address in _interface_addresses()
 
 
 def _refuse(config, why: str):
@@ -103,3 +129,22 @@ def evaluation_server(config, argv: list | None = None) -> str:
                         f"named for this run. Use {ENV} or {FLAG}.")
     config.values["server"] = saved
     return saved
+
+
+class _RunOnly:
+    """No saved settings: the key came with the run, so the server has to as well."""
+    def __init__(self):
+        self.values = {"server": DEFAULTS["server"], "api_key": ""}
+
+    def __getitem__(self, key):
+        return self.values[key]
+
+
+def run_server(argv: list | None = None) -> str:
+    """For a run handed its own key, like tests/shell_harness/e2e.sh: the server named for it,
+    or Refused. Settings are never read, so the default is never taken."""
+    return evaluation_server(_RunOnly(), argv)
+
+
+if __name__ == "__main__":
+    print(run_server())

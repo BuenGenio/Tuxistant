@@ -307,11 +307,12 @@ def phone_choices(devices: list[dict] | None, saved: str) -> dict[str, str]:
     return choices
 
 
-def calendar_listing(reply) -> tuple[list[dict], str]:
+def calendar_listing(reply) -> tuple[list[dict] | None, str]:
     """ListCalendars sends a list, or {"problem": text} when the daemon can't reach calendars at
-    all. The daemon words the problem, so voice and Settings say the same thing."""
+    all. The daemon words the problem, so voice and Settings say the same thing. A problem gives
+    no list, as it says nothing about whether the saved calendar is still there."""
     if isinstance(reply, dict):
-        return [], shown(str(reply.get("problem") or NO_CALENDARS))
+        return None, shown(str(reply.get("problem") or NO_CALENDARS))
     return (reply if isinstance(reply, list) else []), ""
 
 

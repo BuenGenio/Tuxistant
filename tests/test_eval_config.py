@@ -1,10 +1,14 @@
 """Evaluations and the live test: the key goes only to a server chosen for the run, and every
 real handler they run meets a stand-in in place of the desktop, the phone, the home and the mail.
-Nothing here reaches a network: the guard is a check of how an address is written."""
+Nothing here reaches a network: the guard is a check of how an address is written, and the
+interface addresses it compares with are made up."""
 import ast
 import asyncio
 import contextlib
 import io
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +17,8 @@ from unittest.mock import patch
 import yaml
 
 from tools import eval_cutoffs
-from tools.eval_config import Refused, evaluation_server, on_this_computer
+from tools import eval_config
+from tools.eval_config import Refused, evaluation_server, on_this_computer, run_server
 from tools.eval_cutoffs import ACTIONS, install, owner, stand_ins
 from tests.test_realtime_live import CountingSkills
 from tuxistant import calendars, homeassistant, mail, mcp, media, phone, timers
@@ -24,6 +29,25 @@ from tuxistant.skills import HANDLERS
 
 ROOT = Path(__file__).resolve().parent.parent
 KEY = "sk-" + "e" * 40     # made up
+READ_INTERFACES = eval_config._interface_addresses     # setUp stands in for it
+HELD = {"192.168.1.20", "172.17.0.1", "fd00::5"}     # made-up interface addresses
+FIB_TRIE = """Main:
+  +-- 0.0.0.0/0 3 0 5
+     |-- 0.0.0.0
+        /0 universe UNICAST
+     +-- 127.0.0.0/8 2 0 2
+        |-- 127.0.0.1
+           /32 host LOCAL
+     |-- 172.17.0.1
+        /32 host LOCAL
+     |-- 172.17.255.255
+        /32 link BROADCAST
+     |-- 192.168.1.0
+        /24 link UNICAST
+"""
+IF_INET6 = """00000000000000000000000000000001 01 80 10 80       lo
+fd000000000000000000000000000005 02 40 00 00     wlan0
+"""
 
 
 class EvaluationServer(unittest.TestCase):
@@ -31,9 +55,10 @@ class EvaluationServer(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.path = Path(folder.name) / "config.json"
-        env = patch.dict("os.environ", {"TUXISTANT_SERVER": ""})
-        env.start()
-        self.addCleanup(env.stop)
+        for stand_in in (patch.dict("os.environ", {"TUXISTANT_SERVER": ""}),
+                         patch.object(eval_config, "_interface_addresses", return_value=HELD)):
+            stand_in.start()
+            self.addCleanup(stand_in.stop)
 
     def config(self, saved: str | None = None) -> Config:
         if saved is not None:
@@ -79,6 +104,27 @@ class EvaluationServer(unittest.TestCase):
                     self.refused(self.config(saved))
             self.assertFalse(on_this_computer("other.lan:8080"))
 
+    def test_this_computers_name_on_the_local_network_is_refused(self):
+        """mDNS answers <name>.local with this computer's own addresses."""
+        with patch("socket.gethostname", return_value="tuxbox"):
+            for saved in ("tuxbox.local:8080", "TUXBOX.LOCAL.:8080"):
+                with self.subTest(saved):
+                    self.refused(self.config(saved))
+            self.assertFalse(on_this_computer("otherbox.local:8080"))
+
+    def test_an_address_this_computer_holds_is_refused(self):
+        """Docker publishes a port on all of them, so a container there answers on each."""
+        for saved in ("192.168.1.20:8080", "172.17.0.1:8080", "3232235796:8080",
+                      "[::ffff:172.17.0.1]:8080", "[fd00::5]:8080", "[FD00:0::5]:8080"):
+            with self.subTest(saved):
+                self.refused(self.config(saved))
+
+    def test_the_interface_addresses_are_read_from_the_kernel_lists(self):
+        files = {"/proc/net/fib_trie": FIB_TRIE, "/proc/net/if_inet6": IF_INET6}
+        with patch.object(eval_config, "_read", side_effect=files.get):
+            found = READ_INTERFACES()
+        self.assertEqual(found, {"127.0.0.1", "172.17.0.1", "::1", "fd00::5"})
+
     def test_addresses_elsewhere_are_not_taken_for_this_computer(self):
         for server in ("192.168.1.5:8080", "10.0.0.2:8080", "3232235781:8080",
                        "[2001:db8::1]:8080", "[::ffff:192.168.1.5]:8080", "model.example.test",
@@ -120,6 +166,48 @@ class EvaluationServer(unittest.TestCase):
         with patch.dict("os.environ", {"TUXISTANT_SERVER": "ftp://x"}):
             self.refused(self.config("model.example.test:8080"))
 
+    def test_a_run_with_its_own_key_needs_its_server_named(self):
+        """Settings are never read, so neither a saved server nor the default is taken."""
+        with patch.object(eval_config, "evaluation_server", wraps=evaluation_server) as asked:
+            with self.assertRaises(Refused) as stopped:
+                run_server(["e2e"])
+            self.assertIn("TUXISTANT_SERVER", str(stopped.exception))
+            self.assertEqual(asked.call_args.args[0]["server"], DEFAULTS["server"])
+        self.assertEqual(run_server(["e2e", "--server", "localhost:8080"]), "localhost:8080")
+        with patch.dict("os.environ", {"TUXISTANT_SERVER": "http://model.example.test:8080/"}):
+            self.assertEqual(run_server([]), "model.example.test:8080")
+
+    def test_the_shell_gets_the_named_server_or_the_reason(self):
+        env = {"PATH": os.environ["PATH"], "TUXISTANT_SERVER": "model.example.test:8080"}
+        command = [sys.executable, "-B", "-m", "tools.eval_config"]
+        named = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True)
+        self.assertEqual((named.returncode, named.stdout), (0, "model.example.test:8080\n"))
+        env["TUXISTANT_SERVER"] = ""
+        refused = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True)
+        self.assertEqual((refused.returncode, refused.stdout), (1, ""))
+        self.assertIn(eval_config.NOTHING_SENT, refused.stderr)
+
+    def test_the_end_to_end_run_asks_before_it_writes_the_key(self):
+        """Read and never run: it starts a whole shell."""
+        harness = ROOT / "tests" / "shell_harness"
+        script = (harness / "e2e.sh").read_text()
+        guard = script.index("server=$(cd \"$root\" && python3 -B -m tools.eval_config) || exit 1")
+        self.assertLess(guard, script.index("mktemp"))
+        self.assertLess(guard, script.index('os.environ["TUXISTANT_API_KEY"]'))
+        self.assertIn('config["server"] = sys.argv[2]', script)
+        self.assertNotIn('os.environ.get("TUXISTANT_SERVER")', script)
+        live = (harness / "test_e2e_live.py").read_text()
+        self.assertLess(live.index("run_server([])"), live.index("subprocess.run("))
+
+    def test_the_unreachable_server_step_never_has_the_key(self):
+        """Port 9 on this computer was not chosen for the run."""
+        source = (ROOT / "tests" / "shell_harness" / "e2e_scenario.py").read_text()
+        step = source[source.index("async def step_errors"):source.index("async def step_cli(")]
+        self.assertLess(step.index('set_config("api_key", "not-the-key")'),
+                        step.index('set_config("server", "127.0.0.1:9")'))
+        self.assertLess(step.index('set_config("server", server)'),
+                        step.index('set_config("api_key", key)'))
+
     def test_each_tool_asks_before_it_reads_the_key(self):
         """Read and never imported: importing one would run it."""
         for name in ("eval_routing", "eval_flows", "eval_facts"):
@@ -148,29 +236,64 @@ class EvaluationServer(unittest.TestCase):
             if path.stem in listed:
                 continue
             with self.subTest(path.name):
-                calls = [node for node in ast.walk(ast.parse(path.read_text()))
-                         if _calls(node, "Config")]
-                self.assertEqual(calls, [])
+                tree = ast.parse(path.read_text())
+                self.assertEqual([node for node in ast.walk(tree) if _reads_settings(node)], [])
+                self.assertEqual(_renamed_configs(tree), [])
+
+    def test_the_check_finds_every_way_of_writing_config(self):
+        guarded = "cfg = Config()\nevaluation_server(cfg)\n"
+        for source in ("if Config()['server']:\n    pass\n",
+                       "with open(Config()['x']) as c:\n    evaluation_server(c)\n",
+                       "for c in [Config()]:\n    evaluation_server(c)\n",
+                       "c = config.Config()\nprint(c)\n",
+                       "c = tuxistant.config.Config()\n",
+                       "c = Config()\nprint(c)\nevaluation_server(c)\n"):
+            with self.subTest(source), self.assertRaises(AssertionError):
+                _guarded_configs(ast.parse(guarded + source))
+        self.assertEqual(_guarded_configs(ast.parse(
+            "c = config.Config()\nevaluation_server(c)\n"
+            "def f():\n    d = Config()\n    evaluation_server(d)\n")), 2)
+        self.assertTrue(_reads_settings(ast.parse("tuxistant.config.Config()").body[0].value))
+        self.assertEqual(len(_renamed_configs(ast.parse(
+            "from tuxistant.config import Config as Settings\n"))), 1)
+
+
+def _reads_settings(node) -> bool:
+    """A call of Config however it is reached: config.Config() holds the key just the same."""
+    return isinstance(node, ast.Call) and ast.unparse(node.func).rpartition(".")[2] == "Config"
+
+
+def _renamed_configs(tree: ast.Module) -> list:
+    """An import that renames Config would hide it from the checks."""
+    return [alias for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+            if alias.name.rpartition(".")[2] == "Config" and alias.asname not in (None, "Config")]
+
+
+def _statement_lists(tree: ast.Module):
+    for node in ast.walk(tree):
+        for field in ("body", "orelse", "finalbody"):
+            body = getattr(node, field, None)
+            if isinstance(body, list) and body and isinstance(body[0], ast.stmt):
+                yield body
 
 
 def _guarded_configs(tree: ast.Module) -> int:
-    """How many Config() calls there are, after failing if one is not followed by the guard."""
-    found = 0
+    """How many Config() calls there are, after failing on any that is not in a plain statement
+    with the guard as the very next one. One in an if, with or for header fails, unclaimed."""
+    claimed = set()
+    for body in _statement_lists(tree):
+        for statement, after in zip(body, body[1:]):
+            plain = isinstance(statement, (ast.Assign, ast.AnnAssign, ast.Expr))
+            guard = isinstance(after, ast.Expr) and _calls(after.value, "evaluation_server")
+            if plain and guard:
+                claimed |= {id(part) for part in ast.walk(statement) if _reads_settings(part)}
     for node in ast.walk(tree):
-        body = getattr(node, "body", None)
-        if not isinstance(body, list):
-            continue
-        for i, statement in enumerate(body):
-            if hasattr(statement, "body"):      # looked at from inside, by the walk
-                continue
-            if not any(_calls(part, "Config") for part in ast.walk(statement)):
-                continue
-            after = body[i + 1] if i + 1 < len(body) else None
-            if after is None or not any(_calls(part, "evaluation_server")
-                                        for part in ast.walk(after)):
-                raise AssertionError(f"line {statement.lineno}: Config() with no guard after it")
-            found += 1
-    return found
+        if _reads_settings(node) and id(node) not in claimed:
+            raise AssertionError(f"line {node.lineno}: Config() with no guard after it")
+    if _renamed_configs(tree):
+        raise AssertionError("Config is imported under another name")
+    return len(claimed)
 
 
 class DemoVideo(unittest.TestCase):

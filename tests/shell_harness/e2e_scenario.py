@@ -548,6 +548,8 @@ async def step_conversation(h: Harness):
 async def step_errors(h: Harness):
     key, server = Config().values["api_key"], Config().values["server"]
     await asyncio.sleep(0.5)
+    # Whatever listens on port 9 here was not chosen for the run, so it gets no key.
+    await h.set_config("api_key", "not-the-key")
     await h.set_config("server", "127.0.0.1:9")
     mark = h.mark()
     await h.call("Toggle")
@@ -559,7 +561,6 @@ async def step_errors(h: Harness):
     await h.shoot("error-server")
     await h.signal(mark, "StateChanged", "idle", timeout=5)
     await h.set_config("server", server)
-    await h.set_config("api_key", "not-the-key")
     await asyncio.sleep(0.5)
     mark = h.mark()
     await h.call("Toggle")
