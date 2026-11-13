@@ -81,7 +81,23 @@ CLOUD_BODY = (
     "File contents go only when you click to approve each one.\n\n"
     "Ordinary single-step requests send nothing to Anthropic."
 )
-RAW_FIELDS = ("Command", "Arguments", "Result")     # shown as they are, so columns stay columns
+SENT_AS = "As the model gets it"
+RAW_FIELDS = ("Command", "Arguments", "Result", SENT_AS)    # shown as they are, so columns stay
+# Each skill's settings, shown on its page, by the SettingsBox rows that make them. A setting two
+# skills use, such as the phone, is on both pages: only one page is open at a time, and each is
+# built when it opens. Only skills that come with Tuxistant: the ids are reserved for them.
+SKILL_SETTINGS = {
+    "org.tuxistant.weather": ("weather",), "org.tuxistant.news": ("news",),
+    "org.tuxistant.calendar_add": ("calendar",), "org.tuxistant.mail": ("mail",),
+    "org.tuxistant.timers": ("timer",), "org.tuxistant.phone": ("phone",),
+    "org.tuxistant.phone_send": ("phone",), "org.tuxistant.system": ("tailscale",),
+    "org.tuxistant.translate": ("translation",),
+    "org.tuxistant.translate_selection": ("translation",),
+    "org.tuxistant.knowledge": ("fact", "search"), "org.tuxistant.websearch": ("search",),
+    "org.tuxistant.research": ("search",), "org.tuxistant.lights": ("lights",),
+    "org.tuxistant.home": ("home",), "org.tuxistant.home_status": ("home",),
+    "org.tuxistant.task": ("cloud",),
+}
 CSS = """
 .risk-badge {
   padding: 2px 10px;
@@ -528,14 +544,18 @@ class ShortcutDialog(Adw.Dialog):
         return True
 
 
-class GeneralPage(Adw.PreferencesPage):
+class SettingsBox:
+    """Rows that edit settings. General holds the app's own, and each skill's page holds that
+    skill's, built when the page opens: a setting shows in one place at a time, so two rows can't
+    disagree about it. Only what was built is shown, synced and saved."""
+
+    ROWS = ("location", "news", "calendar", "phone", "translate", "search", "tapo_email",
+            "tapo_password", "home", "home_token", "cloud", "cloud_key", "cloud_model")
+
     def __init__(self, win):
-        super().__init__()
         self.win = win
         self.syncing = False  # a change made here came from the daemon: don't send it back
-        self.saved_server = ""
         self.saved_location = ""
-        self.saved_instructions = ""
         self.saved_translate = ""
         self.saved_search = ""
         self.saved_model = ""
@@ -549,34 +569,108 @@ class GeneralPage(Adw.PreferencesPage):
         self.phone_labels = []
         self.switches = {}
         self.spins = {}  # key: (row, config units per unit shown)
-        self.shell = load_shell_settings()
-        self.add(self._connection_group())
-        self.add(self._pipeline_group())
-        self.add(self._listening_group())
-        self.add(self._weather_group())
-        self.add(self._news_group())
-        self.add(self._calendar_group())
-        self.add(self._mail_group())
-        self.add(self._timers_group())
-        self.add(self._phone_group())
-        self.add(self._privacy_group())
-        self.add(self._translation_and_search_group())
-        self.add(self._lights_group())
-        self.add(self._home_group())
-        self.add(self._cloud_group())
-        self.add(self._shortcuts_group())
-        self.add(self._instructions_group())
+        self.keys = {}   # name: (row, status, remove)
+        for name in self.ROWS:
+            setattr(self, name, None)
 
-    def _connection_group(self):
-        group = Adw.PreferencesGroup(title="Connection")
-        self.server = Adw.EntryRow(title="Server address", show_apply_button=True)
-        self.server.connect("apply", self.on_server_apply)
-        self.server.connect("changed", lambda row: row.remove_css_class("error"))
-        group.add(self.server)
+    # The rows of each skill's settings. Each adds its rows to a group and returns its note.
 
-        self.api_key, self.key_status, self.key_remove = self._key_row("API key", "api_key")
-        group.add(self.api_key)
-        return group
+    def weather_rows(self, group):
+        self.location = Adw.EntryRow(title="Home town", show_apply_button=True)
+        self.location.connect("apply", self.on_location_apply)
+        group.add(self.location)
+        group.add(self._switch("fahrenheit", "Use Fahrenheit",
+                               "Temperatures in Fahrenheit and wind in miles per hour"))
+        return "Open-Meteo receives the town you ask about"
+
+    def news_rows(self, group):
+        self.news = Adw.ComboRow(title="Source", use_markup=False)
+        self.news.set_model(Gtk.StringList.new([name for name, _base, _feeds in SOURCES.values()]))
+        self.news.connect("notify::selected", self.on_news)
+        group.add(self.news)
+        return "The source you choose sees your IP address when you ask"
+
+    def calendar_rows(self, group):
+        self.calendar = Adw.ComboRow(title="Add events to", use_markup=False)
+        self.calendar.connect("notify::selected", self.on_calendar)
+        group.add(self.calendar)
+        return "Calendars come from the accounts in GNOME Settings, under Online Accounts"
+
+    def mail_rows(self, group):
+        group.add(self._switch("mail_search", "Search my mail",
+                               "Junk and Trash are skipped, and sign-in codes are hidden where "
+                               "they are recognised"))
+        return MAIL_NOTE
+
+    def timer_rows(self, group):
+        group.add(self._switch("timer_chime", "Chime for timers",
+                               "A short sound before the words when a timer or reminder comes "
+                               "due. On a locked screen it is the only sound: the words wait "
+                               "until you unlock"))
+        return ""
+
+    def phone_rows(self, group):
+        self.phone = Adw.ComboRow(title="Default device", use_markup=False)
+        self.phone.connect("notify::selected", self.on_phone)
+        group.add(self.phone)
+        return ""
+
+    def tailscale_rows(self, group):
+        group.add(self._switch("say_tailscale_address", "Say my Tailscale address",
+                               "When you ask for your IP address, also say this computer's "
+                               "Tailscale address"))
+        return ""
+
+    def translation_rows(self, group):
+        self.translate = Adw.EntryRow(title="LibreTranslate server", show_apply_button=True)
+        self.translate.connect("apply", self.on_translate_apply)
+        self.translate.connect("changed", lambda row: row.remove_css_class("error"))
+        group.add(self.translate)
+        return "Leave the server empty to use the main server's host, port 5000"
+
+    def search_rows(self, group):
+        self.search = Adw.EntryRow(title="SearXNG server", show_apply_button=True)
+        self.search.connect("apply", self.on_search_apply)
+        self.search.connect("changed", lambda row: row.remove_css_class("error"))
+        group.add(self.search)
+        return "Leave the server empty to use the main server's host, port 8888"
+
+    def fact_rows(self, group):
+        group.add(self._switch("fact_lookup", "Look up facts on Wikipedia",
+                               "Questions of general knowledge are sent to Wikipedia, so answers "
+                               "aren't made up. Off, Tux answers from memory and can be wrong."))
+        return ""
+
+    def lights_rows(self, group):
+        self.tapo_email = Adw.EntryRow(title="TP-Link email", show_apply_button=True)
+        self.tapo_email.connect("apply", self.on_tapo_email_apply)
+        group.add(self.tapo_email)
+        self.tapo_password, self.tapo_password_status, self.tapo_password_remove = self._key_row(
+            "TP-Link password", "tapo_password")
+        group.add(self.tapo_password)
+        return LIGHTS_NOTE
+
+    def home_rows(self, group):
+        self.home = Adw.EntryRow(title="Address", show_apply_button=True)
+        self.home.connect("apply", self.on_home_apply)
+        self.home.connect("changed", lambda row: row.remove_css_class("error"))
+        group.add(self.home)
+        self.home_token, self.home_token_status, self.home_token_remove = self._key_row(
+            "Long-lived access token", "ha_token")
+        group.add(self.home_token)
+        return HOME_NOTE
+
+    def cloud_rows(self, group):
+        self.cloud = Adw.SwitchRow(title="Use Claude for complex requests")
+        self.cloud.connect("notify::active", self.on_cloud)
+        group.add(self.cloud)
+        self.cloud_key, self.cloud_key_status, self.cloud_key_remove = self._key_row(
+            "Anthropic API key", "cloud_api_key")
+        group.add(self.cloud_key)
+        self.cloud_model = Adw.EntryRow(title="Model", show_apply_button=True)
+        self.cloud_model.connect("apply", self.on_model_apply)
+        group.add(self.cloud_model)
+        return "For complex requests that need several steps"
 
     def _key_row(self, title, key):
         """A row that only ever takes a key in: what is stored is never read back."""
@@ -589,189 +683,8 @@ class GeneralPage(Adw.PreferencesPage):
         remove.connect("clicked", self.on_key_remove, key)
         row.add_suffix(status)
         row.add_suffix(remove)
+        self.keys[key] = (row, status, remove)
         return row, status, remove
-
-    def _pipeline_group(self):
-        group = Adw.PreferencesGroup(title="Pipeline")
-        self.pipelines = {}
-        for name, note in PIPELINES:
-            first = next(iter(self.pipelines.values()), None)
-            check = Gtk.CheckButton(group=first, valign=Gtk.Align.CENTER)
-            check.connect("toggled", self.on_pipeline, name)
-            row = plain_row(name, note, activatable_widget=check)
-            row.add_prefix(check)
-            group.add(row)
-            self.pipelines[name] = check
-        return group
-
-    def _listening_group(self):
-        group = Adw.PreferencesGroup(title="Listening")
-        group.add(self._switch("conversation_mode", "Conversation mode",
-                               "Keep listening briefly after a reply"))
-        group.add(self._spin("listen_timeout_s", "Listen timeout",
-                             "Seconds to wait for speech before giving up", 1, 120, 1))
-        return group
-
-    def _weather_group(self):
-        group = Adw.PreferencesGroup(
-            title="Weather", description="Open-Meteo receives the town you ask about")
-        self.location = Adw.EntryRow(title="Home town", show_apply_button=True)
-        self.location.connect("apply", self.on_location_apply)
-        group.add(self.location)
-        group.add(self._switch("fahrenheit", "Use Fahrenheit",
-                               "Temperatures in Fahrenheit and wind in miles per hour"))
-        return group
-
-    def _news_group(self):
-        group = Adw.PreferencesGroup(
-            title="News", description="The source you choose sees your IP address when you ask")
-        self.news = Adw.ComboRow(title="Source", use_markup=False)
-        self.news.set_model(Gtk.StringList.new([name for name, _base, _feeds in SOURCES.values()]))
-        self.news.connect("notify::selected", self.on_news)
-        group.add(self.news)
-        return group
-
-    def _calendar_group(self):
-        group = Adw.PreferencesGroup(
-            title="Calendar",
-            description="Calendars come from the accounts in GNOME Settings, under Online Accounts")
-        self.calendar = Adw.ComboRow(title="Add events to", use_markup=False)
-        self.calendar.connect("notify::selected", self.on_calendar)
-        group.add(self.calendar)
-        return group
-
-    def _mail_group(self):
-        group = Adw.PreferencesGroup(title="Mail", description=MAIL_NOTE)
-        group.add(self._switch("mail_search", "Search my mail",
-                               "Junk and Trash are skipped, and sign-in codes are hidden where they are recognised"))
-        return group
-
-    def _timers_group(self):
-        group = Adw.PreferencesGroup(title="Timers and reminders")
-        group.add(self._switch("timer_chime", "Chime for timers",
-                               "A short sound before the words when a timer or reminder comes "
-                               "due. On a locked screen it is the only sound: the words wait "
-                               "until you unlock"))
-        return group
-
-    def _phone_group(self):
-        group = Adw.PreferencesGroup(title="Phone")
-        self.phone = Adw.ComboRow(title="Default device", use_markup=False)
-        self.phone.connect("notify::selected", self.on_phone)
-        group.add(self.phone)
-        return group
-
-    def _privacy_group(self):
-        group = Adw.PreferencesGroup(title="Privacy")
-        group.add(self._switch("say_tailscale_address", "Say my Tailscale address",
-                               "When you ask for your IP address, also say this computer's "
-                               "Tailscale address"))
-        return group
-
-    def _translation_and_search_group(self):
-        group = Adw.PreferencesGroup(
-            title="Translation and search",
-            description="Leave a server empty to use the main server's host: "
-                        "port 5000 for translation, 8888 for search")
-        self.translate = Adw.EntryRow(title="LibreTranslate server", show_apply_button=True)
-        self.translate.connect("apply", self.on_translate_apply)
-        self.translate.connect("changed", lambda row: row.remove_css_class("error"))
-        group.add(self.translate)
-        self.search = Adw.EntryRow(title="SearXNG server", show_apply_button=True)
-        self.search.connect("apply", self.on_search_apply)
-        self.search.connect("changed", lambda row: row.remove_css_class("error"))
-        group.add(self.search)
-        group.add(self._switch("fact_lookup", "Look up facts on Wikipedia",
-                               "Questions of general knowledge are sent to Wikipedia, so answers "
-                               "aren't made up. Off, Tux answers from memory and can be wrong."))
-        return group
-
-    def _lights_group(self):
-        group = Adw.PreferencesGroup(title="Lights", description=LIGHTS_NOTE)
-        self.tapo_email = Adw.EntryRow(title="TP-Link email", show_apply_button=True)
-        self.tapo_email.connect("apply", self.on_tapo_email_apply)
-        group.add(self.tapo_email)
-        self.tapo_password, self.tapo_password_status, self.tapo_password_remove = self._key_row(
-            "TP-Link password", "tapo_password")
-        group.add(self.tapo_password)
-        return group
-
-    def _home_group(self):
-        group = Adw.PreferencesGroup(title="Home Assistant", description=HOME_NOTE)
-        self.home = Adw.EntryRow(title="Address", show_apply_button=True)
-        self.home.connect("apply", self.on_home_apply)
-        self.home.connect("changed", lambda row: row.remove_css_class("error"))
-        group.add(self.home)
-        self.home_token, self.home_token_status, self.home_token_remove = self._key_row(
-            "Long-lived access token", "ha_token")
-        group.add(self.home_token)
-        return group
-
-    def _cloud_group(self):
-        group = Adw.PreferencesGroup(
-            title="Cloud", description="For complex requests that need several steps")
-        self.cloud = Adw.SwitchRow(title="Use Claude for complex requests")
-        self.cloud.connect("notify::active", self.on_cloud)
-        group.add(self.cloud)
-        self.cloud_key, self.cloud_key_status, self.cloud_key_remove = self._key_row(
-            "Anthropic API key", "cloud_api_key")
-        group.add(self.cloud_key)
-        self.cloud_model = Adw.EntryRow(title="Model", show_apply_button=True)
-        self.cloud_model.connect("apply", self.on_model_apply)
-        group.add(self.cloud_model)
-        return group
-
-    def _shortcuts_group(self):
-        group = Adw.PreferencesGroup(title="Shortcuts")
-        self.shortcut = Adw.ActionRow(title="Toggle shortcut", activatable=True)
-        self.shortcut_label = Adw.ShortcutLabel(valign=Gtk.Align.CENTER, disabled_text="Off")
-        self.shortcut.add_suffix(self.shortcut_label)
-        self.shortcut.connect("activated", self.on_shortcut)
-        group.add(self.shortcut)
-        if self.shell:
-            self.shell.connect(f"changed::{SHORTCUT_KEY}", lambda *_: self.sync_shortcut())
-            self.sync_shortcut()
-        else:
-            self.shortcut_label.set_disabled_text("Unavailable")
-            self.shortcut.set_sensitive(False)
-            self.shortcut.set_subtitle("Install the Tuxistant GNOME Shell extension to set this")
-
-        hold = self._switch("fn_hold_enabled", "Hold Fn to talk",
-                            "Needs the tuxistant-fn helper")
-        group.add(hold)
-        duration = self._spin("fn_hold_ms", "Hold duration",
-                              "Seconds to hold Fn before Tux starts listening",
-                              0.3, 5, 0.1, scale=1000, digits=1)
-        hide = self._switch("hide_on_release", "Hide on release",
-                            "Hide Tux when Fn is released, even while it is still replying")
-        group.add(duration)
-        group.add(hide)
-        for row in (duration, hide):
-            hold.bind_property("active", row, "sensitive", GObject.BindingFlags.SYNC_CREATE)
-        group.add(self._switch("dictation_enabled", "Dictation",
-                               "Tap Fn, then hold it and speak, to type where your cursor is. "
-                               "Ctrl+Super+D starts and stops it"))
-        return group
-
-    def _instructions_group(self):
-        self.save_instructions = Gtk.Button(
-            label="Save", sensitive=False, valign=Gtk.Align.CENTER)
-        self.save_instructions.connect("clicked", self.on_instructions_save)
-        group = Adw.PreferencesGroup(
-            title="Assistant instructions", description="How Tux should behave and reply",
-            header_suffix=self.save_instructions)
-        self.instructions = Gtk.TextView(
-            wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False, top_margin=10, bottom_margin=10,
-            left_margin=12, right_margin=12)
-        self.instructions.update_property(
-            [Gtk.AccessibleProperty.LABEL], ["Assistant instructions"])
-        self.instructions.get_buffer().connect("changed", self.on_instructions_changed)
-        scroller = Gtk.ScrolledWindow(
-            child=self.instructions, min_content_height=120, max_content_height=240,
-            propagate_natural_height=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
-        frame = Gtk.Frame(child=scroller, css_classes=["view"])
-        group.add(frame)
-        return group
 
     def _switch(self, key, title, subtitle):
         row = Adw.SwitchRow(title=title, subtitle=subtitle)
@@ -790,66 +703,60 @@ class GeneralPage(Adw.PreferencesPage):
 
     def load(self):
         # Not worth an outage page: GSConnect can be slow, or the daemon older than this app.
-        self.win.daemon.fetch("ListPhones", self.show_devices, timeout=PHONES_TIMEOUT_MS,
-                              fail=lambda _error: self.show_devices([]))
-        self.win.daemon.fetch("ListCalendars", self.show_calendars, timeout=CALENDARS_TIMEOUT_MS,
-                              fail=lambda _error: self.show_calendars(
-                                  {"problem": CALENDARS_FAILED}))
+        if self.phone:
+            self.win.daemon.fetch("ListPhones", self.show_devices, timeout=PHONES_TIMEOUT_MS,
+                                  fail=lambda _error: self.show_devices([]))
+        if self.calendar:
+            self.win.daemon.fetch("ListCalendars", self.show_calendars,
+                                  timeout=CALENDARS_TIMEOUT_MS,
+                                  fail=lambda _error: self.show_calendars(
+                                      {"problem": CALENDARS_FAILED}))
 
     def sync(self, config):
         """Show what the daemon holds, leaving alone anything the user is halfway through."""
         self.syncing = True
         # A daemon that hasn't restarted since an update may not send every key yet.
-        server = config.get("server", self.saved_server)
-        if self.server.get_text() == self.saved_server:
-            self.set_row_text(self.server, server)
-        self.saved_server = server
-        location = config.get("location", self.saved_location)
-        if self.location.get_text() == self.saved_location:
-            self.set_row_text(self.location, location)
-        self.saved_location = location
-        translate = config.get("translate_server", "")
-        if self.translate.get_text() == self.saved_translate:
-            self.set_row_text(self.translate, translate)
-        self.saved_translate = translate
-        email = config.get("tapo_email", "")
-        if self.tapo_email.get_text() == self.saved_tapo_email:
-            self.set_row_text(self.tapo_email, email)
-        self.saved_tapo_email = email
-        home = config.get("ha_server", "")
-        if self.home.get_text() == self.saved_home:
-            self.set_row_text(self.home, home)
-        self.saved_home = home
-        search = config.get("search_server", "")
-        if self.search.get_text() == self.saved_search:
-            self.set_row_text(self.search, search)
-        self.saved_search = search
-        model = config.get("cloud_model") or DEFAULTS["cloud_model"]
-        if self.cloud_model.get_text() == self.saved_model:
-            self.set_row_text(self.cloud_model, model)
-        self.saved_model = model
-        # .get, as above, and a source this Settings doesn't know shows as the default.
-        source = config.get("news_source", DEFAULT_SOURCE)
-        self.news.set_selected(list(SOURCES).index(source if source in SOURCES else DEFAULT_SOURCE))
+        if self.location:
+            self.saved_location = self.sync_entry(
+                self.location, self.saved_location, config.get("location", self.saved_location))
+        if self.translate:
+            self.saved_translate = self.sync_entry(
+                self.translate, self.saved_translate, config.get("translate_server", ""))
+        if self.tapo_email:
+            self.saved_tapo_email = self.sync_entry(
+                self.tapo_email, self.saved_tapo_email, config.get("tapo_email", ""))
+        if self.home:
+            self.saved_home = self.sync_entry(self.home, self.saved_home,
+                                              config.get("ha_server", ""))
+        if self.search:
+            self.saved_search = self.sync_entry(self.search, self.saved_search,
+                                                config.get("search_server", ""))
+        if self.cloud_model:
+            self.saved_model = self.sync_entry(
+                self.cloud_model, self.saved_model,
+                config.get("cloud_model") or DEFAULTS["cloud_model"])
+        if self.news:
+            # .get, as above, and a source this Settings doesn't know shows as the default.
+            source = config.get("news_source", DEFAULT_SOURCE)
+            self.news.set_selected(
+                list(SOURCES).index(source if source in SOURCES else DEFAULT_SOURCE))
         self.show_phone()
         self.show_calendar()
         self.show_cloud()
         self.show_keys()
-        if "pipeline" in config:
-            for name, check in self.pipelines.items():
-                check.set_active(name == config["pipeline"])
         for key, row in self.switches.items():
             if key in config and key not in self.win.timers:
                 row.set_active(bool(config[key]))
         for key, (row, scale) in self.spins.items():
             if key in config and key not in self.win.timers:
                 row.set_value(config[key] / scale)
-        instructions = config.get("instructions", self.saved_instructions)
-        if self.instructions_text() == self.saved_instructions:
-            self.instructions.get_buffer().set_text(instructions)
-        self.saved_instructions = instructions
-        self.on_instructions_changed()
         self.syncing = False
+
+    def sync_entry(self, row, saved, value):
+        """Shows the daemon's value unless the row holds an edit. Returns the new saved value."""
+        if row.get_text() == saved:
+            self.set_row_text(row, value)
+        return value
 
     def set_row_text(self, row, text):
         # Text set from code counts as an edit and would leave the apply button showing.
@@ -858,11 +765,7 @@ class GeneralPage(Adw.PreferencesPage):
         row.set_show_apply_button(True)
 
     def show_keys(self):
-        for status, remove, name in (
-                (self.key_status, self.key_remove, "api_key"),
-                (self.cloud_key_status, self.cloud_key_remove, "cloud_api_key"),
-                (self.tapo_password_status, self.tapo_password_remove, "tapo_password"),
-                (self.home_token_status, self.home_token_remove, "ha_token")):
+        for name, (_row, status, remove) in self.keys.items():
             is_set = self.win.config.get(KEY_SET[name], False)
             words = KEY_WORDS.get(name, ("Key is set", "No key set"))
             status.set_label(words[0] if is_set else words[1])
@@ -876,6 +779,8 @@ class GeneralPage(Adw.PreferencesPage):
 
     def show_phone(self):
         """Only with syncing set: a new model selects its first item, and that isn't a choice."""
+        if not self.phone:
+            return
         saved = self.win.config.get("phone_device", "")
         choices = phone_choices(self.devices, saved)
         labels = [shown(label) for label in choices.values()]
@@ -893,6 +798,8 @@ class GeneralPage(Adw.PreferencesPage):
 
     def show_calendar(self):
         """Only with syncing set, as for the phone row."""
+        if not self.calendar:
+            return
         saved = self.win.config.get("calendar_add_to", "")
         choices = calendar_choices(self.calendars, saved)
         labels = [shown(label) for label in choices.values()]
@@ -905,23 +812,13 @@ class GeneralPage(Adw.PreferencesPage):
 
     def show_cloud(self):
         """The switch follows the config: after Cancel, or a reload behind an open dialog."""
+        if not self.cloud:
+            return
         enabled = self.win.config.get("cloud_enabled", False)
         syncing, self.syncing = self.syncing, True
         self.cloud.set_active(enabled)
         self.syncing = syncing
         self.cloud.set_subtitle(cloud_note(enabled, self.win.config.get("cloud_key_set", False)))
-
-    def on_server_apply(self, row):
-        server = clean_server(row.get_text())
-        if server is None:
-            row.add_css_class("error")
-            self.win.toast("Enter a host name and port, like myserver:8080")
-            return
-        self.set_row_text(row, server)
-        if server != self.saved_server and self.win.config.get("api_key_set"):
-            self.win.toast("A new server needs its own API key: enter it below")
-        self.saved_server = server
-        self.win.save("server", server)
 
     def on_location_apply(self, row):
         location = " ".join(row.get_text().split())
@@ -1042,10 +939,6 @@ class GeneralPage(Adw.PreferencesPage):
         self.show_cloud()
         self.win.save("cloud_enabled", enabled)
 
-    def on_pipeline(self, check, name):
-        if check.get_active() and not self.syncing:
-            self.win.save("pipeline", name)
-
     def on_switch(self, row, _param, key):
         if not self.syncing:
             self.win.save(key, row.get_active())
@@ -1053,6 +946,138 @@ class GeneralPage(Adw.PreferencesPage):
     def on_spin(self, row, _param, key):
         if not self.syncing:
             self.win.save_later(key, round(row.get_value() * self.spins[key][1]))
+
+
+class GeneralPage(Adw.PreferencesPage, SettingsBox):
+    """The app's own settings: the server and its key, listening, shortcuts and instructions.
+    A skill's settings are on its page under Skills."""
+
+    def __init__(self, win):
+        Adw.PreferencesPage.__init__(self)
+        SettingsBox.__init__(self, win)
+        self.saved_server = ""
+        self.saved_instructions = ""
+        self.shell = load_shell_settings()
+        self.add(self._connection_group())
+        self.add(self._pipeline_group())
+        self.add(self._listening_group())
+        self.add(self._shortcuts_group())
+        self.add(self._instructions_group())
+
+    def _connection_group(self):
+        group = Adw.PreferencesGroup(title="Connection")
+        self.server = Adw.EntryRow(title="Server address", show_apply_button=True)
+        self.server.connect("apply", self.on_server_apply)
+        self.server.connect("changed", lambda row: row.remove_css_class("error"))
+        group.add(self.server)
+
+        self.api_key, self.key_status, self.key_remove = self._key_row("API key", "api_key")
+        group.add(self.api_key)
+        return group
+
+    def _pipeline_group(self):
+        group = Adw.PreferencesGroup(title="Pipeline")
+        self.pipelines = {}
+        for name, note in PIPELINES:
+            first = next(iter(self.pipelines.values()), None)
+            check = Gtk.CheckButton(group=first, valign=Gtk.Align.CENTER)
+            check.connect("toggled", self.on_pipeline, name)
+            row = plain_row(name, note, activatable_widget=check)
+            row.add_prefix(check)
+            group.add(row)
+            self.pipelines[name] = check
+        return group
+
+    def _listening_group(self):
+        group = Adw.PreferencesGroup(title="Listening")
+        group.add(self._switch("conversation_mode", "Conversation mode",
+                               "Keep listening briefly after a reply"))
+        group.add(self._spin("listen_timeout_s", "Listen timeout",
+                             "Seconds to wait for speech before giving up", 1, 120, 1))
+        return group
+
+    def _shortcuts_group(self):
+        group = Adw.PreferencesGroup(title="Shortcuts")
+        self.shortcut = Adw.ActionRow(title="Toggle shortcut", activatable=True)
+        self.shortcut_label = Adw.ShortcutLabel(valign=Gtk.Align.CENTER, disabled_text="Off")
+        self.shortcut.add_suffix(self.shortcut_label)
+        self.shortcut.connect("activated", self.on_shortcut)
+        group.add(self.shortcut)
+        if self.shell:
+            self.shell.connect(f"changed::{SHORTCUT_KEY}", lambda *_: self.sync_shortcut())
+            self.sync_shortcut()
+        else:
+            self.shortcut_label.set_disabled_text("Unavailable")
+            self.shortcut.set_sensitive(False)
+            self.shortcut.set_subtitle("Install the Tuxistant GNOME Shell extension to set this")
+
+        hold = self._switch("fn_hold_enabled", "Hold Fn to talk",
+                            "Needs the tuxistant-fn helper")
+        group.add(hold)
+        duration = self._spin("fn_hold_ms", "Hold duration",
+                              "Seconds to hold Fn before Tux starts listening",
+                              0.3, 5, 0.1, scale=1000, digits=1)
+        hide = self._switch("hide_on_release", "Hide on release",
+                            "Hide Tux when Fn is released, even while it is still replying")
+        group.add(duration)
+        group.add(hide)
+        for row in (duration, hide):
+            hold.bind_property("active", row, "sensitive", GObject.BindingFlags.SYNC_CREATE)
+        group.add(self._switch("dictation_enabled", "Dictation",
+                               "Tap Fn, then hold it and speak, to type where your cursor is. "
+                               "Ctrl+Super+D starts and stops it"))
+        return group
+
+    def _instructions_group(self):
+        self.save_instructions = Gtk.Button(
+            label="Save", sensitive=False, valign=Gtk.Align.CENTER)
+        self.save_instructions.connect("clicked", self.on_instructions_save)
+        group = Adw.PreferencesGroup(
+            title="Assistant instructions", description="How Tux should behave and reply",
+            header_suffix=self.save_instructions)
+        self.instructions = Gtk.TextView(
+            wrap_mode=Gtk.WrapMode.WORD_CHAR, accepts_tab=False, top_margin=10, bottom_margin=10,
+            left_margin=12, right_margin=12)
+        self.instructions.update_property(
+            [Gtk.AccessibleProperty.LABEL], ["Assistant instructions"])
+        self.instructions.get_buffer().connect("changed", self.on_instructions_changed)
+        scroller = Gtk.ScrolledWindow(
+            child=self.instructions, min_content_height=120, max_content_height=240,
+            propagate_natural_height=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        frame = Gtk.Frame(child=scroller, css_classes=["view"])
+        group.add(frame)
+        return group
+
+    def sync(self, config):
+        SettingsBox.sync(self, config)
+        self.syncing = True
+        server = config.get("server", self.saved_server)
+        self.saved_server = self.sync_entry(self.server, self.saved_server, server)
+        if "pipeline" in config:
+            for name, check in self.pipelines.items():
+                check.set_active(name == config["pipeline"])
+        instructions = config.get("instructions", self.saved_instructions)
+        if self.instructions_text() == self.saved_instructions:
+            self.instructions.get_buffer().set_text(instructions)
+        self.saved_instructions = instructions
+        self.on_instructions_changed()
+        self.syncing = False
+
+    def on_server_apply(self, row):
+        server = clean_server(row.get_text())
+        if server is None:
+            row.add_css_class("error")
+            self.win.toast("Enter a host name and port, like myserver:8080")
+            return
+        self.set_row_text(row, server)
+        if server != self.saved_server and self.win.config.get("api_key_set"):
+            self.win.toast("A new server needs its own API key: enter it below")
+        self.saved_server = server
+        self.win.save("server", server)
+
+    def on_pipeline(self, check, name):
+        if check.get_active() and not self.syncing:
+            self.win.save("pipeline", name)
 
     def instructions_text(self):
         buffer = self.instructions.get_buffer()
@@ -1259,17 +1284,340 @@ def skill_problems(problems) -> list[tuple[str, str, str]]:
             for path, problem in sorted(problems.items())]
 
 
+def skill_origin(skill: dict) -> str:
+    if skill.get("source") == "yours":
+        return "A recipe you added" if skill.get("recipe") else "A code skill you added"
+    if skill.get("source") == "bundled":
+        return "Comes with Tuxistant: a code skill"
+    return "Built into Tuxistant"
+
+
+def module_file(module: str) -> str:
+    return module.replace(".", "/") + ".py"
+
+
+def code_words(details: dict) -> str:
+    """What stands behind the manifest, as the YAML alone isn't the skill."""
+    if details.get("recipe"):
+        return ("It has no code of its own. Tux does what the file says with its own code, in "
+                "tuxistant/recipes.py, and a recipe can only ask the hosts it names, open the "
+                "app or page it names, or say a sentence")
+    if details.get("source") in ("yours", "bundled"):
+        return ("Its own program, in the files below. It runs in a sandbox that sees its own "
+                "folder and none of your home folder, with the network only if it asks for it")
+    modules = sorted({module_file(a["module"]) for a in details.get("actions", [])
+                      if a.get("module")})
+    where = f" in {', '.join(modules)}" if modules else ""
+    return (f"Built in: Python code{where}. The manifest says what the model is offered, and "
+            "the code decides what really happens")
+
+
+def permission_list(permissions: dict) -> list[tuple[str, str]]:
+    """(what, where) for each permission asked for, in words. Unknown ones still show."""
+    found = []
+    for key in [k for k in PERMISSION_WORDS if k in permissions] + [
+            k for k in permissions if k not in PERMISSION_WORDS]:
+        value = permissions[key]
+        if not value:
+            continue
+        words = PERMISSION_WORDS.get(key) or "use " + str(key).replace("_", " ")
+        if isinstance(value, str):
+            value = [value]
+        where = "Anywhere" if key == "network" and value is True else ""
+        if isinstance(value, (list, tuple)):
+            where = ", ".join("your own server" if key == "network" and name == HOME_SERVER
+                              else str(name) for name in value)
+        found.append((words[0].upper() + words[1:], where))
+    return found
+
+
+def risk_words(risk: str, because: list | None, permissions: dict) -> str:
+    """Why the risk is what it is. An older daemon doesn't say, so then the permissions do."""
+    if because is None:
+        return permission_words(permissions)
+    if not because:
+        return "It asks for nothing that raises the risk"
+    reasons = [PERMISSION_WORDS.get(key) or "use " + str(key).replace("_", " ")
+               for key in because]
+    head = ", ".join(reasons[:-1])
+    return f"Because it can {head + ' and ' if head else ''}{reasons[-1]}"
+
+
+def held_back_words(action: dict) -> str:
+    if action.get("offered", True):
+        return "The model is offered this"
+    if action.get("held_back") == "switched_off":
+        return "Not offered to the model until it is switched on in the settings above"
+    return "Not offered to the model until its settings above are filled in"
+
+
+def param_words(name: str, schema, required: list) -> tuple[str, str]:
+    """A parameter as a row: its name, and what the model is told of it."""
+    title = f"{name} (required)" if name in required else name
+    if not isinstance(schema, dict):
+        return title, as_text(schema)
+    rest = as_text({key: value for key, value in schema.items() if key != "description"})
+    lines = [as_text(schema["description"])] if "description" in schema else []
+    return title, "\n".join(lines + [rest] if rest else lines)
+
+
+def manifest_size(text: str) -> str:
+    size = len(text.encode())
+    return f"{size} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
+
+
+class SkillRow(Adw.ActionRow):
+    """One skill. Activating it opens its page."""
+
+    def __init__(self, skill):
+        super().__init__(use_markup=False, activatable=True)
+        self.skill = skill
+        self.set_title(shown(skill["name"]))
+        self.set_subtitle(shown(skill_subtitle(skill)))
+        risk = skill["risk"]
+        self.add_suffix(Gtk.Label(
+            label=risk_label(risk), valign=Gtk.Align.CENTER,
+            css_classes=["risk-badge", RISK_CLASSES.get(risk, "error")]))
+        self.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+
+
+class SkillSettings(SettingsBox):
+    """One skill's settings, on its page."""
+
+    def __init__(self, win, names):
+        super().__init__(win)
+        self.group = Adw.PreferencesGroup(title="Settings")
+        notes = [getattr(self, f"{name}_rows")(self.group) for name in names]
+        self.group.set_description(". ".join(note for note in notes if note) or None)
+
+
+class SkillDialog(Adw.PreferencesDialog):
+    """Everything about one skill: where it comes from, what it may do and why that is its risk,
+    its settings, what the model is given for each action, word for word, and its manifest.
+
+    What a skill says about itself is a stranger's text, so every row shows it as it is, never
+    as markup. The words around it are Tuxistant's own."""
+
+    def __init__(self, win, skill):
+        super().__init__(search_enabled=False, content_width=680, content_height=760)
+        self.win, self.skill = win, skill
+        self.details = None     # SkillDetails, once it answers
+        self.problem = ""       # why there are none, if it failed
+        self.about_rows, self.permission_rows, self.manifest_row = [], [], None
+        self.set_title(shown(skill["name"]))
+        self.page = Adw.PreferencesPage()
+        self.add(self.page)
+        names = SKILL_SETTINGS.get(skill["id"], ()) if skill.get("source") != "yours" else ()
+        self.settings = SkillSettings(win, names) if names else None
+        self.about = Adw.PreferencesGroup()
+        self.page.add(self.about)
+        if self.settings:
+            self.page.add(self.settings.group)
+            self.settings.sync(win.config)
+            self.settings.load()
+        self.permissions = Adw.PreferencesGroup(title="Permissions")
+        self.page.add(self.permissions)
+        self.actions = Adw.PreferencesGroup(
+            title="What the model is given",
+            description="For each action, the tool name, description and parameters the model "
+                        "reads, exactly as Tuxistant sends them")
+        self.page.add(self.actions)
+        self.manifest = Adw.PreferencesGroup(title="Manifest", visible=False)
+        self.page.add(self.manifest)
+        self.files = Adw.PreferencesGroup(title="Files", visible=False)
+        self.page.add(self.files)
+        self.waiting = Adw.ActionRow(title="Loading…")
+        self.waiting.add_prefix(Adw.Spinner())
+        self.actions.add(self.waiting)
+        self.show_about(skill)
+        self.show_permissions(skill, None)
+        win.daemon.fetch("SkillDetails", self.fill, (skill["id"],), "s", fail=self.failed)
+
+    def sync(self, config):
+        if self.settings:
+            self.settings.sync(config)
+
+    def load(self):
+        if self.settings:
+            self.settings.load()
+
+    def show_about(self, skill):
+        for row in self.about_rows:
+            self.about.remove(row)
+        where = skill_origin(skill)
+        if skill.get("source") == "yours" and skill.get("file"):
+            where += f"\n{skill['file']}"
+        rows = [detail_row("What it does", skill["description"]),
+                detail_row("Where it comes from", where)]
+        if skill.get("version"):
+            rows.append(detail_row("Version", skill["version"]))
+        if "manifest" in skill:
+            rows.append(detail_row("Code", code_words(skill)))
+        self.about_rows = rows
+        for row in rows:
+            self.about.add(row)
+
+    def show_permissions(self, skill, because):
+        for row in self.permission_rows:
+            self.permissions.remove(row)
+        rows = [plain_row(what, where) for what, where in permission_list(skill["permissions"])]
+        if not rows:
+            rows.append(plain_row("None", "It needs no special permissions"))
+        risk = plain_row(risk_label(skill["risk"]),
+                         risk_words(skill["risk"], because, skill["permissions"]))
+        risk.add_prefix(Gtk.Image(icon_name="dialog-information-symbolic"))
+        rows.append(risk)
+        self.permission_rows = rows
+        for row in rows:
+            self.permissions.add(row)
+
+    def fill(self, details):
+        self.actions.remove(self.waiting)
+        if not isinstance(details, dict):
+            self.show_problem("This skill isn't loaded any more. Close this and look again")
+            return
+        self.details = details
+        self.show_about(details)
+        self.show_permissions(details, details.get("risk_because", []))
+        for action in details["actions"]:
+            self.actions.add(SkillActionRow(action))
+        self.show_manifest(details)
+        self.show_files(details)
+
+    def failed(self, error):
+        self.actions.remove(self.waiting)
+        if error.matches(Gio.DBusError.quark(), Gio.DBusError.UNKNOWN_METHOD):
+            self.show_problem("The Tuxistant running now is older than these Settings. Restart "
+                              "it to read what the model is given and the manifest")
+        else:
+            self.show_problem(f"Tuxistant didn't send this skill's details: "
+                              f"{error_text(error.message)}")
+
+    def show_problem(self, text):
+        """What ListSkills said is still worth showing: the actions by name."""
+        self.problem = text
+        # A group's description is read as markup, and the error came from elsewhere.
+        self.actions.set_description(GLib.markup_escape_text(shown(text)))
+        for name in self.skill.get("actions", []):
+            self.actions.add(plain_row(name, ""))
+
+    def show_manifest(self, details):
+        text = details.get("manifest") or ""
+        path = details.get("file") or ""
+        if not text:
+            return
+        copy = Gtk.Button(label="Copy", valign=Gtk.Align.CENTER)
+        copy.connect("clicked", lambda _button: self.copy_manifest())
+        self.manifest.set_header_suffix(copy)
+        self.manifest.set_description(
+            "What the skill says about itself, as it was loaded. It is read-only here"
+            if details.get("source") != "yours" else
+            "What the skill says about itself, as it was loaded. Change it in its file")
+        read = plain_row(Path(path).name or "Manifest", f"{manifest_size(text)}\n{path}",
+                         activatable=True, subtitle_selectable=True)
+        read.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        read.connect("activated", lambda _row: self.push_subpage(ManifestPage(self, details)))
+        self.manifest_row = read
+        self.manifest.add(read)
+        if details.get("recipe"):
+            self.manifest.add(self.open_row("Open file", Path(path)))
+        self.manifest.set_visible(True)
+
+    def show_files(self, details):
+        files = details.get("files") or []
+        if not details.get("folder"):
+            return
+        self.files.add(detail_row("Folder", details["folder"]))
+        for name in files:
+            row = plain_row(name, "")
+            row.add_css_class("raw")
+            self.files.add(row)
+        if details.get("source") == "yours":
+            self.files.add(self.open_row("Open folder", Path(details["folder"])))
+        self.files.set_visible(True)
+
+    def open_row(self, title, path):
+        row = Adw.ButtonRow(title=title, end_icon_name="external-link-symbolic")
+        row.connect("activated", lambda _row: self.open_path(path))
+        return row
+
+    def open_path(self, path: Path):
+        launcher = Gtk.FileLauncher.new(Gio.File.new_for_path(str(path)))
+        launcher.launch(self.win, None, self.on_opened)
+
+    def on_opened(self, launcher, result):
+        try:
+            launcher.launch_finish(result)
+        except GLib.Error as e:
+            if not e.matches(Gtk.DialogError.quark(), Gtk.DialogError.DISMISSED):
+                self.add_toast(Adw.Toast(title=f"Could not open it: {e.message}",
+                                         use_markup=False))
+
+    def copy_manifest(self):
+        self.get_clipboard().set_content(
+            Gdk.ContentProvider.new_for_value(self.details["manifest"]))
+        self.add_toast(Adw.Toast(title="Copied the manifest", use_markup=False))
+
+
+class SkillActionRow(Adw.ExpanderRow):
+    """One action, as the model is given it. Built on opening: a page can hold many."""
+
+    def __init__(self, action):
+        super().__init__(use_markup=False)
+        self.action, self.built = action, False
+        self.set_title(shown(action["tool"]["name"]))
+        self.set_subtitle(shown(f"{action['name']}\n{held_back_words(action)}"))
+        self.connect("notify::expanded", self.on_expanded)
+
+    def on_expanded(self, *_):
+        if not self.get_expanded() or self.built:
+            return
+        self.built = True
+        tool = self.action["tool"]
+        self.add_row(detail_row("Description", tool["description"]))
+        parameters = tool.get("parameters") or {}
+        required = parameters.get("required") or []
+        for name, schema in (parameters.get("properties") or {}).items():
+            self.add_row(detail_row(*param_words(name, schema, required)))
+        if self.action.get("module"):
+            self.add_row(detail_row("Code", module_file(self.action["module"])))
+        self.add_row(detail_row(SENT_AS, json.dumps(tool, indent=2, ensure_ascii=False)))
+
+
+class ManifestPage(Adw.NavigationPage):
+    """The whole manifest, read-only, to read, select and copy."""
+
+    def __init__(self, dialog, details):
+        super().__init__(title=shown(Path(details.get("file") or "manifest").name))
+        copy = Gtk.Button(label="Copy")
+        copy.connect("clicked", lambda _button: dialog.copy_manifest())
+        header = Adw.HeaderBar()
+        header.pack_end(copy)
+        self.text = Gtk.TextView(
+            editable=False, cursor_visible=False, monospace=True,
+            wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=12, bottom_margin=12, left_margin=12,
+            right_margin=12)
+        self.text.update_property([Gtk.AccessibleProperty.LABEL], ["Manifest"])
+        self.text.get_buffer().set_text(shown(details["manifest"]))
+        view = Adw.ToolbarView(content=Gtk.ScrolledWindow(
+            child=self.text, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True))
+        view.add_top_bar(header)
+        self.set_child(view)
+
+
 class SkillsPage(Adw.PreferencesPage):
     def __init__(self, win):
         super().__init__()
         self.win = win
         self.rows = []
         self.problem_rows = []
+        self.dialog = None      # the skill page open now, if any
         open_skills = Gtk.Button(label="Open skills folder", valign=Gtk.Align.CENTER)
         open_skills.connect("clicked", self.on_open_folder)
         self.group = Adw.PreferencesGroup(
             title="Skills", header_suffix=open_skills,
-            description="What Tux can do for you. Risk follows from what a skill is allowed to do")
+            description="What Tux can do for you. Open one to read it and change its settings. "
+                        "Risk follows from what a skill is allowed to do")
         self.problems = Adw.PreferencesGroup(
             title="Skills with problems",
             description="These skills can't be used until they are fixed", visible=False)
@@ -1279,6 +1627,8 @@ class SkillsPage(Adw.PreferencesPage):
     def load(self):
         self.win.daemon.fetch("ListSkills", self.fill)
         self.win.daemon.fetch("SkillProblems", self.fill_problems, fail=lambda _error: None)
+        if self.dialog:
+            self.dialog.load()
 
     def fill(self, skills):
         for row in self.rows:
@@ -1305,12 +1655,23 @@ class SkillsPage(Adw.PreferencesPage):
         folder_opened(self.win, "skills", launcher, result)
 
     def make_row(self, skill):
-        row = plain_row(skill["name"], skill_subtitle(skill))
-        risk = skill["risk"]
-        row.add_suffix(Gtk.Label(
-            label=risk_label(risk), valign=Gtk.Align.CENTER,
-            css_classes=["risk-badge", RISK_CLASSES.get(risk, "error")]))
+        row = SkillRow(skill)
+        row.connect("activated", lambda row: self.open(row.skill))
         return row
+
+    def open(self, skill):
+        self.dialog = SkillDialog(self.win, skill)
+        self.dialog.connect("closed", self.on_closed)
+        self.dialog.present(self.win)
+        return self.dialog
+
+    def on_closed(self, dialog):
+        if self.dialog is dialog:
+            self.dialog = None
+
+    def sync(self, config):
+        if self.dialog:
+            self.dialog.sync(config)
 
 
 class HistoryPage(Adw.Bin):
@@ -1469,6 +1830,7 @@ class SettingsWindow(Adw.ApplicationWindow):
     def apply_config(self, config):
         self.config = config
         self.general.sync(config)
+        self.skills.sync(config)
         self.voices.select(config.get("voice"))
         self.appearance.select(config.get("theme"))
 

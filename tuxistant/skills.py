@@ -6,6 +6,7 @@ whatever asks for an action, the model or the planner, meets the same checks. Bu
 are Python; sandboxed code skills reach it through SkillHost as async handlers of their own.
 """
 import asyncio
+import functools
 import inspect
 import json
 import shutil
@@ -24,14 +25,27 @@ RISK_ORDER = ["low", "medium", "high"]
 HOME = "home"   # a network permission naming the server this install already talks to
 
 
+HIGH_RISK = ("shell", "files_write")
+MEDIUM_RISK = ("network", "files_read", "clipboard", "calendar_read", "calendar_write",
+               "mail_read", "home_read", "home_control")
+
+
 def risk_of(permissions: dict) -> str:
-    if permissions.get("shell") or permissions.get("files_write"):
+    if any(permissions.get(p) for p in HIGH_RISK):
         return "high"
-    if any(permissions.get(p) for p in ("network", "files_read", "clipboard", "calendar_read",
-                                        "calendar_write", "mail_read", "home_read",
-                                        "home_control")):
+    if any(permissions.get(p) for p in MEDIUM_RISK):
         return "medium"
     return "low"
+
+
+def risk_because(permissions: dict) -> list[str]:
+    """The permissions that set the risk, so Settings can say why without working it out again.
+    Empty for a low risk: nothing asked for raises it."""
+    for level in (HIGH_RISK, MEDIUM_RISK):
+        found = [p for p in level if permissions.get(p)]
+        if found:
+            return found
+    return []
 
 
 def reads_private(permissions: dict) -> bool:
@@ -59,8 +73,15 @@ def _disk_usage(args, _config, _session=None):
 
 
 def _plain(handler):
-    """For handlers that do not care which conversation they are in."""
-    return lambda args, config, _session: handler(args, config)
+    """For handlers that do not care which conversation they are in. Wrapped, so Settings names
+    the module the code is really in."""
+    return functools.wraps(handler)(lambda args, config, _session: handler(args, config))
+
+
+def code_module(handler) -> str:
+    """Where a handler's code lives, such as tuxistant.livedata, or "" when nothing says."""
+    module = getattr(inspect.unwrap(handler), "__module__", None) if handler else None
+    return module if isinstance(module, str) else ""
 
 
 # Which of a skill's declared hosts one call will reach, where a setting decides it. The card
@@ -134,12 +155,20 @@ class Skills:
     without a turn ever seeing half of each. A plain Skills(folder) reads YAML manifests whose
     handlers are all in HANDLERS; SkillHost builds one from manifests it has already checked."""
 
-    def __init__(self, folder: Path = BUILTIN, config=None, manifests=None, handlers=None):
+    def __init__(self, folder: Path = BUILTIN, config=None, manifests=None, handlers=None,
+                 origins=None):
         self.config = DEFAULTS if config is None else config
         self.handlers = HANDLERS if handlers is None else handlers
+        # By skill id, where each was read from: "file", its text as "manifest", and for a code
+        # skill its "folder" and "files". Settings shows them, so people can read a skill.
+        self.origins = {} if origins is None else origins
         if manifests is None:
-            manifests = [{**yaml.safe_load(file.read_text()), "source": "built-in"}
-                         for file in sorted(folder.glob("*.yaml"))]
+            manifests = []
+            for file in sorted(folder.glob("*.yaml")):
+                text = file.read_text()
+                manifest = {**yaml.safe_load(text), "source": "built-in"}
+                manifests.append(manifest)
+                self.origins.setdefault(manifest["id"], {"file": str(file), "manifest": text})
         self.skills = {}
         self.actions = {}
         for manifest in manifests:
@@ -154,19 +183,30 @@ class Skills:
         self.tool_names = {name.replace(".", "_"): name for name in self.actions}
 
     def tools(self) -> list[dict]:
-        """OpenAI Realtime tool definitions. Dots are not valid in function names."""
-        return [{
+        """OpenAI Realtime tool definitions, of the actions offered now."""
+        return [self.tool(name) for name in self.actions if self.offered(name)]
+
+    def tool(self, name: str) -> dict:
+        """One action as the model is given it. Dots are not valid in function names."""
+        action = self.actions[name]
+        return {
             "type": "function", "name": name.replace(".", "_"),
             "description": action["description"],
             "parameters": {"type": "object", "properties": action.get("params") or {},
                            "required": action.get("required") or []},
-        } for name, action in self.actions.items() if self.offered(name)]
+        }
 
     def offered(self, name: str) -> bool:
         """Whether the model is told of this action. Settings lists its skill either way."""
         if name in SWITCHED and self.config[SWITCHED[name]] is not True:
             return False
         return name not in SET_UP or SET_UP[name](self.config) is True
+
+    def _held_back(self, name: str) -> str:
+        """Why the model isn't told of an action now, or "" when it is."""
+        if name in SWITCHED and self.config[SWITCHED[name]] is not True:
+            return "switched_off"
+        return "" if self.offered(name) else "not_set_up"
 
     def action_name(self, tool_name: str) -> str:
         return self.tool_names.get(tool_name, tool_name)
@@ -226,8 +266,32 @@ class Skills:
         return None
 
     def listing(self) -> list[dict]:
-        return [{"id": s["id"], "name": s["name"], "description": s["description"],
-                 "risk": s["risk"], "permissions": s.get("permissions") or {},
-                 "actions": sorted(s["actions"]), "source": s["source"],
-                 "recipe": bool(s.get("recipe"))}
-                for s in self.skills.values()]
+        return [self._entry(s) for s in self.skills.values()]
+
+    @staticmethod
+    def _entry(s: dict) -> dict:
+        return {"id": s["id"], "name": s["name"], "description": s["description"],
+                "risk": s["risk"], "permissions": s.get("permissions") or {},
+                "actions": sorted(s["actions"]), "source": s["source"],
+                "recipe": bool(s.get("recipe"))}
+
+    def details(self, skill_id: str) -> dict | None:
+        """Everything Settings shows of one skill, or None if it isn't loaded. Each action's tool
+        comes from tool(), the code that builds the model's list, so what is shown is what the
+        model is sent, word for word, once the action is offered."""
+        skill = self.skills.get(skill_id)
+        if skill is None:
+            return None
+        origin = self.origins.get(skill_id, {})
+        actions = []
+        for name in skill["actions"]:
+            action = {"name": name, "tool": self.tool(name), "offered": self.offered(name),
+                      "held_back": self._held_back(name)}
+            if skill["source"] == "built-in" or skill.get("recipe"):
+                action["module"] = code_module(self.handlers.get(name))
+            actions.append(action)
+        return {**self._entry(skill), "version": str(skill.get("version") or ""),
+                "risk_because": risk_because(skill.get("permissions") or {}),
+                "file": origin.get("file", ""), "folder": origin.get("folder", ""),
+                "files": list(origin.get("files", [])), "manifest": origin.get("manifest", ""),
+                "actions": actions}

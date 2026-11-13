@@ -22,7 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tuxistant import BUS_NAME, BUS_PATH, voices  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.history import History  # noqa: E402
-from tuxistant.skills import Skills, risk_of  # noqa: E402
+from tuxistant.skillhost import offline  # noqa: E402
+from tuxistant.skills import risk_of  # noqa: E402
 
 TEST_INTERFACE = "org.tuxistant.Test"
 DAY = 86400
@@ -42,6 +43,36 @@ THEMES = {
          "error": "layout.kind must be orb or band, got <wobble> & more"},
     ],
 }
+MARKUP_NAME = '<b>Bold</b> &amp; <span foreground="red">red</span>'
+MARKUP_TEXT = ('Does <b>things</b> &amp; <span foreground="red">more</span> '
+               + "z" * 300 + " " + "long words " * 40)
+# A recipe of nearly 64 KB, the most a manifest may be, with markup in a comment, and a code skill.
+RECIPE = """id: org.example.tides
+name: Tides
+description: Says when the next high tide is &amp; more
+version: "1.0.0"
+permissions:
+  network: [api.tides.example]
+actions:
+  tides.next:
+    description: Say when the next high tide is at a seaside town
+    params:
+      town: { type: text, max: 40, description: "The town, like Brighton" }
+    required: [town]
+    get: https://api.tides.example/v1/next?town={town}
+    say: "The next high tide in {town} is soon."
+# <span foreground="red">Not markup</span> &amp; <b>not bold</b>
+""" + "# filler line to make it long, with <b>tags</b> & ampersands\n" * 1000
+MOON = """id: org.example.moon
+name: Moon
+description: Tells you the phase of the moon
+version: 1.0.0
+run: [python3, main.py]
+permissions: { network: true }
+actions:
+  moon.phase:
+    description: Say what phase the moon is in tonight
+"""
 EXTRA_SKILLS = [
     {"id": "org.example.web", "name": "Web lookup", "description": "Searches the web for you",
      "permissions": {"network": ["api.example.org"], "files_read": True},
@@ -50,10 +81,24 @@ EXTRA_SKILLS = [
      "permissions": {"shell": True, "files_write": ["~/Documents"], "clipboard": True,
                      "camera": True},
      "actions": ["shell.run"]},
-    {"id": "org.example.tides", "name": "Tides", "description": "Says when the next high tide is",
-     "permissions": {"network": ["api.tides.example"]}, "actions": ["tides.next"],
-     "source": "yours", "recipe": True},
+    {"id": "org.example.markup", "name": MARKUP_NAME, "description": MARKUP_TEXT,
+     "permissions": {"network": True, "<b>odd</b>": True}, "actions": ["markup.go"],
+     "source": "yours"},
 ]
+# A daemon checks what a skill you add says, but Settings must not count on that: a built-in
+# manifest isn't held to it, and a comment in any manifest can say anything.
+DETAILS = {"org.example.markup": {
+    **EXTRA_SKILLS[-1], "risk": "medium", "recipe": False, "version": "<i>1</i>",
+    "risk_because": ["network"], "file": "/home/tux/.local/share/tuxistant/skills/<b>m</b>/skill.yaml",
+    "folder": "/home/tux/.local/share/tuxistant/skills/<b>m</b>",
+    "files": ["skill.yaml", "<b>main</b>.py", "x" * 300],
+    "manifest": "# <span foreground=\"red\">red</span> &amp; <b>bold</b>\n" + "y" * 400 + "\n"
+                + "# <b>filler</b> &lt;\n" * 3098,
+    "actions": [{"name": "markup.go", "offered": True, "held_back": "", "tool": {
+        "type": "function", "name": "markup_go", "description": MARKUP_TEXT,
+        "parameters": {"type": "object", "required": ["<i>q</i>"], "properties": {
+            "<i>q</i>": {"type": "string", "description": "<span foreground=\"red\">q</span>"}}}}}],
+}}
 SKILL_PROBLEMS = {
     "/home/tux/.local/share/tuxistant/skills/broken.yaml":
         "It asks for shell, and a recipe may only name the hosts it reaches.",
@@ -79,8 +124,18 @@ class Daemon(ServiceInterface):
         self.phones = PHONES
         self.calendars = CALENDARS
         self.skill_problems = SKILL_PROBLEMS
+        self.host = offline(self.config, user=self.user_skills(folder / "skills"))
         if not self.history.recent(1):
             self.seed_history()
+
+    @staticmethod
+    def user_skills(folder: Path) -> Path:
+        (folder / "moon" / "lib").mkdir(parents=True, exist_ok=True)
+        (folder / "tides.yaml").write_text(RECIPE)
+        (folder / "moon" / "skill.yaml").write_text(MOON)
+        (folder / "moon" / "main.py").write_text("print('moon')\n")
+        (folder / "moon" / "lib" / "phase.py").write_text("FULL = 1\n")
+        return folder
 
     def seed_history(self):
         add = self.history.add
@@ -101,7 +156,8 @@ class Daemon(ServiceInterface):
         if method in self.delays:
             await asyncio.sleep(self.delays.pop(method) / 1000)
         if method in self.failures:
-            raise DBusError("org.tuxistant.Error.Failed", self.failures.pop(method))
+            name, message = self.failures.pop(method)
+            raise DBusError(name, message)
 
     @dbus_method()
     async def GetConfig(self) -> "s":
@@ -139,7 +195,12 @@ class Daemon(ServiceInterface):
     async def ListSkills(self) -> "s":
         await self.enter("ListSkills")
         extra = [{**s, "risk": risk_of(s["permissions"])} for s in EXTRA_SKILLS]
-        return json.dumps(Skills().listing() + extra)
+        return json.dumps(self.host.current().listing() + extra)
+
+    @dbus_method()
+    async def SkillDetails(self, skill_id: "s") -> "s":
+        await self.enter("SkillDetails", skill_id)
+        return json.dumps(DETAILS.get(skill_id) or self.host.current().details(skill_id))
 
     @dbus_method()
     async def SkillProblems(self) -> "s":
@@ -232,7 +293,12 @@ class Control(ServiceInterface):
 
     @dbus_method()
     def FailNext(self, method: "s", message: "s"):
-        self.daemon.failures[method] = message
+        self.daemon.failures[method] = ("org.tuxistant.Error.Failed", message)
+
+    @dbus_method()
+    def FailNextAs(self, method: "s", name: "s", message: "s"):
+        """As a daemon older than the method would: org.freedesktop.DBus.Error.UnknownMethod."""
+        self.daemon.failures[method] = (name, message)
 
     @dbus_method()
     def DelayNext(self, method: "s", ms: "i"):

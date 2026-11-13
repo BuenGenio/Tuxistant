@@ -41,7 +41,7 @@ METHODS = {
     "GetState": ("", "s"), "GetConfig": ("", "s"), "SetConfig": ("ss", ""),
     "ListVoices": ("", "s"), "PreviewVoice": ("s", ""), "Say": ("s", ""),
     "ListThemes": ("", "s"), "PreviewTheme": ("s", ""), "ListSkills": ("", "s"),
-    "ReloadSkills": ("", "s"), "SkillProblems": ("", "s"),
+    "ReloadSkills": ("", "s"), "SkillProblems": ("", "s"), "SkillDetails": ("s", "s"),
     "GetHistory": ("i", "s"), "ClearHistory": ("", ""), "OpenSettings": ("", ""),
     "ListPhones": ("", "s"), "ListCalendars": ("", "s"),
     "Hello": ("i", ""), "CanAsk": ("", "b"), "Answer": ("sb", ""),
@@ -206,6 +206,12 @@ class Service(OnPrivateBus):
     async def test_list_skills(self):
         skills = json.loads(await self.iface.call_list_skills())
         self.assertIn("org.tuxistant.time", [s["id"] for s in skills])
+
+    async def test_skill_details(self):
+        found = json.loads(await self.iface.call_skill_details("org.tuxistant.time"))
+        self.assertEqual(found["actions"][0]["tool"]["name"], "time_now")
+        self.assertIn("time.now", found["manifest"])
+        self.assertIsNone(json.loads(await self.iface.call_skill_details("org.example.none")))
 
     async def test_history(self):
         self.history.add("heard", "reply", [{"name": "time.now"}], "ok")

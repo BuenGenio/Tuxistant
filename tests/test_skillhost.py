@@ -612,6 +612,116 @@ class Command(unittest.TestCase):
 
 
 
+class Details(Case):
+    """SkillDetails: what Settings shows, so people can read a skill before they trust it."""
+
+    RECIPE = ("id: org.example.tides\nname: Tides\ndescription: Says when the tide is\n"
+              "version: \"1.0\"\npermissions:\n  network: [api.tides.example]\nactions:\n"
+              "  tides.next:\n    description: Say when the next high tide is\n"
+              "    params:\n      town: { type: text, max: 40, description: \"The town\" }\n"
+              "    required: [town]\n    get: https://api.tides.example/next?town={town}\n"
+              "    say: \"Soon.\"\n")
+
+    def details(self, skill_id):
+        found = self.host.current().details(skill_id)
+        return json.loads(json.dumps(found))    # what goes over the bus
+
+    async def test_a_code_skill_you_added_shows_its_folder_files_and_text(self):
+        folder = write_skill(self.user, "demo")
+        (folder / "lib").mkdir()
+        (folder / "lib" / "util.py").write_text("x = 1\n")
+        (folder / ".git").mkdir()
+        (folder / ".git" / "HEAD").write_text("ref\n")
+        (folder / "main.py.swp").write_text("swap")
+        self.assertEqual(self.host.reload(), {})
+        found = self.details("org.example.demo")
+        self.assertEqual((found["source"], found["recipe"]), ("yours", False))
+        self.assertEqual(found["folder"], str(folder.resolve()))
+        self.assertEqual(found["file"], str(folder.resolve() / "skill.yaml"))
+        self.assertEqual(found["files"], ["lib/util.py", "main.py", "skill.yaml"],
+                         "the files that are its code, as the fingerprint counts them")
+        self.assertEqual(found["manifest"], (folder / "skill.yaml").read_text())
+        self.assertNotIn("module", found["actions"][0], "its code is its own, not the daemon's")
+
+    async def test_each_action_is_the_tool_the_model_is_sent(self):
+        write_skill(self.user, "demo")
+        self.host.reload()
+        skills = self.host.current()
+        found = self.details("org.example.demo")
+        sent = {tool["name"]: tool for tool in skills.tools()}
+        self.assertEqual([a["name"] for a in found["actions"]], ["demo.hello"])
+        self.assertEqual(found["actions"][0]["tool"], sent["demo_hello"])
+        self.assertEqual(found["actions"][0]["tool"]["parameters"]["properties"],
+                         {"who": {"type": "string", "description": "Who to greet"}})
+        self.assertTrue(found["actions"][0]["offered"])
+
+    async def test_a_recipe_shows_its_file_and_the_schema_tux_wrote(self):
+        file = self.user / "tides.yaml"
+        self.user.mkdir(parents=True)
+        file.write_text(self.RECIPE)
+        self.assertEqual(self.host.reload(), {})
+        found = self.details("org.example.tides")
+        self.assertEqual((found["source"], found["recipe"]), ("yours", True))
+        self.assertEqual((found["file"], found["folder"], found["files"]), (str(file), "", []))
+        self.assertEqual(found["manifest"], self.RECIPE)
+        action = found["actions"][0]
+        self.assertEqual(action["module"], "tuxistant.recipes", "Tux's own code does what it says")
+        self.assertEqual(action["tool"]["parameters"], {
+            "type": "object", "required": ["town"],
+            "properties": {"town": {"type": "string", "maxLength": 40,
+                                    "description": "The town"}}},
+            "what the model sees is the schema Tux wrote, not the recipe's own words for it")
+        self.assertEqual(found["risk_because"], ["network"])
+
+    async def test_a_bundled_skill_and_a_built_in_one(self):
+        lamp = write_skill(self.bundled, "lamp", id="org.tuxistant.lamp", action="lamp.on")
+        self.host.reload()
+        found = self.details("org.tuxistant.lamp")
+        self.assertEqual((found["source"], found["folder"]), ("bundled", str(lamp.resolve())))
+        weather = self.details("org.tuxistant.weather")
+        self.assertEqual(weather["source"], "built-in")
+        self.assertEqual(weather["file"], str(self.builtin / "weather.yaml"))
+        self.assertEqual(weather["manifest"], (BUILTIN / "weather.yaml").read_text())
+        self.assertEqual(weather["actions"][0]["module"], "tuxistant.livedata")
+        self.assertEqual(self.details("org.tuxistant.time")["actions"][0]["module"],
+                         "tuxistant.skills")
+        self.assertIsNone(self.details("org.example.gone"))
+
+    async def test_the_text_shown_is_the_version_in_use(self):
+        folder = write_skill(self.user, "demo")
+        self.host.reload()
+        working = (folder / "skill.yaml").read_text()
+        (folder / "skill.yaml").write_text("id: [broken\n")
+        self.assertIn("still in use", self.host.reload()[str(folder)])
+        self.assertEqual(self.details("org.example.demo")["manifest"], working,
+                         "not the broken file on disk, which isn't what runs")
+
+    async def test_a_manifest_that_changes_while_it_loads_is_not_shown_as_loaded(self):
+        folder = write_skill(self.user, "demo")
+        real = skillhost.load_code_manifest
+
+        def edited_meanwhile(where, bundled):
+            loaded = real(where, bundled)
+            if where == folder:
+                (folder / "skill.yaml").write_text(
+                    (folder / "skill.yaml").read_text().replace("Say hello", "Say goodbye"))
+            return loaded
+
+        with mock.patch.object(skillhost, "load_code_manifest", edited_meanwhile):
+            problems = self.host.reload()
+        self.assertIn("changed while it was being read", problems[str(folder)])
+        self.assertEqual(self.host.reload(), {}, "the next reload, as the watcher does, loads it")
+        self.assertIn("Say goodbye", self.details("org.example.demo")["manifest"])
+
+    async def test_an_action_held_back_says_why(self):
+        self.host.reload()
+        skills = self.host.current()
+        with mock.patch("tuxistant.skills.SWITCHED", {"time.now": "mail_search"}):
+            found = skills.details("org.tuxistant.time")["actions"][0]
+        self.assertEqual((found["offered"], found["held_back"]), (False, "switched_off"))
+        self.assertEqual(found["tool"]["name"], "time_now", "still shown, as it would be sent")
+
+
 class ReviewFixes(Case):
     """What a security review of live skills found, each kept as a test."""
 

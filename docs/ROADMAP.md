@@ -142,6 +142,8 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 25. Settings: the Skills page shows a recipe as "A recipe you added.", a broken one under "Skills with problems" with its file name, and "Open skills folder" opens the folder.
 26. **Done 2026-11-13,** on the real server, ten repeats: see "Recipes and the budget" in [TESTING.md](TESTING.md). The recipe cases route 11 of 13 in both setups. Built-in routing moved by about 1.2 points, down as installed and up with Home Assistant only, and facts by +12 and -9, the usual reshuffle when the tool list changes, so `USER_TOOLS` stays at six. Still to do: tighten the `coins.price` and `work.sound` descriptions, which take "What's the price of gold?" (to no tool) and "Show me the Wi-Fi settings", and measure again with three or four recipe actions to see whether "Launch the calculator" and "Close Firefox" recover.
 
+27. Settings, a skill's page: open Weather, a recipe and a code skill you added. Each shows where it comes from, its permissions and risk, the tool name, description and parameters for each action, and the manifest, which Copy puts on the clipboard. "Open file" and "Open folder" open the right one. Change the home town on Weather, then Default device on Phone and see Send to phone agree. At a narrow width the page fits and nothing runs off the side. None of this has run on the real desktop.
+
 Move site claims from Soon to Now only after the matching check passes.
 
 ## Known limits

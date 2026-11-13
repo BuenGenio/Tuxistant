@@ -339,33 +339,68 @@ def _skip_names(root: str, names: list[str]) -> set[str]:
     return {name for name in names if _skipped(name, os.path.isdir(os.path.join(root, name)))}
 
 
-def fingerprint(folder: Path) -> str:
-    """What the skill's code is: every file but what _skipped leaves out. Links count by where
-    they point, and are never followed out of the folder."""
-    digest, count, size = hashlib.sha256(), 0, 0
+def _code_files(folder: Path):
+    """(path, path relative to the folder) of every file of a skill's code, links included and
+    never followed, leaving out what _skipped does."""
     for root, dirs, names in os.walk(folder):
         links = [d for d in dirs if os.path.islink(os.path.join(root, d))]
         dirs[:] = sorted(d for d in dirs if d not in links and not _skipped(d, True))
         for name in sorted(names + links):
-            path = Path(root) / name
-            relative = path.relative_to(folder)
-            if _skipped(name, name in links):
-                continue
-            count += 1
-            digest.update(str(relative).encode() + b"\0")
-            if path.is_symlink():
-                digest.update(b"link:" + os.readlink(path).encode() + b"\0")
-                continue
-            try:
-                data = path.read_bytes()
-            except OSError as e:
-                raise ValueError(f"Its file {shown(relative, 80)} could not be read: "
-                                 f"{e.strerror or e}.") from None
-            size += len(data)
-            if count > MAX_FOLDER_FILES or size > MAX_FOLDER_BYTES:
-                raise ValueError("Its folder is too big.")
-            digest.update(hashlib.sha256(data).digest())
-    return digest.hexdigest()
+            if not _skipped(name, name in links):
+                path = Path(root) / name
+                yield path, path.relative_to(folder)
+
+
+def fingerprint(folder: Path) -> str:
+    """What the skill's code is: every file but what _skipped leaves out. Links count by where
+    they point, and are never followed out of the folder."""
+    return fingerprinted(folder)[0]
+
+
+def fingerprinted(folder: Path) -> tuple[str, list[str]]:
+    """The fingerprint, and the names of the files it was made from, in one walk."""
+    digest, count, size, names = hashlib.sha256(), 0, 0, []
+    for path, relative in _code_files(folder):
+        count += 1
+        names.append(str(relative))
+        digest.update(str(relative).encode() + b"\0")
+        if path.is_symlink():
+            digest.update(b"link:" + os.readlink(path).encode() + b"\0")
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError as e:
+            raise ValueError(f"Its file {shown(relative, 80)} could not be read: "
+                             f"{e.strerror or e}.") from None
+        size += len(data)
+        if count > MAX_FOLDER_FILES or size > MAX_FOLDER_BYTES:
+            raise ValueError("Its folder is too big.")
+        digest.update(hashlib.sha256(data).digest())
+    return digest.hexdigest(), names
+
+
+def _as_loaded(file: Path, load):
+    """(what load() returns, the text it was loaded from). The file is read again on each side
+    of the load, as one saved halfway through would show text that isn't what was loaded."""
+    before = _peek(file)
+    loaded = load()
+    if _peek(file) != before:
+        raise ValueError(f"Its {file.name} changed while it was being read.")
+    return loaded, before or ""
+
+
+def _peek(file: Path) -> str | None:
+    """A manifest's text as Settings shows it, never through a link, at most the size a
+    manifest may be. None when it can't be read; loading says why."""
+    try:
+        handle = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(handle, "rb") as stream:
+        try:
+            return stream.read(MAX_MANIFEST_BYTES + 1).decode("utf-8", "replace")
+        except OSError:
+            return None
 
 
 def _state_dir(skill_id: str) -> Path:
@@ -514,6 +549,15 @@ class _Found:
     folder: Path | None = None      # code skills only
     digest: str = ""
     kind: str = "builtin"           # "builtin", "code" or "recipe"
+    text: str = ""                  # the manifest's text, as it was loaded
+    files: tuple = ()               # a code skill's files, as fingerprinted
+
+    def origin(self) -> dict:
+        """Where it came from, as Skills.details hands it to Settings."""
+        if self.kind == "code":
+            return {"file": str(self.folder / MANIFEST), "folder": str(self.folder),
+                    "files": list(self.files), "manifest": self.text}
+        return {"file": self.key, "manifest": self.text}
 
 
 class SkillHost:
@@ -657,7 +701,7 @@ class SkillHost:
 
     @staticmethod
     def _builtin(file: Path) -> _Found:
-        manifest = _read_yaml(file)
+        manifest, text = _as_loaded(file, lambda: _read_yaml(file))
         actions = manifest.get("actions")
         if not isinstance(manifest.get("id"), str) or not isinstance(actions, dict) or not actions:
             raise ValueError("It needs an id and at least one action.")
@@ -673,22 +717,24 @@ class SkillHost:
                              "Restart Tuxistant to load it.")
         manifest = {**manifest, "source": "built-in"}
         manifest["risk"] = risk_of(manifest.get("permissions") or {})
-        return _Found(str(file), manifest)
+        return _Found(str(file), manifest, text=text)
 
     def _code(self, folder: Path, bundled: bool) -> _Found:
-        manifest = load_code_manifest(folder, bundled)
+        manifest, text = _as_loaded(folder / MANIFEST, lambda: load_code_manifest(folder, bundled))
         problem = "" if bundled else self.grants.problem(manifest, folder)
         if problem:
             raise ValueError(problem)
-        return _Found(str(folder), manifest, folder.resolve(), fingerprint(folder), "code")
+        digest, files = fingerprinted(folder)
+        return _Found(str(folder), manifest, folder.resolve(), digest, "code", text,
+                      tuple(sorted(files)))
 
     def _recipe(self, file: Path) -> _Found:
         from . import recipes
-        manifest = recipes.load(file)
+        manifest, text = _as_loaded(file, lambda: recipes.load(file))
         problem = self.grants.problem(manifest, file)
         if problem:
             raise ValueError(problem)
-        return _Found(str(file), manifest, kind="recipe")
+        return _Found(str(file), manifest, kind="recipe", text=text)
 
     def _grant(self, chosen: list[_Found]) -> None:
         for item in chosen:
@@ -754,7 +800,7 @@ class SkillHost:
     def _build(self, chosen: list[_Found], problems: dict, sandbox_problem: str):
         """The new Skills, the processes it uses and the keys of what keeps its place in the
         budget. Nothing is swapped yet."""
-        running, proxies = {}, {}
+        running, proxies, origins = {}, {}, {}
         manifests, offered = [], set()
         for item in chosen:
             if item.kind == "recipe":
@@ -773,10 +819,12 @@ class SkillHost:
                 for name in item.manifest["actions"]:
                     proxies[name] = _proxy(entry, name)
             manifests.append(item.manifest)
+            origins[item.manifest["id"]] = item.origin()
             offered.add(item.key)
         handlers = ChainMap(proxies, HANDLERS)  # HANDLERS read live, so tests can patch it
         try:
-            skills = Skills(config=self.config, manifests=manifests, handlers=handlers)
+            skills = Skills(config=self.config, manifests=manifests, handlers=handlers,
+                            origins=origins)
         except Exception:
             self._drop_unused(running)
             raise
