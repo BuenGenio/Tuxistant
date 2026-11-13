@@ -57,7 +57,21 @@ HERE_SHAPES = (
     "What colour is that bulb?", "What does the thermostat say?", "What's our thermostat at?",
     "Is the countdown over?", "Cancel the egg timer", "Which timers are going?",
     "How much longer will the bread take?", "How much longer for the lasagne?",
-    "Who is in the house?", "Is Our side door locked?")
+    "Who is in the house?", "Is Our side door locked?",
+    # A pause written as a new sentence: its capital says nothing about a title.
+    "Okay. My passport number?", "Hey! Our electricity bill, how much was it?",
+    "Tux? My phone, where is it?",
+    # A wait with no word after it but the thing, a timer that may be here, and the device alone.
+    "How much longer is the pasta?", "How much longer is the movie?", "Is there a timer set?",
+    "Have I got a timer on?", "Timer?", "What's the countdown?", "Thermostat temperature?",
+    "What mode is the thermostat in?", "Is the thermostat working?", "Put a quick timer on",
+    "Start a long countdown",
+    # This home's own building after "of", and our things whose names start with a shared noun.
+    "Is the front door of the house open?", "What's the temperature in the kitchen of the flat?",
+    "Where is our sun cream?", "Is our world cup sweepstake paid?", "Did our sun cream arrive?",
+    # A lamp's colour or brightness, worded with a room after it, "set to" or "how bright".
+    "How bright is the lamp?", "How bright are the lights?",
+    "What colour is the lamp in the bedroom?", "What colour is the kitchen light set to?")
 # Not private but never a fact: what is true only now, and questions about Tux itself.
 NOT_FACT_SHAPES = (
     "Which day of the week is it today?", "Is it a holiday tomorrow?", "What happened yesterday?",
@@ -91,7 +105,16 @@ SHARED_WORDS = (
     "What number is on the front door of the White House?", "Who first hosted Countdown?",
     "Who recorded My Generation?", "Who wrote the song Our House?", "Who wrote My Antonia?",
     "Who sang The Final Countdown?", "What can you do with baking soda?",
-    "How many bones are in your hand?", "Who sang Your Song?")
+    "How many bones are in your hand?", "Who sang Your Song?",
+    # The same words where they aren't about a lock, a door, a garage, a timer or a lamp here.
+    "What is locked-in syndrome?", "Who left on the Mayflower?", "What is a back door in computing?",
+    "When did the garage rock revival begin?", "How long is a pomodoro timer set for?",
+    "What is a thermostat?", "How does a thermostat read the temperature?",
+    "How bright is the light from a supernova?", "What colour are the Northern Lights?",
+    # Our, with a word before the shared noun, or the verb that ends the question after it.
+    "Which galaxy is closest to our own?", "How far is our nearest galaxy?",
+    "What did our early ancestors eat?", "How did our universe begin?",
+    "What is our planet's atmosphere made of?")
 
 
 def reply(text):

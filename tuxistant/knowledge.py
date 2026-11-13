@@ -86,20 +86,39 @@ SORTED = tuple((f'Message: "{said}"', label) for said, label in (
 # to Wikipedia these would be a wrong answer and a private question asked of a stranger, with no
 # click, so they go the normal way without asking the model, and the tool refuses them. That makes
 # a miss cost more than it looks: a fact these catch is never looked up on any turn, so a noun
-# that facts use too, such as thermostat or timer, counts only with the words of a reading.
+# that facts use too, such as thermostat or timer, counts only with the words of a reading, or
+# as the whole question. Where the two can't be told apart, privacy wins.
 # Each is a shape rather than a phrase, as people word these a hundred ways. None may be written
 # from tools/eval_facts.py, or its leak count would pass by construction.
 ROOMS = ("room|bedroom|kitchen|bathroom|hall|hallway|office|study|lounge|basement|attic|cellar"
          "|loft|house|flat|garage|upstairs|downstairs")
-# What everyone shares: "our solar system" is no more private than "the solar system".
-OURS_ALONE = ("solar system|galaxy|sun|moon|planet|world|universe|species|ancestors|earth"
-              "|nearest star|closest star|star")
+# Words that end a noun phrase, so a noun before one isn't the start of a longer name.
+ENDS = ("is|are|was|were|has|have|had|will|would|can|could|in|of|and|or|to|from|than|for|with|at"
+        "|on|by|that|which|like|as|compared|versus")
+# What everyone shares: "our solar system" is no more private than "the solar system". The noun
+# has to end the phrase, as "our sun cream" is this home's. After "did our" or the like, the verb
+# that ends the question may follow it, as in "What did our early ancestors eat?".
+SHARED = ("solar system|galaxy|sun|moon|planet|world|universe|species|ancestors|forebears|earth"
+          "|star|stars")
+AUX = "did|does|do|can|could|will|would|should|might|may|must"
+OURS = re.compile(rf"\b(?P<aux>(?:{AUX}) )?our (?=(?:(?:own|nearest|closest|early|earliest|home) )?"
+                  rf"(?:{SHARED})(?:'s\b|$| (?:{ENDS})\b|(?(aux) \w+$|(?!)))"
+                  rf"|own(?:$| (?:{ENDS})\b))")
 DEVICE = r"(?:thermostat|countdown|timers?)"
 READING = ("set|at|on|off|up|over|done|finished|left|going|gone|running|ringing|reading|say|says"
-           "|show|shows|showing|read|reads|go|ring|rings|beep|beeping")
+           "|show|shows|showing|read|reads|go|ring|rings|beep|beeping|got|temperature|mode|setting")
+# What a timer is doing, rather than what one says, and asked of one that may be here: "How long
+# is a pomodoro timer set for?" and "How does a thermostat read the temperature?" are facts, and
+# "Is there a timer set?" is not.
+STATE = "set|on|off|up|over|done|finished|left|going|gone|running|ringing|go|went|beeping"
 OWNED = r"(?:the|my|our|this|that)"
+# "the front door of 10 Downing Street" is somebody else's, and so is "the House of Commons", but
+# "the front door of the flat" is this home's.
+ELSEWHERE = rf"(?! of (?!(?:the|my|our|this) (?:{ROOMS}|home)\b))"
+LAMP = (rf"(?:(?:\w+ ){{0,2}}(?:lamp|bulb)|(?:(?:\w+ )?(?:{ROOMS}|desk|ceiling|porch|bedside) )?"
+        rf"light)s?")
 HERE = re.compile(r"\b(?:" + "|".join((
-    rf"my|mine|ours|our(?! (?:{OURS_ALONE})\b)",
+    r"my|mine|ours|our",
     r"(?:this|that|the current) (?:song|track|tune|album|record|artist|band|singer|music|video"
     r"|podcast|episode|playlist|station)",
     r"(?:song|track|tune|album|music) (?:is (?:this|that|playing|on)|playing)",
@@ -112,33 +131,41 @@ HERE = re.compile(r"\b(?:" + "|".join((
     r"reminders?",
     # "Who invented the egg timer?" is a fact, and "Is the oven timer done?" is not.
     rf"{OWNED} (?:\w+ )?{DEVICE}(?:'s| is| are| was)? (?:{READING})",
-    rf"(?:is|are|on|at|of|for|in) {OWNED} (?:\w+ )?{DEVICE}$",
+    rf"(?:^(?:is|are)|there|got|have|had|did) (?:a|any) (?:\w+ )?{DEVICE} (?:{STATE})",
+    rf"^(?:\w+ )?{DEVICE}(?: (?:{READING}))?$",
+    rf"(?:'s|is|are|on|at|of|for|in) {OWNED} (?:\w+ )?{DEVICE}$",
+    rf"(?:'s|is|are) {OWNED} (?:\w+ )?{DEVICE} \w+$",
     r"(?<!invented )(?:any|what|which|how many|all|the) (?:\w+ )?timers?"
     r"(?! (?:was |were )?invented)(?! work)",
-    r"(?:set|start|cancel|stop|pause|reset) (?:a |an )?(?:\w+ )?timer",
-    r"(?:time|minutes|seconds|long) (?:is |are )?left|left on",
+    r"(?:set|put|start|cancel|stop|pause|reset) (?:a |an )?(?:\w+ ){0,2}(?:timer|countdown)",
+    # "Who left on the Mayflower?" went somewhere, and "What's left on the timer?" is a wait.
+    r"(?:time|minutes|seconds|long) (?:is |are )?left|(?:'s|is|are|much|anything|time) left on"
+    r"|left on$",
     # "How much longer is the Nile than the Amazon?" compares, and a wait doesn't.
-    r"how much longer(?: (?:on|for|till|until|left|now|to go|before|is left)\b|(?:[\w' ]* (?:take"
-    r"|takes|need|needs|cook|cooking|run|running|left|done|ready))?$)",
+    r"how much longer(?![\w' ]* than\b)",
     r"(?:until|till) [\w' ]*(?:done|ready|finished|cooked)",
     r"will (?:the |my )?[\w ]+ be (?:done|ready|cooked)",
-    r"locked|unlocked|switched (?:on|off)|turned (?:on|off)|lights? (?:on|off)",
+    r"(?<!-)locked(?!-)|unlocked|switched (?:on|off)|turned (?:on|off)|lights? (?:on|off)",
     r"(?:lock|unlock) the (?:\w+ )?(?:door|gate|car|house|shed)s?",
     r"(?:doors?|windows?|gates?|garage|blinds?|curtains?) (?:open|closed|shut)",
-    # "the front door of 10 Downing Street" is somebody else's, and so is "the House of Commons".
-    r"(?:front|back|garage) door(?! of)|the garage|the heating|the alarm(?! clock)",
+    # "a back door" in software is nobody's, and "the garage rock revival" is music.
+    rf"(?<!\ba )(?:front|back|garage) door{ELSEWHERE}",
+    r"the garage(?! (?:rock|punk|band|music)s?\b)|the heating|the alarm(?! clock)",
     r"alarm (?:is )?(?:set|armed|disarmed|on|off)",
-    r"in the house(?! of)|at home|home assistant|(?:any|some|every|no)(?:one|body) (?:at )?home",
+    rf"in the house{ELSEWHERE}|at home|home assistant|(?:any|some|every|no)(?:one|body) (?:at )?home",
     rf"(?:temperature|humidity|warm|cold|hot|humid)(?: is it| it is| is)?(?: in| inside)?"
-    rf"(?: the)? (?:\w+ )?(?:{ROOMS})(?! of)",
+    rf"(?: the)? (?:\w+ )?(?:{ROOMS}){ELSEWHERE}",
     r"(?:temperature|humidity) inside|(?:indoor|inside|room) (?:temperature|humidity)",
-    rf"(?:colou?r|brightness) (?:is|are|of) (?:the|this|that) (?:(?:\w+ )?(?:lamp|bulb)"
-    rf"|(?:(?:{ROOMS}|desk|ceiling|porch|bedside) )?light)s?$",
+    # A lamp, light or bulb of this home: "the light from a red dwarf" and "a sodium lamp" are not.
+    rf"(?:colou?r|brightness|bright|dim)(?:'s| is| are| of) (?:the|this|that) {LAMP}"
+    rf"(?:$| (?:in|on) (?:the|my|our) (?:\w+ )?(?:{ROOMS})\b| (?:set|now|at)\b)",
     # "Is the kettle on?": asked of a thing as a whole question, it's a thing in this house.
     r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running|done|finished|ready)$",
 )) + r")\b")
-# Spoken words come out in lower case after the first, so "Who sang My Way?" names a song.
-TITLED = re.compile(r"(?<=.)\b(?:My|Our|Mine|Ours)\b")
+# Spoken words come out in lower case after the first, so "Who sang My Way?" names a song. Only a
+# capital right after a word counts: Whisper starts a new sentence at a pause, as in "Okay. My
+# emails?", and that capital says nothing.
+TITLED = re.compile(r"(?:(?<=\w )|(?<=\w [\"'\u201c\u2018]))(?:My|Our|Mine|Ours)\b")
 # Not private, but never a fact: what is true only now, and questions about Tux itself. The sorter
 # called some of these a fact every time it was asked, so they skip it. The tool may look them up.
 # Matched in lower case only: "Who sang Yesterday?" names a song, and titles have capitals.
@@ -261,7 +288,7 @@ def _plain(heard: str) -> str:
 
 def about_here(heard: str) -> bool:
     """Whether the words are about this computer, its music or timers, or the home."""
-    return bool(HERE.search(_plain(TITLED.sub("title", heard))))
+    return bool(HERE.search(OURS.sub(r"\g<aux>the ", _plain(TITLED.sub("title", heard)))))
 
 
 def never_a_fact(heard: str) -> bool:
