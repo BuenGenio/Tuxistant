@@ -120,6 +120,30 @@ It also found two tests whose stand-ins for the network ended before a thread th
 
 - *Research read this computer's public addresses.* A page was refused only for an address off the open internet or an own server's name or address, so a search result whose name answered with this computer's own global IPv6, or an address on a container's network that was given a public range, was read. Research only sends a GET with no cookie or key, and what it reads goes to a model with no tools, but any service listening on every address here, such as a Docker-published LocalAI or the Docker API, could have been read out. Every page and redirect is now refused at this computer's own addresses and its containers' and virtual machines' networks, by the check recipes use.
 
+## Skills from the registry
+
+The registry repo doesn't exist yet, but Tux's side of the checks is built and tested offline, in `tuxistant/registry.py`, to [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). Nothing calls it yet: there is no fetching and no Browse page. The registry key in `tuxistant/registry_allowed_signers` is a **placeholder**. Its private half was thrown away when it was made, so no index verifies with it until a release ships the real key there.
+
+What each check stops:
+
+- **The registry key's signature on `index.json`, in namespace `tuxistant-index`.** The site, a mirror or anyone on the path serving a list of their own: other skills, hashes, publisher keys or moderation keys. The namespace keeps a signature the registry key made for anything else from passing as an index. The signature is checked before the file is parsed, so bytes nobody signed never reach the JSON parser.
+- **The sequence number.** Serving an older signed index, or an older `revocations.json`, to hide a skill revoked since. An equal number needs the same bytes. The numbers are kept in `~/.local/state/tuxistant/registry/`, a 0700 folder, written whole or not at all, so a restart or a crash halfway doesn't lower them.
+- **Every field against the format.** A signed file Tux would read differently from the portal and CI: an unknown or repeated field, `NaN`, a risk lower than its hosts give, a host a recipe can't use, a fingerprint that isn't its key's, an RSA key under 2048 bits, a version signed by a key not listed for its author, or an author's status that its revocations don't give. A newer `format` asks for a newer Tuxistant, and an index dated more than a day ahead is refused, which a wrong clock shows up as.
+- **The moderation key, named by the accepted index, in namespace `tuxistant-revocations`.** It can only add revocations. A `revocations.json` with any field but the four, or one bad entry, is refused whole. The first copy of an id stands, so a later copy can't narrow it, an entry a newer file leaves out stays, and only an index can lift one. A leaked moderation key can switch skills off, which is the safe direction, and can't sign an index.
+- **The pinned size and SHA-256.** A host serving other bytes for a recipe. It is fetched with its size as the limit.
+- **The publisher's signature,** one `allowed_signers` line with the key the index names for that version, principal `io.github.<author>` and namespace `tuxistant-recipe`. A recipe signed by another publisher's key, or a signature made for an index or a git commit.
+- **Tux's own loader,** the one the daemon runs, on a private copy of the bytes, and then the id, version, hosts and risk it gives must be the index's. A signed recipe the daemon would refuse, or one whose hosts differ from what Browse shows and the card asks about.
+- **Revocations on what is installed.** A recipe installed from the registry and covered by a revocation in effect is switched off at the next reload, with the reason as its problem in Settings, and stays on disk. A broken recipe keeps its last version that worked, but a switched-off one doesn't, as that would keep it running. A switch-off outlasts a lost state folder: only a lift ends it. Only what Tux installed is touched, matched by the file name, id, version and key it recorded, so a recipe you wrote or copied in is left alone, as the format says.
+- **ssh-keygen itself.** It is taken from `/usr/bin` or `/bin`, never from `PATH`, run with a fixed argv and no shell, for at most 10 seconds, with the data, the signature and an `allowed_signers` written for that one check into a fresh 0700 folder, and its output thrown away. A signature has to be armored text of at most 4 KiB before it runs, and every file is bounded before it is read: the index 4 MiB, revocations 1 MiB, a recipe its listed size.
+
+What doesn't hold yet:
+
+- **Freshness.** Whoever serves the files can keep serving the last ones Tux accepted, and Tux can't tell (see "Not decided yet" in the format).
+- **A leaked registry key** can name a new key for a publisher and sign recipes with it. The publisher's signature only adds to the hash when the registry key is safe.
+- **A renamed copy.** A recipe from the registry that you rename or copy by hand is no longer one Tux installed, so revocations don't reach it.
+- **No caller.** Nothing fetches, notifies or installs yet. `install()` writes only what `check()` passed, and Browse is to call it only after its card is allowed.
+- **Something already running as you** can write the state folder or the record of what was installed, as it can write any recipe.
+
 ## A hostile model
 
 Unlike the attacks below, this one hasn't been tried: no backdoored model or hostile model file has been run against Tuxistant.

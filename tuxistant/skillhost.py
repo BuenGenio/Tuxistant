@@ -34,6 +34,7 @@ from pathlib import Path
 
 import yaml
 
+from . import registry
 from .config import DATA_DIR
 from .gate import printable, shown
 from .inotify import ignored
@@ -937,6 +938,7 @@ class SkillHost:
         self.retired: list[_Running] = []           # retired with no loop to stop them on
         self.watcher = None
         self.grants = _Grants(self.user.parent / GRANTS)
+        self.switched_off: dict[str, tuple[str, str]] = {}  # recipes the registry revoked
         self.code_root = self.user.parent / CODE_DIR
         self.using: Counter = Counter()             # checked copies by the processes using them
         self._current = Skills(config=config, manifests=[])
@@ -1060,6 +1062,7 @@ class SkillHost:
     def _scan(self, problems: dict) -> list[_Found]:
         self.failed: dict[str, str] = {}    # why each that didn't load failed, this reload
         found = []
+        self.switched_off = registry.switched_off(self.user)
         for file in self._listing(self.builtin, "*.yaml", problems):
             found += self._attempt(str(file), problems, lambda f=file: self._builtin(f))
         for root, bundled in ((self.bundled, True), (self.user, False)):
@@ -1088,6 +1091,9 @@ class SkillHost:
     def _attempt(self, key: str, problems: dict, load) -> list[_Found]:
         try:
             item = load()
+        except registry.SwitchedOff as e:     # never the version kept in use, either
+            self.failed[key] = problems[key] = str(e)
+            return []
         except Exception as e:
             problem = str(e) if isinstance(e, ValueError) else f"It could not be loaded: {e}"
             self.failed[key] = problems[key] = problem
@@ -1131,6 +1137,10 @@ class SkillHost:
     def _recipe(self, file: Path) -> _Found:
         from . import recipes
         manifest, text = _as_loaded(file, lambda: recipes.load(file))
+        off = self.switched_off.get(file.name)
+        if off and off[0] == manifest["id"]:
+            self.seen_ids[str(file)] = (manifest["id"], _text_digest(text))
+            raise registry.SwitchedOff(off[1])
         problem = self.grants.problem(manifest, file)
         if problem:     # it read, so its id is known, though it doesn't load
             self.seen_ids[str(file)] = (manifest["id"], _text_digest(text))

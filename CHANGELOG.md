@@ -2,6 +2,8 @@
 
 ## Not yet released
 
+- Signing for the skills registry, Tux's side, tested offline and not yet called by anything: `tuxistant/registry.py` checks the index against the registry key that ships with Tuxistant, `revocations.json` against a moderation key the index names, and each recipe against its pinned size and SHA-256, its publisher's signature and Tux's own loader, all with `ssh-keygen -Y verify`. An older index or list of revocations than one already seen is refused. Recipes installed from the registry that a revocation covers are switched off with its reason and come back on when it is lifted. The registry key shipped now is a placeholder that nothing verifies with. See "Skills from the registry" in SECURITY.md.
+
 ## 0.5.0
 
 The stable release, by the owner's choice, and what the website offers. Every change in it was reviewed, and the review's findings were fixed and checked again, but most of what it adds has only run in tests, in an isolated GNOME Shell and in evaluations against a real model, not yet on a real desktop: each entry below says how far it was tried. 0.2.0 is the last release whose additions all worked on the owner's own desktop.
