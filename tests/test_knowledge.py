@@ -3,9 +3,11 @@
 The model and the web are stubs that record what they were sent, because what matters is what they
 were offered. What the real model says is in tools/eval_facts.py.
 """
+import ast
 import asyncio
 import io
 import json
+import re
 import sys
 import unittest
 import urllib.error
@@ -28,11 +30,62 @@ PAGE = {"query": {"pages": {
     "1": {"index": 1, "title": "Astatine", "extract": "Astatine is the rarest element."},
     "3": {"index": 3, "title": "No text"}}}}
 RARE = Hit("Rare", "example.org", "Astatine is rare.", "https://example.org/")
+# Music, timers and the home, which must never be asked of Wikipedia. None of these may come from
+# tools/eval_facts.py, as that measures how well the filter does on wordings it was not written for.
+HERE_ASKED = (
+    "Who sings this?", "How long is left on the pasta?", "Is the front door locked?",
+    "What song is this?", "Who\u2019s singing?", "What album is this from?",
+    "What's playing right now?", "How many minutes left on the timer?",
+    "When is my dentist reminder?", "Is the kitchen light on?", "Are the lights off?",
+    "Is the garage shut?", "Is the heating on?", "What is the thermostat set to?",
+    "Is the alarm armed?", "Is anyone at home?", "WHO SINGS THIS", "How much time is left?",
+    "Who sang that?", "Is the house alarm set?", "Is the kettle on?", "Is the oven on?",
+    "Is the oven still on?", "What's the temperature in the living room?",
+    "What is the humidity in the bathroom?", "Is anyone home?", "How cold is it in the house?",
+    "What's the indoor temperature?")
+# The same things by shape: a music word before "is this", "until" before "done", "lock the" before
+# a door, a temperature word before a room, and a whole question ending in "finished".
+HERE_SHAPES = (
+    "Which singer is that?", "What group is playing?", "Who are the singers?", "Who's the singer?",
+    "What's the name of the song?", "What's the name of this track?", "Who performs this?",
+    "Who's performing now?", "When will the pasta be ready?", "When will the roast be cooked?",
+    "How many minutes until the cake is done?", "How many seconds until the kettle's ready?",
+    "Did I lock the door?", "Did you lock the shed?", "Can you unlock the side gate?",
+    "How cold is the bedroom?", "How hot is it upstairs?", "How warm is it downstairs?",
+    "How hot is the kitchen?", "Is the washing machine finished?", "Is the dryer ready?")
 
 
 def reply(text):
     return json.dumps({"choices": [{"message": {"content": text}}]}).encode()
 
+
+ROOT = Path(__file__).resolve().parent.parent
+# Words any question has, which say nothing about what it is asking.
+COMMON = knowledge.FILLER | set("i me my you your it it's this that to for and be has have will "
+                                "can now still".split())
+
+
+def _shown() -> list[str]:
+    return [message.removeprefix('Message: "').removesuffix('"')
+            for message, _ in knowledge.SORTED]
+
+
+def _never_seen() -> list[str]:
+    tree = ast.parse((ROOT / "tools" / "eval_facts.py").read_text())
+    return [case for node in tree.body if isinstance(node, ast.Assign)
+            and getattr(node.targets[0], "id", "") in ("UNSEEN_FACTS", "UNSEEN_OTHER")
+            for case in ast.literal_eval(node.value)]
+
+
+def _content(said: str) -> set[str]:
+    words = set(re.findall(r"[a-z']+", said.casefold().replace("\u2019", "'"))) - COMMON
+    return {word.removesuffix("s") if len(word) > 3 else word for word in words}
+
+
+def _near(said: str, case: str) -> bool:
+    """Whether half the words that say what is being asked are the same."""
+    mine, theirs = _content(said), _content(case)
+    return len(mine & theirs) >= 0.5 * max(1, len(mine | theirs))
 
 class Web:
     """Wikipedia, web search and the model at home, as far as this code can tell."""
@@ -193,19 +246,8 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
 
     async def test_music_timers_and_the_home_go_the_normal_way_without_the_model(self):
         """Called a fact, each would be asked of Wikipedia with no click, and answered wrong."""
-        web = Web(self, says=["FACT"] * 40)
-        for heard in ("Who sings this?", "How long is left on the pasta?",
-                      "Is the front door locked?", "What song is this?", "Who\u2019s singing?",
-                      "What album is this from?", "What's playing right now?",
-                      "How many minutes left on the timer?", "When is my dentist reminder?",
-                      "Is the kitchen light on?", "Are the lights off?", "Is the garage open?",
-                      "Is the heating on?", "What is the thermostat set to?",
-                      "Is the alarm armed?", "Is anyone at home?", "WHO SINGS THIS",
-                      "How much time is left?", "Who sang that?", "Is the house alarm set?",
-                      "Is the kettle on?", "Is the oven on?", "Is the oven still on?",
-                      "What's the temperature in the living room?",
-                      "What is the humidity in the bathroom?", "Is anyone home?",
-                      "How cold is it in the house?", "What's the indoor temperature?"):
+        web = Web(self, says=["FACT"] * (len(HERE_ASKED) + len(HERE_SHAPES)))
+        for heard in HERE_ASKED + HERE_SHAPES:
             with self.subTest(heard):
                 self.assertFalse(await knowledge.is_fact(heard, CONFIG))
         self.assertEqual(web.model, [])
@@ -216,7 +258,11 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
                  "Who invented the padlock?", "When did the Golden Gate Bridge open?",
                  "How long is the Nile?", "What is the House of Lords?",
                  "What is the temperature in the core of the Sun?", "Who sang Yesterday?",
-                 "Is Pluto a planet?", "How long did the Hundred Years War last?")
+                 "Is Pluto a planet?", "How long did the Hundred Years War last?",
+                 "Who is the artist behind Guernica?", "Which band sang Wonderwall?",
+                 "Who performed at Live Aid?", "How hot is the surface of Venus?",
+                 "When was the Hoover Dam finished?", "How cold is it in Antarctica?",
+                 "How long until the next solar eclipse?", "Who was the lead singer of Queen?")
         web = Web(self, says=["FACT"] * len(facts))
         for heard in facts:
             with self.subTest(heard):
@@ -228,24 +274,35 @@ class Sorting(unittest.IsolatedAsyncioTestCase):
         for word in ("music", "timers", "reminders", "home", "lights", "doors", "locks"):
             self.assertIn(word, knowledge.SORT)
         shown = dict(knowledge.SORTED)
-        for said in ("Who is singing right now?", "How long until my eggs are done?",
+        for said in ("Who is singing right now?", "How much longer on the rice?",
                      "Is the back door shut?"):
             self.assertEqual(shown[f'Message: "{said}"'], "OTHER")
             self.assertTrue(knowledge.about_here(said), "and they never get as far as the model")
 
     def test_the_sorter_examples_are_not_the_evaluations_own(self):
-        """An example copied from an evaluation makes that evaluation pass by construction. The
-        music, timer and home ones are checked, as the evaluations measure leaks with those."""
-        root = Path(__file__).resolve().parent.parent
-        evals = "".join((root / "tools" / name).read_text()
-                        for name in ("eval_routing.py", "eval_flows.py", "eval_facts.py"))
-        shown = [message.removeprefix('Message: "').removesuffix('"')
-                 for message, _ in knowledge.SORTED]
-        here = [said for said in shown if knowledge.about_here(said)]
-        self.assertGreaterEqual(len(here), 3)
-        for said in here:
+        """An example copied from an evaluation makes that evaluation pass by construction."""
+        quoted = "".join((ROOT / "tools" / name).read_text()
+                         for name in ("eval_routing.py", "eval_flows.py", "eval_facts.py"))
+        shown = _shown()
+        self.assertGreaterEqual(len([said for said in shown if knowledge.about_here(said)]), 3)
+        for said in shown:
             with self.subTest(said):
-                self.assertNotIn(said, evals)
+                self.assertNotIn(f'"{said}"', quoted)
+
+    def test_nothing_here_nearly_copies_a_never_seen_case(self):
+        """A near copy leaks as much as a copy: "How long until my eggs are done?" in the sorter's
+        examples made "How long till the eggs are done?" easy. The filter's own tests count too,
+        as wordings tuned to pass them end up in its patterns."""
+        unseen = _never_seen()
+        self.assertGreater(len(unseen), 30)
+        for said in (*_shown(), *HERE_ASKED, *HERE_SHAPES):
+            for case in unseen:
+                with self.subTest(said=said, case=case):
+                    self.assertFalse(_near(said, case))
+
+    def test_a_near_copy_is_caught(self):
+        self.assertTrue(_near("How long until my eggs are done?", "How long till the eggs are done?"))
+        self.assertFalse(_near("How much longer on the rice?", "How long till the eggs are done?"))
 
     async def test_sums_stay_exact_with_the_switch_off(self):
         self.assertTrue(await knowledge.is_fact("What's 7 times 8?",

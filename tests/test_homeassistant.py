@@ -1750,7 +1750,10 @@ class Wired(WithHome):
                              ("switch.drivewaygate", "Drivewaygate"),
                              ("input_boolean.house_armed", "House armed"),
                              ("input_boolean.disarm_at_dawn", "Dawn"),
-                             ("input_boolean.alarm_arming", "Arming")):
+                             ("input_boolean.alarm_arming", "Arming"),
+                             ("input_boolean.arm_away", "Arm away"),
+                             ("input_boolean.helper_2", "Arm home"),
+                             ("switch.relay_3", "Garageopener"), ("switch.garageopener", "Opener")):
             with self.subTest(entity):
                 self.assertTrue(self.guarded(entity, name))
 
@@ -1771,7 +1774,9 @@ class Wired(WithHome):
                              ("switch.outdoor_plug", "Outdoor plug"),
                              ("switch.indoor_fan", "Indoor fan"),
                              ("switch.gateway", "Network gateway"),
-                             ("switch.frontdoor_lamp", "Frontdoor lamp")):
+                             ("switch.frontdoor_lamp", "Frontdoor lamp"),
+                             ("switch.farm_pump", "Farm pump"),
+                             ("switch.garagelight", "Garagelight")):
             with self.subTest(entity):
                 self.assertFalse(self.guarded(entity, name))
 

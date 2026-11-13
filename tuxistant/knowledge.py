@@ -70,35 +70,45 @@ SORTED = tuple((f'Message: "{said}"', label) for said, label in (
     ("Who wrote Hamlet?", "FACT"), ("What's the weather in Rome?", "OTHER"),
     ("Find my passport", "OTHER"), ("What is the capital of Atlantis?", "FACT"),
     ("How do you say hello in French?", "OTHER"), ("Who won the match last night?", "OTHER"),
-    ("What's the Italian for thanks?", "OTHER"), ("When did the Berlin Wall fall?", "FACT"),
-    ("How many files are in Downloads?", "OTHER"), ("Tell me a joke", "OTHER"),
+    ("What's grazie in English?", "OTHER"), ("When did the Berlin Wall fall?", "FACT"),
+    ("How many files are in Downloads?", "OTHER"), ("That made me laugh", "OTHER"),
     ("What is florbium?", "FACT"), ("Who won the 1975 Nobel Prize in Gardening?", "FACT"),
-    ("Who is singing right now?", "OTHER"), ("How long until my eggs are done?", "OTHER"),
+    ("Who is singing right now?", "OTHER"), ("How much longer on the rice?", "OTHER"),
     ("Is the back door shut?", "OTHER"),
 ))
 # What only this computer or this house can answer: the music playing, the timers, the home. Sent
 # to Wikipedia these would be a wrong answer and a private question asked of a stranger, with no
 # click, so they go the normal way without asking the model. Missing a fact costs far less.
+# Each is a shape rather than a phrase, as people word these a hundred ways. None may be written
+# from tools/eval_facts.py, or its leak count would pass by construction.
+ROOMS = ("room|bedroom|kitchen|bathroom|hall|hallway|office|study|lounge|basement|attic|cellar"
+         "|loft|house|flat|garage|upstairs|downstairs")
 HERE = re.compile(r"\b(?:" + "|".join((
     r"my|our|mine|ours",
     r"(?:this|that|the current) (?:song|track|tune|album|record|artist|band|singer|music|video"
     r"|podcast|episode|playlist|station)",
     r"(?:song|track|tune|album|music) (?:is (?:this|that|playing|on)|playing)",
-    r"(?:sings?|sang|singing|plays?|played|playing) (?:this|that|now|right now)",
+    r"(?:sings?|sang|singing|plays?|played|playing|performs?|performed|performing)"
+    r" (?:this|that|now|right now)",
+    r"(?:band|artist|singer|group|song|track|tune|album)s? (?:is|are) (?:this|that|playing|on)",
+    r"^who(?:'s| is| are| was) the (?:artist|singer|singers|band|group|performer)$",
+    r"name of (?:the|this|that) (?:song|track|tune|album|band|artist|singer|record)$",
     r"(?:who|what)(?:'s| is| was) (?:singing|playing)",
     r"timers?|reminders?|countdown",
     r"(?:time|minutes|seconds|long) (?:is |are )?left|left on|how much longer",
+    r"(?:until|till) [\w' ]*(?:done|ready|finished|cooked)",
+    r"will (?:the |my )?[\w ]+ be (?:done|ready|cooked)",
     r"locked|unlocked|switched (?:on|off)|turned (?:on|off)|lights? (?:on|off)",
+    r"(?:lock|unlock) the (?:\w+ )?(?:door|gate|car|house|shed)s?",
     r"(?:doors?|windows?|gates?|garage|blinds?|curtains?) (?:open|closed|shut)",
     r"front door|back door|garage door|the garage|the heating|thermostat|the alarm(?! clock)",
     r"alarm (?:is )?(?:set|armed|disarmed|on|off)",
     r"in the house|at home|home assistant|(?:any|some|every|no)(?:one|body) (?:at )?home",
-    r"(?:temperature|humidity|warm|cold|hot|humid)(?: is it)? (?:in|inside)(?: the)? (?:\w+ )?"
-    r"(?:room|bedroom|kitchen|bathroom|hall|hallway|office|study|lounge|basement|attic|nursery"
-    r"|cellar|loft|house|flat)",
+    rf"(?:temperature|humidity|warm|cold|hot|humid)(?: is it| it is| is)?(?: in| inside)?"
+    rf"(?: the)? (?:\w+ )?(?:{ROOMS})",
     r"(?:temperature|humidity) inside|(?:indoor|inside|room) (?:temperature|humidity)",
     # "Is the kettle on?": asked of a thing as a whole question, it's a thing in this house.
-    r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running)$",
+    r"^(?:is|are) (?:the )?[\w ]+ (?:still )?(?:on|off|running|done|finished|ready)$",
 )) + r")\b")
 GROUNDED = (
     "Answer the question in one short plain sentence using only the search results below. If "
