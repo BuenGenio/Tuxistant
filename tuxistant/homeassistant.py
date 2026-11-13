@@ -140,6 +140,9 @@ JOINED_WAY_IN = re.compile(r"door(?!bell)|(?:front|back|side|garden|drive|drivew
                            r"|garage)gate|^gate(?!way)|^garage(?!(?:" + "|".join(HARMLESS)
                            + r")s?$)")
 NOT_DOORS = {"indoor", "outdoor"}
+CAMEL_BREAK = re.compile(r"(?<=[a-z])(?=[A-Z])")
+# Where a name is split into the words it is found and judged by.
+WORD_BREAK = re.compile(r"[\W_]|" + CAMEL_BREAK.pattern)
 GUARDED_VERBS = {"turn_on": "Turn on", "turn_off": "Turn off", "toggle": "Toggle"}
 GUARDED = ("Its name says it may work an alarm, a lock or a door, and a switch does whatever "
            "it is wired to.")
@@ -429,10 +432,12 @@ def _judged(text, token: str) -> str:
     """A name from the server for finding it and judging it, never to say. The cut for saying
     would lose "garage door" from a long name and add the words of its "(9 more characters)"."""
     whole = _cleaned(text, token)
-    if len(whole) <= MAX_JUDGED_CHARS or whole[MAX_JUDGED_CHARS] == " ":
-        return whole[:MAX_JUDGED_CHARS]
-    # the start of a word split by the cut, "garage do", would be a word that finds it
-    return whole[:MAX_JUDGED_CHARS].rsplit(" ", 1)[0]
+    cut = whole[:MAX_JUDGED_CHARS]
+    if len(whole) <= MAX_JUDGED_CHARS or WORD_BREAK.search(whole[len(cut) - 1:len(cut) + 1]):
+        return cut
+    # The start of a word split by the cut, "garage do", would be a word that finds it, and the
+    # "Fan" of a joined "GarageFancy" would make a garage relay look like a fan.
+    return cut[:max((found.start() for found in WORD_BREAK.finditer(cut)), default=0)]
 
 
 def _kind(entity: Entity) -> str:
@@ -1022,7 +1027,7 @@ def _way_in(word: str) -> bool:
 
 
 def _named_guarded(text: str) -> bool:
-    words = set(_words(re.sub(r"(?<=[a-z])(?=[A-Z])", " ", text)))
+    words = set(_words(CAMEL_BREAK.sub(" ", text)))
     if any(map(_works_a_lock, words)):
         return True
     return any(map(_way_in, words)) and not words & HARMLESS
