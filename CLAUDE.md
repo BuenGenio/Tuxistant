@@ -14,6 +14,7 @@ Tuxistant is a voice assistant for the Linux desktop: a Python daemon, a GNOME S
 | [docs/THEMES.md](docs/THEMES.md) | Writing a theme |
 | [docs/TESTING.md](docs/TESTING.md) | The test layers, the live evaluations, and what can go wrong on a real desktop |
 | [docs/SECURITY.md](docs/SECURITY.md) | Real attacks on it and what stopped them. Add to it when a review finds something that matters |
+| [docs/REGISTRY.md](docs/REGISTRY.md) | The agreed plan for sharing skills: the registry repo, signing, Browse in Settings, moderation |
 | [website/README.md](website/README.md) | Building and deploying the site |
 
 ## Rules that are easy to break
