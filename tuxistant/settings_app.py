@@ -69,6 +69,8 @@ PHONE_NOTE = "Used when you don't name a device"
 CALENDARS_TIMEOUT_MS = 30000    # the daemon connects to each calendar to see if it can be changed
 CALENDAR_NOTE = "Where new events go when you don't name a calendar"
 NO_CALENDARS = "No calendar here can be changed. Add an account in GNOME Settings, Online Accounts"
+# A timeout or an older daemon says nothing about accounts, so no advice to add one.
+CALENDARS_FAILED = "Tuxistant couldn't list your calendars just now"
 GONE_CALENDAR = "Not available: a calendar that is no longer here"
 NO_PHONES = "GSConnect isn't running or has no devices"
 CLOUD_HEADING = "Send complex requests to Anthropic?"
@@ -781,7 +783,8 @@ class GeneralPage(Adw.PreferencesPage):
         self.win.daemon.fetch("ListPhones", self.show_devices, timeout=PHONES_TIMEOUT_MS,
                               fail=lambda _error: self.show_devices([]))
         self.win.daemon.fetch("ListCalendars", self.show_calendars, timeout=CALENDARS_TIMEOUT_MS,
-                              fail=lambda _error: self.show_calendars([]))
+                              fail=lambda _error: self.show_calendars(
+                                  {"problem": CALENDARS_FAILED}))
 
     def sync(self, config):
         """Show what the daemon holds, leaving alone anything the user is halfway through."""

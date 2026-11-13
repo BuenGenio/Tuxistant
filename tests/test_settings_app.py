@@ -1430,6 +1430,21 @@ class Inner(unittest.TestCase):
         self.assertEqual(saved(), [], "a missing calendar service is not a choice")
         shot(self.win, "calendar-no-eds")
 
+    def test_25_calendar_a_failed_listing_gives_no_account_advice(self):
+        # A timeout or a daemon older than this app: the user may well have accounts already.
+        page = self.win.general
+        wait(lambda: page.calendars is not None, "the calendar list")
+        self.addCleanup(self.load_calendars, page.calendars, sa.CALENDAR_NOTE)
+        control("FailNext", "ListCalendars", "timed out", signature="ss")
+        forget()
+        page.load()
+        wait(lambda: calls("ListCalendars"), "a fresh calendar list")
+        wait(lambda: page.calendar.get_subtitle() == sa.CALENDARS_FAILED, "the calendar note")
+        self.assertNotIn("Online Accounts", page.calendar.get_subtitle())
+        self.assertEqual(page.calendar_labels, ["Automatic"])
+        settle()
+        self.assertEqual(saved(), [], "a failed listing is not a choice")
+
     def list_calendars_as(self, reply, subtitle):
         """Have the fake daemon send this reply and wait for the row to show it. Afterwards the
         real list comes back, on the fake and on the page."""
