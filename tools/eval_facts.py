@@ -96,11 +96,11 @@ UNSEEN_OTHER = [
     "What's the German word for tree?",
     # Music, timers and the home, in wordings neither the sorter's examples nor the word filter in
     # knowledge.py were written from. Keep it that way: don't tune either on these.
-    "Who's this band?", "What's this one called?", "Which artist is on?",
-    "How long till the eggs are done?", "When does the oven timer go off?",
+    "Who's this band?", "What's this one called?", "Who recorded the tune we're hearing?",
+    "How many minutes before the pizza comes out?", "When does the oven timer go off?",
     "Has the laundry timer finished?", "Did I leave the garage open?",
     "Are the blinds down in the bedroom?", "Is the back porch light still on?",
-    "How warm is the nursery?", "Is the dishwasher done?", "Who's on the speaker?",
+    "How warm is the nursery?", "Is the hallway lamp lit?", "Who's on the speaker?",
 ]
 SUMS = [
     ("What's 15 percent of 80?", "12"), ("What's seven times eight?", "56"),
@@ -121,6 +121,8 @@ NOT_FACTS = [
     "Tell me about yourself", "What can you do?", "How are you?", "Thanks", "Tell me a joke",
     "Set a reminder for nine", "Search the web for cheap flights", "Research electric bikes",
     "Send this to my phone", "Read my emails", "Turn the volume up", "What's on my calendar?",
+    # Once never seen, but the word filter now catches them by a shape written after they were.
+    "Which artist is on?", "How long till the eggs are done?", "Is the dishwasher done?",
 ]
 
 

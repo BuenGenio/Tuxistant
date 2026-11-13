@@ -43,6 +43,9 @@ SET_UP = {**({"tapo_email": "eval@example.test", "tapo_password": "eval"} if TAP
 # The tools the daemon offers, code skills too, and mail search, which is off until turned on.
 skills = offline({**DEFAULTS, "mail_search": MAIL, **SET_UP}).current()
 OFFERED = {t["name"] for t in skills.tools()}
+# Tools a setup switch can turn off. A case for any other tool the daemon doesn't offer stays in
+# and fails, so a renamed tool or a typo in a case shows up as BAD rather than vanishing.
+SWITCHED = {"mail_search", "lights_set", "lights_status", "home_set", "home_status"}
 # With Home Assistant and no Tapo account, every light belongs to Home Assistant.
 INSTEAD_OF_TAPO = {"lights_set": "home_set", "lights_status": "home_status"}
 REPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3
@@ -210,10 +213,12 @@ CASES = [
 ]
 
 # Only with TUX_EVAL_HOME=1, on top of everything above. With both set up, "the light" with
-# nothing named stays with lights_set above, and a named device or room belongs here.
+# nothing named stays with lights_set above. A named light or lamp, by room or otherwise, may be
+# either provider's: both switch one by name and neither knows the other's, so both tools are
+# right for every one of them. Any other named device or room belongs to Home Assistant.
 HOME_CASES = [
-    ("Turn on the kitchen light", {"home_set"}),
-    ("Switch off the living room lights", {"home_set"}),
+    ("Turn on the kitchen light", {"home_set", "lights_set"}),
+    ("Switch off the living room lights", {"home_set", "lights_set"}),
     ("Dim the bedroom lamp to 30 percent", {"home_set", "lights_set"}),
     ("Turn off the TV", {"home_set"}),
     ("Turn on the fan in the bedroom", {"home_set"}),
@@ -237,7 +242,7 @@ HOME_CASES = [
     ("Lock the screen", {"shell_run", None}),
     ("What's the temperature outside?", {"weather_forecast"}),
     ("How do you say the light is on in French?", {"translate_text"}),
-    ("Turn on the porch light", {"home_set", "lights_set"}),     # named: either provider
+    ("Turn on the porch light", {"home_set", "lights_set"}),
     ("Is the kitchen light on?", {"home_status", "lights_status"}),
     ("Open the living room curtains", {"home_set"}),
     ("Switch the heating off", {"home_set"}),
@@ -310,7 +315,7 @@ async def main():
         if HOME and not TAPO and wanted:
             wanted = {INSTEAD_OF_TAPO.get(name, name) for name in wanted}
         if wanted is not None:
-            wanted = wanted & (OFFERED | {None})
+            wanted = wanted - (SWITCHED - OFFERED)
             if not wanted:
                 continue    # its tool is off in this setup
         seen = collections.Counter()
