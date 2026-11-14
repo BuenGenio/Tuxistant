@@ -182,8 +182,11 @@ class Details(unittest.TestCase):
     """What Settings shows of a built-in skill comes from the code that builds the tool list."""
 
     def test_every_action_shown_is_the_tool_sent(self):
+        from tuxistant.realtime import Realtime
         skills = Skills(config={**DEFAULTS, "mail_search": True, **HOME})
-        sent = {tool["name"]: tool for tool in skills.tools()}
+        session = Realtime(skills.config, skills, lambda _event: None)._session()
+        sent = {tool["name"]: tool for tool in session["tools"]}     # what session.update sends
+        self.assertEqual(len(sent), len(skills.actions), "every action is offered here")
         for skill in skills.listing():
             found = json.loads(json.dumps(skills.details(skill["id"])))
             with self.subTest(skill["id"]):

@@ -19,6 +19,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 from . import BUS_NAME, BUS_PATH, homeassistant, themes  # noqa: E402
 from .config import DATA_DIR, DEFAULTS, clean_server  # noqa: E402
 from .gate import MAX_TITLE_CHARS, printable  # noqa: E402
+from .gate import shown as name_shown  # noqa: E402
 from .livedata import DEFAULT_SOURCE, SOURCES  # noqa: E402
 
 APP_ID = "org.tuxistant.Settings"
@@ -98,6 +99,17 @@ SKILL_SETTINGS = {
     "org.tuxistant.home": ("home",), "org.tuxistant.home_status": ("home",),
     "org.tuxistant.task": ("cloud",),
 }
+# What each set of rows is called when no skill that shows it is loaded, as when Lights can't run
+# without its sandbox: the settings still need a place, if only to remove a stored password.
+SETTINGS_TITLES = {
+    "weather": "Weather", "news": "News", "calendar": "Add to calendar", "mail": "Mail",
+    "timer": "Timers and reminders", "phone": "Phone", "tailscale": "This computer",
+    "translation": "Translation", "search": "Web search", "fact": "General knowledge",
+    "lights": "Lights", "home": "Home Assistant", "cloud": "Multi-step tasks",
+}
+NOT_LOADED = ("The skill these settings are for isn't loaded now, so Tux can't use it. They are "
+              "kept, and Skills with problems says why")
+MAX_FILES_SHOWN = 100       # a code skill may have 2,000, and a row each takes seconds to build
 CSS = """
 .risk-badge {
   padding: 2px 10px;
@@ -150,6 +162,12 @@ def shown(text: str) -> str:
     """Text from outside, as a label can show it. A label stops at a NUL without a word, and a
     lone surrogate, which JSON carries happily, raises and would take the whole page with it."""
     return printable(text, sys.maxsize)
+
+
+def path_shown(path) -> str:
+    """A file or folder name from outside. A line break in one could fake a line of what is
+    shown, such as a second file or another origin, so it shows as an escape."""
+    return name_shown(path, sys.maxsize)
 
 
 def permission_words(permissions: dict) -> str:
@@ -570,6 +588,7 @@ class SettingsBox:
         self.switches = {}
         self.spins = {}  # key: (row, config units per unit shown)
         self.keys = {}   # name: (row, status, remove)
+        self.edits = set()  # the keys this box's rows save, so a test can see each has one home
         for name in self.ROWS:
             setattr(self, name, None)
 
@@ -578,6 +597,7 @@ class SettingsBox:
     def weather_rows(self, group):
         self.location = Adw.EntryRow(title="Home town", show_apply_button=True)
         self.location.connect("apply", self.on_location_apply)
+        self.edits.add("location")
         group.add(self.location)
         group.add(self._switch("fahrenheit", "Use Fahrenheit",
                                "Temperatures in Fahrenheit and wind in miles per hour"))
@@ -587,12 +607,14 @@ class SettingsBox:
         self.news = Adw.ComboRow(title="Source", use_markup=False)
         self.news.set_model(Gtk.StringList.new([name for name, _base, _feeds in SOURCES.values()]))
         self.news.connect("notify::selected", self.on_news)
+        self.edits.add("news_source")
         group.add(self.news)
         return "The source you choose sees your IP address when you ask"
 
     def calendar_rows(self, group):
         self.calendar = Adw.ComboRow(title="Add events to", use_markup=False)
         self.calendar.connect("notify::selected", self.on_calendar)
+        self.edits.add("calendar_add_to")
         group.add(self.calendar)
         return "Calendars come from the accounts in GNOME Settings, under Online Accounts"
 
@@ -612,6 +634,7 @@ class SettingsBox:
     def phone_rows(self, group):
         self.phone = Adw.ComboRow(title="Default device", use_markup=False)
         self.phone.connect("notify::selected", self.on_phone)
+        self.edits.add("phone_device")
         group.add(self.phone)
         return ""
 
@@ -624,6 +647,7 @@ class SettingsBox:
     def translation_rows(self, group):
         self.translate = Adw.EntryRow(title="LibreTranslate server", show_apply_button=True)
         self.translate.connect("apply", self.on_translate_apply)
+        self.edits.add("translate_server")
         self.translate.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.translate)
         return "Leave the server empty to use the main server's host, port 5000"
@@ -631,6 +655,7 @@ class SettingsBox:
     def search_rows(self, group):
         self.search = Adw.EntryRow(title="SearXNG server", show_apply_button=True)
         self.search.connect("apply", self.on_search_apply)
+        self.edits.add("search_server")
         self.search.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.search)
         return "Leave the server empty to use the main server's host, port 8888"
@@ -644,6 +669,7 @@ class SettingsBox:
     def lights_rows(self, group):
         self.tapo_email = Adw.EntryRow(title="TP-Link email", show_apply_button=True)
         self.tapo_email.connect("apply", self.on_tapo_email_apply)
+        self.edits.add("tapo_email")
         group.add(self.tapo_email)
         self.tapo_password, self.tapo_password_status, self.tapo_password_remove = self._key_row(
             "TP-Link password", "tapo_password")
@@ -653,6 +679,7 @@ class SettingsBox:
     def home_rows(self, group):
         self.home = Adw.EntryRow(title="Address", show_apply_button=True)
         self.home.connect("apply", self.on_home_apply)
+        self.edits.add("ha_server")
         self.home.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.home)
         self.home_token, self.home_token_status, self.home_token_remove = self._key_row(
@@ -663,12 +690,14 @@ class SettingsBox:
     def cloud_rows(self, group):
         self.cloud = Adw.SwitchRow(title="Use Claude for complex requests")
         self.cloud.connect("notify::active", self.on_cloud)
+        self.edits.add("cloud_enabled")
         group.add(self.cloud)
         self.cloud_key, self.cloud_key_status, self.cloud_key_remove = self._key_row(
             "Anthropic API key", "cloud_api_key")
         group.add(self.cloud_key)
         self.cloud_model = Adw.EntryRow(title="Model", show_apply_button=True)
         self.cloud_model.connect("apply", self.on_model_apply)
+        self.edits.add("cloud_model")
         group.add(self.cloud_model)
         return "For complex requests that need several steps"
 
@@ -681,6 +710,7 @@ class SettingsBox:
             icon_name="user-trash-symbolic", tooltip_text=f"Remove {title}",
             valign=Gtk.Align.CENTER, css_classes=["flat"], visible=False)
         remove.connect("clicked", self.on_key_remove, key)
+        self.edits.add(key)
         row.add_suffix(status)
         row.add_suffix(remove)
         self.keys[key] = (row, status, remove)
@@ -690,6 +720,7 @@ class SettingsBox:
         row = Adw.SwitchRow(title=title, subtitle=subtitle)
         row.connect("notify::active", self.on_switch, key)
         self.switches[key] = row
+        self.edits.add(key)
         return row
 
     def _spin(self, key, title, subtitle, low, high, step, scale=1, digits=0):
@@ -699,6 +730,7 @@ class SettingsBox:
         row.set_digits(digits)
         row.connect("notify::value", self.on_spin, key)
         self.spins[key] = (row, scale)
+        self.edits.add(key)
         return row
 
     def load(self):
@@ -968,6 +1000,7 @@ class GeneralPage(Adw.PreferencesPage, SettingsBox):
         group = Adw.PreferencesGroup(title="Connection")
         self.server = Adw.EntryRow(title="Server address", show_apply_button=True)
         self.server.connect("apply", self.on_server_apply)
+        self.edits.add("server")
         self.server.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.server)
 
@@ -982,6 +1015,7 @@ class GeneralPage(Adw.PreferencesPage, SettingsBox):
             first = next(iter(self.pipelines.values()), None)
             check = Gtk.CheckButton(group=first, valign=Gtk.Align.CENTER)
             check.connect("toggled", self.on_pipeline, name)
+            self.edits.add("pipeline")
             row = plain_row(name, note, activatable_widget=check)
             row.add_prefix(check)
             group.add(row)
@@ -1041,6 +1075,7 @@ class GeneralPage(Adw.PreferencesPage, SettingsBox):
         self.instructions.update_property(
             [Gtk.AccessibleProperty.LABEL], ["Assistant instructions"])
         self.instructions.get_buffer().connect("changed", self.on_instructions_changed)
+        self.edits.add("instructions")
         scroller = Gtk.ScrolledWindow(
             child=self.instructions, min_content_height=120, max_content_height=240,
             propagate_natural_height=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
@@ -1280,7 +1315,7 @@ def skill_problems(problems) -> list[tuple[str, str, str]]:
     """(title, problem, full path) for each skill that didn't load, from SkillProblems."""
     if not isinstance(problems, dict):
         return []
-    return [(Path(str(path)).name or str(path), str(problem), str(path))
+    return [(path_shown(Path(str(path)).name or str(path)), str(problem), path_shown(path))
             for path, problem in sorted(problems.items())]
 
 
@@ -1446,7 +1481,7 @@ class SkillDialog(Adw.PreferencesDialog):
             self.about.remove(row)
         where = skill_origin(skill)
         if skill.get("source") == "yours" and skill.get("file"):
-            where += f"\n{skill['file']}"
+            where += f"\n{path_shown(skill['file'])}"
         rows = [detail_row("What it does", skill["description"]),
                 detail_row("Where it comes from", where)]
         if skill.get("version"):
@@ -1513,8 +1548,9 @@ class SkillDialog(Adw.PreferencesDialog):
             "What the skill says about itself, as it was loaded. It is read-only here"
             if details.get("source") != "yours" else
             "What the skill says about itself, as it was loaded. Change it in its file")
-        read = plain_row(Path(path).name or "Manifest", f"{manifest_size(text)}\n{path}",
-                         activatable=True, subtitle_selectable=True)
+        read = plain_row(path_shown(Path(path).name or "Manifest"),
+                         f"{manifest_size(text)}\n{path_shown(path)}", activatable=True,
+                         subtitle_selectable=True)
         read.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
         read.connect("activated", lambda _row: self.push_subpage(ManifestPage(self, details)))
         self.manifest_row = read
@@ -1527,11 +1563,13 @@ class SkillDialog(Adw.PreferencesDialog):
         files = details.get("files") or []
         if not details.get("folder"):
             return
-        self.files.add(detail_row("Folder", details["folder"]))
-        for name in files:
-            row = plain_row(name, "")
+        self.files.add(detail_row("Folder", path_shown(details["folder"])))
+        for name in files[:MAX_FILES_SHOWN]:
+            row = plain_row(path_shown(name), "")
             row.add_css_class("raw")
             self.files.add(row)
+        if len(files) > MAX_FILES_SHOWN:
+            self.files.add(plain_row(f"And {len(files) - MAX_FILES_SHOWN} more files", ""))
         if details.get("source") == "yours":
             self.files.add(self.open_row("Open folder", Path(details["folder"])))
         self.files.set_visible(True)
@@ -1588,7 +1626,7 @@ class ManifestPage(Adw.NavigationPage):
     """The whole manifest, read-only, to read, select and copy."""
 
     def __init__(self, dialog, details):
-        super().__init__(title=shown(Path(details.get("file") or "manifest").name))
+        super().__init__(title=path_shown(Path(details.get("file") or "manifest").name))
         copy = Gtk.Button(label="Copy")
         copy.connect("clicked", lambda _button: dialog.copy_manifest())
         header = Adw.HeaderBar()
@@ -1603,6 +1641,36 @@ class ManifestPage(Adw.NavigationPage):
             child=self.text, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True))
         view.add_top_bar(header)
         self.set_child(view)
+
+
+class SettingsOnlyDialog(Adw.PreferencesDialog):
+    """Settings whose skill isn't loaded, so they can still be changed or removed."""
+
+    def __init__(self, win, name):
+        super().__init__(search_enabled=False, content_width=680, content_height=-1)
+        self.skill, self.name = None, name
+        self.set_title(SETTINGS_TITLES[name])
+        self.settings = SkillSettings(win, (name,))
+        note = self.settings.group.get_description()
+        self.settings.group.set_description(f"{NOT_LOADED}. {note}" if note else NOT_LOADED)
+        page = Adw.PreferencesPage()
+        page.add(self.settings.group)
+        self.add(page)
+        self.settings.sync(win.config)
+        self.settings.load()
+
+    def sync(self, config):
+        self.settings.sync(config)
+
+    def load(self):
+        self.settings.load()
+
+
+def unreachable_settings(skills) -> list[str]:
+    """The rows of settings that no listed skill's page shows, in a fixed order."""
+    shown_now = {name for skill in skills if skill.get("source") != "yours"
+                 for name in SKILL_SETTINGS.get(skill.get("id"), ())}
+    return [name for name in SETTINGS_TITLES if name not in shown_now]
 
 
 class SkillsPage(Adw.PreferencesPage):
@@ -1621,8 +1689,14 @@ class SkillsPage(Adw.PreferencesPage):
         self.problems = Adw.PreferencesGroup(
             title="Skills with problems",
             description="These skills can't be used until they are fixed", visible=False)
+        self.orphans = Adw.PreferencesGroup(
+            title="Settings of skills that aren't loaded",
+            description="Kept for when the skill loads again, and here to change or remove",
+            visible=False)
+        self.orphan_rows = []
         self.add(self.group)
         self.add(self.problems)
+        self.add(self.orphans)
 
     def load(self):
         self.win.daemon.fetch("ListSkills", self.fill)
@@ -1636,6 +1710,17 @@ class SkillsPage(Adw.PreferencesPage):
         self.rows = [self.make_row(skill) for skill in skills]
         for row in self.rows:
             self.group.add(row)
+        for row in self.orphan_rows:
+            self.orphans.remove(row)
+        self.orphan_rows = []
+        for name in unreachable_settings(skills):
+            row = plain_row(SETTINGS_TITLES[name], "Its skill isn't loaded", activatable=True)
+            row.settings_name = name
+            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+            row.connect("activated", lambda row: self.open_settings(row.settings_name))
+            self.orphan_rows.append(row)
+            self.orphans.add(row)
+        self.orphans.set_visible(bool(self.orphan_rows))
 
     def fill_problems(self, problems):
         for row in self.problem_rows:
@@ -1661,6 +1746,12 @@ class SkillsPage(Adw.PreferencesPage):
 
     def open(self, skill):
         self.dialog = SkillDialog(self.win, skill)
+        self.dialog.connect("closed", self.on_closed)
+        self.dialog.present(self.win)
+        return self.dialog
+
+    def open_settings(self, name):
+        self.dialog = SettingsOnlyDialog(self.win, name)
         self.dialog.connect("closed", self.on_closed)
         self.dialog.present(self.win)
         return self.dialog
@@ -1806,9 +1897,11 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.root.set_visible_child_name(state)
 
     def toast(self, message):
+        """On a skill's page when one is open: the window's own would be hidden behind it."""
         toast = Adw.Toast(use_markup=False)
         toast.set_title(message)
-        self.toasts.add_toast(toast)
+        dialog = self.get_visible_dialog()
+        (dialog if isinstance(dialog, Adw.PreferencesDialog) else self.toasts).add_toast(toast)
 
     def reload(self):
         self.show_state("loading")

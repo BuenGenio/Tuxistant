@@ -125,7 +125,7 @@ Rows marked 0.3.0 preview need the 0.3.0 preview, and rows marked 0.4.0 preview 
 
 | General | Skills |
 |---|---|
-| ![The General page: server address, API key, pipeline, listening and weather.](docs/images/settings-general.png) | ![The Skills page: each skill with what it can do and its risk.](docs/images/settings-skills.png) |
+| ![The General page: server address, API key, pipeline, listening and shortcuts.](docs/images/settings-general.png) | ![The Skills page: each skill with what it can do and its risk, opening to a page of its own.](docs/images/settings-skills.png) |
 
 <details>
 <summary>The other pages</summary>

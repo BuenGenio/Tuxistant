@@ -85,13 +85,17 @@ EXTRA_SKILLS = [
      "permissions": {"network": True, "<b>odd</b>": True}, "actions": ["markup.go"],
      "source": "yours"},
 ]
+HOSTILE_FOLDER = "/home/tux/.local/share/tuxistant/skills/<b>m</b>\nComes with Tuxistant: a code skill"
+SANDBOX_PROBLEM = "Skills with code of their own need bubblewrap, and it isn't working here."
 # A daemon checks what a skill you add says, but Settings must not count on that: a built-in
 # manifest isn't held to it, and a comment in any manifest can say anything.
 DETAILS = {"org.example.markup": {
     **EXTRA_SKILLS[-1], "risk": "medium", "recipe": False, "version": "<i>1</i>",
-    "risk_because": ["network"], "file": "/home/tux/.local/share/tuxistant/skills/<b>m</b>/skill.yaml",
-    "folder": "/home/tux/.local/share/tuxistant/skills/<b>m</b>",
-    "files": ["skill.yaml", "<b>main</b>.py", "x" * 300],
+    "risk_because": ["network"], "file": HOSTILE_FOLDER + "/skill.yaml", "folder": HOSTILE_FOLDER,
+    # A line break in a name could fake a second file or another origin. 2,000 files, the most a
+    # skill may have, mustn't hold the page either.
+    "files": ["skill.yaml", "<b>main</b>.py", "x" * 300, "README\nskill.yaml"]
+             + [f"lib/f{i:04d}.py" for i in range(1996)],
     "manifest": "# <span foreground=\"red\">red</span> &amp; <b>bold</b>\n" + "y" * 400 + "\n"
                 + "# <b>filler</b> &lt;\n" * 3098,
     "actions": [{"name": "markup.go", "offered": True, "held_back": "", "tool": {
@@ -281,6 +285,15 @@ class Control(ServiceInterface):
     def SetSkillProblems(self, problems: "s"):
         """A reload found these, as after a file was dropped into the skills folder."""
         self.daemon.skill_problems = json.loads(problems)
+        self.daemon.SkillsChanged()
+
+    @dbus_method()
+    def SetSandbox(self, working: "b"):
+        """As a computer without bubblewrap: Lights, which needs it, isn't listed, only a problem."""
+        host = self.daemon.host
+        host._sandbox_problem = (lambda: "") if working else (lambda: SANDBOX_PROBLEM)
+        problems = host.reload()
+        self.daemon.skill_problems = SKILL_PROBLEMS if working else {**SKILL_PROBLEMS, **problems}
         self.daemon.SkillsChanged()
 
     @dbus_method()

@@ -86,6 +86,26 @@ class Logic(unittest.TestCase):
             for name in names:
                 self.assertTrue(callable(getattr(sa.SettingsBox, f"{name}_rows", None)), name)
 
+    def test_settings_whose_skill_isnt_listed_are_named(self):
+        everything = [{"id": skill_id, "source": "built-in"} for skill_id in sa.SKILL_SETTINGS]
+        self.assertEqual(sa.unreachable_settings(everything), [])
+        self.assertEqual(set(sa.SETTINGS_TITLES), {name for names in sa.SKILL_SETTINGS.values()
+                                                  for name in names})
+        without = [s for s in everything if s["id"] != "org.tuxistant.lights"]
+        self.assertEqual(sa.unreachable_settings(without), ["lights"])
+        only_one = [s for s in everything if s["id"] != "org.tuxistant.home"]
+        self.assertEqual(sa.unreachable_settings(only_one), [], "Home Assistant status has them")
+        mine = [{**s, "source": "yours"} if s["id"] == "org.tuxistant.lights" else s
+                for s in everything]
+        self.assertEqual(sa.unreachable_settings(mine), ["lights"],
+                         "a skill of yours can't take an id, but if one did it gets no account")
+
+    def test_a_path_can_not_fake_a_line(self):
+        self.assertEqual(sa.path_shown("moon\nComes with Tuxistant\tx"),
+                         "moon\\nComes with Tuxistant\\tx")
+        self.assertEqual(sa.skill_problems({"/s/a\nb.yaml": "Bad."}),
+                         [("a\\nb.yaml", "Bad.", "/s/a\\nb.yaml")])
+
     def test_every_setting_has_one_home(self):
         """What General keeps and what skills' pages show, together, are all the settings."""
         from tuxistant.config import EDITABLE
@@ -1290,7 +1310,9 @@ class Inner(unittest.TestCase):
         self.win.views.set_visible_child_name("skills")
         row = next(r for r in page.rows if r.skill["id"] == "org.example.markup")
         self.assertEqual(row.get_title(), MARKUP_NAME)
+        started = time.monotonic()
         dialog = open_skill(self.win, "org.example.markup")
+        opening = time.monotonic() - started
         for action in iter_children(dialog.actions):
             if isinstance(action, sa.SkillActionRow):
                 action.set_expanded(True)
@@ -1301,6 +1323,11 @@ class Inner(unittest.TestCase):
         for wanted in (MARKUP_NAME, MARKUP_TEXT, "<i>1</i>", "<b>main</b>.py", "<i>q</i> (required)",
                        '<span foreground="red">q</span>\ntype: string', "Use <b>odd</b>"):
             self.assertIn(wanted, texts, "shown as written")
+        self.assertIn("README\\nskill.yaml", texts, "one file, not two")
+        self.assertFalse([text for text in texts if "\nComes with Tuxistant" in text],
+                         "a folder's name can't fake a line saying where a skill comes from")
+        self.assertIn(f"And {2000 - sa.MAX_FILES_SHOWN} more files", texts)
+        self.assertLess(opening, 2, "2,000 files must not hold the page")
         marked = [label.get_text() for label in labels_of(dialog) if label.get_use_markup()
                   and ("<" in label.get_label() or "&" in label.get_label())]
         self.assertEqual(marked, [], "no label holding a skill's text reads it as markup")
@@ -1342,13 +1369,13 @@ class Inner(unittest.TestCase):
         self.assertEqual(set(general.switches), {"conversation_mode", "fn_hold_enabled",
                                                  "hide_on_release", "dictation_enabled"})
         self.assertEqual(set(general.keys), {"api_key"})
-        found = {}
-        for skill_id in sa.SKILL_SETTINGS:
-            page = self.skill_page(skill_id)
-            keys = set(page.switches) | set(page.keys) | {
-                key for name, key in sa_row_keys().items() if getattr(page, name) is not None}
-            found[skill_id] = keys
+        found = {skill_id: set(self.skill_page(skill_id).edits) for skill_id in sa.SKILL_SETTINGS}
         self.assertEqual(found, EXPECTED_SETTINGS)
+        from tuxistant.config import EDITABLE
+        on_skills = set().union(*found.values())
+        self.assertEqual(general.edits & on_skills, set(), "one home each")
+        self.assertEqual(general.edits | on_skills | {"voice", "theme"}, set(EDITABLE),
+                         "every setting has a home: General, a skill's page, Voice or Appearance")
         dialog = open_skill(self.win, "org.tuxistant.time")
         self.assertIsNone(dialog.settings, "a skill with nothing to set has no Settings group")
 
@@ -1362,6 +1389,71 @@ class Inner(unittest.TestCase):
         self.assertEqual(other.phone_labels[other.phone.get_selected()], "Galaxy Tab")
         other.phone.set_selected(0)
         wait(lambda: self.win.config["phone_device"] == "", "the reset")
+
+    def test_21_h_settings_whose_skill_isnt_loaded_still_have_a_place(self):
+        """Without bubblewrap Lights is only a problem, and a stored password must still go."""
+        page = self.win.skills
+        self.win.views.set_visible_child_name("skills")
+        self.assertFalse(page.orphans.get_visible())
+
+        def lights_listed():
+            return any(row.skill["id"] == "org.tuxistant.lights" for row in page.rows)
+
+        def back():
+            control("SetSandbox", True, signature="b")
+            wait(lights_listed, "Lights to come back")
+
+        self.addCleanup(back)
+        control("Change", "tapo_password", '"stored secret"', signature="ss")
+        wait(lambda: self.win.config.get("tapo_password_set") is True, "a stored password")
+        control("SetSandbox", False, signature="b")
+        wait(lambda: not lights_listed(), "Lights to go")
+        wait(lambda: any("bubblewrap" in row.get_subtitle() for row in page.problem_rows),
+             "the problem to say why")
+        self.assertTrue(page.orphans.get_visible())
+        self.assertEqual([row.get_title() for row in page.orphan_rows], ["Lights"])
+        page.orphan_rows[0].activate()
+        dialog = page.dialog
+        self.assertIs(self.win.get_visible_dialog(), dialog)
+        self.assertEqual(dialog.get_title(), "Lights")
+        box = dialog.settings
+        self.assertIn("isn't loaded now", box.group.get_description())
+        self.assertEqual(box.tapo_password_status.get_label(), "Password is set")
+        shot(self.win, "skill-not-loaded")
+        forget()
+        box.tapo_password_remove.emit("clicked")
+        wait(lambda: saved() == [["tapo_password", '""']], "the password to be removed")
+        wait(lambda: self.win.config.get("tapo_password_set") is False, "tapo_password_set")
+        self.assertEqual(json.loads(control("Stored", "tapo_password", signature="s")[0]), "")
+        box.tapo_email.set_text("tux@example.org")
+        apply_button(box.tapo_email).emit("clicked")
+        wait(lambda: self.win.config.get("tapo_email") == "tux@example.org", "the email to save")
+        control("Change", "tapo_email", '""', signature="ss")
+        wait(lambda: box.tapo_email.get_text() == "", "the outside change")
+
+    def test_21_i_a_skill_pages_messages_show_on_it(self):
+        """The window's own toasts would be hidden behind the page."""
+        page = self.skill_page("org.tuxistant.home")
+        dialog = self.win.skills.dialog
+        with mock.patch.object(dialog, "add_toast", wraps=dialog.add_toast) as on_page, \
+                mock.patch.object(self.win.toasts, "add_toast") as behind:
+            page.home.set_text("two words")
+            apply_button(page.home).emit("clicked")
+            self.assertEqual([call.args[0].get_title() for call in on_page.call_args_list],
+                             ["Enter an address like homeassistant.local:8123"])
+            control("FailNext", "SetConfig", "That is not a <valid> token", signature="ss")
+            page.home_token.set_text("bad token")
+            apply_button(page.home_token).emit("clicked")
+            wait(lambda: on_page.call_count == 2, "the daemon's refusal")
+            self.assertEqual(on_page.call_args.args[0].get_title(), "That is not a <valid> token")
+            self.assertFalse(on_page.call_args.args[0].get_use_markup())
+            shot(self.win, "skill-toast")
+            behind.assert_not_called()
+        wait(lambda: page.home_token_status.get_label() == "No token set", "the state to roll back")
+        close_skill(self.win)
+        with mock.patch.object(self.win.toasts, "add_toast") as window:
+            self.win.toast("No page open")
+        window.assert_called_once()
 
     def test_22_history_lists_and_refreshes_live(self):
         page = self.win.history
@@ -2295,13 +2387,6 @@ def add_record(heard, reply, actions, status="ok"):
     wait(lambda: page.rows and page.rows[0] is not first, "the history to refresh")
 
 
-
-# Which settings each skill's page edits: switches and keys by name, the rest through these rows.
-def sa_row_keys():
-    return {"location": "location", "news": "news_source", "calendar": "calendar_add_to",
-            "phone": "phone_device", "translate": "translate_server", "search": "search_server",
-            "tapo_email": "tapo_email", "home": "ha_server", "cloud": "cloud_enabled",
-            "cloud_model": "cloud_model"}
 
 
 EXPECTED_SETTINGS = {
