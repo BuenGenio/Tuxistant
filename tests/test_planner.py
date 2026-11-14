@@ -254,6 +254,25 @@ class Local(Case):
         self.assertEqual(result["answer"], f"{planner.CHANGED} {planner.PART_DONE}")
         self.assertEqual(len(server.bodies), 1)
 
+    async def test_new_settings_while_the_model_thinks_run_none_of_its_reply(self):
+        """A reply from a server just left acts on nothing, not even its first call."""
+        config = self.config
+
+        class Left(Server):
+            def __call__(self, *args, **kwargs):
+                reply = super().__call__(*args, **kwargs)
+                config.values["server"] = "127.0.0.1:9"     # changed while it was thinking
+                return reply
+        server = Left(asks(("plan_look", "{}")), said("Done."))
+        patcher = mock.patch("tuxistant.realtime._request", server)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        result = await self.task()
+        self.assertEqual(result, {"answer": planner.CHANGED, "steps": 1})
+        self.assertEqual(self.ran, [], "nothing from the old server's reply runs")
+        self.assertEqual(self.clicks.asked, [])
+        self.assertEqual(len(server.bodies), 1)
+
     async def test_the_model_checks_the_settings_as_it_sends(self):
         """Settings change on the main loop while the request waits for its thread."""
         server = self.server(said("ok"))
@@ -765,6 +784,27 @@ class Cloud(CloudCase):
                 self.assertEqual(len(sdk.clients), 1)
                 self.assertEqual(server.bodies, [])
                 self.assertIsNone(session.waiting)
+
+    async def test_cloud_turned_off_while_claude_thinks_shows_no_card(self):
+        """No "Send this output to Claude?" card once Cloud is off: nothing would read it."""
+        self.config.values |= {"cloud_enabled": True, "cloud_api_key": KEY}
+        self.use({"plan.look": lambda *_: self.ran.append("look") or {"file_contents": "PRIVATE"}})
+        config = self.config
+
+        class TurnedOff(FakeSdk):
+            def create(self, **kwargs):
+                answer = super().create(**kwargs)
+                config.values["cloud_enabled"] = False
+                return answer
+        sdk = TurnedOff(calls(tool_use("t1", "plan_look")), reply(text("Done.")))
+        patcher = mock.patch.dict(sys.modules, {"anthropic": sdk})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        result = await self.task()
+        self.assertEqual(result, {"answer": planner.CHANGED, "steps": 1})
+        self.assertEqual(self.ran, [])
+        self.assertEqual(self.clicks.asked, [], "no card offers to send to Claude")
+        self.assertEqual(len(sdk.requests), 1)
 
     async def test_the_cloud_model_checks_the_settings_as_it_sends(self):
         sdk = self.sdk(reply(text("ok")))

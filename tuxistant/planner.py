@@ -273,8 +273,8 @@ async def _work(model, session) -> dict:
                 break   # nothing would read what it did, so it does not run
             outcomes, told = [], {}
             for call in reply.calls:
-                if outcomes:
-                    _same(model)    # nothing would read what the rest of the reply did
+                _same(model)    # a reply from settings just left acts on nothing, not even its
+                #                 first call, and nothing would read what the rest of it did
                 session.busy(ACTION_WAIT_S)
                 asked = (call.name, call.arguments)     # a small model repeats itself, and the
                 result = told.get(asked) or await _act(call, session)   # answer is read out once
