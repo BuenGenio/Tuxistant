@@ -293,13 +293,14 @@ Each action's description, and every text in its `params`, is at most 200 charac
 
 ## Recipe skills
 
-A recipe is one YAML file, `<anything>.yaml`, put straight into `~/.local/share/tuxistant/skills/`, beside any code skill folders. A file there ending in `.yml` or `.json` is listed as a problem rather than loaded. It has no code and no folder: the file is all there is to read before you add it. Tux does what it says with code of its own, in `tuxistant/recipes.py`, and a recipe can do only three things:
+A recipe is one YAML file, `<anything>.yaml`, put straight into `~/.local/share/tuxistant/skills/`, beside any code skill folders. A file there ending in `.yml` or `.json` is listed as a problem rather than loaded. It has no code and no folder: the file is all there is to read before you add it. Tux does what it says with code of its own, in `tuxistant/recipes.py`, and a recipe can do only four things:
 
 - **Ask a host it names**, with `get` or `post`, and say something from the answer.
 - **Open** one installed app or one GNOME Settings page, named in the file.
+- **Do a desktop action** from Tux's own short list, such as Night Light or locking the screen, named in the file. See "Desktop actions" below.
 - **Say** a sentence written in the file.
 
-It has no shell, no files, no clipboard, no D-Bus and no headers, so it can't run anything, carry a key or reach the desktop's own services. Five examples are in [docs/examples/recipes/](examples/recipes/). They have seven actions between them, one more than skills you add may bring, so they can't all be added at once. To make your own from one, copy it somewhere else, change its host and words there, and put it into the skills folder once its hosts are final, as a host changed in place is refused (see "Risk and what it was allowed" below). Recipes load, change and go while Tux is running, like code skills, and Settings lists them as "A recipe you added."
+It has no shell, no files, no clipboard, no D-Bus and no headers, so it can't run anything, carry a key or reach the desktop's own services other than through a desktop action Tux wrote. Six examples are in [docs/examples/recipes/](examples/recipes/). They have eleven actions between them, more than the six skills you add may bring, so they can't all be added at once. To make your own from one, copy it somewhere else, change its host and words there, and put it into the skills folder once its hosts are final, as a host changed in place is refused (see "Risk and what it was allowed" below). Recipes load, change and go while Tux is running, like code skills, and Settings lists them as "A recipe you added."
 
 ```yaml
 id: org.example.tides
@@ -339,10 +340,11 @@ Each action has:
 | `get` or `post` | An address on a host the permissions name |
 | `json` or `text` | A body, with `post` only, and one or the other |
 | `pick` | Up to 4 values to take from the answer, each a list of up to 6 keys and positions. `[]` is the whole answer, when it is plain text or a single JSON value |
-| `say` | With `get` or `post`, said after a good answer. On its own, what the action does. Not with `open`, which already says "Opening ..." |
+| `say` | With `get` or `post`, said after a good answer. On its own, what the action does. Not with `open`, which already says "Opening ...", or `desktop`, which says what it did |
 | `open` | `{app: <desktop id>}`, with or without `.desktop`, of an app in the app grid, or `{settings: <page>}`. A page is named as Settings shows it, in any case: Bluetooth, Displays, Sound, Wi-Fi, Network, Appearance, Notifications, Power, Keyboard, Mouse and Touchpad, Printers, Online Accounts, Privacy and Security, Sharing, Multitasking, Search, Apps, Accessibility, Colour, Graphics Tablet, Mobile Network, Wellbeing, System, About, Date and Time, Region and Language, Users or Ubuntu Desktop. So does a word Tux knows the page by when you ask for it, such as `wallpaper` or `volume`, or its desktop file's name, such as `universal-access`. It takes no params |
+| `desktop` | `{action: <entry>, ...}`: one entry of Tux's desktop actions and its fields, such as `{action: night_light, turn: on}`. See "Desktop actions" below |
 
-Each action has exactly one of `get`, `post` and `open`, or `say` alone. Every host in the permissions has to be used by an action, and every host an action uses has to be in the permissions, so Settings shows exactly what a recipe reaches. A host is a name or an address written as four numbers. `localhost`, loopback, link-local, multicast and the like are refused when the file loads, and the rest is checked again before each request.
+Each action has exactly one of `get`, `post`, `open` and `desktop`, or `say` alone. Every host in the permissions has to be used by an action, and every host an action uses has to be in the permissions, so Settings shows exactly what a recipe reaches. A host is a name or an address written as four numbers. `localhost`, loopback, link-local, multicast and the like are refused when the file loads, and the rest is checked again before each request.
 
 **Params.** The daemon writes the schema the model sees from these, and an author can't add to it.
 
@@ -364,6 +366,7 @@ A param left out uses its `default`, which has to fit its type. One with no defa
 | `open`, a packaged app or a Settings page | Never, as for "Open Firefox" |
 | `open`, an entry from your home folder or elsewhere | The apps card, with the command it runs |
 | `open`, an entry not in the app grid (NoDisplay), such as a screen reader or a helper | Refused: Tux says so and opens nothing, as "Open ..." can't reach it either |
+| `desktop` | The entry's own rule, in the table under "Desktop actions": `lock_screen` always, `do_not_disturb` and `night_light` when they turn on, the others never |
 | `get` to a host on the internet, with only `choice` and `number` values in it | None in a fresh conversation |
 | `get` with a `text` value in it | Always |
 | `post` | Always |
@@ -371,6 +374,36 @@ A param left out uses its `default`, which has to fit its type. One with no defa
 | Anything with a host, after the conversation read something private | The usual card for reaching out first, then the recipe's own card if its row above asks for one. Not for a copy of a request answered in the last 4 seconds, or arguments Tux refuses, as neither sends anything |
 
 The card names the host, says whether it is on the internet or your local network with the addresses it found, and shows the method, the whole address and the exact body that will be sent. Tux writes it from the request, and only the recipe's id comes from the file. Allow sends that request to those addresses and nothing else. A card too long to show whole is never cut: Tux says "That request is too long to show on a card, so I left it alone."
+
+**Desktop actions.** A recipe reaches the desktop only through this table, in `tuxistant/desktop.py`. Each entry has its own code, which holds the D-Bus call or the setting it changes, its own sentence and its own card rule, all written there. A recipe names the entry and fills its fields, and never a bus, a path, an interface, a method, a schema or a key: a D-Bus method name doesn't say what a call will do, so no card could be honest about one.
+
+```yaml
+actions:
+  evening.nightlight:
+    description: Turn Night Light on or off
+    params:
+      turn: { type: choice, of: ["on", "off"], description: "On or off" }
+    required: [turn]
+    desktop: { action: night_light, turn: "{turn}" }
+  evening.away:
+    description: Lock the screen because I'm leaving the computer
+    desktop: { action: lock_screen }
+```
+
+| Entry | Fields | What it does | Tux says | Card |
+|---|---|---|---|---|
+| `notify` | `text` | Shows a notification. Its title is "From the recipe" and the recipe's id, written by Tux, and its text is the recipe's, at most 200 characters | "Done." | Never: nothing changes, and the title says where it came from |
+| `do_not_disturb` | `turn` | Turns Do Not Disturb on or off, as the switch in the notification list does | "Do Not Disturb is on." | When it turns on: nothing on screen changes, and reminders and calls stop popping up until someone turns it off. "Turn on Do Not Disturb?", saying so |
+| `night_light` | `turn` | Turns Night Light on or off, as the switch in the top bar does. It tints the screen during its schedule, set in Settings, Displays | "Night Light is on." | When it turns on: outside its schedule nothing on screen changes, and the screen turns warm hours later. "Turn on Night Light?", saying it tints during its schedule, which may not start until later today |
+| `dark_style` | `turn` | Turns dark style on, or back to the default style | "Dark style is on." | Never: it is seen at once and undone in one click |
+| `lock_screen` | none | Locks the screen | "Locking the screen." | Always: it takes the screen away from whoever is using it. "Lock the screen?", saying it takes your password to get back |
+
+- **`turn`** is `on` or `off`, unquoted (YAML reads them as true and false, which is what Tux wants here), `"on"`, `"off"`, `yes` or `no`, or a choice param in quotes, `"{turn}"`, whose every choice is one of on, off, yes, no, true and false. The card follows the value the model chose, so `do_not_disturb` or `night_light` with `"{turn}"` shows a card only for on. Write `turn: on`, not `on: true`: YAML reads `on:` as a field called true, and the recipe is refused with that advice.
+- **`text`** is a template like a `say` line, at most 200 characters with no `<` or `>`. Only `choice` and `number` params can go in it, never a `text` one: what is on screen under Tux's name is what the author wrote, with values from a fixed list or a range.
+- An entry Tux doesn't have, a field the entry doesn't take, a missing field or a `say` line beside it refuses the recipe with a reason that lists the entries.
+- When the desktop says no, such as a desktop with no Night Light, Tux says so ("I couldn't change Night Light on this desktop.") and nothing is kept, so asking again tries again. The same call again within 5 seconds does nothing more and Tux says what it said, as for a request. Any call to the same entry in between, from any action or recipe, drops that answer, so on, off and on again are three calls. A turn that is cancelled leaves its call running, so two calls to one entry can overlap and either may land last: neither keeps an answer, and Tux never says a state it didn't just set.
+- A desktop action changes something on this computer only, so it never meets the card for reaching out after private data and adds nothing to the recipe's risk, like `open`. Settings and the registry can list the entries a recipe uses from its manifest's `desktop` list.
+- In evaluations and `tuxistant doctor` a desktop action does nothing, like the rest of a recipe. Taking a screenshot isn't an entry: GNOME lets only its own tools take one without asking, and the portal saves it where it chooses.
 
 **Where a request may go.** Tux looks the host up once and connects to the addresses it checked. All of them have to be on the open internet, or all of them on your local network (private ranges, `fc00::/7`, and `100.64.0.0/10` as Tailscale uses). It refuses loopback, link-local, this computer's own addresses, the networks of its containers and virtual machines (a bridge with no physical network card in it, such as Docker's or libvirt's, or a veth or tap on its own), Tailscale's `100.100.100.100` and `fd7a:115c:a1e0::53`, the servers this install talks to, Home Assistant included, and a name that answers with a mix of both. The host is looked up before its card is shown, as the card names the addresses. Plain `http` is only for your local network: to the internet it has to be `https`, and the certificate is checked. No redirect is followed, nothing goes through a proxy, and the only headers are `Host`, with the recipe's host and its port when that isn't the scheme's own, `User-Agent: Tuxistant`, `Accept`, `Accept-Encoding: identity` and, with a body, its type and length. Nothing from the recipe or the model ever goes in a header, so there is no way to send a key.
 
@@ -393,7 +426,6 @@ An answer is only read when the action picks something from it. The same request
 
 None of this exists yet.
 
-- **Desktop actions for recipes.** A fixed table in the daemon, such as a notification, locking the screen, Do Not Disturb or Night Light, each with its own card rule, which a recipe names by entry. Never a bus, path or method in a manifest: a D-Bus method name doesn't say what a call will do, so no card could be honest about it.
 - **Secrets for recipes.** A token kept in Settings or the keyring, sent only over https to the host the recipe names. Until then a recipe has no headers at all.
 - **Recipes that call built-in actions,** such as "movie time", through `Skills.execute`, from a list without the shell, tasks, files or mail, with one card for all the steps.
 - **Recipe switch in Settings.** Turning a recipe off, and "don't ask again" for one, instead of a card every time for a device at home.
