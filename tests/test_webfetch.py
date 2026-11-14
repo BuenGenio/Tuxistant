@@ -530,6 +530,22 @@ class CutShort(unittest.TestCase):
         finally:
             self.assertLess(time.monotonic() - started, CLOCK_S + 1)
 
+    def unreadable(self, read):
+        """Refused for what came back, not for where it was: the request went out."""
+        real, reached = webfetch._get, []
+
+        def get(target, deadline):
+            reached.append(target.host)
+            return real(target, deadline)
+        with mock.patch.object(webfetch, "_get", get), self.assertRaises(PageError) as caught:
+            read()
+        self.assertEqual(str(caught.exception), webfetch.UNREADABLE)
+        return reached
+
+    def fetch(self):
+        self.assertEqual(self.unreadable(
+            lambda: webfetch.fetch("http://example.com/", CONFIG, CLOCK_S)), ["example.com"])
+
     def test_a_length_that_drips_past_the_deadline(self):
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                        b"Content-Length: 7\r\n\r\n123"),
@@ -541,14 +557,12 @@ class CutShort(unittest.TestCase):
     def test_an_answer_with_no_length_cut_by_the_deadline(self):
         self.serve((0, b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n12345"),
                    *[(0.3, b"6")] * 4)
-        with self.assertRaises(PageError):
-            self.send()
+        self.unreadable(self.send)
 
     def test_a_server_that_hangs_up_before_its_length(self):
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                        b"Content-Length: 7\r\n\r\n12345"))
-        with self.assertRaises(PageError):
-            self.send()
+        self.unreadable(self.send)
 
     def test_a_whole_answer_in_time_is_still_read(self):
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -560,15 +574,13 @@ class CutShort(unittest.TestCase):
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
                        b"Content-Length: 100000\r\n\r\n" + page),
                    *[(0.3, b"<p>more</p>")] * 4)
-        with self.assertRaises(PageError):
-            webfetch.fetch("http://example.com/", CONFIG, CLOCK_S)
+        self.fetch()
 
     def test_a_page_whose_server_hangs_up_before_its_length(self):
         page = (f"<p>{WORDS}</p>" * 3).encode()
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
                        b"Content-Length: 100000\r\n\r\n" + page))
-        with self.assertRaises(PageError):
-            webfetch.fetch("http://example.com/", CONFIG, CLOCK_S)
+        self.fetch()
 
 
 class OwnServers(unittest.TestCase):
@@ -739,6 +751,46 @@ class OwnServers(unittest.TestCase):
         with self.page_looked_up_slowly(home), self.assertRaises(PageError):
             webfetch.fetch("http://news.example/", self.config, 2, own=own)
         self.assertEqual(self.web.dialled, [])
+
+    def test_a_server_s_name_in_any_spelling(self):
+        """The resolver looks a name up as IDNA gives it, so a page naming the voice server in
+        another spelling reaches it. Its lookup failed earlier in this research run, and the name
+        answers now: only the name can refuse it."""
+        config = {**self.config, "server": "voice.example:8080"}
+        own = webfetch.own_servers(config, 1)
+        self.web.names["voice.example"] = ["8.8.4.4"]
+        fake = webfetch._resolve
+
+        def resolve(host, port):        # what socket.getaddrinfo does to a name first
+            try:
+                host = host.encode("idna").decode("ascii")
+            except UnicodeError:
+                raise PageError(webfetch.UNREADABLE) from None
+            return fake(host, port)
+        with mock.patch.object(webfetch, "_resolve", resolve):
+            for host in ("ｖｏｉｃｅ.example", "voi\u00adce.example", "ＶＯＩＣＥ.EXAMPLE",
+                         "VOICE.example."):
+                self.web.dialled.clear()
+                with self.subTest(host):
+                    with self.assertRaises(PageError) as caught:
+                        webfetch.fetch(f"http://{host}:8080/", config, 2, own=own)
+                    self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+                    self.assertEqual(self.web.dialled, [])
+
+    def test_a_server_in_the_settings_in_another_spelling(self):
+        config = {**self.config, "server": "http://ＶＯＩ\u00adＣＥ.example:8080"}
+        self.assertIn("voice.example", webfetch.own_servers(config, 1)[0])
+        self.assertIn("ha.lan", webfetch.own_servers({**config, "ha_server": "http://ＨＡ.lan"},
+                                                     1)[0])
+        with self.assertRaises(PageError) as caught:
+            webfetch.place("voice.example", 80, webfetch.own_servers(config, 1), [PUBLIC])
+        self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+
+    def test_a_name_idna_can_not_encode_is_refused(self):
+        with self.assertRaises(PageError) as caught:
+            webfetch.fetch("http://" + "a" * 64 + ".example/", self.config, 1)
+        self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+        self.assertEqual(self.web.lookups, [])
 
     def test_a_lookup_from_before_the_call_that_then_fails_is_followed_by_a_fresh_one(self):
         """Sent before the network came up, by an earlier call, and joined by this one."""

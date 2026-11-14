@@ -103,6 +103,10 @@ It also found two tests whose stand-ins for the network ended before a thread th
 - *Settings changed while a page's host was looked up.* A page's own servers were checked before its host was looked up, which can take seconds, so a voice server named meanwhile at the page's address was dialled. They are now checked after it, just before the dial.
 - *An answer that came while a card waited.* A recipe request whose card was shown while Home Assistant's lookup had failed was judged by Home Assistant's name only. If Home Assistant then answered at the card's address, found by another request or by being home again, the click still sent there. After a card the request is now judged again with what the servers have answered since, and a server still without an answer is looked up afresh.
 
+**The sixth network review.** A check of 6e79f11 found one more, there since 12a720e. It now has tests that failed before the fix:
+
+- *An own server's name in another spelling.* The resolver encodes a name with IDNA before it looks it up, so `ｖｏｉｃｅ.example` in fullwidth letters, or `voice.example` with a soft hyphen in it, is looked up as `voice.example`. A page's host was compared with the servers' names as written, so such a spelling got past the name. That mattered where only the name could refuse it: when the server's lookup had failed earlier in a research run and the name answered now. Every host, a page's, a redirect's, a recipe's and those in Settings, is now compared as the resolver will look it up: IDNA, lowercase and without a trailing dot. A page's host IDNA can't encode is refused.
+
 ## A hostile model
 
 Unlike the attacks below, this one hasn't been tried: no backdoored model or hostile model file has been run against Tuxistant.

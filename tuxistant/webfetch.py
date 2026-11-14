@@ -155,7 +155,18 @@ def _resolve(host: str, port: int) -> list[str]:
 
 
 def _name(host: str) -> str:
-    return host.rstrip(".").lower()
+    """A host as the resolver looks it up: IDNA, as getaddrinfo encodes a name, lowercased and
+    without a trailing dot. So ｖｏｉｃｅ.example, or voice.example with a soft hyphen in it, is
+    voice.example. UnicodeError if IDNA can't encode it, and then nothing can look it up."""
+    return host.encode("idna").decode("ascii").rstrip(".").lower()
+
+
+def _request_name(host: str) -> str:
+    """_name, for a host a page or a recipe names: one IDNA can't encode is refused."""
+    try:
+        return _name(host)
+    except UnicodeError:
+        raise PageError(NOT_ALLOWED) from None
 
 
 def _same(address: str) -> str:
@@ -168,9 +179,13 @@ def _same(address: str) -> str:
 
 
 def _server_host(server: str) -> str | None:
+    """The host of a server in the settings, as _name gives it, so it compares with a page's or a
+    recipe's however either is spelled. None if there is none, or IDNA can't encode it: then no
+    one can look it up, this install included."""
     try:
-        return urllib.parse.urlsplit(_urls(server)[0]).hostname
-    except ValueError:      # config.json can hold anything
+        host = urllib.parse.urlsplit(_urls(server)[0]).hostname
+        return _name(host) if host else None
+    except (ValueError, UnicodeError):      # config.json can hold anything
         return None
 
 
@@ -212,7 +227,7 @@ def _own_hosts(config) -> list[str]:
 
 
 def _own_names(config) -> set[str]:
-    return {_name(host) for host in _own_hosts(config)}
+    return set(_own_hosts(config))     # already as _name gives them
 
 
 def _own_now(config, own, deadline: float, since: float | None = None) -> tuple[set[str], set[str]]:
@@ -272,7 +287,7 @@ def _own_wait(hosts, waits: list[_Lookup], deadline: float,
         found |= _own_wait(stale, _start_own_lookups(stale), deadline, since)[1]
     with _own_lock:
         kept = [_own_addresses.get(host) for host in hosts]
-    return {_name(host) for host in hosts}, found.union(*(entry[1] for entry in kept if entry))
+    return set(hosts), found.union(*(entry[1] for entry in kept if entry))
 
 
 def _own_resolve(lookup: _Lookup):
@@ -467,7 +482,7 @@ def place(host: str, port: int, own: tuple[set[str], set[str]], addresses=None) 
     its containers and virtual machines, the servers this install talks to, or a name that answers
     with a mix of the two. The host is looked up here unless its addresses are given."""
     names, own_addresses = own
-    if _name(host) in names:
+    if _request_name(host) in names:
         raise PageError(NOT_ALLOWED)
     if addresses is None:
         addresses = _resolve(host, port)
@@ -493,7 +508,7 @@ def recipe_place(host: str, port: int, config, seconds: float) -> Place:
     since = time.monotonic()
     deadline = since + seconds
     hosts = _own_hosts(config)
-    if _name(host) in map(_name, hosts):
+    if _request_name(host) in hosts:
         raise PageError(NOT_ALLOWED)
     waits = _start_own_lookups(hosts)
     addresses = _resolve(host, port)
@@ -533,14 +548,15 @@ def _parse(url: str) -> tuple[str, str, int, str]:
         raise PageError(NOT_ALLOWED) from None
     if parts.scheme not in SCHEMES or not host or parts.username is not None:
         raise PageError(NOT_ALLOWED)     # any "@" at all gives a username, even an empty one
-    return parts.scheme, host, port or SCHEMES[parts.scheme], path
+    # As it will be looked up, so it is judged by the name the resolver sees, in any spelling.
+    return parts.scheme, _request_name(host), port or SCHEMES[parts.scheme], path
 
 
 def _judge(scheme: str, host: str, port: int, path: str, addresses: list[str],
            own: tuple[set[str], set[str]]) -> Target:
     names, own_addresses = own
     # All of them must pass: a name with one public address and one private one is an attack.
-    if (_name(host) in names or not addresses or not all(map(public, addresses))
+    if (host in names or not addresses or not all(map(public, addresses))
             or own_addresses.intersection(map(_same, addresses))):
         raise PageError(NOT_ALLOWED)
     return Target(scheme, host, port, path, addresses)
@@ -750,7 +766,7 @@ def fetch(url: str, config, seconds: float = TOTAL_S, own=None) -> Page:
     deadline = time.monotonic() + seconds
     for _ in range(MAX_REDIRECTS + 1):
         scheme, host, port, path = _parse(url)
-        if _name(host) in _own_names(config):
+        if host in _own_names(config):
             raise PageError(NOT_ALLOWED)
         since = time.monotonic()
         if own is None:     # looked up alongside the page's host
