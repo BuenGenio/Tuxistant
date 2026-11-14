@@ -30,6 +30,7 @@ NOTICE_WAIT_S = 3       # past this a notice is no use, and the turn can't read 
 FOUND_MEMORY_S = 300    # "open the second one" can come in a new conversation too
 FOLLOW_ON_S = 120       # a hold this soon after the last carries on its conversation
 QUESTION_HINT_S = 10    # how long a question stays on screen once the turn is over
+ANSWER_GRACE_S = 2      # a hold begun as the hint fades still answers: Fn takes a moment to count
 ANSWER_HINT = "Hold Fn to answer"
 NO_CARD = ("I can't show an approval card on this desktop yet, so I didn't do that. Log out and "
            "back in once, then try again.")
@@ -59,6 +60,7 @@ class Talk:
     def __init__(self, rt):
         self.rt = rt
         self.asked = False      # its last reply was a question
+        self.asked_at = 0.0     # when that question went on screen
         self.timer = None       # the task that ends it after FOLLOW_ON_S
 
 
@@ -76,9 +78,17 @@ class Turn:
         self.rt.confirm, self.rt.selection = ctl.ask, ctl.selection
         if talk is None and time.monotonic() - ctl.found_at < FOUND_MEMORY_S:
             self.rt.session.found = list(ctl.found)
-        # The words of this hold answer a task that asked the user something.
-        self.for_task = bool(talk and talk.asked and self.rt.session.waiting is not None)
+        # The words of this hold answer a task that asked the user something, but only while
+        # its question is on screen: later words may be about anything.
+        on_screen = bool(talk and talk.asked
+                         and time.monotonic() - talk.asked_at < QUESTION_HINT_S + ANSWER_GRACE_S)
+        self.for_task = on_screen and self.rt.session.waiting is not None
+        if talk and not self.for_task:
+            self.rt.session.waiting = None
         self.last_reply = None      # of this turn, if it said anything
+        # What Tux itself last said: the voice model's reply, or a task's answer that asked. The
+        # app's own Speak texts never count, as a mail or a web page could end in "?".
+        self.question = None
         self.ends_talk = False      # a card was answered no
         self.connecting = None
         self.connected = False
@@ -176,6 +186,7 @@ class Turn:
                     deadline = now + REPLY_TIMEOUT_S
                 case "reply":
                     self.replies.append(args[0])
+                    self.question = args[0]
                     ctl.emit("Reply", args[0])
                 case "done":
                     await self._close_mic()
@@ -226,6 +237,7 @@ class Turn:
                     self.ctl.emit("Transcript", args[0], True)
             elif kind == "reply":
                 self.replies.append(args[0])
+                self.question = args[0]
                 if show:
                     self.ctl.emit("Reply", args[0])
             elif kind == "tool":
@@ -326,8 +338,9 @@ class Turn:
         if "error" in result:
             raise RealtimeError(result["error"])
         if result.get("answer"):
-            self.inbox.put_nowait(("speak", Speak(str(result["answer"]), self.ctl.config["voice"],
-                                                  "")))
+            answer = str(result["answer"])
+            self.question = answer if session.waiting is not None else None
+            self.inbox.put_nowait(("speak", Speak(answer, self.ctl.config["voice"], "")))
         self.inbox.put_nowait(("done",))
 
     async def _connect(self):
@@ -335,8 +348,10 @@ class Turn:
             if self.rt.skills is not self.skills:   # reloaded since: the new tools need a new session
                 await self.rt.close()
                 self.rt.use(self.skills)
-            if not self.rt.alive:
-                await self.rt.close()   # whatever is left of a connection the server dropped
+            if not self.rt.alive or self.rt.outdated:
+                # Whatever is left of a connection the server dropped, or one made with a server,
+                # key or voice that has changed since: the words must go where the settings say.
+                await self.rt.close()
                 await self.rt.connect()
             self.inbox.put_nowait(("ready",))
         except Exception as e:     # anything else here would leave the turn waiting for ever
@@ -609,6 +624,7 @@ class Controller:
             self._drop_words()
             if end_talk:
                 await self._end_talk()
+                self._forget()
 
     async def set_locked(self, locked: bool):
         """The shell disables the extension at lock, so a turn would have no blob and no way to
@@ -655,7 +671,9 @@ class Controller:
 
     async def _converse(self, turn: Turn):
         await self._run(turn.run)
-        if turn.hold and not turn.ends_talk:
+        if turn.ends_talk:
+            self._forget()
+        elif turn.hold:
             self._keep(turn)
 
     def _keep(self, turn: Turn):
@@ -663,9 +681,10 @@ class Controller:
         after the turn's idle and Presence, so that nothing takes the question down."""
         talk = self.talk = turn.talk
         if turn.last_reply is not None:
-            talk.asked = planner.asks(turn.last_reply)
+            talk.asked = turn.question is not None and planner.asks(turn.question)
             if talk.asked and not self.locked:
-                self.emit("FollowUp", turn.last_reply, ANSWER_HINT, QUESTION_HINT_S)
+                talk.asked_at = time.monotonic()
+                self.emit("FollowUp", turn.question, ANSWER_HINT, QUESTION_HINT_S)
         if not talk.asked:  # a task's question nobody was left with is no question
             talk.rt.session.waiting = None
         talk.timer = asyncio.create_task(self._expire(talk))
@@ -686,6 +705,10 @@ class Controller:
             if talk.asked:
                 self.emit("FollowUp", "", "", 0)
             await talk.rt.close()
+
+    def _forget(self):
+        """Stop, a lock or a no: the next conversation can't open what this one found either."""
+        self.found, self.found_at = [], 0.0
 
     async def _stop(self):
         if self.active:
