@@ -14,9 +14,9 @@ import gi
 
 gi.require_version("Adw", "1")
 gi.require_version("Gtk", "4.0")
-from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango  # noqa: E402
 
-from . import BUS_NAME, BUS_PATH, homeassistant, themes  # noqa: E402
+from . import BUS_NAME, BUS_PATH, highlight, homeassistant, themes  # noqa: E402
 from . import config as cloud  # noqa: E402
 from .config import CLOUD_PRIVACY_URL, CLOUD_PROVIDER, DATA_DIR, DEFAULTS, clean_server  # noqa: E402
 from .gate import MAX_TITLE_CHARS, printable  # noqa: E402
@@ -125,6 +125,14 @@ SETTINGS_TITLES = {
 }
 NOT_LOADED = ("The skill these settings are for isn't loaded now, so Tux can't use it. They are "
               "kept, and Skills with problems says why")
+# A manifest's colours, light and dark, each at least 5:1 on libadwaita's view background.
+SYNTAX = {
+    highlight.KEY: ("#1a5fb4", "#99c1f1"),
+    highlight.STRING: ("#1d7a40", "#8ff0a4"),
+    highlight.NUMBER: ("#b5400a", "#ffbe6f"),
+    highlight.COMMENT: ("#6a696e", "#a3a2a7"),
+    highlight.MARK: ("#6a696e", "#a3a2a7"),
+}
 MAX_FILES_SHOWN = 100       # a code skill may have 2,000, and a row each takes seconds to build
 CSS = """
 .risk-badge {
@@ -1760,11 +1768,42 @@ class ManifestPage(Adw.NavigationPage):
             wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=12, bottom_margin=12, left_margin=12,
             right_margin=12)
         self.text.update_property([Gtk.AccessibleProperty.LABEL], ["Manifest"])
-        self.text.get_buffer().set_text(shown(details["manifest"]))
+        text = shown(details["manifest"])
+        buffer = self.text.get_buffer()
+        buffer.set_text(text)
+        self.tags = {kind: buffer.create_tag(kind) for kind in highlight.KINDS}
+        self.tags[highlight.COMMENT].props.style = Pango.Style.ITALIC
+        for start, end, kind in highlight.spans(text):
+            buffer.apply_tag(self.tags[kind], buffer.get_iter_at_offset(start),
+                             buffer.get_iter_at_offset(end))
+        self.watching = []
+        self.text.connect("realize", self.watch_style)
+        self.text.connect("unrealize", self.unwatch_style)
         view = Adw.ToolbarView(content=Gtk.ScrolledWindow(
             child=self.text, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True))
         view.add_top_bar(header)
         self.set_child(view)
+
+    def watch_style(self, _view):
+        """Colours follow light and dark as they change. Under high contrast the text keeps the
+        theme's own colour, and keys are bold instead."""
+        style = Adw.StyleManager.get_default()
+        self.watching = [style.connect(f"notify::{name}", self.colour)
+                         for name in ("dark", "high-contrast")]
+        self.colour(style)
+
+    def unwatch_style(self, _view):
+        style = Adw.StyleManager.get_default()
+        for handler in self.watching:
+            style.disconnect(handler)
+        self.watching = []
+
+    def colour(self, style, *_args):
+        plain = style.get_high_contrast()
+        for kind, tag in self.tags.items():
+            tag.props.foreground = SYNTAX[kind][style.get_dark()]
+            tag.props.foreground_set = not plain
+        self.tags[highlight.KEY].props.weight = Pango.Weight.BOLD if plain else Pango.Weight.NORMAL
 
 
 class SettingsOnlyDialog(Adw.PreferencesDialog):
