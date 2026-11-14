@@ -324,7 +324,11 @@ A new registry key ships in a Tuxistant release, and for one release both lines 
 2. It has exactly the four fields above, `format` is 1, and every entry is a valid revocation entry. Anything else refuses the whole file.
 3. `seq` is higher than the one Tux holds for this file, or equal with the same bytes.
 
-**When a revocation is in effect.** Tux keeps every valid revocation entry it has accepted, from either file, by id. The first copy of an id it accepted stands, and a later copy with the same id but different content is ignored, so an entry can't be narrowed once seen. An entry that a newer file leaves out stays. A revocation is in effect until an accepted index lists its id in `lifted`, and a lifted id stays lifted. So the moderation key can only add revocations: it can't lift one, change one, or touch anything else, and only the registry key can undo it.
+**When a revocation is in effect.** Tux keeps every valid revocation entry it has accepted, from either file. Two copies of an id that differ in anything are both kept, and every copy is in effect. So a later copy can't narrow an entry, and a copy signed first can't hide a later one: a leaked moderation key that claims the next ids for nothing doesn't cancel the bans the registry later gives those ids. An entry that a newer file leaves out stays. A revocation is in effect until an accepted index lists its id in `lifted`, which ends every copy of it, and a lifted id stays lifted. So the moderation key can only add revocations: it can't lift one, change one, or touch anything else, and only the registry key can undo it.
+
+Tux keeps at most 1000 copies in effect and 10000 lifted ids, which together fit in the 8 MiB state file it reads back. A file that would take it past either is refused and Tux keeps what it had; an index that lifts ids makes room, and its own new entries count after its lifts. If the state file is there but too big or not what Tux wrote, Tux takes no index and no revocations until it is removed or put right, rather than starting again from nothing, which would forget the newest sequence numbers and every revocation seen.
+
+**Installing.** A revocation that arrives while the card is open still stops the install. An update ends a switch-off only if Tux holds the revocation and it doesn't cover the new version. After a lost state Tux doesn't hold it, so the update is refused until the id is lifted.
 
 **A recipe.** To install or update a version, Tux takes its entry from the accepted index and installs it only if:
 

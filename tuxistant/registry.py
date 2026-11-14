@@ -11,8 +11,10 @@ its input in files in a private folder, with an allowed_signers file written for
 A signature is checked before the file it covers is parsed, so nothing unsigned reaches the
 JSON parser.
 
-The moderation key can only add revocations. Each one Tux accepts is kept by id, the first copy
-standing, and only an index the registry key signed can lift one.
+The moderation key can only add revocations. Every distinct copy of an id Tux accepts is kept and
+in effect, so a copy signed first can neither narrow nor hide a later one, and only an index the
+registry key signed can lift an id. A state file Tux can't read refuses everything until it is
+fixed, as starting again from nothing would forget the newest sequence numbers and revocations.
 
 No network here: fetch(path, limit) -> bytes is handed in, and tests pass a fake.
 """
@@ -56,6 +58,9 @@ MAX_RECIPE_BYTES = 64 * 1024
 MAX_SIG_BYTES = 4 * 1024
 MAX_SHIPPED_BYTES = 4 * 1024
 MAX_STATE_BYTES = 8 * 1024 * 1024
+MAX_SEEN = 1000                 # revocation copies in effect: at most about 6.5 KB each, written
+MAX_LIFTED = 10_000             # lifted ids; both together fit in MAX_STATE_BYTES
+STATE_FIELDS = {"index", "revocations", "seen", "lifted"}
 VERIFY_S = 10
 AHEAD_S = 24 * 3600             # an index dated further ahead of the clock than this is refused
 KEYGEN_PATH = "/usr/bin:/bin"   # never the caller's PATH, so a planted ssh-keygen isn't run
@@ -103,6 +108,11 @@ NEWER_FORMAT = "The skills registry's list needs a newer Tuxistant."
 SHIPPED_DAMAGED = "The registry key that came with Tuxistant is damaged, so nothing can be checked."
 SUSPENDED = "The skills registry has switched it off: {reason}"
 BANNED = "The skills registry has switched it off for good, and you can remove it: {reason}"
+STATE_DAMAGED = ("Tux's record of the skills registry is damaged, so it won't take anything from "
+                 "the registry until it is fixed. Removing state.json in "
+                 "~/.local/state/tuxistant/registry starts it again.")
+TOO_MANY = ("The skills registry has more revoked skills than Tux can keep track of, so Tux kept "
+            "the list it had.")
 
 
 class Refused(ValueError):
@@ -506,6 +516,28 @@ def parse_revocations(data: bytes) -> dict:
     return found
 
 
+def switched_off_because(kind: str, reason: str) -> str:
+    return (BANNED if kind == "ban" else SUSPENDED).format(reason=reason)
+
+
+def _copy_key(entry: dict) -> str:
+    """Where one copy of a revocation is kept: its id and the hash of exactly what it says, so
+    two copies of an id that differ are both kept."""
+    text = json.dumps(entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return f"{entry['id']}:{hashlib.sha256(text.encode()).hexdigest()}"
+
+
+def _taken(kept: dict, entries: list, lifts: list = ()) -> dict:
+    """kept with these revocations and lifts added. A lifted id's copies are dropped, as a lifted
+    id stays lifted, which is also how the registry makes room."""
+    lifted = set(kept["lifted"]) | {entry["id"] for entry in lifts}
+    seen = {key: entry for key, entry in kept["seen"].items() if entry["id"] not in lifted}
+    seen.update((_copy_key(entry), entry) for entry in entries if entry["id"] not in lifted)
+    if len(seen) > MAX_SEEN or len(lifted) > MAX_LIFTED:
+        raise Refused(TOO_MANY)
+    return {**kept, "seen": seen, "lifted": sorted(lifted)}
+
+
 def covers(entry: dict, skill_id: str, version: str, key: str) -> bool:
     scope = entry["scope"]
     if "skill" in scope:
@@ -542,7 +574,7 @@ class Registry:
         self.signers = Path(signers)
         self.clock = clock
         self.on_change = on_change
-        self.problems: dict[str, str] = {}      # "index" or "revocations": why the last failed
+        self.problems: dict[str, str] = {}      # "index", "revocations" or "state": why it failed
         self._kept: dict | None = None
         self._index: dict | None = None
 
@@ -557,7 +589,13 @@ class Registry:
                 self.problems.pop(name, None)
             except Refused as e:
                 self.problems[name] = str(e)
-        return self.apply()
+        try:
+            changes = self.apply()
+            self.problems.pop("state", None)
+            return changes
+        except Refused as e:
+            self.problems["state"] = str(e)
+            return []
 
     def _refresh_index(self) -> None:
         data = self._fetched("index.json", MAX_INDEX_BYTES)
@@ -593,12 +631,11 @@ class Registry:
         kept = copy.deepcopy(self.kept())   # kept in memory only once it is on disk
         digest = hashlib.sha256(data).hexdigest()
         _not_older(kept.get("index"), index["seq"], digest, "list of skills")
-        _write(self.state / HELD_INDEX, data)       # before the state that names it
-        for entry in index["revocations"]:
-            kept["seen"].setdefault(str(entry["id"]), entry)
-        kept["lifted"] = sorted(set(kept["lifted"]) | {entry["id"] for entry in index["lifted"]})
+        kept = _taken(kept, index["revocations"], index["lifted"])
         kept["index"] = {"seq": index["seq"], "sha256": digest}
-        self._save(kept)
+        state = _state_bytes(kept)
+        _write(self.state / HELD_INDEX, data)       # before the state that names it
+        self._save(kept, state)
         self._index = index
         return index
 
@@ -634,10 +671,9 @@ class Registry:
         kept = copy.deepcopy(self.kept())   # kept in memory only once it is on disk
         digest = hashlib.sha256(data).hexdigest()
         _not_older(kept.get("revocations"), found["seq"], digest, "list of revoked skills")
-        for entry in found["revocations"]:
-            kept["seen"].setdefault(str(entry["id"]), entry)    # the first copy stands
+        kept = _taken(kept, found["revocations"])
         kept["revocations"] = {"seq": found["seq"], "sha256": digest}
-        self._save(kept)
+        self._save(kept, _state_bytes(kept))
         return found
 
     def in_effect(self) -> list[dict]:
@@ -665,7 +701,7 @@ class Registry:
             raise Refused("The skills registry doesn't list that skill.")
         revoked = self.covering(skill_id, version, entry["key"])
         if revoked:
-            raise Refused(SUSPENDED.format(reason=revoked["reason"]))
+            raise Refused(switched_off_because(revoked["kind"], revoked["reason"]))
         data = self._fetched(f"recipes/{entry['sha256']}.yaml", entry["size"])
         if len(data) != entry["size"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
             raise Refused("The file the skills registry sent isn't the one its list names, so "
@@ -700,10 +736,20 @@ class Registry:
         """Write a checked recipe into the skills folder, where the loader picks it up. Browse
         calls this only after its card is allowed. A file of the same name that isn't one Tux
         installed, or that was changed since, is left alone."""
+        # a revocation can land between check() and the card being allowed
+        revoked = self.covering(checked.skill_id, checked.version, checked.key)
+        if revoked:
+            raise Refused(switched_off_because(revoked["kind"], revoked["reason"]))
         name = f"{checked.skill_id}.yaml"
         target = self.skills / name
         records = installed(self.skills)
         record = records.get(name)
+        off = record.get("off") if record else None
+        # an update ends a switch-off only if Tux knows the revocation and it doesn't cover the
+        # new version; after a lost state Tux doesn't know it, and only a lift ends it
+        if off and off["revocation"] not in self.kept()["lifted"] and not any(
+                entry["id"] == off["revocation"] for entry in self.in_effect()):
+            raise Refused(switched_off_because(off["kind"], off["reason"]))
         if target.exists() or target.is_symlink():
             if not record or record["id"] != checked.skill_id or target.is_symlink():
                 raise Refused(f"You already have a skill file called {name}, so Tux left it "
@@ -755,13 +801,15 @@ class Registry:
     # The state folder
 
     def kept(self) -> dict:
+        """What the state file holds. Raises Refused if it is there but can't be read, and is
+        read again next time, so removing it or putting it right is noticed."""
         if self._kept is None:
             self._kept = _read_state(self.state / STATE)
         return self._kept
 
-    def _save(self, kept: dict) -> None:
+    def _save(self, kept: dict, data: bytes) -> None:
         _private_folder(self.state)
-        _write(self.state / STATE, _dumps(kept))
+        _write(self.state / STATE, data)
         self._kept = kept
 
     def _work(self) -> Path:
@@ -817,28 +865,55 @@ def _read_json(file: Path, limit: int):
         return None
 
 
+def _state_bytes(kept: dict) -> bytes:
+    """The state as written, refused if it is more than _read_state would read back."""
+    data = _dumps(kept)
+    if len(data) > MAX_STATE_BYTES:
+        raise Refused(TOO_MANY)
+    return data
+
+
 def _read_state(file: Path) -> dict:
-    data = _read_json(file, MAX_STATE_BYTES)
-    data = data if isinstance(data, dict) else {}
-    kept = {"index": _held(data.get("index")), "revocations": _held(data.get("revocations")),
-            "seen": {}, "lifted": []}
-    seen = data.get("seen") if isinstance(data.get("seen"), dict) else {}
+    """The state Tux wrote, or an empty one if there is none. Anything else, too big, not JSON
+    or not in the shape Tux writes, is refused rather than read as empty."""
+    try:
+        if file.stat().st_size > MAX_STATE_BYTES:
+            raise Refused(STATE_DAMAGED)
+        data = json.loads(file.read_bytes())
+    except FileNotFoundError:
+        return {"index": None, "revocations": None, "seen": {}, "lifted": []}
+    except (OSError, ValueError, RecursionError):
+        log.warning("could not read %s", file)
+        raise Refused(STATE_DAMAGED) from None
+    try:
+        return _state(data)
+    except (Refused, KeyError, TypeError):
+        log.warning("%s isn't in the shape Tux writes", file)
+        raise Refused(STATE_DAMAGED) from None
+
+
+def _state(data) -> dict:
+    _exact(data, STATE_FIELDS, "state")
+    lifted = _list(data["lifted"], "lifted", 0, MAX_LIFTED)
+    if any(type(n) is not int or n < 1 for n in lifted) or lifted != sorted(set(lifted)):
+        raise _bad("lifted")
+    seen = data["seen"]
+    if not isinstance(seen, dict) or len(seen) > MAX_SEEN:
+        raise _bad("seen")
     for key, entry in seen.items():
-        try:
-            if key == str(revocation(entry)["id"]):
-                kept["seen"][key] = entry
-        except Refused:
-            pass
-    lifted = data.get("lifted") if isinstance(data.get("lifted"), list) else []
-    kept["lifted"] = sorted({n for n in lifted if type(n) is int and n >= 1})
-    return kept
+        if key != _copy_key(revocation(entry)) or entry["id"] in lifted:
+            raise _bad("seen")
+    return {"index": _held(data["index"]), "revocations": _held(data["revocations"]),
+            "seen": seen, "lifted": lifted}
 
 
 def _held(value) -> dict | None:
-    if (isinstance(value, dict) and type(value.get("seq")) is int
-            and isinstance(value.get("sha256"), str) and SHA256.fullmatch(value["sha256"])):
-        return {"seq": value["seq"], "sha256": value["sha256"]}
-    return None
+    if value is None:
+        return None
+    _exact(value, {"seq", "sha256"}, "state")
+    _int(value["seq"], "state")
+    _matching(SHA256, value["sha256"], "state")
+    return value
 
 
 def installed(skills: Path) -> dict:
@@ -862,6 +937,6 @@ def _off_ok(off) -> bool:
 
 def switched_off(skills: Path) -> dict[str, tuple[str, str]]:
     """{file name: (the id it was installed as, why it is off)} for the loader."""
-    return {name: (record["id"], (BANNED if record["off"]["kind"] == "ban" else SUSPENDED)
-                   .format(reason=record["off"]["reason"]))
+    return {name: (record["id"], switched_off_because(record["off"]["kind"],
+                                                      record["off"]["reason"]))
             for name, record in installed(skills).items() if record.get("off")}

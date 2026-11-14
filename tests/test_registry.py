@@ -356,6 +356,63 @@ class IndexTests(RegistryCase):
         self.assertEqual(self.reg.kept()["index"]["seq"], 5)
         self.assertEqual(self.reg.in_effect(), [])
 
+    def test_a_state_that_cant_be_read_refuses_everything_until_it_is_fixed(self):
+        self.accept(self.index(seq=5))
+        file = self.state / "state.json"
+        good = file.read_bytes()
+        damaged = (b"x" * (registry.MAX_STATE_BYTES + 1), b"{not json", b"[]",
+                   good.replace(b'"seen": {}', b'"seen": {"1": 1}'),
+                   good.replace(b'"lifted": []', b'"lifted": ["1"]'),
+                   good.replace(b'"seq": 5', b'"seq": "5"'))
+        for data in damaged:
+            with self.subTest(data=data[:40]):
+                self.assertNotEqual(data, good)
+                file.write_bytes(data)
+                self.reg = self.new_registry()
+                self.refused(self.accept, self.index(seq=1), contains="damaged")
+                self.refused(self.accept, self.index(seq=6), contains="damaged")
+                self.revoked(1, [])
+                self.refused(self.reg.accept_revocations, self.files["revocations.json"],
+                             self.files["revocations.json.sig"], contains="damaged")
+                self.refused(self.reg.check, "io.github.ada.bluetooth", "1.0.0",
+                             contains="damaged")
+                self.assertEqual(self.reg.refresh(), [])
+                self.assertIn("damaged", self.reg.problems["state"])
+                self.assertEqual(file.read_bytes(), data)
+        file.write_bytes(good)
+        self.reg = self.new_registry()
+        self.refused(self.accept, self.index(seq=1), contains="older list of skills")
+
+    def test_the_state_never_grows_past_what_it_can_read_back(self):
+        self.accept(self.index(seq=5))
+        size = len((self.state / "state.json").read_bytes())
+        n = 0
+
+        def grow(seq):
+            nonlocal n
+            n += 10
+            self.revoked(seq, [self.entry(id, {"skill": "io.github.ada.nothing"},
+                                          reason="x" * 300) for id in range(n - 9, n + 1)])
+            return self.reg.accept_revocations(self.files["revocations.json"],
+                                               self.files["revocations.json.sig"])
+
+        with mock.patch.object(registry, "MAX_STATE_BYTES", size + 20000):
+            seq = 1
+            while True:
+                try:
+                    grow(seq)
+                except Refused as e:
+                    self.assertIn("more revoked skills", str(e))
+                    break
+                seq += 1
+                self.assertLess(seq, 100)
+            self.assertLessEqual(len((self.state / "state.json").read_bytes()),
+                                 registry.MAX_STATE_BYTES)
+            self.reg = self.new_registry()
+            self.assertEqual(self.reg.kept()["index"]["seq"], 5)
+            self.assertEqual(len(self.reg.in_effect()), 10 * (seq - 1))
+            self.refused(self.accept, self.index(seq=1), contains="older list of skills")
+
     def test_a_held_copy_that_isnt_the_one_the_state_names_isnt_used(self):
         self.accept(self.index(seq=5))
         (self.state / "index.json").write_bytes(dumped(self.index(seq=9)))
@@ -538,15 +595,71 @@ class RevocationTests(RegistryCase):
         self.refused(self.take, 2, [], contains="older list of revoked")
         self.refused(self.take, 3, [], contains="same number")
 
-    def test_the_first_copy_of_an_id_stands_and_a_left_out_entry_stays(self):
-        self.take(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"})])
+    def test_every_copy_of_an_id_is_in_effect_and_a_left_out_entry_stays(self):
+        wide = self.entry(1, {"skill": "io.github.ada.bluetooth"})
+        self.take(1, [wide])
         narrowed = self.entry(1, {"skill": "io.github.ada.bluetooth", "versions": ["0.1"]})
         self.take(2, [narrowed])
-        self.assertEqual(self.reg.in_effect()[0]["scope"], {"skill": "io.github.ada.bluetooth"})
+        self.assertCountEqual([entry["scope"] for entry in self.reg.in_effect()],
+                              [wide["scope"], narrowed["scope"]])
+        self.assertTrue(self.reg.covering("io.github.ada.bluetooth", "1.0.0", "k"))
         self.take(3, [])
-        self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [1])
-        self.assertEqual(self.new_registry().in_effect()[0]["scope"],
-                         {"skill": "io.github.ada.bluetooth"})
+        self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [1, 1])
+        self.assertCountEqual([entry["scope"] for entry in self.new_registry().in_effect()],
+                              [wide["scope"], narrowed["scope"]])
+
+    def test_a_copy_the_moderation_key_claimed_first_doesnt_hide_the_registrys(self):
+        # a leaked moderation key signing future ids for nothing at all
+        self.take(1, [self.entry(n, {"skill": "io.github.ada.nothing", "versions": ["9"]})
+                      for n in (2, 3, 4)])
+        ban = self.entry(2, {"author": "ada"}, "ban", "Malware.")
+        self.accept(self.index(seq=2, revocations=[ban],
+                               authors={"ada": {**self.index()["authors"]["ada"],
+                                                "status": "banned"}}))
+        self.assertEqual(self.reg.covering("io.github.ada.bluetooth", "1.0.0", "k"), ban)
+        self.assertEqual(self.new_registry().covering("io.github.ada.bluetooth", "1.0.0", "k"),
+                         ban)
+
+    def test_a_lifted_id_is_forgotten_with_every_copy(self):
+        self.take(1, [self.entry(1, {"author": "ada"}), self.entry(2, {"author": "ada"})])
+        self.accept(self.index(seq=2, lifted=[self.lift(1)]))
+        self.assertEqual([entry["id"] for entry in self.reg.kept()["seen"].values()], [2])
+
+    def test_no_more_revocations_than_the_state_can_hold_and_a_lift_makes_room(self):
+        with mock.patch.object(registry, "MAX_SEEN", 3):
+            self.take(1, [self.entry(n, {"author": "ada"}) for n in (1, 2, 3)])
+            self.refused(self.take, 2, [self.entry(4, {"author": "ada"})],
+                         contains="more revoked skills")
+            self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [1, 2, 3])
+            self.accept(self.index(seq=2, lifted=[self.lift(1)]))
+            self.take(2, [self.entry(4, {"author": "ada"})])
+            self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [2, 3, 4])
+            with mock.patch.object(registry, "MAX_LIFTED", 1):
+                self.refused(self.accept, self.index(seq=3, lifted=[self.lift(1), self.lift(2)]),
+                             contains="more revoked skills")
+            self.assertEqual(self.reg.index()["seq"], 2)
+
+    def test_the_most_the_state_can_hold_fits_in_what_tux_reads_back(self):
+        report = ("https://github.com/" + "a" * 39 + "/" + "r" * 100 + "/issues/"
+                  + "9" * 10)
+        worst = {"kind": "suspend", "reason": "\U0001F600" * 300,
+                 "date": "2026-11-19T16:05:00Z", "actor": "a" * 39, "report": report}
+        top = 2 ** 53
+        seen = {}
+        for n in range(registry.MAX_SEEN):
+            entry = {**worst, "id": top - n,
+                     "scope": {"skill": "io.github." + "a" * 39 + "." + "s" * 40,
+                               "versions": [f"{m:02d}" + "v" * 38 for m in range(50)]}}
+            seen[registry._copy_key(registry.revocation(entry))] = entry
+        held = {"seq": top, "sha256": "f" * 64}
+        state = {"index": held, "revocations": held, "seen": seen,
+                 "lifted": list(range(top - registry.MAX_SEEN - registry.MAX_LIFTED,
+                                      top - registry.MAX_SEEN))}
+        data = registry._dumps(state)
+        self.assertLessEqual(len(data), registry.MAX_STATE_BYTES)
+        registry._private_folder(self.state)
+        (self.state / "state.json").write_bytes(data)
+        self.assertEqual(len(self.new_registry().kept()["seen"]), registry.MAX_SEEN)
 
     def test_only_an_index_lifts_and_a_lifted_id_stays_lifted(self):
         self.take(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"})])
@@ -741,6 +854,47 @@ class InstalledTests(RegistryCase):
         self.reg = self.new_registry()
         self.assertEqual(self.reg.apply(), [])
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+
+    def test_a_revocation_that_lands_while_the_card_is_open_stops_the_install(self):
+        self.file.unlink()
+        registry._write(self.skills.parent / registry.INSTALLED, b"{}")
+        checked = self.reg.check("io.github.ada.bluetooth", "1.1.0")
+        self.revoked(1, [self.entry(1, {"author": "ada"}, reason="Gone bad.")])
+        self.reg.accept_revocations(self.files["revocations.json"],
+                                    self.files["revocations.json.sig"])
+        self.refused(self.reg.install, checked, contains="switched it off: Gone bad.")
+        self.assertFalse(self.file.exists())
+        self.assertEqual(registry.installed(self.skills), {})
+
+    def test_an_update_keeps_a_switch_off_the_state_has_forgotten(self):
+        self.suspend({"author": "ada"}, reason="Gone bad.")
+        (self.state / "state.json").unlink()
+        self.reg = self.new_registry()
+        self.accept(self.index(seq=2, skills=self.base["skills"]))
+        checked = self.reg.check("io.github.ada.bluetooth", "1.1.0")
+        self.refused(self.reg.install, checked, contains="switched it off: Gone bad.")
+        self.assertEqual(registry.installed(self.skills)[self.file.name]["version"], "1.0.0")
+        self.assertIn('"1.0.0"', self.file.read_text())
+        self.assertIn(self.file.name, registry.switched_off(self.skills))
+
+    def test_an_update_its_revocation_doesnt_cover_ends_the_switch_off(self):
+        self.suspend({"skill": "io.github.ada.bluetooth", "versions": ["1.0.0"]})
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.reg.install(self.reg.check("io.github.ada.bluetooth", "1.1.0"))
+        self.assertEqual(registry.switched_off(self.skills), {})
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.reg.apply(), [])
+
+    def test_a_ban_found_by_the_registry_switches_off_after_a_moderation_copy(self):
+        self.revoked(1, [self.entry(2, {"skill": "io.github.ada.nothing", "versions": ["9"]})])
+        self.reg.refresh()
+        authors = {"ada": {**self.base["authors"]["ada"], "status": "banned"}}
+        self.accept(self.index(seq=2, skills=self.base["skills"], authors=authors,
+                               revocations=[self.entry(2, {"author": "ada"}, "ban")]))
+        changes = self.reg.apply()
+        self.assertEqual([(c["off"], c["kind"]) for c in changes], [(True, "ban")])
+        self.assertIn(self.file.name, registry.switched_off(self.skills))
+        self.refused(self.reg.check, "io.github.ada.bluetooth", "1.0.0", contains="for good")
 
     def test_install_leaves_your_own_file_and_your_edits_alone(self):
         self.file.write_text(self.file.read_text().replace("Bluetooth page", "My Bluetooth"))
