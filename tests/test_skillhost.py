@@ -11,7 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 from tuxistant import skillhost  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 from tuxistant.controller import Controller, Turn  # noqa: E402
@@ -280,6 +281,38 @@ class Refused(Case):
         self.assertEqual(problems, {str(b): skillhost.over_budget(4, 3)})
         self.assertIn("already bring 4 actions, and its 3", problems[str(b)])
         self.assertIn("gamma.a1", self.host.current().actions, "a later one that fits loads")
+
+    def test_the_budget_counts_one_action_as_one(self):
+        for first, second in ((1, skillhost.USER_TOOLS), (skillhost.USER_TOOLS, 1)):
+            with self.subTest(first=first, second=second):
+                shutil.rmtree(self.user, ignore_errors=True)
+                (self.user.parent / skillhost.LOADED).unlink(missing_ok=True)
+                self.host.offered = set()
+                self.many("a", "alpha", first)
+                b = self.many("b", "beta", second)
+                problem = self.host.reload()[str(b)]
+                self.assertNotIn("1 actions", problem)
+                self.assertIn(f"already bring {first} action", problem)
+                self.assertIn(f"its {second} action", problem)
+
+    def test_a_skill_past_every_limit_is_told_the_budget(self):
+        """Told only that 32 is too many, its author would cut it to 32 and be refused again."""
+        folder = self.many("huge", "huge", skillhost.MAX_ACTIONS + 1)
+        problem = self.host.reload()[str(folder)]
+        self.assertIn(skillhost.over_budget(0, skillhost.MAX_ACTIONS + 1), problem)
+        self.assertNotIn(str(skillhost.MAX_ACTIONS), problem)
+
+    def test_a_loaded_skill_that_grows_is_counted_by_name_as_the_docs_say(self):
+        a = self.many("a", "alpha", 3)
+        b = self.many("b", "beta", 3)
+        self.assertEqual(self.host.reload(), {})
+        self.many("a", "alpha", 4)
+        problems = self.host.reload()
+        self.assertEqual(problems, {str(b): skillhost.over_budget(4, 3)})
+        self.assertNotIn(str(a), problems)
+        rule = next(line for line in (ROOT / "docs/SKILLS.md").read_text().splitlines()
+                    if line.startswith("**Six actions in all.**"))
+        self.assertIn("A skill that was loaded and then grows", rule)
 
     def test_bad_ids_and_action_names(self):
         for manifest in ({"id": "../../etc"}, {"id": "Org.Example"}, {"id": "noprefix"},

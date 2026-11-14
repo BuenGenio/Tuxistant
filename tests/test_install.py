@@ -802,6 +802,20 @@ class Docs(unittest.TestCase):
         self.assertEqual(controller.FOLLOW_ON_S, 120)
         item = next(line for line in reach.splitlines() if "Fn hold within 2 minutes" in line)
         self.assertIn("card", item)
+        # Only what reads_private calls private makes a later request need a card, so each
+        # thing the item says a hold read has to be one of those.
+        from tuxistant import skills
+        actions = skills.Skills().actions
+        reads = {"mail": "mail.search", "files": "file.find", "calendar": "calendar.events",
+                 "selected text": "translate.selection", "command output": "shell.run",
+                 "home": "home.status", "the web": "web.search", "research": "research.run",
+                 "the news": "news.headlines", "the weather": "weather.forecast"}
+        said = re.search(r"after a hold that read (?:your )?(.+?)\.", item)
+        self.assertTrue(said, item)
+        for source in re.split(r", (?:or )?| or ", said[1]):
+            with self.subTest(source):
+                self.assertIn(source, reads, "name a source this test knows")
+                self.assertTrue(skills.reads_private(actions[reads[source]]["permissions"]))
 
     def test_the_security_table_gives_each_protection_one_status(self):
         readme = (ROOT / "README.md").read_text()

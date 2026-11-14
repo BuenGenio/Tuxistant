@@ -166,12 +166,14 @@ def _unbracketed(text: str) -> str:
     return text.replace("<", " ").replace(">", " ")
 
 
-def _actions(manifest: dict) -> dict:
+def _actions(manifest: dict, bundled: bool) -> dict:
     actions = manifest.get("actions")
     if not isinstance(actions, dict) or not actions:
         raise ValueError("It declares no actions.")
     if len(actions) > MAX_ACTIONS:
-        raise ValueError(f"It declares more than {MAX_ACTIONS} actions.")
+        # one of yours is told the limit it really has to meet, not one that would refuse it again
+        raise ValueError(f"It declares more than {MAX_ACTIONS} actions." if bundled
+                         else over_budget(0, len(actions)))
     checked = {}
     for name, action in actions.items():
         action_name(name)
@@ -323,7 +325,7 @@ def load_code_manifest(folder: Path, bundled: bool) -> dict:
             "version": _text(manifest, "version", required=False),
             "run": _run(manifest, folder), "permissions": _permissions(manifest),
             "config": _config(manifest, bundled), "timeout_s": _timeout(manifest),
-            "actions": _actions(manifest), "source": "bundled" if bundled else "yours"}
+            "actions": _actions(manifest, bundled), "source": "bundled" if bundled else "yours"}
 
 
 def _skipped(name: str, is_dir: bool) -> bool:
@@ -1015,9 +1017,13 @@ def over_budget(yours: int, count: int) -> str:
         return (f"It has {count} actions, and the skills you add may bring {USER_TOOLS} at most "
                 "between them, as more would make Tux worse at choosing the right one. Take some "
                 f"out of it, leaving {USER_TOOLS} or fewer, to use it.")
-    return (f"Skills you added already bring {yours} actions, and its {count} would take them "
-            f"past {USER_TOOLS}, which would make Tux worse at choosing the right one. Take one "
-            "of them out to use this one.")
+    return (f"Skills you added already bring {_counted(yours)}, and its {_counted(count)} would "
+            f"take them past {USER_TOOLS}, which would make Tux worse at choosing the right one. "
+            "Take one of them out to use this one.")
+
+
+def _counted(count: int) -> str:
+    return f"{count} action" if count == 1 else f"{count} actions"
 
 
 def _lookalike(manifest: dict, ours: set) -> str:
