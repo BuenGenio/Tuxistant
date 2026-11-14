@@ -23,6 +23,7 @@ REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 from tuxistant import apps, recipes  # noqa: E402
+from tuxistant.skillhost import HOST  # noqa: E402
 from tuxistant.skills import risk_of  # noqa: E402
 
 # The registry repo's name waits for the owner (REGISTRY.md, "Not decided yet"). This is the
@@ -32,6 +33,7 @@ REPORT_TEMPLATE = "report.yml"
 MAX_INDEX = 4 << 20
 MAX_REVOCATIONS = 1 << 20
 MAX_RECIPE = 65536
+MAX_HOSTS = recipes.MAX_HOSTS
 HIDDEN = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
 KEY_TYPES = ("ssh-ed25519", "sk-ssh-ed25519@openssh.com", "ecdsa-sha2-nistp256",
              "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "sk-ecdsa-sha2-nistp256@openssh.com",
@@ -162,12 +164,24 @@ def _version(version, where):
     _need(isinstance(version["sig"], str) and len(version["sig"]) <= 4096
           and version["sig"].startswith("-----BEGIN SSH SIGNATURE-----\n")
           and version["sig"].endswith("-----END SSH SIGNATURE-----\n"), f"{where} sig isn't one")
-    permissions = version["permissions"]
-    _need(isinstance(permissions, dict) and set(permissions) <= {"network"}
-          and all(isinstance(h, str) for h in permissions.get("network", []))
-          and (not permissions or 1 <= len(permissions["network"]) <= 4),
+    _permissions(version["permissions"], where)
+    _need(version["risk"] == risk_of(version["permissions"]),
+          f"{where} risk isn't what Tux works out")
+
+
+def _permissions(permissions, where):
+    """A recipe's: nothing, or 1 to 4 different host names. A host is shown on the page even when
+    Tux's loader refuses the file, so it is held to the loader's form here: a right-to-left
+    override or a line break in one would make the page say something else."""
+    _need(isinstance(permissions, dict) and set(permissions) <= {"network"},
           f"{where} permissions aren't a recipe's")
-    _need(version["risk"] == risk_of(permissions), f"{where} risk isn't what Tux works out")
+    if not permissions:
+        return
+    hosts = permissions["network"]
+    _need(isinstance(hosts, list) and 1 <= len(hosts) <= MAX_HOSTS
+          and all(isinstance(h, str) and len(h) <= 253 and HOST.fullmatch(h) for h in hosts)
+          and len(set(hosts)) == len(hosts),
+          f"{where} names hosts that aren't 1 to {MAX_HOSTS} different host names")
 
 
 def _skill(skill, tags, keys):
@@ -321,9 +335,15 @@ def _recipe(folder: Path, skill, version, scratch: Path):
     return info
 
 
+def is_sample(folder: Path) -> bool:
+    """The made-up registry this site uses until the real one exists."""
+    return (folder / "SAMPLE").is_file()
+
+
 def load(folder: Path) -> dict:
     """The registry as the portal shows it: categories, and every skill with at least one version
-    that isn't revoked, newest update first."""
+    that isn't revoked, newest update first. A skill whose current version Tux's loader refuses
+    keeps its page, for whoever follows a link or a report to it, but has no card in Browse."""
     index = _read_json(folder / "index.json", MAX_INDEX)
     keys = check_index(index)
     revocations = _revocations(folder, index)
@@ -342,7 +362,7 @@ def load(folder: Path) -> dict:
                           "file_name": skill["id"].rsplit(".", 1)[1] + ".yaml"})
     shown.sort(key=lambda skill: (skill["current"]["date"], skill["id"]), reverse=True)
     return {"categories": index["categories"], "skills": shown,
-            "sample": (folder / "SAMPLE").is_file()}
+            "sample": is_sample(folder)}
 
 
 # Words
@@ -476,8 +496,15 @@ def report_url(skill, version) -> str:
 
 
 SAMPLE_NOTE = ('<p class="sample" role="note"><strong>Sample.</strong> The registry isn\'t open '
-               "yet. These made-up skills show how its pages will look, and can't be installed."
-               "</p>")
+               "yet. These made-up skills show how its pages will look. There is nothing to "
+               "install or report.</p>")
+LEDE = {
+    True: "Recipe skills people will share for Tuxistant. Each will be signed by its publisher and "
+          "reviewed before it's merged, and Tux will check it again before installing.",
+    False: "Recipe skills people share for Tuxistant. Each is signed by its publisher and reviewed "
+           "before it's merged, and Tux checks it again before installing.",
+}
+REFUSED = "Tux's loader refuses this version, so it can't be installed: "
 
 
 def card_html(skill, categories) -> str:
@@ -503,11 +530,12 @@ def browse_html(registry) -> str:
         + "".join(f'<a class="chip" href="?tag={esc(t)}" data-filter="tag:{esc(t)}">{esc(t)}</a>'
                   for t in c["tags"]) + "</div>"
         for c in categories)
-    cards = "".join(card_html(skill, categories) for skill in registry["skills"])
-    count = len(registry["skills"])
+    listed = [skill for skill in registry["skills"] if skill["current"]["loaded"]]
+    cards = "".join(card_html(skill, categories) for skill in listed)
+    count = len(listed)
     return f"""<section class="portal wrap" aria-labelledby="skills-title">
   <h1 id="skills-title">Skills</h1>
-  <p class="lede">Recipe skills people share for Tuxistant. Each is reviewed and signed by its publisher, and Tux checks it again before it installs.</p>
+  <p class="lede">{LEDE[registry["sample"]]}</p>
   {SAMPLE_NOTE if registry["sample"] else ""}
   <div class="finder" id="finder" hidden><label class="visually-hidden" for="skill-search">Search skills</label><input id="skill-search" type="search" placeholder="Search skills" autocomplete="off" spellcheck="false"></div>
   <nav class="cats" aria-label="Categories and tags"><a class="cat-name" href="./" data-filter="" aria-current="true">All</a>{cats}</nav>
@@ -535,7 +563,7 @@ def action_html(name, action, raw_action) -> str:
             + f'</div><p>{esc(does)} {esc(card)}</p>{said}</div>')
 
 
-def install_html(skill, current) -> str:
+def by_hand_html(skill, current) -> str:
     name = skill["file_name"]
     signers = f"{name.removesuffix('.yaml')}.signers"
     principal = f"io.github.{skill['author']}"
@@ -544,13 +572,25 @@ def install_html(skill, current) -> str:
                 f"ssh-keygen -Y verify -f {signers} -I {principal} -n tuxistant-recipe "
                 f"-s {name}.sig < {name}\n"
                 f"mv {name} ~/.local/share/tuxistant/skills/")
+    file = f'../recipes/{esc(current["sha256"])}.yaml'
+    return (f'<li>By hand: download <a href="{file}" download="{esc(name)}">{esc(name)}</a> and '
+            f'<a href="{file}.sig" download="{esc(name)}.sig">its signature</a>, check them, and '
+            f'put the recipe in your skills folder:\n<pre class="code">{esc(commands)}</pre>\n'
+            "      A recipe added by hand isn't switched off if the registry later revokes it.</li>")
+
+
+def install_html(skill, current, sample) -> str:
+    """Install steps. The sample's files are made up, so its pages offer neither them nor the
+    commands, and nothing is offered for a file Tux's loader refuses."""
+    if not current["loaded"]:
+        return ""
+    by_hand = ('<li><span class="tag tag-soon">Soon</span> By hand: the recipe, its signature and '
+               'the commands that check them.</li>' if sample else by_hand_html(skill, current))
     return f"""<section class="section" id="install" aria-labelledby="install-title">
     <h2 id="install-title">Install</h2>
     <ol class="steps">
       <li><span class="tag tag-soon">Soon</span> In Tuxistant's Settings, open Skills, then Browse, and search for {esc(skill["name"])}. Install shows you a card with the hosts it reaches and its risk first, and Tux checks the file's hash and signature itself.</li>
-      <li>By hand: download <a href="../recipes/{esc(current["sha256"])}.yaml" download="{esc(name)}">{esc(name)}</a> and <a href="../recipes/{esc(current["sha256"])}.yaml.sig" download="{esc(name)}.sig">its signature</a>, check them, and put the recipe in your skills folder:
-<pre class="code">{esc(commands)}</pre>
-      A recipe added by hand isn't switched off if the registry later revokes it.</li>
+      {by_hand}
     </ol>
   </section>"""
 
@@ -573,11 +613,13 @@ def version_html(skill, versions, position) -> str:
         items = "".join(f"<li>{esc(line)}</li>" for line in changes(before, version))
         changed = (f'<details><summary>What changed from {esc(before["version"])}</summary>'
                    f'<ul class="changes">{items}</ul>{diff_html(before, version)}</details>')
+    # Risk and hosts only for a file Tux loads, as nothing else backs up what the index says.
+    loaded = version["loaded"]
     return (f'<li class="version"><div class="version-head"><strong>{esc(version["version"])}'
             f'</strong><span class="muted">{esc(version["date"][:10])}</span>'
-            f'{risk_badge(version["risk"])}</div>'
-            f'<p class="file-meta">{esc(reach_words(version["permissions"]))} Signed with '
-            f'{esc(version["key"])}. SHA-256 {esc(version["sha256"])}.</p>'
+            f'{risk_badge(version["risk"]) if loaded else ""}</div>'
+            f'<p class="file-meta">{esc(reach_words(version["permissions"])) + " " if loaded else ""}'
+            f'Signed with {esc(version["key"])}. SHA-256 {esc(version["sha256"])}.</p>'
             f"{note}{problem}{changed}</li>")
 
 
@@ -586,11 +628,18 @@ def skill_html(skill, sample) -> str:
     loaded = current["loaded"]
     raw_actions = (current["raw"] or {}).get("actions") or {}
     if loaded:
-        actions = "".join(action_html(name, action, raw_actions.get(name))
-                          for name, action in loaded["actions"].items())
+        actions = (f'<p class="muted">{esc(reach_words(current["permissions"]))} Each action below '
+                   "is one the model can choose, by the words it sees.</p>"
+                   + "".join(action_html(name, action, raw_actions.get(name))
+                             for name, action in loaded["actions"].items()))
     else:
-        actions = (f'<p class="revoked">Tux\'s loader refuses this version: '
-                   f'{esc(current["problem"])}</p>')
+        # The index's hosts and risk aren't shown: only a file Tux loads backs them up.
+        actions = '<p class="muted">Not shown, as Tux wouldn\'t load the file.</p>'
+    why = (f'{risk_badge(current["risk"])} {esc(risk_why(current["risk"], current["permissions"]))}'
+           if loaded else f'<span class="revoked">{esc(REFUSED + current["problem"])}</span>')
+    buttons = (['<a class="btn" href="#install">Install</a>'] if loaded else []) + (
+        [] if sample else [f'<a class="btn" href="{esc(report_url(skill, current))}" '
+                           'rel="nofollow noopener">Report this skill</a>'])
     links = "".join(f'<a href="{esc(link["url"])}" rel="nofollow noopener ugc">'
                     f'{esc(link["title"])}</a>' for link in skill["links"])
     history = "".join(version_html(skill, skill["versions"], i)
@@ -600,7 +649,7 @@ def skill_html(skill, sample) -> str:
   <h1 id="skill-title" class="fit">{esc(skill["name"])}</h1>
   <p class="lede">{esc(skill["summary"])}</p>
   {SAMPLE_NOTE if sample else ""}
-  <p class="why">{risk_badge(current["risk"])} {esc(risk_why(current["risk"], current["permissions"]))}</p>
+  <p class="why">{why}</p>
   <dl class="facts">
     <div><dt>Publisher</dt><dd><a href="https://github.com/{esc(skill["author"])}" rel="nofollow noopener">{esc(skill["author"])}</a></dd></div>
     <div><dt>Version</dt><dd>{esc(current["version"])}, {esc(current["date"][:10])}</dd></div>
@@ -609,13 +658,12 @@ def skill_html(skill, sample) -> str:
     <div><dt>Tags</dt><dd class="chips">{tag_chips(skill["tags"], "../")}</dd></div>
     {f'<div><dt>Links</dt><dd class="links">{links}</dd></div>' if links else ""}
   </dl>
-  <div class="buttons"><a class="btn" href="#install">Install</a><a class="btn" href="{esc(report_url(skill, current))}" rel="nofollow noopener">Report this skill</a></div>
+  {f'<div class="buttons">{"".join(buttons)}</div>' if buttons else ""}
   <section class="section" aria-labelledby="does-title">
     <h2 id="does-title">What it does</h2>
-    <p class="muted">{esc(reach_words(current["permissions"]))} Each action below is one the model can choose, by the words it sees.</p>
     {actions}
   </section>
-  {install_html(skill, current)}
+  {install_html(skill, current, sample)}
   <section class="section" aria-labelledby="file-title">
     <h2 id="file-title">The whole recipe</h2>
     <p class="file-meta">{esc(skill["file_name"])}, version {esc(current["version"])}, {current["size"]} bytes. SHA-256 {esc(current["sha256"])}.</p>
@@ -633,17 +681,18 @@ def build(dist: Path, folder: Path, shell) -> int:
     sample) wraps a body in the site's page. Returns how many skill pages it wrote."""
     registry = load(folder)
     out = dist / "skills"
-    (out / "recipes").mkdir(parents=True)
+    out.mkdir(parents=True)
     sample = registry["sample"]
     (out / "index.html").write_text(shell(
-        "Skills", "Recipe skills people share for Tuxistant.", 1, browse_html(registry), sample))
+        "Skills", LEDE[sample].split(". ")[0] + ".", 1, browse_html(registry), sample))
     for skill in registry["skills"]:
         page = out / skill["id"] / "index.html"
         page.parent.mkdir()
         page.write_text(shell(skill["name"], skill["summary"], 2, skill_html(skill, sample),
                               sample))
-        for version in skill["versions"]:
+        for version in [] if sample else skill["versions"]:
             target = out / "recipes" / f"{version['sha256']}.yaml"
+            target.parent.mkdir(exist_ok=True)
             target.write_bytes(version["bytes"])
             # The signature the index carries, which is the one Tux checks.
             target.with_name(target.name + ".sig").write_text(version["sig"])

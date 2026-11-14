@@ -29,10 +29,11 @@ This shows the site as it will look once the releases in `preview/upcoming.json`
 REGISTRY_DIR=/path/to/published python3 build.py
 ```
 
-Until the registry exists it uses `src/registry-sample/`, made-up skills whose `SAMPLE` file makes every portal page say so and ask not to be indexed.
+Until the registry exists it uses `src/registry-sample/`, made-up skills whose `SAMPLE` file makes every portal page say so and ask not to be indexed. While it does, the front pages have no Skills link, and the portal offers no downloads, install commands or Report button, so a deploy publishes nothing that looks open.
 
 - **Everything in the registry is a stranger's text.** The index is checked against the format and the build stops if anything doesn't fit, or if a recipe isn't the size and hash the index gives. Strings are escaped in `portal.py`; hidden characters in a recipe show as their code; `skills.js` only hides and shows cards the build wrote.
-- **Recipes go through Tux's own loader**, so the build needs what the daemon imports (PyYAML and websockets).
+- **Recipes go through Tux's own loader**, so the build needs what the daemon imports (PyYAML and websockets). A skill whose current file the loader refuses has no card in Browse, and its page offers nothing to install and makes no claim about its hosts or risk. Hosts in the index are held to the loader's form either way.
+- **Any word may break.** A stranger's 140 letters with no space would otherwise run off a phone's screen, so `.portal` sets `overflow-wrap: anywhere`; headings still never wrap and shrink instead.
 - **Revoked skills are hidden**, by the index's revocations and any newer ones in `revocations.json`, until the index lifts them. A suspended version of a skill that is still shown is listed with its reason.
 - The portal is in English only. The registry repo's name and its report form's field ids are guesses until they exist: `REGISTRY_REPO` and `report_url` in `portal.py`.
 

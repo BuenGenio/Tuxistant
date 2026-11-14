@@ -470,15 +470,18 @@ def cta_releases(strings, releases):
     return f'<a class="btn btn-cta btn-cta-alt" href="{esc(page)}">{esc(strings["ctaReleases"])}</a>'
 
 
-def site_header(root, strings, home, language_menu="", current=""):
-    """The same bar on every page. The portal is in English and has no language menu."""
+def site_header(root, strings, home, language_menu="", current="", skills_link=True):
+    """The same bar on every page. The portal is in English and has no language menu. The front
+    pages leave the Skills link out while the portal shows the sample, as it isn't open yet."""
     skills = ' aria-current="page"' if current == "skills" else ""
+    link = (f'<a class="nav-link" href="{root}skills/"{skills}>{SKILLS_ICON}<span class="nav-text">'
+            f'{esc(strings["skills"])}</span></a>' if skills_link else "")
     modes = "".join(f'<option value="{m}">{esc(strings["modes"][m])}</option>' for m in MODES)
     return f"""<header class="site-header" id="site-header">
   <div class="nav-glass" aria-hidden="true"></div>
   <div class="wrap bar">
     <a class="brand" href="{home}">Tuxistant</a>
-    <a class="nav-link" href="{root}skills/"{skills}>{SKILLS_ICON}<span class="nav-text">{esc(strings['skills'])}</span></a>
+    {link}
     {language_menu}
     <span class="mode">{MODE_ICONS}<select id="mode" aria-label="{esc(strings['appearance'])}" title="{esc(strings['appearance'])}">{modes}</select></span>
     <a class="btn btn-coffee" href="{DONATE}" rel="noopener">{esc(strings['donate'])}</a>
@@ -526,7 +529,7 @@ def portal_shell(strings, policy):
     return shell
 
 
-def page(code, strings, languages, releases, detect, policy):
+def page(code, strings, languages, releases, detect, policy, skills_link=True):
     caps_a, caps_b = caps_html(strings)
     tabs, panels = panels_html(strings)
     options = "".join(
@@ -555,7 +558,7 @@ def page(code, strings, languages, releases, detect, policy):
 {alternates}
 </head>
 <body>
-{site_header(root, strings, "./", language_menu)}
+{site_header(root, strings, "./", language_menu, skills_link=skills_link)}
 <main>{local_preview_html(strings)}
   <section class="hero" id="hero" data-theme="{THEME_ORDER[0]}">
     <canvas id="tux" aria-hidden="true"></canvas>
@@ -653,16 +656,17 @@ def main(argv=()):
     policy = (f"default-src 'none'; script-src 'self' {csp_hash(MODE_SCRIPT)} {csp_hash(detect)}; "
               "style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'")
 
+    portal = _portal()
+    skills_link = not portal.is_sample(REGISTRY)
     shutil.rmtree(dist, ignore_errors=True)
     dist.mkdir()
     for code, strings in languages.items():
         target = dist / path_for(code).strip("/") / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(page(code, strings, languages, releases, detect, policy))
+        target.write_text(page(code, strings, languages, releases, detect, policy, skills_link))
     shutil.copy(SRC / "style.css", dist)
     for script in ("site.js", "app.js", "skills.js"):
         shutil.copy(SRC / script, dist)
-    portal = _portal()
     try:
         shown = portal.build(dist, REGISTRY, portal_shell(languages["en"], policy))
     except portal.Refused as e:

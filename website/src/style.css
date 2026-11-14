@@ -362,7 +362,9 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
 .foot { padding-block: 18px; color: var(--muted); font-size: 0.8rem; }
 
 /* Skills portal */
-.portal { padding-block-start: 14px; }
+/* Every word in it may be a stranger's 140 letters with no space, so any word may break. Headings
+   keep white-space: nowrap and shrink instead. */
+.portal { padding-block-start: 14px; overflow-wrap: anywhere; }
 .portal h1 { font-size: clamp(1.8rem, 6vw, 2.6rem); }
 .portal h1.fit { overflow: hidden; text-overflow: ellipsis; }
 .lede { margin: 4px 0 0; color: var(--muted); }

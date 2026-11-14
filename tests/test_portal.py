@@ -57,6 +57,11 @@ class Registry:
         version["size"] = len(data)
         (self.folder / "recipes" / f"{version['sha256']}.yaml").write_bytes(data)
 
+    def open(self):
+        """As the real registry will be: no SAMPLE file."""
+        (self.folder / "SAMPLE").unlink()
+        return self
+
     def build(self):
         (self.folder / "index.json").write_text(json.dumps(self.index))
         (self.folder / "revocations.json").write_text(json.dumps(self.revocations))
@@ -68,8 +73,9 @@ class Registry:
         return dist / "skills"
 
 
-class BuiltPortal(unittest.TestCase):
-    """The whole site, built from the sample registry as build.py does it."""
+class BuiltSite(unittest.TestCase):
+    """The whole site, built from a registry folder as build.py does it."""
+    registry = SAMPLE
 
     @classmethod
     def setUpClass(cls):
@@ -77,7 +83,7 @@ class BuiltPortal(unittest.TestCase):
         cls.addClassCleanup(folder.cleanup)
         cls.dist = Path(folder.name) / "dist"
         saved = build.DIST, build.REGISTRY
-        build.DIST, build.REGISTRY = cls.dist, SAMPLE
+        build.DIST, build.REGISTRY = cls.dist, cls.registry_in(Path(folder.name))
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 build.main()
@@ -87,8 +93,19 @@ class BuiltPortal(unittest.TestCase):
         cls.pages = sorted(cls.skills.glob("**/index.html"))
         cls.index = json.loads((SAMPLE / "index.json").read_text())
 
+    @classmethod
+    def registry_in(cls, folder):
+        return SAMPLE
+
     def page(self, skill_id=None):
         return (self.skills / (skill_id or "") / "index.html").read_text()
+
+
+class BuiltPortal(BuiltSite):
+    """Built from the sample registry, as the site is until the registry exists."""
+
+    def front_pages(self):
+        return [p for p in self.dist.glob("**/index.html") if "skills" not in p.parts]
 
     def test_a_page_per_skill_that_isnt_revoked(self):
         shown = {p.parent.name for p in self.pages if p.parent != self.skills}
@@ -128,9 +145,29 @@ class BuiltPortal(unittest.TestCase):
             self.assertIn('<header class="site-header" id="site-header">', html, page)
             self.assertIn('<div class="nav-glass" aria-hidden="true"></div>', html, page)
             self.assertIn('aria-current="page"', html, page)
-        self.assertIn('href="skills/"', (self.dist / "index.html").read_text())
-        for code in ("es", "pt", "zh", "ar"):
-            self.assertIn('href="../skills/"', (self.dist / code / "index.html").read_text())
+
+    def test_front_pages_dont_link_to_the_sample(self):
+        self.assertEqual(len(self.front_pages()), 5)
+        for page in self.front_pages():
+            html = page.read_text()
+            self.assertIn('<header class="site-header" id="site-header">', html, page)
+            self.assertNotIn("skills/", html, page)
+
+    def test_sample_pages_offer_nothing_to_install_or_report(self):
+        self.assertNotIn("Report this skill", self.page(TIDES))
+        self.assertNotIn("issues/new", self.page(TIDES))
+        for page in self.pages:
+            html = page.read_text()
+            for offer in ("sha256sum", "ssh-keygen", "download=", "recipes/", "~/.local"):
+                self.assertNotIn(offer, html, page)
+        self.assertFalse((self.skills / "recipes").exists())
+        self.assertIn("nothing to install or report", self.page(TIDES))
+
+    def test_browse_doesnt_say_the_registry_works_today(self):
+        lede = re.search(r'<p class="lede">([^<]+)</p>', self.page())[1]
+        self.assertEqual(lede, "Recipe skills people will share for Tuxistant. Each will be signed "
+                               "by its publisher and reviewed before it's merged, and Tux will "
+                               "check it again before installing.")
 
     def test_no_script_builds_markup(self):
         for name in ("site.js", "skills.js", "app.js"):
@@ -142,6 +179,24 @@ class BuiltPortal(unittest.TestCase):
     def test_code_wraps_rather_than_hiding_a_line_off_to_the_side(self):
         css = (self.dist / "style.css").read_text()
         self.assertRegex(css, r"\.code \{[^}]*white-space: pre-wrap;[^}]*overflow-wrap: anywhere")
+
+    def test_a_long_word_from_the_index_breaks_rather_than_running_off_the_page(self):
+        css = (self.dist / "style.css").read_text()
+        self.assertRegex(css, r"\n\.portal \{[^}]*overflow-wrap: anywhere;")
+        self.assertRegex(css, r"\nh1, h2 \{[^}]*white-space: nowrap;", "headings shrink instead")
+        # Everything a stranger writes is inside .portal, so the rule reaches it.
+        registry = Registry(self)
+        tides = registry.skill(TIDES)
+        tides["summary"] = "S" * 140
+        registry.index["revocations"][0]["reason"] = "R" * 300
+        skills = registry.build()
+        for page in (skills / "index.html", skills / TIDES / "index.html"):
+            html = page.read_text()
+            main = re.search(r"<main>(.*)</main>", html, re.S)[1]
+            self.assertRegex(main.strip(), r'^<(section|article) class="portal wrap"', page)
+            self.assertEqual(main.count('class="portal'), 1, page)
+            self.assertIn("S" * 140, main, page)
+        self.assertIn("R" * 300, (skills / TIDES / "index.html").read_text())
 
     def test_each_action_shows_the_description_the_model_sees(self):
         tides = self.page(TIDES)
@@ -189,6 +244,29 @@ class BuiltPortal(unittest.TestCase):
         self.assertIn("<strong>Suspended:</strong> Its host, api.tides.example, has been taken "
                       "over by someone else.", tides)
         self.assertIn("<dd>1.1.0, 2026-11-20</dd>", tides, "the newest version still allowed")
+
+
+class OpenRegistry(BuiltSite):
+    """Built from the registry as it will be, with no SAMPLE file."""
+
+    @classmethod
+    def registry_in(cls, folder):
+        shutil.copytree(SAMPLE, folder / "registry")
+        (folder / "registry" / "SAMPLE").unlink()
+        return folder / "registry"
+
+    def test_front_pages_link_to_the_portal(self):
+        self.assertIn('href="skills/"', (self.dist / "index.html").read_text())
+        for code in ("es", "pt", "zh", "ar"):
+            self.assertIn('href="../skills/"', (self.dist / code / "index.html").read_text())
+
+    def test_no_page_says_it_is_a_sample(self):
+        for page in self.pages:
+            html = page.read_text()
+            self.assertNotIn('class="sample"', html, page)
+            self.assertNotIn("noindex", html, page)
+        self.assertIn("Each is signed by its publisher and reviewed before it's merged",
+                      self.page())
 
     def test_report_opens_the_registry_issue_form_filled_in(self):
         link = re.search(r'<a class="btn" href="([^"]+)"[^>]*>Report this skill</a>',
@@ -291,6 +369,52 @@ class HostileRegistry(unittest.TestCase):
                 change(registry.index)
                 with self.assertRaises(portal.Refused):
                     registry.build()
+
+    def test_hosts_in_the_index_are_held_to_the_loaders_form(self):
+        """Even for a file the loader refuses, where nothing compares them with the file's."""
+        cases = {
+            "a right-to-left override": ["moc.elpmaxe-yap\u202e.bank"],
+            "a line break": ["two\nlines.example"],
+            "markup": ["<b>x</b>.example"],
+            "longer than a host name": [("a" * 60 + ".") * 5 + "example"],
+            "a host named twice": ["tides.example.org", "tides.example.org"],
+            "five hosts": [f"h{n}.example.org" for n in range(5)],
+            "no hosts": [],
+            "not a list": "tides.example.org",
+        }
+        bluetooth = "io.github.example-bo.bluetooth"
+        for name, hosts in cases.items():
+            with self.subTest(name):
+                registry = Registry(self)
+                registry.replace_recipe(bluetooth, registry.recipe(bluetooth) + "risk: low\n")
+                version = registry.skill(bluetooth)["versions"][-1]
+                version.update(permissions={"network": hosts}, risk="medium")
+                with self.assertRaisesRegex(portal.Refused, "aren't 1 to 4 different host names"):
+                    registry.build()
+        registry = Registry(self)
+        registry.replace_recipe(bluetooth, registry.recipe(bluetooth) + "risk: low\n")
+        registry.skill(bluetooth)["versions"][-1].update(
+            permissions={"network": ["Tides.example.org", "a-b.example.org"]}, risk="medium")
+        page = (registry.build() / bluetooth / "index.html").read_text()   # host names: built
+        self.assertNotIn("a-b.example.org", page, "only a file Tux loads backs up its hosts")
+
+    def test_a_skill_whose_file_tux_refuses_has_no_card_and_nothing_to_install(self):
+        registry = Registry(self).open()
+        bluetooth = "io.github.example-bo.bluetooth"
+        registry.replace_recipe(bluetooth, registry.recipe(bluetooth) + "risk: low\n")
+        skills = registry.build()
+        browse = (skills / "index.html").read_text()
+        self.assertNotIn(f'href="{bluetooth}/"', browse)
+        self.assertNotIn("Bluetooth page", browse)
+        self.assertIn(f'href="{TIDES}/"', browse)
+        self.assertIn(">5 skills</h2>", browse)
+        page = (skills / bluetooth / "index.html").read_text()
+        self.assertIn("Tux&#x27;s loader refuses this version, so it can&#x27;t be installed: ",
+                      page)
+        for offer in ('id="install"', 'href="#install"', "sha256sum", "download=", "Low risk",
+                      "Reaches no network"):
+            self.assertNotIn(offer, page)
+        self.assertIn("Report this skill", page)
 
     def test_revocations_hide_skills_until_the_index_lifts_them(self):
         registry = Registry(self)
