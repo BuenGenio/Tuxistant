@@ -611,6 +611,7 @@ class OwnServers(unittest.TestCase):
         self.assertEqual(self.web.dialled, [])
 
     def test_they_are_looked_up_once_a_minute(self):
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
         for _ in range(3):
             webfetch.fetch("http://example.com/", self.config, CLOCK_S)
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
@@ -622,6 +623,77 @@ class OwnServers(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 0.15, "the old addresses do meanwhile")
             self.lookups_reach(3)
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 3)
+
+    def settled(self):
+        for _ in range(100):
+            if not webfetch._own_pending:
+                return
+            time.sleep(0.02)
+
+    def test_a_lookup_that_failed_is_not_kept(self):
+        """However it failed, the next call looks the name up again and waits for it, so the
+        address it answers with once the network is up counts at once, not a minute on."""
+        real, how = self.web.resolve, []
+
+        def failing(host, port):
+            if host == "homeassistant.local" and how:
+                self.web.lookups.append(host)
+                if how[0] == "raises":
+                    raise RuntimeError("a resolver that breaks")
+                return []
+            return real(host, port)
+        for way in ("fails", "raises", "answers nothing"):
+            with self.subTest(way), mock.patch.object(webfetch, "_resolve", failing):
+                webfetch.forget_own_servers()
+                self.web.names.pop("homeassistant.local", None)
+                how[:] = [] if way == "fails" else [way]
+                self.assertNotIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+                how.clear()
+                self.web.names["homeassistant.local"] = ["192.168.1.30"]
+                self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+
+    def test_a_lookup_that_ran_out_of_time_and_then_failed_is_not_kept(self):
+        release = self.hung()
+        with self.assertRaises(TimeoutError):
+            webfetch.own_servers(self.config, 0.1)
+        release.set()
+        self.settled()
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
+        self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+
+    def test_two_calls_after_a_failure_both_wait_for_the_one_lookup(self):
+        webfetch.own_servers(self.config, 1)
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
+        found = []
+
+        def call():
+            found.append(webfetch.own_servers(self.config, 1)[1])
+        threads = [threading.Thread(target=call) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(found), 2)
+        self.assertTrue(all("192.168.1.30" in addresses for addresses in found))
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 2)
+
+    def test_a_page_at_a_voice_server_whose_lookup_failed_is_refused(self):
+        """The voice server failed to look up, as before the network was up, and now answers
+        slowly at the page's address."""
+        config = {**self.config, "server": "tuxserver.example:8080"}
+        self.web.names["news.example"] = [PUBLIC]
+        self.assertIn("real page", webfetch.fetch("http://news.example/", config, 2).text)
+        self.web.dialled.clear()
+        self.web.names["tuxserver.example"] = [PUBLIC]
+        real = webfetch._resolve
+
+        def slow(host, port):
+            if host == "tuxserver.example":
+                time.sleep(0.3)
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", slow), self.assertRaises(PageError):
+            webfetch.fetch("http://news.example/", config, 2)
+        self.assertEqual(self.web.dialled, [])
 
     def test_the_names_are_refused_whatever_was_kept(self):
         self.web.names["tux.example"] = [PUBLIC]
