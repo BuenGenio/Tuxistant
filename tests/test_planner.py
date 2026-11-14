@@ -548,7 +548,16 @@ class FakeSdk(Errors):
 
     def Anthropic(self, **kwargs):
         self.clients.append(kwargs)
-        return Fake(beta=Fake(messages=Fake(create=self.create)))
+        retries = kwargs.get("max_retries", 2)
+
+        def create(**request):  # retries behind the caller's back, as the real one does
+            for attempt in range(retries + 1):
+                try:
+                    return self.create(**request)
+                except (self.APIConnectionError, self.InternalServerError, self.RateLimitError):
+                    if attempt == retries:
+                        raise
+        return Fake(beta=Fake(messages=Fake(create=create)))
 
     def create(self, **kwargs):
         self.requests.append({**kwargs, "messages": list(kwargs["messages"])})
@@ -565,7 +574,8 @@ class CloudCase(Case):
         self.config.set("cloud_consent", AGREED)    # as Settings does, which turns it on
         self.config.values |= {"cloud_api_key": KEY}
         for patcher in (mock.patch.object(sys, "path", list(sys.path)),
-                        mock.patch.object(planner, "VENDOR", self.folder / "vendor")):
+                        mock.patch.object(planner, "VENDOR", self.folder / "vendor"),
+                        mock.patch.object(planner, "CLOUD_PAUSE_S", 0)):
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -610,9 +620,9 @@ class Cloud(CloudCase):
         sdk = self.sdk(reply(text("ok")))
         await self.task()
         self.assertEqual(sdk.clients, [{"api_key": KEY, "timeout": planner.CLOUD_TIMEOUT_S,
-                                        "max_retries": planner.CLOUD_RETRIES}])
-        self.assertGreater(planner.CLOUD_WAIT_S,
-                           planner.CLOUD_TIMEOUT_S * (planner.CLOUD_RETRIES + 1))
+                                        "max_retries": 0}], "Tux retries, checking first")
+        self.assertGreater(planner.CLOUD_WAIT_S, (planner.CLOUD_TIMEOUT_S + planner.CLOUD_PAUSE_S)
+                           * (planner.CLOUD_RETRIES + 1))
 
     async def test_the_chosen_model_is_used_and_an_empty_one_is_the_default(self):
         for chosen, used in (("claude-sonnet-5-5", "claude-sonnet-5-5"), ("", "claude-opus-5-5")):
@@ -813,6 +823,82 @@ class Cloud(CloudCase):
         self.assertEqual(self.ran, [])
         self.assertEqual(self.clicks.asked, [], "no card offers to send to Claude")
         self.assertEqual(len(sdk.requests), 1)
+
+    def flipping(self, change, *replies, when="create"):
+        """A stand-in SDK that changes the settings while it is building a client or sending."""
+        config = self.config
+
+        class Flipping(FakeSdk):
+            def Anthropic(self, **kwargs):
+                if when == "client":
+                    change(config)
+                return super().Anthropic(**kwargs)
+
+            def create(self, **kwargs):
+                if when == "create" and len(self.requests) == 0:
+                    change(config)
+                return super().create(**kwargs)
+        sdk = Flipping(*replies)
+        patcher = mock.patch.dict(sys.modules, {"anthropic": sdk})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return sdk
+
+    CHANGES = {"withdrawn": lambda config: config.set("cloud_consent", {}),
+               "switched off": lambda config: config.set("cloud_enabled", False),
+               "another model": lambda config: config.set("cloud_model", "claude-other-1")}
+
+    async def test_a_retry_goes_only_with_the_agreement_still_in_force(self):
+        """Withdrawn while the first attempt was out, which then failed: nothing is sent again."""
+        for name, change in self.CHANGES.items():
+            for error in (Errors.InternalServerError("overloaded"),
+                          Errors.APIConnectionError("reset"), Errors.APITimeoutError("slow")):
+                with self.subTest(name, error=type(error).__name__):
+                    self.config.set("cloud_consent", AGREED)
+                    sdk = self.flipping(change, error, reply(text("Retried.")))
+                    session = self.session()
+                    result = await self.task(session=session)
+                    self.assertEqual(result, {"answer": planner.CLOUD_OFF, "steps": 1})
+                    self.assertEqual(len(sdk.requests), 1)
+                    self.assertIsNone(session.waiting)
+
+    async def test_a_change_just_before_the_send_stops_it(self):
+        """As the SDK loads or the client is built, after the check before the thread."""
+        for name, change in self.CHANGES.items():
+            with self.subTest(name):
+                self.config.set("cloud_consent", AGREED)
+                sdk = self.flipping(change, reply(text("Done.")), when="client")
+                self.assertEqual(await self.task(), {"answer": planner.CLOUD_OFF, "steps": 1})
+                self.assertEqual(sdk.requests, [])
+
+    async def test_a_reply_that_arrives_after_cloud_went_off_is_not_read_out(self):
+        for name, change in self.CHANGES.items():
+            for answer in (reply(text("Shall I print it?")), Errors.AuthenticationError("no")):
+                with self.subTest(name, answer=answer):
+                    self.config.set("cloud_consent", AGREED)
+                    sdk = self.flipping(change, answer)
+                    session = self.session()
+                    result = await self.task(session=session)
+                    self.assertEqual(result, {"answer": planner.CLOUD_OFF, "steps": 1})
+                    self.assertEqual(len(sdk.requests), 1)
+                    self.assertIsNone(session.waiting)
+
+    async def test_only_a_lost_connection_or_a_server_error_is_tried_again_once(self):
+        for first, retried in ((Errors.APIConnectionError("reset"), True),
+                               (Errors.APITimeoutError("slow"), True),
+                               (Errors.InternalServerError("overloaded"), True),
+                               (Errors.RateLimitError("slow down"), False),
+                               (Errors.AuthenticationError("no"), False),
+                               (Errors.BadRequestError("no"), False)):
+            with self.subTest(type(first).__name__):
+                sdk = self.sdk(first, reply(text("Second time.")))
+                answer = (await self.task())["answer"]
+                self.assertEqual(len(sdk.requests), 1 + retried)
+                self.assertEqual(answer == "Second time.", retried)
+                self.assertEqual(len(sdk.clients), 1)
+        sdk = self.sdk(Errors.InternalServerError("overloaded"))
+        self.assertEqual((await self.task())["answer"], planner.CLOUD_TROUBLE)
+        self.assertEqual(len(sdk.requests), planner.CLOUD_RETRIES + 1)
 
     async def test_the_cloud_model_checks_the_settings_as_it_sends(self):
         sdk = self.sdk(reply(text("ok")))

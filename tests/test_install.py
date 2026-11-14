@@ -142,6 +142,10 @@ class DryRun(Prefix):
         self.assertEqual(self.calls(), [])
         self.assertIn("Log out and back in once", done.stdout)
         self.assertIn(f"gnome-extensions enable {UUID}", done.stdout)
+        # An update leaves the old daemon running, with its own rules for what goes to Claude.
+        self.assertIn("restarts the daemon too", done.stdout)
+        self.assertIn("\n     Cloud rules and all. To restart only the daemon now: "
+                      "systemctl --user restart tuxistant\n", done.stdout)
 
     def test_nothing_lands_outside_the_prefix(self):
         self.ok("install.sh", "--fn-helper")
