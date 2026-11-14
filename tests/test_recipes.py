@@ -10,6 +10,7 @@ import json
 import os
 import socket
 import shutil
+import stat
 import sys
 import tempfile
 import threading
@@ -1475,6 +1476,20 @@ class Host(Case):
 
     CLASH = "Another skill already has the action work.chat."
 
+    @staticmethod
+    def held(holder: str, name: str, what: str = "action") -> str:
+        """Why a new or edited skill can't have a name another of yours holds."""
+        return (f"The skill in {holder} has the {what} {name}, which it keeps until it is taken "
+                "out of your skills folder, or an edit to it without that loads.")
+
+    @property
+    def HELD(self) -> str:      # noqa: N802, as CLASH beside it
+        return self.held("work.yaml", "work.chat")
+
+    @property
+    def HELD_KEPT(self) -> str:     # noqa: N802
+        return f"{self.HELD} {skillhost.KEPT}"
+
     async def test_an_edit_never_takes_an_action_from_one_running_its_kept_version(self):
         """work grew, so its last version was in use, and coins, which sorts first, edited to
         have work.chat, took it from work."""
@@ -1483,12 +1498,12 @@ class Host(Case):
         grew = f"{skillhost.GREW} {skillhost.KEPT}"
         self.assertEqual(self.host.reload(), {str(work): grew, **refused})
         coins = self.edit("coins.yaml", "coins.price", "work.chat")
-        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+        self.assertEqual(self.host.reload(), {str(coins): self.HELD_KEPT,
                                               str(work): grew, **refused})
         self.work_has_its_chat(self.host)
         self.assertLessEqual({"work.guestwifi", "coins.price"}, set(self.host.current().actions))
         again = self.restart()
-        self.assertEqual(again.reload(), {str(coins): self.CLASH, str(work): skillhost.GREW,
+        self.assertEqual(again.reload(), {str(coins): self.HELD, str(work): skillhost.GREW,
                                           **refused}, "neither has a version to keep")
         self.assertNotIn("alarm.ring", again.current().actions)
 
@@ -1501,7 +1516,7 @@ class Host(Case):
                      f"model could take it for one. {skillhost.KEPT}")
         self.assertEqual(self.host.reload(), {str(work): lookalike, **refused})
         coins = self.edit("coins.yaml", "coins.price", "work.chat")
-        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+        self.assertEqual(self.host.reload(), {str(coins): self.HELD_KEPT,
                                               str(work): lookalike, **refused})
         self.work_has_its_chat(self.host)
         self.assertLessEqual({"work.guestwifi", "coins.price"}, set(self.host.current().actions))
@@ -1512,23 +1527,24 @@ class Host(Case):
         alarm, refused = self.full()
         coins = self.edit("coins.yaml", "coins.price", "work.chat")
         self.edit("work.yaml", "Open the work chat app", "Open the work chat app now")
-        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+        self.assertEqual(self.host.reload(), {str(coins): self.HELD_KEPT,
                                               **refused})
         actions = self.host.current().actions
         self.assertEqual(actions["work.chat"]["description"], "Open the work chat app now")
         self.assertIn("coins.price", actions)
 
-    async def test_an_action_an_edit_gives_up_is_free_from_the_next_reload(self):
-        """work.chat stays work's until work's edit that drops it has loaded, so coins, edited
-        at the same time to have it, waits one reload, whichever is counted first."""
+    async def test_an_action_an_edit_gives_up_is_free_as_soon_as_that_edit_loads(self):
+        """work's edit dropped work.chat and coins' took it, in one reload. A second pass frees
+        what an edit that loads gives up."""
         alarm, refused = self.full()
         self.edit("work.yaml", "work.chat:", "work.talk:")
-        coins = self.edit("coins.yaml", "coins.price", "work.chat")
-        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
-                                              **refused})
-        self.assertLessEqual({"work.talk", "coins.price"}, set(self.host.current().actions))
+        self.edit("coins.yaml", "coins.price", "work.chat")
         self.assertEqual(self.host.reload(), refused)
         self.assertLessEqual({"work.chat", "work.talk"}, set(self.host.current().actions))
+        self.assertEqual(self.host.current().actions["work.chat"]["skill"], "org.example.coins")
+        check = skillhost.offline(CONFIG, builtin=self.builtin, bundled=self.bundled,
+                                  user=self.user)
+        self.assertEqual(check.problems, refused, "tuxistant doctor agrees")
         self.assertEqual(self.restart().reload(), refused)
 
     def rename_and_lookalike(self, name="work.yaml") -> str:
@@ -1548,7 +1564,7 @@ class Host(Case):
         kept = {str(work): f"{why} {skillhost.KEPT}"}
         self.assertEqual(self.host.reload(), {**kept, **refused})
         coins = self.edit("coins.yaml", "coins.price", "work.chat")
-        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+        self.assertEqual(self.host.reload(), {str(coins): self.HELD_KEPT,
                                               **kept, **refused})
         self.work_has_its_chat(self.host)
         self.assertLessEqual({"work.guestwifi", "coins.price"}, set(self.host.current().actions))
@@ -1560,7 +1576,7 @@ class Host(Case):
         grew = {str(work): f"{skillhost.GREW} {skillhost.KEPT}"}
         self.assertEqual(self.host.reload(), {**grew, **refused})
         coins = self.edit("coins.yaml", "coins.price", "work.chat")
-        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+        self.assertEqual(self.host.reload(), {str(coins): self.HELD_KEPT,
                                               **grew, **refused})
         self.work_has_its_chat(self.host)
         self.assertIn("work.guestwifi", self.host.current().actions)
@@ -1572,7 +1588,7 @@ class Host(Case):
         grew = {str(notes): f"{skillhost.GREW} {skillhost.KEPT}"}
         self.assertEqual(self.host.reload(), {**grew, **refused})
         work = self.edit("work.yaml", "org.example.work", "org.example.notes")
-        same_id = f"Another skill already has the id org.example.notes. {skillhost.KEPT}"
+        same_id = f"{self.held('notes.yaml', 'org.example.notes', 'id')} {skillhost.KEPT}"
         self.assertEqual(self.host.reload(), {str(work): same_id, **grew, **refused})
         actions = self.host.current().actions
         self.assertEqual(actions["notes.phone"]["skill"], "org.example.notes")
@@ -1588,10 +1604,11 @@ class Host(Case):
         self.assertEqual(self.host.reload(), {str(work): f"{why} {skillhost.KEPT}"})
         aa = self.add("aa.yaml", recipe(id="org.example.aa", permissions={}, actions={
             "work.chat": {"description": "Say hi", "say": "Hi."}}))
-        taken = {str(aa): self.CLASH}
+        taken = {str(aa): self.CLASH}       # by the version of work in use
         self.assertEqual(self.host.reload(), {str(work): f"{why} {skillhost.KEPT}", **taken})
         again = self.restart()
-        self.assertEqual(again.reload(), {str(work): why, **taken})
+        self.assertEqual(again.reload(), {str(work): why,
+                                          str(aa): self.held("work.yaml", "work.chat")})
         self.assertEqual(self.saved()["work.yaml"], 3)
         work.write_text(before)
         self.assertEqual(again.reload(), taken, "work loads again once the change is undone")
@@ -1654,10 +1671,167 @@ class Host(Case):
                     if name == skillhost.LOADED:     # not trusted, so counted by name
                         self.assertIn("alarm.ring", actions)
                         self.assertIn(str(self.user / "work.yaml"), started["problems"])
-                    else:
-                        self.assertEqual(started["problems"], refused)
+                    else:   # nothing new is allowed, and the file is left for you to see
+                        why = skillhost.BROKEN_GRANTS.format(file=file)
+                        networked = ("coins.yaml", "deskstrip.yaml", "notes.yaml")
+                        self.assertEqual(started["problems"], {
+                            **{str(self.user / n): why for n in networked}, **refused})
+                        self.assertIn("work.chat", actions)
+                        self.assertEqual(stat.S_ISFIFO(file.lstat().st_mode), how == "pipe")
+                        if how != "pipe":
+                            self.assertEqual(len(file.read_text()) > 200000, True, "kept")
                     file.unlink()
                     file.write_text(text)
+
+    def swap(self, *pairs) -> None:
+        for name, old, new in pairs:
+            self.edit(name, old, new)
+
+    async def test_two_skills_can_swap_actions(self):
+        """Each held the action the other's edit took, so both were refused on every reload,
+        and after a restart neither had anything in use."""
+        self.example("coins.yaml", "notes.yaml")
+        self.swap(("coins.yaml", "coins.price", "notes.phone"),
+                  ("notes.yaml", "notes.phone", "coins.price"))
+        self.assertEqual(self.host.reload(), {})
+        actions = self.host.current().actions
+        self.assertEqual(actions["notes.phone"]["skill"], "org.example.coins")
+        self.assertEqual(actions["coins.price"]["skill"], "org.example.notes")
+        self.assertEqual(self.restart().reload(), {})
+
+    async def test_skills_can_swap_actions_after_a_restart_and_three_ways(self):
+        self.example("coins.yaml", "deskstrip.yaml", "notes.yaml")
+        self.swap(("coins.yaml", "coins.price", "notes.phone"),
+                  ("notes.yaml", "notes.phone", "deskstrip.brightness"),
+                  ("deskstrip.yaml", "deskstrip.brightness", "coins.price"))
+        again = self.restart()
+        self.assertEqual(again.reload(), {})
+        actions = again.current().actions
+        self.assertEqual(actions["deskstrip.brightness"]["skill"], "org.example.notes")
+        self.assertEqual(actions["coins.price"]["skill"], "org.example.deskstrip")
+
+    async def test_a_swap_with_an_edit_that_is_refused_takes_nothing(self):
+        """notes' edit starts like a built-in, so it is refused and its last version, with
+        notes.phone, stays in use: coins can't have notes.phone."""
+        self.example("coins.yaml", "notes.yaml")
+        self.swap(("coins.yaml", "coins.price", "notes.phone"),
+                  ("notes.yaml", "notes.phone", "coins.price"))
+        self.grow("notes.yaml", "file.wipe")
+        self.assertEqual(self.host.reload(), {
+            str(self.user / "notes.yaml"): "Another skill already has the action coins.price. "
+                                           f"{skillhost.KEPT}",
+            str(self.user / "coins.yaml"): f"{self.held('notes.yaml', 'notes.phone')} "
+                                           f"{skillhost.KEPT}"})
+        actions = self.host.current().actions
+        self.assertEqual(actions["notes.phone"]["skill"], "org.example.notes")
+        self.assertEqual(actions["coins.price"]["skill"], "org.example.coins")
+        again = self.restart()
+        self.assertEqual(set(again.reload()), {str(self.user / "notes.yaml"),
+                                               str(self.user / "coins.yaml")})
+        self.assertFalse({"notes.phone", "coins.price"} & set(again.current().actions))
+
+    async def test_a_place_that_is_no_longer_a_skill_says_so(self):
+        """A recipe that became a pipe, or a folder that became a plain file, kept its place and
+        names with nothing said."""
+        alarm, refused = self.full()
+        notes = self.user / "notes.yaml"
+        notes.unlink()
+        os.mkfifo(notes)
+        self.assertEqual(self.host.reload(), {str(notes): skillhost.NOT_A_SKILL, **refused})
+        notes.unlink()
+        self.assertEqual(self.host.reload(), {}, "taken out, it frees its place")
+
+    async def test_a_refused_edit_that_then_breaks_says_why_it_broke(self):
+        """After a restart nothing of work was in use, yet breaking it kept the stale reason of
+        the edit before, or claimed a version that never worked was still in use."""
+        self.example("coins.yaml", "notes.yaml", "work.yaml")
+        work = self.edit("work.yaml", "work.guestwifi:", "file.guestwifi:")
+        again = self.restart()
+        self.assertIn("starts like one built into", again.reload()[str(work)])
+        work.write_text("id: [broken")
+        problem = again.reload()[str(work)]
+        self.assertIn("not valid YAML", problem)
+        self.assertNotIn(skillhost.KEPT, problem)
+        self.assertNotIn("starts like", problem)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a folder whatever its mode")
+    async def test_a_folder_that_couldnt_be_read_forgets_no_version_in_use(self):
+        self.example("coins.yaml", "notes.yaml", "work.yaml")
+        os.chmod(self.user, 0)
+        try:
+            self.host.reload()
+        finally:
+            os.chmod(self.user, 0o755)
+        work = self.edit("work.yaml", "work.guestwifi:", "file.guestwifi:")
+        self.assertIn(skillhost.KEPT, self.host.reload()[str(work)])
+        self.work_has_its_chat(self.host)
+
+    def grants(self) -> Path:
+        return self.user.parent / skillhost.GRANTS
+
+    async def test_a_grant_of_the_wrong_shape_allows_nothing_and_stops_nothing(self):
+        """permissions null, or a host list that isn't one, made every reload fail once the
+        record was marked removed, built-ins included."""
+        self.example("coins.yaml", "work.yaml")
+        good = json.loads(self.grants().read_text())
+        for record in ({"permissions": None, "removed": True, "folder": "gone.yaml"},
+                       {"permissions": [1], "removed": True}, "x", [1],
+                       {"permissions": {"network": 5}}, {**good["org.example.coins"],
+                                                         "removed": "no"}):
+            with self.subTest(record=record):
+                self.grants().write_text(json.dumps({**good, "org.example.coins": record}))
+                again = self.restart()
+                problems = again.reload()
+                self.assertIn("time.now", again.current().actions)
+                self.assertIn("work.chat", again.current().actions)
+                self.assertIn("which it wasn't allowed before", problems[str(self.user /
+                                                                          "coins.yaml")])
+                self.assertEqual(again.reload(), problems)
+
+    async def test_grants_that_cant_be_read_allow_nothing_new_and_are_left_alone(self):
+        """coins was refused evil.example. Past the size cap the file counted as missing, so
+        at the next start coins.leak loaded, and the file was written over."""
+        file = self.add("coins.yaml", (EXAMPLES / "coins.yaml").read_text())
+        self.example("work.yaml")
+        grown = file.read_text().replace("network: [api.coins.example]",
+                                         "network: [api.coins.example, evil.example]")
+        file.write_text(grown.replace("actions:\n", "actions:\n  coins.leak:\n    description: "
+                                      "Leak\n    get: https://evil.example/x\n", 1))
+        self.assertIn("now asks to reach evil.example", self.host.reload()[str(file)])
+        data = json.loads(self.grants().read_text())
+        old = {"permissions": {}, "config": [], "folder": "gone.yaml", "removed": True}
+        for i in range(skillhost.MAX_STATE_BYTES // 60):
+            data[f"org.example.old{i}"] = old
+        self.grants().write_text(json.dumps(data))
+        size = self.grants().stat().st_size
+        self.assertGreater(size, skillhost.MAX_STATE_BYTES)
+        again = self.restart()
+        why = skillhost.BROKEN_GRANTS.format(file=self.grants())
+        self.assertEqual(again.reload(), {str(file): why})
+        self.assertNotIn("coins.leak", again.current().actions)
+        self.assertIn("work.chat", again.current().actions, "it asks for nothing")
+        self.assertIn("time.now", again.current().actions)
+        self.assertEqual(self.grants().stat().st_size, size, "left as it was")
+
+    async def test_records_of_skills_taken_out_are_pruned(self):
+        """So a long-lived install never reaches the cap."""
+        self.example("work.yaml")
+        data = json.loads(self.grants().read_text())
+        for i in range(skillhost.MAX_REMOVED + 10):
+            data[f"org.example.old{i}"] = {"permissions": {}, "config": [], "folder": "x",
+                                           "removed": True, "removed_at": i}
+        self.grants().write_text(json.dumps(data))
+        shutil.copy(EXAMPLES / "coins.yaml", self.user / "coins.yaml")
+        with mock.patch.object(SkillHost, "_clear_state") as cleared:
+            self.restart().reload()
+        self.assertEqual(sorted(call.args[0] for call in cleared.call_args_list),
+                         sorted(f"org.example.old{i}" for i in range(10)),
+                         "back later, one of those starts with nothing it saved")
+        removed = [key for key, record in json.loads(self.grants().read_text()).items()
+                   if record.get("removed")]
+        self.assertEqual(len(removed), skillhost.MAX_REMOVED)
+        self.assertNotIn("org.example.old0", removed, "the oldest go")
+        self.assertIn(f"org.example.old{skillhost.MAX_REMOVED + 9}", removed)
 
     async def test_a_check_names_the_same_skills_as_the_daemon(self):
         """tuxistant doctor reads the same folders with a host of its own, and named work."""
@@ -1682,7 +1856,7 @@ class Host(Case):
         again = self.restart()
         problems = again.reload()
         self.assertEqual(set(problems), {str(notes), str(copy)})
-        self.assertEqual(problems[str(copy)], same_id)
+        self.assertEqual(problems[str(copy)], self.held('notes.yaml', 'org.example.notes', 'id'))
         self.assertNotIn("notes.phone", again.current().actions)
         notes.write_text(before)
         self.assertEqual(again.reload(), {str(copy): same_id})
@@ -1699,10 +1873,11 @@ class Host(Case):
         self.assertEqual(again.reload(), {str(notes): self.CLASH})
         aa = self.add("aa.yaml", recipe(id="org.example.aa", permissions={}, actions={
             "notes.phone": {"description": "Say hi", "say": "Hi."}}))
-        taken = {str(aa): "Another skill already has the action notes.phone."}
+        taken = {str(aa): self.held('notes.yaml', 'notes.phone')}
         self.assertEqual(again.reload(), {str(notes): self.CLASH, **taken})
         notes.write_text(before)
-        self.assertEqual(again.reload(), taken, "notes loads again once the change is undone")
+        self.assertEqual(again.reload(), {str(aa): "Another skill already has the action "
+                                                   "notes.phone."}, "notes loads again")
         self.assertIn("ntfy", str(again.current().actions["notes.phone"]))
 
     @unittest.skipIf(os.geteuid() == 0, "root reads a folder whatever its mode")
