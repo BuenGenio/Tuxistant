@@ -79,10 +79,12 @@ class Turn:
         if talk is None and time.monotonic() - ctl.found_at < FOUND_MEMORY_S:
             self.rt.session.found = list(ctl.found)
         # The words of this hold answer a task that asked the user something, but only while
-        # its question is on screen: later words may be about anything.
+        # its question is on screen: later words may be about anything. A task whose server, key
+        # or Cloud setting has changed since is dropped, and the words go the usual way.
         on_screen = bool(talk and talk.asked
                          and time.monotonic() - talk.asked_at < QUESTION_HINT_S + ANSWER_GRACE_S)
-        self.for_task = on_screen and self.rt.session.waiting is not None
+        self.for_task = on_screen and planner.resumable(self.rt.session.waiting,
+                                                          self.skills.config)
         if talk and not self.for_task:
             self.rt.session.waiting = None
         self.last_reply = None      # of this turn, if it said anything

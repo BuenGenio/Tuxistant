@@ -463,9 +463,10 @@ class FollowUps(Case):
         await self.hold(rig, "and now")
         self.assertEqual(len(server.connections), 1)
 
-    async def task_asks(self, then: str):
+    async def task_asks(self, then: str, one_config=False):
         """A hold whose task asks which report to print, and a server that answers the next
-        request put to the voice model with then."""
+        request put to the voice model with then. With one_config, the skills read the
+        controller's Config, as in service.run."""
         async def script(c):
             await c.expect("response.create")
             await c.tool_call("task_run", "t1", json.dumps({"goal": "print my report"}))
@@ -478,6 +479,8 @@ class FollowUps(Case):
         Model.script = ["I found report-a and report-b. Which one should I print?",
                         "Printed report-b."]
         server, rig = await self.rigged(script)
+        if one_config:
+            rig.ctl.skills.config = rig.config
         await self.hold(rig, "print my report")
         self.assertEqual(rig.of("FollowUp")[0][0], QUESTION)
         return server, rig
@@ -502,6 +505,18 @@ class FollowUps(Case):
             await self.hold(rig, "the second one")
         self.assertEqual([m.heard for m in Model.made], [["print my report", "the second one"]])
         self.assertEqual(self.asked(server), ["print my report"])
+
+    async def test_a_new_server_drops_the_waiting_task(self):
+        """The task's history would go with the answer: to a server it never started on."""
+        server, rig = await self.task_asks("unused", one_config=True)
+        new = await self.server(lambda c: self.replies(c, "Sorry, print what."))
+        rig.config.set("server", f"127.0.0.1:{new.port}")     # which clears the key
+        rig.config.set("api_key", "good")
+        await self.hold(rig, "the second one")
+        self.assertEqual([m.heard for m in Model.made], [["print my report"]])
+        self.assertEqual(self.asked(new), ["the second one"])
+        self.assertEqual(self.sorted, ["print my report", "the second one"])
+        self.assertIsNone(rig.ctl.talk.rt.session.waiting)
 
     async def test_text_the_app_reads_out_raises_no_hint(self):
         async def script(c):

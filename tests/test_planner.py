@@ -950,6 +950,27 @@ class Answers(Case):
                          ["delete everything"])
         self.assertIsNone(session.waiting, "the model's call used up the question")
 
+    async def test_an_answer_after_a_new_server_starts_afresh(self):
+        """The task's history (the goal, what it read) goes with each request, so it is never
+        sent to a server the task didn't start on."""
+        server = self.server(said("I read notes.txt: PRIVATE-NOTE. Which one should I print?"),
+                             said("Which report?"))
+        session = self.session()
+        await self.task("print my report", session)
+        for key, value in (("api_key", "another-key"), ("server", "127.0.0.1:9")):
+            with self.subTest(key=key):
+                was = self.config.values.get(key)
+                self.assertTrue(planner.resumable(session.waiting, self.config))
+                self.config.values[key] = value
+                self.assertFalse(planner.resumable(session.waiting, self.config))
+                self.config.values[key] = was
+        self.config.values |= {"server": "127.0.0.1:9", "api_key": "another-key"}
+        result = await self.answer("the second one", session)
+        self.assertEqual(result["answer"], "Which report?")
+        sent = json.dumps(server.bodies[1])
+        self.assertNotIn("PRIVATE-NOTE", sent)
+        self.assertNotIn("print my report", sent)
+
     async def test_the_question_survives_a_long_reply(self):
         self.server(said("I looked in Documents. There are two reports there. Both are from May. "
                          "Which one should I print?"))
@@ -973,6 +994,19 @@ class AnswersInTheCloud(CloudCase):
         self.assertEqual(len(self.clicks.asked), 1, "the user's own words need no card")
         self.assertEqual(sdk.requests[1]["messages"][-1],
                          {"role": "user", "content": "the second one"})
+
+    async def test_an_answer_after_a_new_cloud_key_starts_afresh(self):
+        sdk = self.sdk(reply(text("I read PRIVATE-NOTE. Which one should I print?")),
+                       reply(text("Which report?")))
+        session = self.session()
+        await self.task("print my report", session)
+        self.config.values["cloud_api_key"] = KEY.replace("0123", "9876")
+        self.clicks.answers = [True]
+        session.replying = True
+        result = await self.task("the second one", session)
+        self.assertEqual(result["answer"], "Which report?")
+        self.assertEqual(sdk.requests[1]["messages"], [{"role": "user", "content": "the second one"}])
+        self.assertEqual(sdk.clients[-1]["api_key"], KEY.replace("0123", "9876"))
 
     async def test_with_the_cloud_turned_off_since_an_answer_stays_home(self):
         sdk = self.sdk(reply(text("Which one should I print?")))

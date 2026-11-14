@@ -57,6 +57,8 @@ NOT_SENT = "You said no, so nothing went to Claude."
 PART_DONE = "Part of it may already be done."
 UNREADABLE = "The model sent back something I could not read."
 NO_SDK = "The Claude library is not installed. Run the Tuxistant installer again to add it."
+# Where a task's requests go: its history goes along with each one. See resumable.
+SENT_TO = ("server", "api_key", "cloud_enabled", "cloud_api_key")
 BAD_KEY = "The cloud key in the settings is not valid."
 REJECTED = "The cloud key was rejected."
 NOT_ALLOWED = "The cloud key is not allowed to do that."
@@ -157,9 +159,8 @@ class Cloud:
         self.client = None
 
     def hear(self, answer: str):
-        """The user's answer to the question this task ended on. The key may have changed since."""
+        """The user's answer to the question this task ended on. A new key starts a new task."""
         self.messages.append({"role": "user", "content": answer})
-        self.client = None
 
     async def step(self, outcomes: list[Outcome], last: bool) -> Reply:
         if outcomes:
@@ -287,16 +288,31 @@ async def _work(model, session) -> dict:
     return {"answer": OUT_OF_STEPS, "steps": step}
 
 
+def _provider(config):
+    return Cloud if config["cloud_enabled"] and config["cloud_api_key"] else Local
+
+
+def _sent_to(config) -> tuple:
+    return tuple(config[key] for key in SENT_TO)
+
+
+def resumable(waiting, config) -> bool:
+    """Whether a task waiting for the user's answer may carry on. Its model holds everything the
+    task saw, and that goes with each request: Cloud turned off or on, or a new server or key,
+    since it started means it would go somewhere the task never sent it, so it starts afresh."""
+    return isinstance(waiting, _provider(config)) \
+        and getattr(waiting, "sent_to", None) == _sent_to(config)
+
+
 async def run(args, config, session) -> dict:
     goal = " ".join(str(args.get("goal") or "").split())[:MAX_GOAL_CHARS]
     waiting, session.waiting = session.waiting, None    # one answer each, and only the daemon's
     if not goal:
         return {"answer": NOT_CLEAR, "steps": 0}
-    provider = Cloud if config["cloud_enabled"] and config["cloud_api_key"] else Local
-    if session.replying and isinstance(waiting, provider):
+    provider = _provider(config)
+    if session.replying and resumable(waiting, config):
         # The user's own words, as Whisper heard them, answering the task's question. No voice
-        # model wrote them, so they can't carry what the conversation read. Cloud turned off or
-        # on since then starts afresh, as the task's model is no longer the one allowed.
+        # model wrote them, so they can't carry what the conversation read.
         waiting.hear(goal)
         return await _work(waiting, session)
     tools = [tool for tool in session.skills.tools()
@@ -305,7 +321,9 @@ async def run(args, config, session) -> dict:
     if provider.leaves_home and session.tainted and not await session.confirm(
             Ask("Send this request to Claude?", goal, dict)):
         return {"answer": NOT_SENT, "steps": 0}
-    return await _work(provider(config, goal, tools), session)
+    model = provider(config, goal, tools)
+    model.sent_to = _sent_to(config)
+    return await _work(model, session)
 
 
 HANDLERS = {ACTION: run}
