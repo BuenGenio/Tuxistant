@@ -18,6 +18,10 @@ MAX_DICTATE_S = 300     # a stuck key must not leave the mic open for ever
 TAIL_S = 0.2            # people let go on the last word, not after it
 TYPE_WAIT_S = 3         # the shell answers at once if it answers at all
 NOT_TYPED = "The desktop didn't take the text, so nothing was typed"
+# A go that types nothing says so: the shell said "Dictating…", and silence would look like a fault.
+TOO_SHORT = "That was too short, so nothing was typed."
+NOTHING_HEARD = "I didn't hear any words, so nothing was typed."
+MODES = ("hold", "tap", "shortcut")     # how it stops: let go of Fn, tap Fn, or the shortcut again
 # Whisper's words for no words: [BLANK_AUDIO], (music), ♪. One group only, or a real sentence with
 # brackets at both ends would match.
 NO_WORDS = re.compile(r"\[[^\]]*\]|\([^)]*\)|\*[^*]*\*|♪[^♪]*♪|♪+")
@@ -39,8 +43,10 @@ def clean(text: str) -> str:
 class Dictation:
     """One go at dictating, from the key press to the words reaching the window."""
 
-    def __init__(self, ctl):
+    def __init__(self, ctl, mode: str | None = None):
         self.ctl = ctl
+        self.mode = mode        # None until Fn says whether the second press was a tap or a hold
+        self.started = False    # the shell has heard DictationStarted, so it can hear the mode
         self.id = secrets.token_hex(16)
         self.pcm = bytearray()
         self.voiced = 0
@@ -56,12 +62,28 @@ class Dictation:
         ctl.set_presence(True)
         ctl.set_state("listening")
         ctl.emit("DictationStarted", self.id)
+        self.started = True
+        if self.mode:
+            ctl.emit("DictationMode", self.id, self.mode)
+        broke = False
         try:
             await self._record()
         except RealtimeError as e:
             ctl.emit("Error", str(e))   # what it heard before that still counts
-        if len(self.pcm) >= MIN_HOLD_BYTES and self.voiced >= MIN_VOICED_BYTES:
+            broke = True
+        if self._enough():
             ctl.deliver(self)
+        elif not broke:
+            ctl.emit("Error", TOO_SHORT if len(self.pcm) < MIN_HOLD_BYTES else NOTHING_HEARD)
+
+    def _enough(self) -> bool:
+        return len(self.pcm) >= MIN_HOLD_BYTES and self.voiced >= MIN_VOICED_BYTES
+
+    def set_mode(self, mode: str):
+        if mode in MODES and mode != self.mode:
+            self.mode = mode
+            if self.started:
+                self.ctl.emit("DictationMode", self.id, mode)
 
     async def _record(self):
         """Letting go ends this whether or not the microphone has anything to say."""

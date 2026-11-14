@@ -85,7 +85,7 @@ Four themes come with it, and each one reacts as Tux listens, thinks and speaks.
 
 ### Dictation
 
-Tap Fn, then press it again and hold it while you speak. When you let go, your words are typed where your cursor is, in any language Whisper knows. For longer passages, or without Fn, `Ctrl+Super+D` starts and stops it.
+Tap Fn twice and speak, hands-free, then tap Fn once more: your words are typed where your cursor is, in any language Whisper knows. Or tap Fn, then press it again and hold it while you speak, and let go when you are done. Tux says which it is doing and how to stop, such as "Dictating… tap Fn to stop", and says so when it heard nothing to type. Without Fn, `Ctrl+Super+D` starts and stops it.
 
 It only ever types: it never presses Enter, so nothing is sent or run until you say so. If you moved to another window while it was working, the words go to the clipboard instead. Fields that tell the desktop they hold a password are refused, but not every password box does, so don't dictate passwords. Apps that don't support input methods, such as many Electron apps, get a paste, and what was on your clipboard is put back afterwards. It stops by itself after five minutes and copies what it heard rather than typing it.
 

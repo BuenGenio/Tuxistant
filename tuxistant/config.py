@@ -24,7 +24,7 @@ DEFAULTS = {
     "fn_hold_enabled": True,      # hold Fn to talk (needs the tuxistant-fn helper)
     "fn_hold_ms": 1500,
     "hide_on_release": True,      # hold mode: hide the blob when Fn is released
-    "dictation_enabled": True,    # tap Fn, then hold it, and the words are typed
+    "dictation_enabled": True,    # tap Fn twice, or tap then hold, and the words are typed
     "location": "",               # home town, for weather questions that name no place
     "fahrenheit": False,          # weather in Fahrenheit and miles per hour
     "news_source": DEFAULT_SOURCE,  # one of livedata.SOURCES

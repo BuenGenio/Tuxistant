@@ -52,7 +52,7 @@ SIGNALS = {
     "Error": "s", "ConfigChanged": "s", "ThemePreview": "s", "HistoryChanged": "",
     "SkillsChanged": "",
     "Approval": "ssssi", "ApprovalClosed": "s", "SelectionWanted": "s",
-    "DictationStarted": "s", "TypeText": "ssb",
+    "DictationStarted": "s", "DictationMode": "ss", "TypeText": "ssb",
 }
 
 
@@ -565,6 +565,25 @@ class OnlyTheShellTypes(OnPrivateBus):
         await self.call(shell, "DictateStart")
         self.assertIsNotNone(self.daemon.controller.dictation)
         await self.daemon.controller.cancel()
+
+    async def test_the_shortcut_says_it_is_stopped_by_the_shortcut(self):
+        shell = await self.the_shell()
+        heard = []
+        shell.add_message_handler(
+            lambda m: heard.append(m.body) if m.member == "DictationMode" else None)
+        await shell.call(Message(
+            destination="org.freedesktop.DBus", path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus", member="AddMatch", signature="s",
+            body=[f"type='signal',interface='{BUS_NAME}',member='DictationMode'"]))
+        await self.call(shell, "Hello", "i", [2])
+        self.daemon.controller.make_mic = BlockedMic
+        for member in ("DictateToggle", "DictateStart"):
+            await self.call(shell, member)
+            go = self.daemon.controller.dictation
+            async with asyncio.timeout(2):
+                while [go.id, "shortcut"] not in heard:
+                    await asyncio.sleep(0.01)
+            await self.daemon.controller.cancel()
 
     async def test_the_words_go_to_the_shell_and_nobody_else_hears_them(self):
         shell = await self.the_shell()

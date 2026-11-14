@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_daemon_fakes import CHUNK, Case, FakeSpeech, tone  # noqa: E402
 from tuxistant import controller, dictation  # noqa: E402
 from tuxistant.controller import NO_TYPING  # noqa: E402
-from tuxistant.dictation import NOT_TYPED, clean  # noqa: E402
+from tuxistant.dictation import NOT_TYPED, NOTHING_HEARD, TOO_SHORT, clean  # noqa: E402
 
 VOICE = tone(1.0)
 
@@ -141,28 +141,91 @@ class Flow(Case):
         rig = self.rig_for(self.speech(transcript="rm -rf ~\n"))
         self.assertEqual(await self.dictated(rig), "rm -rf ~ ")
 
-    async def test_a_hold_too_short_to_be_speech_ends_quietly(self):
+    async def test_a_go_too_short_to_be_speech_says_so_and_sends_nothing(self):
         http = self.speech(transcript="Thank you.")
         rig = self.rig_for(http, mic_pcm=VOICE[:CHUNK])
         await self.spoke(rig)
         await self.delivered(rig)
         self.assertEqual(http.uploads, [])
-        self.assertEqual(rig.of("Error"), [])
+        self.assertEqual(rig.of("TypeText"), [])
+        self.assertEqual(rig.of("Error"), [TOO_SHORT])
+        self.assertEqual(rig.ctl.state, "idle")
 
-    async def test_silence_is_not_sent_for_whisper_to_invent_words(self):
+    async def test_silence_is_not_sent_for_whisper_to_invent_words_and_it_says_so(self):
         http = self.speech(transcript="Thank you.")
         rig = self.rig_for(http, mic_pcm=bytes(len(VOICE)))
         await self.spoke(rig)
         await self.delivered(rig)
         self.assertEqual(http.uploads, [])
         self.assertEqual(rig.of("TypeText"), [])
+        self.assertEqual(rig.of("Error"), [NOTHING_HEARD])
 
-    async def test_no_words_means_nothing_is_typed(self):
+    async def test_no_words_means_nothing_is_typed_and_it_says_so(self):
         rig = self.rig_for(self.speech(transcript="[BLANK_AUDIO]"))
         await self.spoke(rig)
         await self.delivered(rig)
         self.assertEqual(rig.of("TypeText"), [])
+        self.assertEqual(rig.of("Error"), [NOTHING_HEARD])
+
+    async def test_a_cancelled_go_is_not_called_too_short(self):
+        rig = self.rig_for(self.speech(transcript="Hello."), mic_pcm=VOICE[:CHUNK])
+        await rig.ctl.dictate_start()
+        await self.heard_all_of(rig)
+        await rig.ctl.cancel()
+        await asyncio.sleep(0.05)
         self.assertEqual(rig.of("Error"), [])
+
+    async def test_a_mode_known_at_the_start_comes_straight_after_it(self):
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        await rig.ctl.dictate_toggle("shortcut")
+        await self.heard_all_of(rig)
+        names = [name for name, *_ in rig.signals if name.startswith("Dictation")]
+        self.assertEqual(names, ["DictationStarted", "DictationMode"])
+        (started,) = rig.of("DictationStarted")
+        self.assertEqual(rig.of("DictationMode"), [(started, "shortcut")])
+        await rig.ctl.dictate_toggle("shortcut")
+        await self.wait_for(rig, "TypeText")
+        rig.ctl.typed(rig.of("TypeText")[0][0], "typed")
+        await self.delivered(rig)
+
+    async def test_fn_says_the_mode_once_it_knows_it(self):
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        await rig.ctl.dictate_start()
+        await self.heard_all_of(rig)
+        self.assertEqual(rig.of("DictationMode"), [])
+        (started,) = rig.of("DictationStarted")
+        await rig.ctl.dictate_mode("tap")
+        await rig.ctl.dictate_mode("tap")
+        await rig.ctl.dictate_mode("sideways")
+        self.assertEqual(rig.of("DictationMode"), [(started, "tap")])
+        self.assertEqual(rig.ctl.dictation.mode, "tap")
+
+    async def test_a_mode_with_nothing_dictating_says_nothing(self):
+        rig = self.rig_for(self.speech())
+        await rig.ctl.dictate_mode("tap")
+        self.assertEqual(rig.of("DictationMode"), [])
+        self.assertFalse(rig.ctl.dictating)
+
+    async def test_a_mode_before_the_go_has_begun_waits_for_dictation_started(self):
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        await rig.ctl.dictate_start()
+        await rig.ctl.dictate_mode("tap")     # before the job has run at all
+        await self.heard_all_of(rig)
+        names = [name for name, *_ in rig.signals if name.startswith("Dictation")]
+        self.assertEqual(names, ["DictationStarted", "DictationMode"])
+
+    async def test_dictating_is_true_only_while_it_listens(self):
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        self.assertFalse(rig.ctl.dictating)
+        await rig.ctl.dictate_start()
+        self.assertTrue(rig.ctl.dictating)
+        await self.heard_all_of(rig)
+        await rig.ctl.dictate_end()
+        await rig.finished()
+        self.assertFalse(rig.ctl.dictating)
+        await self.wait_for(rig, "TypeText")
+        rig.ctl.typed(rig.of("TypeText")[0][0], "typed")
+        await self.delivered(rig)
 
     async def test_an_old_extension_is_told_so_and_the_mic_stays_closed(self):
         rig = self.rig_for(self.speech())
