@@ -331,7 +331,7 @@ A param left out uses its `default`, which has to fit its type. One with no defa
 | `open`, a packaged app or a Settings page | Never, as for "Open Firefox" |
 | `open`, an entry from your home folder or elsewhere | The apps card, with the command it runs |
 | `open`, an entry not in the app grid (NoDisplay), such as a screen reader or a helper | Refused: Tux says so and opens nothing, as "Open ..." can't reach it either |
-| `desktop` | The entry's own rule, in the table under "Desktop actions": `lock_screen` always, `do_not_disturb` when it turns on, the others never |
+| `desktop` | The entry's own rule, in the table under "Desktop actions": `lock_screen` always, `do_not_disturb` and `night_light` when they turn on, the others never |
 | `get` to a host on the internet, with only `choice` and `number` values in it | None in a fresh conversation |
 | `get` with a `text` value in it | Always |
 | `post` | Always |
@@ -359,14 +359,14 @@ actions:
 |---|---|---|---|---|
 | `notify` | `text` | Shows a notification. Its title is "From the recipe" and the recipe's id, written by Tux, and its text is the recipe's, at most 200 characters | "Done." | Never: nothing changes, and the title says where it came from |
 | `do_not_disturb` | `turn` | Turns Do Not Disturb on or off, as the switch in the notification list does | "Do Not Disturb is on." | When it turns on: nothing on screen changes, and reminders and calls stop popping up until someone turns it off. "Turn on Do Not Disturb?", saying so |
-| `night_light` | `turn` | Turns Night Light on or off, as the switch in the top bar does. It tints the screen during its schedule, set in Settings, Displays | "Night Light is on." | Never: it is seen at once and undone in one click |
-| `dark_style` | `turn` | Turns dark style on, or back to the default style | "Dark style is on." | Never, as for Night Light |
+| `night_light` | `turn` | Turns Night Light on or off, as the switch in the top bar does. It tints the screen during its schedule, set in Settings, Displays | "Night Light is on." | When it turns on: outside its schedule nothing on screen changes, and the screen turns warm hours later. "Turn on Night Light?", saying it tints during its schedule, which may not start until later today |
+| `dark_style` | `turn` | Turns dark style on, or back to the default style | "Dark style is on." | Never: it is seen at once and undone in one click |
 | `lock_screen` | none | Locks the screen | "Locking the screen." | Always: it takes the screen away from whoever is using it. "Lock the screen?", saying it takes your password to get back |
 
-- **`turn`** is `on` or `off`, unquoted (YAML reads them as true and false, which is what Tux wants here), `"on"`, `"off"`, `yes` or `no`, or a choice param in quotes, `"{turn}"`, whose every choice is one of on, off, yes, no, true and false. The card follows the value the model chose, so `do_not_disturb` with `"{turn}"` shows a card only for on. Write `turn: on`, not `on: true`: YAML reads `on:` as a field called true, and the recipe is refused with that advice.
+- **`turn`** is `on` or `off`, unquoted (YAML reads them as true and false, which is what Tux wants here), `"on"`, `"off"`, `yes` or `no`, or a choice param in quotes, `"{turn}"`, whose every choice is one of on, off, yes, no, true and false. The card follows the value the model chose, so `do_not_disturb` or `night_light` with `"{turn}"` shows a card only for on. Write `turn: on`, not `on: true`: YAML reads `on:` as a field called true, and the recipe is refused with that advice.
 - **`text`** is a template like a `say` line, at most 200 characters with no `<` or `>`. Only `choice` and `number` params can go in it, never a `text` one: what is on screen under Tux's name is what the author wrote, with values from a fixed list or a range.
 - An entry Tux doesn't have, a field the entry doesn't take, a missing field or a `say` line beside it refuses the recipe with a reason that lists the entries.
-- When the desktop says no, such as a desktop with no Night Light, Tux says so ("I couldn't change Night Light on this desktop.") and nothing is kept, so asking again tries again. The same call again within 5 seconds does nothing more and Tux says what it said, as for a request.
+- When the desktop says no, such as a desktop with no Night Light, Tux says so ("I couldn't change Night Light on this desktop.") and nothing is kept, so asking again tries again. The same call again within 5 seconds does nothing more and Tux says what it said, as for a request. Any call to the same entry in between, from any action or recipe, drops that answer, so on, off and on again are three calls and Tux never says a state it didn't just set.
 - A desktop action changes something on this computer only, so it never meets the card for reaching out after private data and adds nothing to the recipe's risk, like `open`. Settings and the registry can list the entries a recipe uses from its manifest's `desktop` list.
 - In evaluations and `tuxistant doctor` a desktop action does nothing, like the rest of a recipe. Taking a screenshot isn't an entry: GNOME lets only its own tools take one without asking, and the portal saves it where it chooses.
 

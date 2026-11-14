@@ -1232,7 +1232,7 @@ class DesktopRuns(Case):
         self.add("evening.yaml", evening(**actions))
         self.assertEqual(self.host.reload(), {})
 
-    async def test_night_light_from_a_choice_with_no_card(self):
+    async def test_night_light_from_a_choice(self):
         self.example("evening.yaml")
         result, said = await self.call("evening_nightlight", {"turn": "On."})
         self.assertEqual((result, said), ({APP_SAYS: True}, ["Night Light is on."]))
@@ -1241,7 +1241,66 @@ class DesktopRuns(Case):
         self.assertEqual(self.changed, [
             ("org.gnome.settings-daemon.plugins.color", "night-light-enabled", "true"),
             ("org.gnome.settings-daemon.plugins.color", "night-light-enabled", "false")])
-        self.assertEqual(self.asked, [])
+        self.assertEqual(len(self.asked), 1)    # off needs no card
+
+    async def test_night_light_on_shows_a_card_as_it_may_tint_only_later(self):
+        """At noon, on changes nothing on screen, and the screen turns warm at sunset."""
+        self.example("evening.yaml")
+        self.allow = False
+        result, said = await self.call("evening_nightlight", {"turn": "on"})
+        self.assertTrue(result["declined"])
+        self.assertEqual((self.changed, said), ([], []))
+        self.assertEqual(self.asked[0].title, "Turn on Night Light?")
+        self.assertEqual(self.asked[0].detail.splitlines(), [
+            "From the recipe org.example.evening, which you added.",
+            "The screen turns warmer during Night Light's schedule, set in Settings, Displays, "
+            "which may not start until later today. It stays on until it is turned off."])
+        self.allow = True
+        _, said = await self.call("evening_nightlight", {"turn": "on"})
+        self.assertEqual(said, ["Night Light is on."])
+        await self.call("evening_nightlight", {"turn": "off"})
+        self.assertEqual(len(self.asked), 2)
+
+    async def test_on_off_on_does_all_three(self):
+        """Each answer kept for a repeat is dropped once the entry changes again, so the third
+        call isn't taken for a copy of the first and answered with a state that isn't true."""
+        self.example("evening.yaml")
+        said = []
+        for turn in ("on", "off", "on"):
+            said += (await self.call("evening_nightlight", {"turn": turn}))[1]
+        self.assertEqual(said, ["Night Light is on.", "Night Light is off.", "Night Light is on."])
+        self.assertEqual([value for _, _, value in self.changed], ["true", "false", "true"])
+
+    async def test_two_actions_on_one_entry_dont_answer_for_each_other(self):
+        self.with_actions(**{
+            "evening.dark": {"description": "Dark style on", "desktop": {
+                "action": "dark_style", "turn": "on"}},
+            "evening.light": {"description": "Dark style off", "desktop": {
+                "action": "dark_style", "turn": "off"}}})
+        said = []
+        for tool in ("evening_dark", "evening_light", "evening_dark"):
+            said += (await self.call(tool))[1]
+        self.assertEqual(said, ["Dark style is on.", "Dark style is off.", "Dark style is on."])
+        self.assertEqual([value for _, _, value in self.changed],
+                         ["'prefer-dark'", "'default'", "'prefer-dark'"])
+
+    async def test_two_recipes_on_one_entry_dont_answer_for_each_other(self):
+        """Do Not Disturb on, off from another recipe, on again: the last one shows its card
+        and is done, as nothing on screen would show that it wasn't."""
+        self.with_actions(**{"evening.quiet": {"description": "Do Not Disturb on", "desktop": {
+            "action": "do_not_disturb", "turn": "on"}}})
+        other = evening(**{"loud.off": {"description": "Do Not Disturb off", "desktop": {
+            "action": "do_not_disturb", "turn": "off"}}})
+        other.update(id="org.example.loud", name="Loud")
+        self.add("loud.yaml", other)
+        self.assertEqual(self.host.reload(), {})
+        said = []
+        for tool in ("evening_quiet", "loud_off", "evening_quiet"):
+            said += (await self.call(tool))[1]
+        self.assertEqual(said, ["Do Not Disturb is on.", "Do Not Disturb is off.",
+                                "Do Not Disturb is on."])
+        self.assertEqual([value for _, _, value in self.changed], ["false", "true", "false"])
+        self.assertEqual([a.title for a in self.asked], ["Turn on Do Not Disturb?"] * 2)
 
     async def test_a_bad_choice_changes_nothing(self):
         self.example("evening.yaml")

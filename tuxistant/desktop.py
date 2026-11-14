@@ -142,6 +142,18 @@ def _night_light(values: dict, _recipe: str) -> None:
     _gsettings(NIGHT_LIGHT, "night-light-enabled", "true" if values["turn"] else "false")
 
 
+def _night_light_card(values: dict, recipe: str) -> tuple | None:
+    """On may change nothing yet: Night Light tints only during its schedule, so in the daytime
+    the screen turns warm hours later with nothing to say why. Off is seen at once, or changes
+    nothing that anyone misses."""
+    if not values["turn"]:
+        return None
+    return ("Turn on Night Light?",
+            f"{_from(recipe)}\nThe screen turns warmer during Night Light's schedule, set in "
+            "Settings, Displays, which may not start until later today. It stays on until it is "
+            "turned off.")
+
+
 @_failed("I couldn't change the style on this desktop.")
 def _dark_style(values: dict, _recipe: str) -> None:
     _gsettings(INTERFACE, "color-scheme", "'prefer-dark'" if values["turn"] else "'default'")
@@ -169,9 +181,9 @@ DESKTOP = {
     "notify": Entry("notify", (("text", "words"),), _notify, lambda _: "Done.", _no_card),
     "do_not_disturb": Entry("do_not_disturb", (("turn", "switch"),), _do_not_disturb,
                             _switched("Do Not Disturb"), _dnd_card),
-    # Seen at once and undone in one click from the top bar, so no card.
     "night_light": Entry("night_light", (("turn", "switch"),), _night_light,
-                         _switched("Night Light"), _no_card),
+                         _switched("Night Light"), _night_light_card),
+    # Seen at once and undone in one click from Settings or the top bar, so no card.
     "dark_style": Entry("dark_style", (("turn", "switch"),), _dark_style,
                         _switched("Dark style"), _no_card),
     "lock_screen": Entry("lock_screen", (), _lock_screen, lambda _: "Locking the screen.",

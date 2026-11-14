@@ -940,12 +940,15 @@ async def _desktop_call(plan: Plan, found: dict, config, session):
     """The entry's own card rule decides the card, from the values it will really be given."""
     entry = desktop.DESKTOP[plan.entry]
     settings = _settings(plan, found)
-    key = (plan.skill, plan.action, "desktop", plan.entry, tuple(sorted(settings.items())))
+    key = ("desktop", plan.entry, plan.skill, plan.action, tuple(sorted(settings.items())))
     said = _again(key)
     if said is not None:
         return _echo(session, config, said)
 
     def act() -> dict:
+        # Whatever this call does, an answer kept for the same entry with any other value, or
+        # from any other action or recipe, may no longer be true: on, off, on is three calls.
+        _forget(key[:2])
         done, said = desktop.run(entry, settings, plan.skill)
         if done:
             _remember(key, said)
@@ -1086,6 +1089,13 @@ def _again(key: tuple, within: float = AGAIN_S) -> str | None:
     with _recent_lock:
         at, said = _recent.get(key, (-math.inf, ""))
         return said if time.monotonic() - at < within else None
+
+
+def _forget(start: tuple) -> None:
+    """Every answer kept under a key that starts with these, such as one desktop entry's."""
+    with _recent_lock:
+        for old in [k for k in _recent if k[:len(start)] == start]:
+            del _recent[old]
 
 
 def _remember(key: tuple, said: str) -> None:

@@ -1,5 +1,5 @@
-# No network: low risk. Night Light and a notification need no card. Do Not Disturb shows one
-# when it turns on, and locking the screen always does: see "Desktop actions" in docs/SKILLS.md.
+# No network: low risk. A notification needs no card. Night Light and Do Not Disturb show one
+# when they turn on, and locking the screen always does: see "Desktop actions" in docs/SKILLS.md.
 id: org.example.evening
 name: Evening
 description: Night Light, quiet time and locking up for the evening
