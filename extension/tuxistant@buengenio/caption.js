@@ -14,6 +14,8 @@ const EDGE = 12;
 const FADE_MS = 160;
 const ERROR_MS = 6000;
 
+const clip = text => text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS)}…` : text;
+
 // Long enough to read: a base plus a little per character.
 const lingerMs = text => Math.min(8000, 2500 + 40 * text.length);
 
@@ -29,6 +31,7 @@ export class Caption {
         });
         this._heard = this._addLabel('tuxistant-caption-heard');
         this._reply = this._addLabel('tuxistant-caption-reply');
+        this._hint = this._addLabel('tuxistant-caption-hint');
         Main.layoutManager.addTopChrome(this.actor);
         this._timeoutId = 0;
         this._rect = null;
@@ -36,6 +39,7 @@ export class Caption {
         this._anchor = 'bottom-right';
         this._blobVisible = false;
         this._isError = false;
+        this._asking = false;
     }
 
     _addLabel(styleClass) {
@@ -72,7 +76,7 @@ export class Caption {
     showReply(text) {
         if (this._isError)
             this._clearLabels();
-        this._set(this._reply, text.length > MAX_CHARS ? `${text.slice(0, MAX_CHARS)}…` : text);
+        this._set(this._reply, clip(text));
         this._present();
     }
 
@@ -85,9 +89,26 @@ export class Caption {
         this._hideIn(ERROR_MS);
     }
 
-    // The turn is over: keep the text up for a moment. An error keeps its own, longer timer.
+    // Tux asked something, and the next hold answers it: the question stays up for ms, with
+    // the hint under it. Nothing that comes after the turn shortens that.
+    showQuestion(question, hint, ms) {
+        this._clearLabels();
+        this._asking = true;
+        this._set(this._reply, clip(question));
+        this._set(this._hint, hint);
+        this._present();
+        this._hideIn(ms);
+    }
+
+    // The question has been answered or dropped.
+    endQuestion() {
+        if (this._asking)
+            this.hide();
+    }
+
+    // The turn is over: keep the text up for a moment. An error and a question keep their own timer.
     linger() {
-        if (this.actor.visible && !this._isError)
+        if (this.actor.visible && !this._isError && !this._asking)
             this._hideIn(lingerMs(this._reply.text));
     }
 
@@ -121,9 +142,11 @@ export class Caption {
 
     _clearLabels() {
         this._isError = false;
+        this._asking = false;
         this._reply.remove_style_class_name('tuxistant-caption-error');
         this._set(this._heard, '');
         this._set(this._reply, '');
+        this._set(this._hint, '');
     }
 
     // Text that comes with no blob on screen goes where the user is, not where the blob last was.

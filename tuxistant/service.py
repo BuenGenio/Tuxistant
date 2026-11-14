@@ -99,6 +99,14 @@ class Daemon(ServiceInterface):
                                   path=BUS_PATH, interface=BUS_NAME, member=name,
                                   signature=signature, body=list(body)))
 
+    def fn_keys(self) -> FnClient:
+        """Fn, through the helper. Another key pressed with Fn while dictating is a Fn shortcut,
+        so it stops the dictation and leaves the conversation alone."""
+        ctl = self.controller
+        return FnClient(self.config, ctl.hold_start, ctl.hold_end,
+                        on_dictate_start=ctl.dictate_start, on_dictate_end=ctl.dictate_end,
+                        on_dictate_cancel=lambda: ctl.cancel(end_talk=False))
+
     def keep(self, coroutine):
         task = asyncio.create_task(coroutine)
         self.children.add(task)
@@ -319,6 +327,10 @@ class Daemon(ServiceInterface):
     def TypeText(self, id, text, only_copy) -> "ssb":
         return [id, text, only_copy]
 
+    @signal()
+    def FollowUp(self, question, hint, seconds) -> "ssi":
+        return [question, hint, seconds]
+
 
 async def watch_shell(bus, daemon):
     """Keeps track of who the shell is, so only it can answer a card."""
@@ -418,10 +430,7 @@ async def _serve_until_stopped(daemon) -> int:
         say=controller.say_when_free, sound=controller.sound,
         notify=lambda item: timers.notify(bus, item),
         locked=lambda: controller.locked, chimes=lambda: daemon.config["timer_chime"])
-    fn = asyncio.create_task(FnClient(
-        daemon.config, controller.hold_start, controller.hold_end,
-        on_dictate_start=controller.dictate_start, on_dictate_end=controller.dictate_end,
-        on_dictate_cancel=controller.cancel).run())
+    fn = asyncio.create_task(daemon.fn_keys().run())
     lock = asyncio.create_task(watch_lock(bus, controller))
     ticking = asyncio.create_task(tick(store, crier, lock))
     ticking.add_done_callback(_timers_stopped)

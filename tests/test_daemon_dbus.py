@@ -52,7 +52,7 @@ SIGNALS = {
     "Error": "s", "ConfigChanged": "s", "ThemePreview": "s", "HistoryChanged": "",
     "SkillsChanged": "",
     "Approval": "ssssi", "ApprovalClosed": "s", "SelectionWanted": "s",
-    "DictationStarted": "s", "TypeText": "ssb",
+    "DictationStarted": "s", "TypeText": "ssb", "FollowUp": "ssi",
 }
 
 

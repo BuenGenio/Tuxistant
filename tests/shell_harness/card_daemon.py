@@ -1199,6 +1199,127 @@ async def scenario_dictation_real(daemon, test, args):
         (d.run.out / "report.json").write_text(json.dumps(report, indent=1))
 
 
+FOLLOW_UP_LOOK = r"""
+const caption = ext._caption;
+return {
+    state: ext._state,
+    blob: ext._blob.visible,
+    caption: caption.actor.visible && caption.actor.opacity > 0,
+    reply: caption._reply.visible ? caption._reply.text : '',
+    hint: caption._hint.visible ? caption._hint.text : '',
+    heard: caption._heard.visible ? caption._heard.text : '',
+};
+"""
+
+
+class QuietSpeaker:
+    """Stands in for the speaker: takes what it is given and plays nothing."""
+
+    def __init__(self, on_level):
+        self.on_level = on_level
+
+    async def start(self):
+        pass
+
+    def write(self, _pcm):
+        self.on_level(0.4)
+
+    async def drain(self):
+        await asyncio.sleep(0.2)
+        self.on_level(0.0)
+
+    async def stop(self):
+        self.on_level(0.0)
+
+
+async def scenario_followup_real(daemon, test, args):
+    """The production service and controller against the real extension, with a stand-in server
+    on loopback: a question after the blob was let go stays on screen with how to answer it, and
+    the next hold carries on the same connection. Only the microphone, the speaker, speech to
+    text and the server are stand-ins."""
+    from tests.test_daemon_fakes import FakeServer, tone
+
+    ctl = daemon.controller
+    ctl.make_mic, ctl.make_speaker = LoudMic, QuietSpeaker
+    question = "I found two reports. Which one should I print?"
+    replies = [question, question, "It is noon.", question]
+    heard = iter(["print my report", "print my other report", "what time is it",
+                  "print the last one"])
+
+    async def script(conn):
+        for count, text in enumerate(replies, 1):
+            await conn.wait_for(lambda: conn.types().count("response.create") >= count, 60)
+            await conn.reply(text, pcm=tone(0.2))
+
+    async def hears(_config, _pcm):
+        return next(heard)
+
+    async def never_a_fact(_heard, _config):
+        return False
+
+    async def look():
+        return await test.command("eval", code=FOLLOW_UP_LOOK)
+
+    async def hold(release=True):
+        await ctl.hold_start()
+        await asyncio.sleep(0.6)
+        if release:
+            await ctl.hold_end()
+            for _ in range(200):
+                if not ctl.active:
+                    return
+                await asyncio.sleep(0.05)
+
+    server = FakeServer(script)
+    await server.__aenter__()
+    daemon.config.values.update(server=f"127.0.0.1:{server.port}", api_key="good")
+    real_controller.transcribe = hears
+    real_controller.knowledge.is_fact = never_a_fact
+    report = {}
+    try:
+        for _ in range(100):
+            if ctl.face:
+                break
+            await asyncio.sleep(0.05)
+        await hold()
+        report["after_release_presence"] = ctl.presence
+        await asyncio.sleep(1.0)
+        report["question_up"] = await look()
+        await test.command("shoot", path=str(Path(args.out) / "followup_question.png"))
+        daemon.Presence(False)  # a stray one must not cut the question's time short
+        await asyncio.sleep(5.0)
+        report["question_still_up"] = await look()
+        await asyncio.sleep(5.5)
+        report["question_gone"] = await look()
+
+        await hold()
+        await asyncio.sleep(1.0)
+        report["second_question_up"] = await look()
+        await hold(release=False)
+        report["answering"] = await look()
+        await ctl.hold_end()
+        for _ in range(200):
+            if not ctl.active:
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(1.0)
+        report["plain_reply"] = await look()
+
+        await hold()
+        await asyncio.sleep(1.0)
+        report["third_question_up"] = await look()
+        await ctl.cancel()
+        await asyncio.sleep(0.6)
+        report["cancelled"] = await look()
+        report["connections"] = len(server.connections)
+        report["asked"] = [e["item"]["content"][0]["text"] for e in server.connections[0].log
+                           if e["type"] == "conversation.item.create"]
+        report["state"] = ctl.state
+    finally:
+        await server.__aexit__()
+        (Path(args.out) / "report.json").write_text(json.dumps(report, indent=1))
+
+
 def real_daemon(args):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -1210,7 +1331,7 @@ def real_daemon(args):
 
 SCENARIOS = {"dictation": scenario_dictation, "dictation_real": scenario_dictation_real,
              "verify": scenario_verify, "fit": scenario_fit, "monitors": scenario_monitors,
-             "real": scenario_real}
+             "real": scenario_real, "followup_real": scenario_followup_real}
 
 
 async def main():
@@ -1224,7 +1345,7 @@ async def main():
     bus = await MessageBus().connect()
     test = Test()
     bus.export(BUS_PATH, test)
-    if args.scenario in ("real", "dictation_real"):
+    if args.scenario in ("real", "dictation_real", "followup_real"):
         daemon = real_daemon(args)
         await service.serve(bus, daemon)
     else:

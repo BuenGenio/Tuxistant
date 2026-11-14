@@ -10,10 +10,10 @@ import logging
 import secrets
 import time
 
-from . import knowledge
+from . import knowledge, planner
 from .audio import MIN_HOLD_BYTES, MIN_VOICED_BYTES, VOICE_LEVEL, Mic, Speaker, level
 from .dictation import Dictation, clean
-from .gate import APPROVAL_WAIT_S, MAX_DETAIL_CHARS, MAX_TITLE_CHARS, Ask, printable
+from .gate import APPROVAL_WAIT_S, MAX_DETAIL_CHARS, MAX_TITLE_CHARS, Ask, Speak, printable
 from .realtime import SETUP_TIMEOUT_S, Realtime, RealtimeError, sentences, speech, transcribe
 
 log = logging.getLogger("tuxistant")
@@ -27,7 +27,10 @@ CONNECT_LIMIT_S = SETUP_TIMEOUT_S + 5   # past the client's own timeout: this is
 VOICE_GRACE_S = 1.0     # speech_started lags, so a voice right at the timeout gets this long
 SELECTION_WAIT_S = 2    # the shell answers at once if it answers at all
 NOTICE_WAIT_S = 3       # past this a notice is no use, and the turn can't read while it waits
-FOUND_MEMORY_S = 300    # "open the second one" can come in a new turn, as a hold turn ends at once
+FOUND_MEMORY_S = 300    # "open the second one" can come in a new conversation too
+FOLLOW_ON_S = 120       # a hold this soon after the last carries on its conversation
+QUESTION_HINT_S = 10    # how long a question stays on screen once the turn is over
+ANSWER_HINT = "Hold Fn to answer"
 NO_CARD = ("I can't show an approval card on this desktop yet, so I didn't do that. Log out and "
            "back in once, then try again.")
 NO_TYPING = "Dictation needs the new desktop extension. Log out and back in once, then try again."
@@ -44,17 +47,39 @@ def describe(error: Exception) -> str:
     return "Something went wrong. The log has the details"  # its text could hold anything
 
 
-class Turn:
-    """One connection: a hold turn, or a VAD turn and its conversation follow-ups."""
+def _ignore(_event):
+    pass
 
-    def __init__(self, ctl, hold: bool):
+
+class Talk:
+    """A conversation that outlives its hold turns: the client, with its connection if that is
+    still open, and its Session, with what the conversation touched. See "Follow-ups" in
+    docs/CONTRACT.md."""
+
+    def __init__(self, rt):
+        self.rt = rt
+        self.asked = False      # its last reply was a question
+        self.timer = None       # the task that ends it after FOLLOW_ON_S
+
+
+class Turn:
+    """One request at a time on one conversation: a hold turn, or a VAD turn and its follow-ups."""
+
+    def __init__(self, ctl, hold: bool, talk: Talk | None = None):
         self.ctl, self.hold = ctl, hold
         self.inbox = asyncio.Queue()    # everything the turn reacts to, in order of arrival
         self.skills = ctl.skills    # one Skills for the whole turn: what it offers, it can run
-        self.rt = ctl.make_realtime(ctl.config, self.skills, self.inbox.put_nowait, hold=hold)
+        self.talk = talk or Talk(
+            ctl.make_realtime(ctl.config, self.skills, self.inbox.put_nowait, hold=hold))
+        self.rt = self.talk.rt
+        self.rt.on_event, self.rt.parked = self.inbox.put_nowait, False
         self.rt.confirm, self.rt.selection = ctl.ask, ctl.selection
-        if time.monotonic() - ctl.found_at < FOUND_MEMORY_S:
+        if talk is None and time.monotonic() - ctl.found_at < FOUND_MEMORY_S:
             self.rt.session.found = list(ctl.found)
+        # The words of this hold answer a task that asked the user something.
+        self.for_task = bool(talk and talk.asked and self.rt.session.waiting is not None)
+        self.last_reply = None      # of this turn, if it said anything
+        self.ends_talk = False      # a card was answered no
         self.connecting = None
         self.connected = False
         self.held = bytearray()     # a hold turn's audio, which never goes to the session
@@ -97,7 +122,7 @@ class Turn:
         finally:
             self.aborted = outcome is not None
             try:
-                await self._close()
+                await self._close(keep=self.hold and not self.aborted and not self.ends_talk)
             finally:
                 if outcome:     # after closing: by now nothing more can start or arrive
                     self._take_late_events(show=False)
@@ -270,7 +295,10 @@ class Turn:
                 self.inbox.put_nowait(("quiet",))
             else:
                 self.inbox.put_nowait(("heard", heard))
-                if await knowledge.is_fact(heard, config):
+                if self.for_task:
+                    self.answering = True
+                    await self._answer_task(heard)
+                elif await knowledge.is_fact(heard, config):
                     self.answering = True
                     _, result = await self.rt.session.execute(
                         "knowledge.answer", json.dumps({"question": heard}))
@@ -285,9 +313,31 @@ class Turn:
             self.answering = False
             self.inbox.put_nowait(("failed", describe(e)))
 
+    async def _answer_task(self, heard: str):
+        """Hands the words to the task that asked for them, through the same gates as ever. Only
+        this sets session.replying, so a model calling task.run can't pass its words off as the
+        user's. The app says the task's answer, as nothing asked the voice model for one."""
+        session = self.rt.session
+        session.replying = True
+        try:
+            _, result = await session.execute(planner.ACTION, json.dumps({"goal": heard}))
+        finally:
+            session.replying = False
+        if "error" in result:
+            raise RealtimeError(result["error"])
+        if result.get("answer"):
+            self.inbox.put_nowait(("speak", Speak(str(result["answer"]), self.ctl.config["voice"],
+                                                  "")))
+        self.inbox.put_nowait(("done",))
+
     async def _connect(self):
         try:
-            await self.rt.connect()
+            if self.rt.skills is not self.skills:   # reloaded since: the new tools need a new session
+                await self.rt.close()
+                self.rt.use(self.skills)
+            if not self.rt.alive:
+                await self.rt.close()   # whatever is left of a connection the server dropped
+                await self.rt.connect()
             self.inbox.put_nowait(("ready",))
         except Exception as e:     # anything else here would leave the turn waiting for ever
             self.inbox.put_nowait(("failed", describe(e)))
@@ -339,12 +389,15 @@ class Turn:
             self.ctl.found = list(self.rt.session.found)
             self.ctl.found_at = time.monotonic()
         reply = " ".join(self.replies)
+        if self.replies:
+            self.last_reply = self.replies[-1]
         if self.heard or reply or self.actions or status == "error":
             self.ctl.history.add(self.heard, reply, self.actions, status)
             self.ctl.emit("HistoryChanged")
         self._new_exchange()
 
-    async def _close(self):
+    async def _close(self, keep=False):
+        """keep leaves the connection open for the next hold, if it still is."""
         self.closing = True
         if self.speaker:
             await self.speaker.stop()
@@ -354,7 +407,9 @@ class Turn:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await self.rt.close(abort=self.aborted)
+        self.rt.on_event, self.rt.parked = _ignore, True    # nothing is asked of it meanwhile
+        if not (keep and self.rt.alive):
+            await self.rt.close(abort=self.aborted)
 
 
 class _Fixed:
@@ -389,6 +444,7 @@ class Controller:
         self.face = False       # an extension that can draw cards has said hello
         self.typist = False     # and one that can type
         self.found, self.found_at = [], 0.0     # file.find's latest results, across turns
+        self.talk = None        # the conversation the next hold carries on, while no turn has it
 
     @property
     def skills(self):
@@ -428,9 +484,13 @@ class Controller:
         self.emit("Approval", request, printable(ask.title, MAX_TITLE_CHARS),
                   printable(ask.detail, MAX_DETAIL_CHARS), ask.level, APPROVAL_WAIT_S)
         try:
-            return await asyncio.wait_for(answer, APPROVAL_WAIT_S)
+            allowed = await asyncio.wait_for(answer, APPROVAL_WAIT_S)
         except TimeoutError:
             return False
+        else:
+            if not allowed and self.turn:   # a no means stop, so nothing carries on after it
+                self.turn.ends_talk = True
+            return allowed
         finally:
             self.approval = None
             self.emit("ApprovalClosed", request)
@@ -525,7 +585,9 @@ class Controller:
         async with self.lock:
             if self.active:
                 await self._stop()
+                await self._end_talk()
             elif not self.locked:
+                await self._end_talk()
                 self._start_turn(hold=False)
 
     async def hold_start(self):
@@ -539,10 +601,14 @@ class Controller:
             if self.active and self.turn and self.turn.hold:
                 self.turn.inbox.put_nowait(("hold_end",))
 
-    async def cancel(self):
+    async def cancel(self, end_talk=True):
+        """end_talk=False is for a Fn shortcut pressed while dictating, which is not a cancel of
+        the conversation."""
         async with self.lock:
             await self._stop()
             self._drop_words()
+            if end_talk:
+                await self._end_talk()
 
     async def set_locked(self, locked: bool):
         """The shell disables the extension at lock, so a turn would have no blob and no way to
@@ -581,8 +647,45 @@ class Controller:
                 self.job = asyncio.create_task(self._run(lambda: self._sound(pcm)))
 
     def _start_turn(self, hold: bool):
-        self.turn = Turn(self, hold)
-        self.job = asyncio.create_task(self._run(self.turn.run))
+        talk, self.talk = (self.talk, None) if hold else (None, self.talk)
+        if talk and talk.timer:
+            talk.timer.cancel()
+        self.turn = Turn(self, hold, talk)
+        self.job = asyncio.create_task(self._converse(self.turn))
+
+    async def _converse(self, turn: Turn):
+        await self._run(turn.run)
+        if turn.hold and not turn.ends_talk:
+            self._keep(turn)
+
+    def _keep(self, turn: Turn):
+        """After a hold turn however it ended: the conversation waits for the next hold. Sent
+        after the turn's idle and Presence, so that nothing takes the question down."""
+        talk = self.talk = turn.talk
+        if turn.last_reply is not None:
+            talk.asked = planner.asks(turn.last_reply)
+            if talk.asked and not self.locked:
+                self.emit("FollowUp", turn.last_reply, ANSWER_HINT, QUESTION_HINT_S)
+        if not talk.asked:  # a task's question nobody was left with is no question
+            talk.rt.session.waiting = None
+        talk.timer = asyncio.create_task(self._expire(talk))
+
+    async def _expire(self, talk: Talk):
+        await asyncio.sleep(FOLLOW_ON_S)
+        async with self.lock:
+            if self.talk is talk:
+                talk.timer = None   # this task: ending the talk must not cancel it half way
+                await self._end_talk()
+
+    async def _end_talk(self):
+        """The next hold starts a new conversation, with nothing carried over."""
+        talk, self.talk = self.talk, None
+        if talk:
+            if talk.timer:
+                talk.timer.cancel()
+            if talk.asked:
+                self.emit("FollowUp", "", "", 0)
+            await talk.rt.close()
 
     async def _stop(self):
         if self.active:

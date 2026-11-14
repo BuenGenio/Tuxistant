@@ -33,6 +33,7 @@ export default class TuxistantExtension extends Extension {
         this._state = 'idle';
         this._stateSignals = 0;
         this._presence = false;
+        this._followUpId = 0;
 
         this._blob = new Blob({
             onContextMenu: () => this._openBlobMenu(),
@@ -74,6 +75,7 @@ export default class TuxistantExtension extends Extension {
     }
 
     disable() {
+        this._endFollowUp();
         Main.wm.removeKeybinding(KEYBINDING);
         Main.wm.removeKeybinding(DICTATE_KEYBINDING);
         // With the blob and the icon gone there would be nothing to show or stop a live microphone.
@@ -206,10 +208,35 @@ export default class TuxistantExtension extends Extension {
         this._indicator.setState(state);
         this._blob.setState(state);
         this._blob.setWanted(this._presence && state !== 'idle');
-        if (starting)
+        if (starting) {
+            this._endFollowUp();
             this._caption.reset();
+        }
         else if (state === 'idle')
             this._caption.linger();
+    }
+
+    // The turn asked something: the blob and the question stay a while, with how to answer.
+    _followUp(question, hint, seconds) {
+        this._endFollowUp();
+        if (seconds <= 0 || !question || this._state !== 'idle')
+            return;
+        this._blob.setWaiting(true);
+        this._toCaption(() => this._caption.showQuestion(question, hint, seconds * 1000));
+        this._followUpId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, seconds, () => {
+            this._followUpId = 0;
+            this._blob.setWaiting(false);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _endFollowUp() {
+        if (this._followUpId) {
+            GLib.source_remove(this._followUpId);
+            this._followUpId = 0;
+        }
+        this._blob?.setWaiting(false);
+        this._caption?.endQuestion();
     }
 
     // Text can arrive just after the turn ended, and showing it stops the hide timer.
@@ -328,6 +355,9 @@ export default class TuxistantExtension extends Extension {
             break;
         case 'TypeText':
             this._onTypeText(...args);
+            break;
+        case 'FollowUp':
+            this._followUp(...args);
             break;
         }
     }

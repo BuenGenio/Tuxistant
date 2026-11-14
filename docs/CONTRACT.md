@@ -24,10 +24,10 @@ Methods:
 
 | Method | Signature | Meaning |
 |---|---|---|
-| `Toggle` | `() -> ()` | idle: start a VAD turn. Active: cancel |
-| `HoldStart` | `() -> ()` | Start a push-to-talk turn |
+| `Toggle` | `() -> ()` | idle: start a VAD turn, in a new conversation. Active: cancel. Either way it ends a kept conversation (see "Follow-ups") |
+| `HoldStart` | `() -> ()` | Start a push-to-talk turn. Within 2 minutes of the last hold turn it carries on that conversation: see "Follow-ups" |
 | `HoldEnd` | `() -> ()` | Stop the mic, get the words, then answer a fact or ask the voice model. See "Facts" |
-| `Cancel` | `() -> ()` | Stop everything, back to idle |
+| `Cancel` | `() -> ()` | Stop everything, back to idle, and end the conversation |
 | `DictateStart` | `() -> ()` | Start dictating, from the shell only. See "Dictation" |
 | `DictateEnd` | `() -> ()` | Stop listening and type what was said |
 | `DictateToggle` | `() -> ()` | `DictateStart`, or `DictateEnd` if already dictating |
@@ -73,10 +73,11 @@ Signals:
 | `SelectionWanted` | `s id` | Send the selected text, or else the clipboard text, to `SelectionText` |
 | `DictationStarted` | `s id` | Note the focused window: the words are for that one |
 | `TypeText` | `s id, s text, b only_copy` | Put the words where the cursor is, then reply with `Typed`. Sent to the shell alone, not broadcast. `only_copy` is true after the time limit |
+| `FollowUp` | `s question, s hint, i seconds` | The hold turn that just ended asked the user something. Sent after `StateChanged` `idle` and `Presence` false: show the blob, and the question with the hint under it, for `seconds`, whatever `Presence` says. A turn starting takes them down, and so does `FollowUp` with `seconds` 0. Plain text, like `Reply` |
 
 ## Locked screen
 
-GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged` and `GetActive` of `org.gnome.ScreenSaver` on `org.gnome.Shell.ScreenShield`, `/org/gnome/ScreenSaver`. While the shield is up it cancels any job and ignores `Toggle`, `HoldStart`, `Say` and `PreviewVoice`, in the controller, so that holding Fn is covered too. The timer scheduler waits for the initial lock check to finish. A failed or timed-out check keeps speech locked; an absent screen-shield service is treated as unlocked. A timer or reminder that comes due while the shield is up leaves its notification, and its words wait for the unlock, up to an hour for a timer or a day for a reminder: `Controller.say_when_free` refuses while the shield is up, as `say` does. With `timer_chime` on, which it isn't as installed, a chime with no words is played then through `Controller.sound`, the one thing that makes a sound on a locked screen.
+GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged` and `GetActive` of `org.gnome.ScreenSaver` on `org.gnome.Shell.ScreenShield`, `/org/gnome/ScreenSaver`. While the shield is up it cancels any job, ends the conversation (see "Follow-ups") and ignores `Toggle`, `HoldStart`, `Say` and `PreviewVoice`, in the controller, so that holding Fn is covered too. The timer scheduler waits for the initial lock check to finish. A failed or timed-out check keeps speech locked; an absent screen-shield service is treated as unlocked. A timer or reminder that comes due while the shield is up leaves its notification, and its words wait for the unlock, up to an hour for a timer or a day for a reminder: `Controller.say_when_free` refuses while the shield is up, as `say` does. With `timer_chime` on, which it isn't as installed, a chime with no words is played then through `Controller.sound`, the one thing that makes a sound on a locked screen.
 
 ## Approvals
 
@@ -84,7 +85,7 @@ GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged
 
 1. If the conversation has read something private (`session.tainted`) and the action's `network` permission names anything but `home`, it asks first. `home` means the server this install already talks to.
 2. The handler runs: in a thread, or on the event loop if it is `async def`. Only async handlers may use `session.confirm`, `busy`, `selection` and `execute`.
-3. An `Ask` goes to `session.confirm`, which puts up the card. Yes runs `ask.run` in a thread. Anything else returns `{"declined": true, ...}` to the model.
+3. An `Ask` goes to `session.confirm`, which puts up the card. Yes runs `ask.run` in a thread. Anything else returns `{"declined": true, ...}` to the model. A click on Deny also ends the conversation once that turn is over, so the next hold starts afresh (see "Follow-ups"); a card that runs out of time doesn't.
 4. Success with `files_read`, `shell` or `clipboard` sets `session.tainted`.
 
 ```mermaid
@@ -137,6 +138,18 @@ Steps 2 and 3 hand the results to a model with no tools, told to answer only fro
 The sorter's prompt matters more than it looks. Asked plainly, the model answers the question instead of sorting it, so the words go in as `Message: "..."` after fifteen worked examples. An empty thinking block takes four tokens before the first word, so the limit, `SORT_TOKENS`, is 12, which leaves room for the one word after it.
 
 A VAD turn can't be sorted, as the server replies by itself when it hears you stop. The same action is on its tool list, and the model picks it now and then.
+
+## Follow-ups
+
+`Talk` in `tuxistant/controller.py`. A hold turn doesn't end the conversation. Its connection to the server stays open, with the microphone shut, and the next hold within 2 minutes (`FOLLOW_ON_S`) carries on in it. The microphone still opens only while Fn is held.
+
+1. The new words go into the same session, so the model remembers what was said before. Between holds the client is parked: whatever the server sends is dropped, so no tool can run with no turn on screen.
+2. What the conversation has touched carries over in the same `Session`: `session.tainted`, so a card the last turn would have needed is needed now, and `session.found`.
+3. If the last reply of a turn ends in a question mark, the daemon sends `FollowUp(question, "Hold Fn to answer", 10)` once the turn has gone idle. The extension shows the blob, the question and the hint for those 10 seconds, even with `hide_on_release` on.
+4. If `task.run` ended on a question, the planner keeps its model and what it has said so far in `session.waiting`. While the turn's last reply was a question, the words of the next hold in the conversation go to the planner as the answer, through `session.execute("task.run", ...)` with `session.replying` set, and the app says what it answers in the usual voice. Neither the fact sorter nor the voice model sees those words, and the voice model doesn't learn how the task went. A cloud task carried on this way shows no "Send this request to Claude?" card, as the answer is the words Whisper heard, not text the voice model wrote. A last reply that isn't a question drops the waiting task.
+5. It ends, and the next hold starts a new conversation with nothing carried over, after 2 minutes with no hold, on `Cancel`, on `Toggle` either way, on a lock, and at the end of a turn in which a card was answered with Deny.
+6. The conversation goes on with a new connection, which keeps what it touched but not what the model remembers, if the server closed the connection meanwhile, a hold cut the last reply short, the last turn failed, or the skills were reloaded since.
+7. A VAD turn (`Toggle`) is a conversation of its own, with follow-ups only through `conversation_mode`, and is never carried on by a hold.
 
 ## Mail
 
@@ -211,7 +224,7 @@ It serves `/run/tuxistant-fn/events.sock` (Unix stream, broadcast to all clients
 - `up`: Fn released
 - `other`: another key was pressed while Fn is held. Never says which key, and is never sent when Fn is not held
 
-Nothing else may ever leave this helper. The daemon owns timing: `down` starts a `fn_hold_ms` timer; `other` or `up` cancels it; if it fires, `HoldStart`; `up` after that means `HoldEnd`. A `down` within 0.4 s of a tap, meaning a press under 0.3 s with no other key, is `DictateStart` straight away, `up` then means `DictateEnd`, and `other` cancels it, because that was a Fn shortcut. A missing socket must not stop the daemon: retry quietly every 5 s. `TUXISTANT_FN_SOCKET` overrides the path, for tests.
+Nothing else may ever leave this helper. The daemon owns timing: `down` starts a `fn_hold_ms` timer; `other` or `up` cancels it; if it fires, `HoldStart`; `up` after that means `HoldEnd`. A `down` within 0.4 s of a tap, meaning a press under 0.3 s with no other key, is `DictateStart` straight away, `up` then means `DictateEnd`, and `other` cancels it, because that was a Fn shortcut. That cancel stops the dictation and its words, and leaves a kept conversation alone. A missing socket must not stop the daemon: retry quietly every 5 s. `TUXISTANT_FN_SOCKET` overrides the path, for tests.
 
 ## Themes
 

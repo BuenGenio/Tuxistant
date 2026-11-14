@@ -8,6 +8,7 @@ but no file contents without a click.
 import asyncio
 import importlib
 import json
+import re
 import sys
 from typing import NamedTuple
 
@@ -99,6 +100,10 @@ class Local:
             key: tool[key] for key in ("name", "description", "parameters")}} for tool in tools]
         self.messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": goal}]
 
+    def hear(self, answer: str):
+        """The user's answer to the question this task ended on."""
+        self.messages.append({"role": "user", "content": answer})
+
     async def step(self, outcomes: list[Outcome], last: bool) -> Reply:
         self.messages += [{"role": "tool", "tool_call_id": outcome.id, "content": outcome.text}
                           for outcome in outcomes]
@@ -151,6 +156,11 @@ class Cloud:
         self.messages = [{"role": "user", "content": goal}]
         self.client = None
 
+    def hear(self, answer: str):
+        """The user's answer to the question this task ended on. The key may have changed since."""
+        self.messages.append({"role": "user", "content": answer})
+        self.client = None
+
     async def step(self, outcomes: list[Outcome], last: bool) -> Reply:
         if outcomes:
             blocks = [{"type": "tool_result", "tool_use_id": outcome.id, "content": outcome.text,
@@ -201,8 +211,16 @@ class Cloud:
             raise RealtimeError(CLOUD_TROUBLE) from None
 
 
+def asks(text: str) -> bool:
+    """Whether text ends on a question, so that the user's next words are the answer."""
+    return bool(re.search(r"\?[\"'\u201d\u2019)\]]*\s*$", text or ""))
+
+
 def _spoken(text: str) -> str:
-    return " ".join(realtime.sentences(text)[:MAX_SENTENCES])
+    parts = realtime.sentences(text)
+    if len(parts) > MAX_SENTENCES and asks(parts[-1]):  # the question matters more than the rest
+        parts = parts[:MAX_SENTENCES - 1] + parts[-1:]
+    return " ".join(parts[:MAX_SENTENCES])
 
 
 def _failed(error: RealtimeError, acted: bool) -> str:
@@ -238,7 +256,10 @@ async def _work(model, session) -> dict:
             session.busy(model.wait_s)
             reply = await model.step(outcomes, step == MAX_STEPS)
             if not reply.calls:
-                return {"answer": _spoken(reply.text) or NO_ANSWER, "steps": step}
+                answer = _spoken(reply.text) or NO_ANSWER
+                if asks(answer):    # see "Follow-ups" in docs/CONTRACT.md
+                    session.waiting = model
+                return {"answer": answer, "steps": step}
             if step == MAX_STEPS:
                 break   # nothing would read what it did, so it does not run
             outcomes, told = [], {}
@@ -268,11 +289,18 @@ async def _work(model, session) -> dict:
 
 async def run(args, config, session) -> dict:
     goal = " ".join(str(args.get("goal") or "").split())[:MAX_GOAL_CHARS]
+    waiting, session.waiting = session.waiting, None    # one answer each, and only the daemon's
     if not goal:
         return {"answer": NOT_CLEAR, "steps": 0}
+    provider = Cloud if config["cloud_enabled"] and config["cloud_api_key"] else Local
+    if session.replying and isinstance(waiting, provider):
+        # The user's own words, as Whisper heard them, answering the task's question. No voice
+        # model wrote them, so they can't carry what the conversation read. Cloud turned off or
+        # on since then starts afresh, as the task's model is no longer the one allowed.
+        waiting.hear(goal)
+        return await _work(waiting, session)
     tools = [tool for tool in session.skills.tools()
              if session.skills.action_name(tool["name"]) != ACTION]
-    provider = Cloud if config["cloud_enabled"] and config["cloud_api_key"] else Local
     # The voice model wrote the goal, and it may have seen something private in this conversation.
     if provider.leaves_home and session.tainted and not await session.confirm(
             Ask("Send this request to Claude?", goal, dict)):

@@ -902,5 +902,90 @@ class Wiring(Case):
                 await task
 
 
+class Answers(Case):
+    """A task that ends on a question waits for the user's answer, and gets it only from the
+    daemon. See "Follow-ups" in docs/CONTRACT.md."""
+
+    def server(self, *replies):
+        server = Server(*replies)
+        patcher = mock.patch("tuxistant.realtime._request", server)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return server
+
+    async def answer(self, words, session):
+        session.replying = True
+        try:
+            return await self.task(words, session)
+        finally:
+            session.replying = False
+
+    async def test_a_question_leaves_the_task_waiting_and_an_answer_does_not(self):
+        self.server(said("I found two. Which one should I print?"))
+        session = self.session()
+        await self.task("print my report", session)
+        self.assertIsInstance(session.waiting, planner.Local)
+        self.server(said("Done, I printed it."))
+        await self.task("print my report", session)
+        self.assertIsNone(session.waiting)
+
+    async def test_the_users_answer_carries_on_the_same_task(self):
+        server = self.server(said("Which one should I print?"), said("Printed the second one."))
+        session = self.session()
+        await self.task("print my report", session)
+        result = await self.answer("the second one", session)
+        self.assertEqual(result["answer"], "Printed the second one.")
+        messages = server.bodies[1]["messages"]
+        self.assertEqual([m["content"] for m in messages if m["role"] == "user"],
+                         ["print my report", "the second one"])
+        self.assertEqual(messages[2]["content"], "Which one should I print?")
+        self.assertIsNone(session.waiting)
+
+    async def test_a_model_calling_the_task_cannot_answer_for_the_user(self):
+        server = self.server(said("Which one should I print?"), said("Started afresh."))
+        session = self.session()
+        await self.task("print my report", session)
+        await self.task("delete everything", session)
+        self.assertEqual([m["content"] for m in server.bodies[1]["messages"] if m["role"] == "user"],
+                         ["delete everything"])
+        self.assertIsNone(session.waiting, "the model's call used up the question")
+
+    async def test_the_question_survives_a_long_reply(self):
+        self.server(said("I looked in Documents. There are two reports there. Both are from May. "
+                         "Which one should I print?"))
+        session = self.session()
+        result = await self.task("print my report", session)
+        self.assertEqual(result["answer"], "I looked in Documents. Which one should I print?")
+        self.assertIsNotNone(session.waiting)
+
+
+class AnswersInTheCloud(CloudCase):
+    async def test_an_answer_goes_to_the_same_cloud_task_with_no_card(self):
+        sdk = self.sdk(reply(text("Which one should I print?")), reply(text("Printed it.")))
+        session = self.session()
+        session.tainted = True
+        self.clicks.answers = [True]
+        await self.task("print my report", session)
+        self.assertEqual(len(self.clicks.asked), 1)     # the goal the voice model wrote
+        session.replying = True
+        result = await self.task("the second one", session)
+        self.assertEqual(result["answer"], "Printed it.")
+        self.assertEqual(len(self.clicks.asked), 1, "the user's own words need no card")
+        self.assertEqual(sdk.requests[1]["messages"][-1],
+                         {"role": "user", "content": "the second one"})
+
+    async def test_with_the_cloud_turned_off_since_an_answer_stays_home(self):
+        sdk = self.sdk(reply(text("Which one should I print?")))
+        session = self.session()
+        await self.task("print my report", session)
+        self.config.values["cloud_enabled"] = False
+        server = Server(said("At home."))
+        session.replying = True
+        with mock.patch("tuxistant.realtime._request", server):
+            result = await self.task("the second one", session)
+        self.assertEqual(result["answer"], "At home.")
+        self.assertEqual(len(sdk.requests), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
