@@ -39,7 +39,7 @@ from .gate import Speak
 from .knowledge import FILLER
 from .realtime import RealtimeError
 from .research import _brain, _say, _short
-from .webfetch import TAG, clean
+from .webfetch import clean
 
 # Where a Thunderbird from a package, a snap and a flatpak each keep their profiles.
 ROOTS = ("~/.thunderbird", "~/snap/thunderbird/common/.thunderbird",
@@ -62,7 +62,7 @@ SUBJECT_CHARS = 200
 SECRET_REACH = 160      # how far after the word for a secret the secret itself is looked for
 SECRET_BEFORE = 60      # and how far before it: "482913 is your code"
 TALK_REACH = 20         # how far before a cut its rest is read from, for words the cut split
-REST_CHARS = 200_000    # and how much of that rest: past it, a mail is taken to talk of signing in
+REST_CHARS = 50_000     # and how much of that rest: past it, a mail is taken to talk of signing in
 TRIED = 3               # mails shown to the model, best first
 CHECKED = 6             # the best few have their senders looked up, which can cost a scan each
 MAX_CHECKED = 30        # and more of the best, so that six strangers can't fill every place
@@ -523,10 +523,28 @@ def _uncut(text: str) -> str:
 
 
 def _talks(rest: str | None) -> bool:
-    """Whether the rest of a mail, past where it is read, talks of signing in. It is made plain
-    enough for SIGN_IN_TALK to see what a reader would: wide letters, odd spaces and tags."""
-    return bool(SIGN_IN_TALK.search(SPACE.sub(" ", TAG.sub(" ", unicodedata.normalize(
-        "NFKC", rest or "")))))
+    """Whether the rest of a mail, past where it is read, talks of signing in. It is looked at as
+    the part that is read would be, by the same steps: as hidden first (_plain), then as the model
+    reads it (_joined, then _plain again). So "sign\nin", "&#115;ign in", a soft hyphen or a tag
+    inside the words count as they would before the cut. A rest that NFKC grows past twice
+    REST_CHARS, as only ligatures do, is taken to talk of signing in rather than read."""
+    rest = unicodedata.normalize("NFKC", rest or "")
+    if len(rest) > 2 * REST_CHARS:
+        return True
+    first = _plain(rest)
+    return bool(SIGN_IN_TALK.search(first) or SIGN_IN_TALK.search(_plain(_joined(first))))
+
+
+def _plain(text: str) -> str:
+    """A mail's text made what the model is shown, with its lines kept and a code spelt out one
+    character to a line put on a line of its own (see _hide)."""
+    return SPELT.sub(lambda run: "".join(run[0].split()), SPACE.sub(" ", _seen(text)))
+
+
+def _joined(text: str) -> str:
+    """A mail's text as the model reads it: links out, cleaned and its lines joined. clean() makes
+    no text longer, so it cuts nothing here."""
+    return clean(URL.sub(" ", text), len(text))
 
 
 def _hide(text: str, cut: bool = False, talk: bool | None = None) -> str:
@@ -543,8 +561,7 @@ def _hide(text: str, cut: bool = False, talk: bool | None = None) -> str:
     _uncut would end it, as part of a code may be too short to hide. Secrets are looked for in
     all of it, so a word for a code in what goes still hides the code before it, and one that
     runs past that end is hidden whole."""
-    text = _seen(text)
-    text = SPELT.sub(lambda run: "".join(run[0].split()), SPACE.sub(" ", text))
+    text = _plain(text)
     stop = len(_uncut(text)) if cut else len(text)
     out, at = [], 0
     for start, end in _spans(text, cut if talk is None else talk):
@@ -816,8 +833,7 @@ def _shown(text: str, limit: int) -> str:
     stands for, so cutting after hiding also keeps the text within the limit. Only a hostile mail
     grows past CLEANED_CHARS, and it loses what that cut may have split."""
     cut = len(text) > CLEANED_CHARS
-    text = clean(URL.sub(" ", text[:CLEANED_CHARS]), CLEANED_CHARS)   # clean() makes none longer
-    return _fit(_hide(text, cut), limit)
+    return _fit(_hide(_joined(text[:CLEANED_CHARS]), cut), limit)
 
 
 async def _note(question: str, mail: Mail, config, seconds: float) -> str:

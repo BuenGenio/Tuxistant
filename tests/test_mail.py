@@ -81,6 +81,11 @@ ORDER = ("Thanks for your order with Acme Kitchen. Order number: 10482913. Fligh
          "Lisbon, booking reference 6612. Questions? Call us on 0800 123 4567. It arrives on "
          "Tuesday.")
 ORDER_NUMBERS = ("10482913", "BA 2491", "reference 6612", "0800 123 4567")
+# Sign-in words split in ways the part that is read is joined back up: by a line, a soft hyphen,
+# a character reference for a space or a letter, and tags.
+SPLIT_TALK = ("Please sign\nin within 10 minutes.", "Please sign\u00ad in within 10 minutes.",
+              "Please sign&nbsp;in within 10 minutes.", "Please &#115;ign in within 10 minutes.",
+              "Please <b>sign</b> <b>in</b> within 10 minutes.", "Thanks for verifying&nbsp;it.")
 
 
 def cut_at_scan(head: str) -> str:
@@ -756,6 +761,20 @@ class Strangers(Base):
         self.assertNotIn("482913", shown)
         self.assertIn("renew your passport", shown)
 
+    async def test_sign_in_talk_split_past_the_cut_still_counts(self):
+        """The rest of the mail is made plain as the part that is read is, so words split there
+        count as they would anywhere else."""
+        head = PASSPORT["body"] + " " + TALK_PAST
+        for talk in SPLIT_TALK:
+            with self.subTest(talk=talk):
+                self.model.clear()
+                self.index({**PASSPORT,
+                            "body": head + " " * (mail.SCAN_CHARS + 50 - len(head)) + talk})
+                await self.ask()
+                shown = self.read().split("=====")[2]
+                self.assertNotIn("482913", shown)
+                self.assertIn("renew your passport", shown)
+
     async def test_a_long_ordinary_mail_keeps_its_numbers(self):
         """Cut short, a mail is taken to talk of signing in only if the rest of it does."""
         self.index({**PASSPORT, "body": PASSPORT["body"] + " " + ORDER + " Thanks." * 3000})
@@ -1230,10 +1249,21 @@ class Limits(Base):
 
     def test_the_rest_of_a_mail_talks_of_signing_in_as_a_reader_sees_it(self):
         for rest in ("Please sign in.", "Please sign<b>in.", "Please log\u00a0in.",
-                     "\uff33\uff49\uff47\uff4e in now", "your one-time PIN", "Verification"):
+                     "\uff33\uff49\uff47\uff4e in now", "your one-time PIN", "Verification",
+                     *SPLIT_TALK):
             self.assertTrue(mail._talks(rest), rest)
+            self.assertTrue(mail.SIGN_IN_TALK.search(mail._plain(mail._joined(mail._plain(rest)))))
         for rest in ("Thanks for your order.", "", None, "design in", "a login_form"):
             self.assertFalse(mail._talks(rest), rest)
+        # A rest that NFKC grows too far to read is taken to talk of signing in.
+        self.assertTrue(mail._talks("\ufdfa" * (mail.REST_CHARS // 8)))
+
+    def test_reading_the_rest_of_a_mail_is_quick(self):
+        for rest in ("Thanks for your order. " * 3000, "\ufdfa" * 5555, "\uff33" * 50_000,
+                     "&nbsp;" * 9000, "<" * 50_000, "K\n" * 25_000):
+            started = time.monotonic()
+            mail._talks(rest[:mail.REST_CHARS])
+            self.assertLess(time.monotonic() - started, 0.5, rest[:10])
 
     async def test_it_is_off_until_switched_on(self):
         self.assertIs(DEFAULTS["mail_search"], False)
