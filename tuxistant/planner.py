@@ -57,8 +57,9 @@ NOT_SENT = "You said no, so nothing went to Claude."
 PART_DONE = "Part of it may already be done."
 UNREADABLE = "The model sent back something I could not read."
 NO_SDK = "The Claude library is not installed. Run the Tuxistant installer again to add it."
-# Where a task's requests go: its history goes along with each one. See resumable.
+# Where a task's requests go: its history goes along with each one. See resumable and _same.
 SENT_TO = ("server", "api_key", "cloud_enabled", "cloud_api_key")
+CHANGED = "The settings changed, so I stopped that."
 BAD_KEY = "The cloud key in the settings is not valid."
 REJECTED = "The cloud key was rejected."
 NOT_ALLOWED = "The cloud key is not allowed to do that."
@@ -98,6 +99,7 @@ class Local:
 
     def __init__(self, config, goal: str, tools: list[dict]):
         self.config = config
+        self.sent_to = _sent_to(config)
         self.tools = [{"type": "function", "function": {
             key: tool[key] for key in ("name", "description", "parameters")}} for tool in tools]
         self.messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": goal}]
@@ -114,8 +116,12 @@ class Local:
             self.messages.append({"role": "user", "content": LAST_STEP})
         else:
             body["tools"] = self.tools
-        raw = await asyncio.to_thread(realtime._request, self.config, "/v1/chat/completions", body)
+        raw = await asyncio.to_thread(self._send, body)
         return self._read(raw)
+
+    def _send(self, body: dict) -> bytes:
+        _same(self)     # in the thread, as close to the request as it gets
+        return realtime._request(self.config, "/v1/chat/completions", body)
 
     def _read(self, raw: bytes) -> Reply:
         try:
@@ -153,6 +159,7 @@ class Cloud:
 
     def __init__(self, config, goal: str, tools: list[dict]):
         self.config = config
+        self.sent_to = _sent_to(config)
         self.tools = [{"name": tool["name"], "description": tool["description"],
                        "input_schema": tool["parameters"]} for tool in tools]
         self.messages = [{"role": "user", "content": goal}]
@@ -185,6 +192,7 @@ class Cloud:
     def _create(self):
         """Blocking, like the import, so it runs in a thread. Every failure becomes a fixed
         sentence: an SDK message isn't written to be spoken, and it must never carry the key."""
+        _same(self)     # consent and the key the task started with, or nothing goes
         sdk = _sdk()
         key = self.config["cloud_api_key"]
         if not valid_key(key):
@@ -265,6 +273,8 @@ async def _work(model, session) -> dict:
                 break   # nothing would read what it did, so it does not run
             outcomes, told = [], {}
             for call in reply.calls:
+                if outcomes:
+                    _same(model)    # nothing would read what the rest of the reply did
                 session.busy(ACTION_WAIT_S)
                 asked = (call.name, call.arguments)     # a small model repeats itself, and the
                 result = told.get(asked) or await _act(call, session)   # answer is read out once
@@ -296,6 +306,14 @@ def _sent_to(config) -> tuple:
     return tuple(config[key] for key in SENT_TO)
 
 
+def _same(model):
+    """A task stops once the settings its requests go by changed since it started, whether it
+    is thinking, running a tool or showing a card: the next request would carry everything it
+    has seen to a server or account it never used, or to Claude after Cloud was turned off."""
+    if _sent_to(model.config) != model.sent_to:
+        raise RealtimeError(CHANGED)
+
+
 def resumable(waiting, config) -> bool:
     """Whether a task waiting for the user's answer may carry on. Its model holds everything the
     task saw, and that goes with each request: Cloud turned off or on, or a new server or key,
@@ -321,9 +339,7 @@ async def run(args, config, session) -> dict:
     if provider.leaves_home and session.tainted and not await session.confirm(
             Ask("Send this request to Claude?", goal, dict)):
         return {"answer": NOT_SENT, "steps": 0}
-    model = provider(config, goal, tools)
-    model.sent_to = _sent_to(config)
-    return await _work(model, session)
+    return await _work(provider(config, goal, tools), session)
 
 
 HANDLERS = {ACTION: run}

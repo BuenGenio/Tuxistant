@@ -30,7 +30,8 @@ class Model:
     made = []
     script = []
 
-    def __init__(self, _config, goal, _tools):
+    def __init__(self, config, goal, _tools):
+        self.config, self.sent_to = config, planner._sent_to(config)    # as the real ones do
         self.heard = [goal]
         Model.made.append(self)
 
