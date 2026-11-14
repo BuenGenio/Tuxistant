@@ -129,8 +129,10 @@ class Watcher:
     poll_s = POLL_S
 
     def __init__(self, roots: list[Path], on_change: Callable[[], None],
-                 debounce_s: float = 0.3):
+                 debounce_s: float = 0.3, files: list[Path] = ()):
         self.roots = [Path(os.path.abspath(r)) for r in roots]
+        # single files, such as the grants, watched by their folder for changes to them alone
+        self.files = [Path(os.path.abspath(f)) for f in files]
         self.on_change = on_change
         self.debounce_s = debounce_s
         self.polling = False
@@ -180,7 +182,20 @@ class Watcher:
             for entry in _entries(root):
                 if entry is not None and entry[1]:
                     wanted.append((root / entry[0], "skill"))
+        for file in self.files:
+            wanted.append((file.parent, "file") if file.parent.is_dir()
+                          else (_existing_ancestor(file.parent), "anchor"))
         return wanted
+
+    def _file_names(self) -> set[str]:
+        """The names of the watched files, and of what a link among them leads to beside it."""
+        names = set()
+        for file in self.files:
+            names.add(file.name)
+            target = Path(os.path.realpath(file))
+            if target.parent == Path(os.path.realpath(file.parent)):
+                names.add(target.name)
+        return names
 
     def _sync(self) -> None:
         """Make the watch set match the folders that exist now."""
@@ -250,8 +265,11 @@ class Watcher:
         if not targets:
             return False, bool(mask & IN_IGNORED)
         structural = bool(mask & (STRUCTURE | IN_ISDIR))
-        if all(kind == "anchor" for _path, kind in targets):
-            return False, True      # _sync notices a root that has appeared
+        kinds = {kind for _path, kind in targets}
+        if kinds <= {"anchor", "file"}:     # only the files there count, or a root appearing
+            if "file" in kinds and name in self._file_names():
+                return not mask & IN_IGNORED, structural
+            return False, "anchor" in kinds or structural
         return not mask & IN_IGNORED, structural
 
     def _changed(self) -> None:
@@ -300,4 +318,10 @@ class Watcher:
             subs = tuple((e[0], tuple(_entries(root / e[0])))
                          for e in top if e is not None and e[1])
             state.append((str(root), tuple(top), subs))
+        for file in self.files:
+            try:
+                info = os.stat(file)
+                state.append((str(file), info.st_ino, info.st_size, info.st_mtime_ns))
+            except OSError:
+                state.append((str(file), None))
         return tuple(state)

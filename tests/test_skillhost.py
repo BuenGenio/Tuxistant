@@ -426,8 +426,9 @@ class Processes(Case):
         watchers = []
 
         class Watcher:
-            def __init__(self, roots, on_change, debounce_s=0.3):
+            def __init__(self, roots, on_change, debounce_s=0.3, files=()):
                 self.roots, self.on_change, self.stopped = roots, on_change, False
+                self.files = files
                 watchers.append(self)
 
             async def start(self):
@@ -441,6 +442,8 @@ class Processes(Case):
         with mock.patch.dict(sys.modules, {"tuxistant.inotify": fake}):
             await self.host.start()
         self.assertEqual(watchers[0].roots, [self.builtin, self.bundled, self.user])
+        self.assertEqual(watchers[0].files, [self.user.parent / skillhost.GRANTS],
+                         "a hand edit to what was allowed counts at once")
         self.assertIn("two.go", self.host.current().actions)
         (self.user / "two" / "main.py").write_text("changed\n")
         watchers[0].on_change()     # what the watcher does after a quiet moment

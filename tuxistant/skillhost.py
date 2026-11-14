@@ -76,6 +76,9 @@ BROKEN_GRANTS = ("Tux couldn't read what your skills were allowed, in {file}, so
                  "file is fixed or taken out it allows no skill you added the network or a "
                  "setting, even one it allowed before. Taking the file out allows every skill of "
                  "yours what it asks for now, edits that were refused included.")
+UNKEPT_GRANTS = ("{file} kept changing while Tux noted what your skills were allowed, so this "
+                 "time it allows no skill you added the network or a setting. It tries again at "
+                 "the next change.")
 NOT_A_SKILL = ("It is no longer a recipe or a skill folder, so nothing of it is in use, but it "
                "keeps its place and its names until you take it out.")
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
@@ -478,6 +481,7 @@ class _Grants:
         self.broken = ""        # why the file is there but can't be trusted, if it is
         self._records: dict | None = None
         self._seen = None       # the identity of the file as it was read, or None
+        self._hold = False      # unkept() for the next reload
         self._dirty = False
 
     @property
@@ -490,7 +494,9 @@ class _Grants:
     def refresh(self) -> None:
         """Read the file again at the next use if it is broken or changed since it was read,
         as after a fix, a hand edit or damage while Tux runs, or once it is taken out."""
-        if self._records is not None and (self.broken or _identity(self.file) != self._seen):
+        if self._hold:      # unkept() holds for the one reload it was made for
+            self._hold = False
+        elif self._records is not None and (self.broken or _identity(self.file) != self._seen):
             self._records, self.broken, self._dirty = None, "", False
 
     def _read(self) -> dict:
@@ -510,13 +516,22 @@ class _Grants:
 
     def _data(self):
         """What the file holds, {} when there is none, or the error. A link that leads nowhere,
-        such as onto a drive that isn't there, is an error, not a missing file."""
+        such as onto a drive that isn't there, or out of the folder the file is in, where Tux
+        won't write, is an error, not a missing file."""
+        if self.file.is_symlink() and not _beside(self.file):
+            return OSError(f"{self.file} is a link to a file in another folder")
         try:
             return _read_json(self.file)
         except FileNotFoundError as e:
             return e if os.path.lexists(self.file) else {}
         except (OSError, ValueError, RecursionError) as e:
             return e
+
+    def unkept(self) -> None:
+        """For one reload, after the file kept changing as Tux tried to save it."""
+        self._records, self._dirty, self._hold = {}, False, True
+        self.broken = UNKEPT_GRANTS.format(file=self.file)
+        log.warning("%s kept changing as Tux saved it", self.file)
 
     def denies(self, manifest: dict) -> str:
         """Why what a manifest asks for isn't allowed now, as for a version kept in use after
@@ -537,7 +552,7 @@ class _Grants:
         more = _beyond(manifest, record)
         if not more:
             return ""
-        if record.get("folder") != folder.name and not _there(folder.parent, record):
+        if record.get("folder") != folder.name and _there(folder.parent, record) is False:
             record["folder"], self._dirty = folder.name, True   # moved: it stays refused here
         if manifest.get("recipe"):
             return (f"It now asks {' and '.join(more)}, which it wasn't allowed before, so the "
@@ -563,7 +578,9 @@ class _Grants:
                 **record, "removed": False, "folder": folder.name}
             self._dirty = True
             return bool(more)
-        return False
+        if record.get("folder") != folder.name and _there(folder.parent, record) is False:
+            record["folder"], self._dirty = folder.name, True   # renamed, or the copy that
+        return False                                            # is left of two
 
     def gone(self, user: Path, here: set[str]) -> set[str]:
         """Marks removed each record whose file or folder is really not there and whose id no
@@ -598,21 +615,25 @@ class _Grants:
             self._dirty = True
         return dropped
 
-    def save(self) -> None:
-        """Writes the records, whole, over the file they were read from. Not when the file was
-        damaged or changed since, which is read again at the next reload instead, and through a
-        link only onto the file it led to when read, beside it."""
+    def save(self) -> bool:
+        """Writes the records, whole, over the file they were read from, and says whether what
+        was allowed in this reload is kept. Not when the file changed since it was read, which
+        is read again for the reload to be made again, and through a link only onto the file
+        it led to when read, beside it."""
         if not self._dirty or not self.writable or self.broken:
-            return
+            return True
         target = self._target()
         if target is None:
             self._records, self._dirty = None, False
-            return
+            return False
         try:
             _write_json(target, self.records)
             self._seen, self._dirty = _identity(self.file), False
+            return True
         except OSError as e:
             log.warning("could not save what skills were allowed: %s", e)
+            self._records, self._dirty = None, False
+            return False
 
     def _target(self) -> Path | None:
         """Where to write: the file, or the one a link to it leads to, resolved once, as long
@@ -624,15 +645,19 @@ class _Grants:
         if not self.file.is_symlink():
             return self.file
         target = Path(os.path.realpath(self.file))
-        if target.parent != Path(os.path.realpath(self.file.parent)) or (
-                _identity(target) != self._seen):
+        if not _beside(self.file) or _identity(target) != self._seen:
             log.warning("%s leads elsewhere, so it isn't written", self.file)
             return None
         return target
 
 
+def _beside(link: Path) -> bool:
+    """Whether a link leads to a file in the folder it is in."""
+    return Path(os.path.realpath(link)).parent == Path(os.path.realpath(link.parent))
+
+
 def _identity(file: Path):
-    """What tells whether a file changed: device, inode, size and time, following a link;
+    """What tells whether a file changed: device, inode, size and times, following a link;
     "missing" or "dangling" when there is nothing to follow."""
     try:
         info = os.stat(file)
@@ -640,7 +665,8 @@ def _identity(file: Path):
         return "dangling" if os.path.lexists(file) else "missing"
     except OSError as e:
         return f"error {e.errno}"
-    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, stat.S_IFMT(info.st_mode)
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+            stat.S_IFMT(info.st_mode))
 
 
 def _there(user: Path, record: dict) -> bool | None:
@@ -654,7 +680,7 @@ def _there(user: Path, record: dict) -> bool | None:
         return True
     except FileNotFoundError:
         return False
-    except OSError:
+    except (OSError, ValueError):   # UnicodeError is a ValueError
         return None
 
 
@@ -806,7 +832,15 @@ def _place_from(value) -> _Place | None:
 
 
 def _plain_name(name) -> bool:
-    return isinstance(name, str) and name not in ("", ".", "..") and "/" not in name
+    """A name of one file in a folder, that the system can be asked about: not empty, . or ..,
+    with no / or NUL, and one os.fsencode can encode, so no lone surrogate either."""
+    if not isinstance(name, str) or name in ("", ".", "..") or "/" in name or "\0" in name:
+        return False
+    try:
+        os.fsencode(name)
+    except UnicodeError:
+        return False
+    return True
 
 
 @dataclass
@@ -848,6 +882,7 @@ class SkillHost:
         self.last_offered: dict[str, _Found] = {}   # by key, as the last reload offered them
         self.running: dict[str, _Running] = {}      # by folder
         self.failed: dict[str, str] = {}            # by key, why it didn't load, last reload
+        self.seen_ids: dict[str, str] = {}          # yours by key, the id each last read with
         self.stopping: set[asyncio.Task] = set()
         self.retired: list[_Running] = []           # retired with no loop to stop them on
         self.watcher = None
@@ -868,7 +903,8 @@ class SkillHost:
             log.warning("could not make the skills folder: %s", e)
         try:
             from .inotify import Watcher
-            self.watcher = Watcher([self.builtin, self.bundled, self.user], self._changed)
+            self.watcher = Watcher([self.builtin, self.bundled, self.user], self._changed,
+                                   files=[self.grants.file])
             await self.watcher.start()
         except Exception:   # the skills still work; only changes need a ReloadSkills
             log.exception("could not watch the skills folders")
@@ -904,6 +940,10 @@ class SkillHost:
             swapped = swapped or done
             if not more:
                 break
+        if not done:    # the grants file kept changing: allow nothing new rather than unkept
+            self.grants.unkept()
+            problems, done, _ = self._reload_once()
+            swapped = swapped or done
         if swapped and self.on_change:
             try:
                 self.on_change()
@@ -921,7 +961,8 @@ class SkillHost:
             found = self._scan(problems)
             sandbox_problem = self._sandbox_problem()
             chosen, places, problems, late = self._settle(found, problems, sandbox_problem)
-            self._grant(chosen, found, listed=str(self.user) not in problems)
+            if not self._grant(chosen, found, listed=str(self.user) not in problems):
+                return dict(problems), False, True      # made again from the file as it is now
             skills, running, offered = self._build(chosen, problems, sandbox_problem)
         except Exception as e:
             log.exception("reloading the skills failed")
@@ -1040,21 +1081,34 @@ class SkillHost:
             raise ValueError(problem)
         return _Found(str(file), manifest, kind="recipe", text=text)
 
-    def _grant(self, chosen: list[_Found], found: list[_Found], listed: bool) -> None:
-        for item in chosen:
-            if item.kind != "builtin" and item.manifest["source"] == "yours" and (
-                    self.grants.grant(item.manifest, Path(item.key))) and item.kind == "code":
-                self._clear_state(item.manifest["id"])  # a recipe keeps nothing
+    def _grant(self, chosen: list[_Found], found: list[_Found], listed: bool) -> bool:
+        """Notes what is allowed, and clears the state of those back with more or pruned, once
+        that is kept. False when it couldn't be kept, as the file changed meanwhile."""
+        clear = [item.manifest["id"] for item in chosen
+                 if item.kind != "builtin" and item.manifest["source"] == "yours"
+                 and self.grants.grant(item.manifest, Path(item.key)) and item.kind == "code"]
         if listed:      # a folder that couldn't be read shows nothing gone
+            for item in found:
+                if item.manifest["source"] == "yours":
+                    self.seen_ids[item.key] = item.manifest["id"]
+            self.seen_ids = {key: skill_id for key, skill_id in self.seen_ids.items()
+                             if os.path.lexists(key)}
             found_ids = {item.manifest["id"] for item in found}
-            marked = self.grants.gone(self.user, found_ids)
+            # a file there that doesn't load now still has the id it last loaded with
+            present = set(self.seen_ids.values()) | {
+                place.skill_id for key, place in self.offered.items()
+                if place.skill_id and Path(key).parent == self.user and os.path.lexists(key)}
+            marked = self.grants.gone(self.user, found_ids | present)
             here = found_ids | marked | {
                 place.skill_id for place in self.offered.values() if place.skill_id}
             # one pruned is new when it comes back, so it keeps nothing it saved
-            for skill_id in self.grants.prune(self.user, here):
-                if SKILL_ID.fullmatch(skill_id):    # a key from the file, which may be anything
-                    self._clear_state(skill_id)
-        self.grants.save()
+            clear += [skill_id for skill_id in self.grants.prune(self.user, here)
+                      if SKILL_ID.fullmatch(skill_id)]  # a key from the file may be anything
+        if not self.grants.save():
+            return False
+        for skill_id in clear:          # a recipe keeps nothing, so only code is cleared
+            self._clear_state(skill_id)
+        return True
 
     def _clear_state(self, skill_id: str) -> None:
         """Only the default launcher gives a skill this folder; a test's launcher has none."""

@@ -13,6 +13,7 @@ six-action budget:
   I7  right after a restart, tuxistant doctor refuses the same skills and loads the same tools;
   I8  a reload with nothing changed changes nothing, not even a reason.
 """
+import json
 import os
 import random
 import unittest
@@ -73,7 +74,17 @@ class Fuzz(tr.Case):
         op = rng.random()
         if path.exists() and not path.is_file():
             path.unlink()
-        if op < 0.45:
+        if op < 0.03:       # names in the saved order the system can't be asked about
+            loaded = self.user.parent / skillhost.LOADED
+            try:
+                data = json.loads(loaded.read_text())
+            except (OSError, ValueError):
+                data = None
+            if isinstance(data, dict):
+                data[rng.choice(["a\u0000b.yaml", "a\ud800b.yaml", "../a.yaml", "", "."])] = {
+                    "count": 1, "digest": "", "id": "org.example.a", "actions": ["a.one"]}
+                loaded.write_text(json.dumps(data))
+        elif op < 0.45:
             skill_id = rng.choice(IDS[:5] + [f"org.example.{name[0]}"] * 4)
             while True:
                 actions = rng.sample(POOL, rng.choice([1, 1, 2, 2, 3]))
