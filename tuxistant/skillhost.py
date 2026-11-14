@@ -66,7 +66,7 @@ USER_IDLE_S = 300
 IGNORED_PARTS = frozenset({"__pycache__"})
 GRANTS = "skill-grants.json"    # next to the skills folder, so tests that move it move this too
 CODE_DIR = "skill-code"         # the checked copies that skills really run from
-LOADED = "skills-loaded.json"   # yours that were loaded, by name, with how many actions each had
+LOADED = "skills-loaded.json"   # yours that keep their place, by name, with their counts
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
 ACTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+")
 PARAM = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}")
@@ -586,7 +586,7 @@ class SkillHost:
         self.loaded = self.user.parent / LOADED
         self.saved = _read_loaded(self.loaded)
         # what keeps its place in the budget, by key, with how many actions it was offered with:
-        # what the last reload loaded, or at start yours that loaded before the restart
+        # what the last reload loaded or kept a place for, or at start yours that kept one before
         self.offered: dict[str, int | None] = {
             str(self.user / name): count for name, count in self.saved.items()}
         self.last_offered: dict[str, _Found] = {}   # by key, as the last reload offered them
@@ -768,21 +768,25 @@ class SkillHost:
     # Deciding who gets what
 
     def _resolve(self, found: list[_Found], problems: dict, sandbox_problem: str):
-        """What loads, and the places kept for yours that grew and have no version to use.
+        """What loads, and the places kept for yours that were offered and aren't now.
         Yours that were loaded keep their place, ahead of new ones, so a file dropped in is
-        the one refused rather than one that was working. One that has more actions than it was
-        offered with comes after those that don't, so what it added is refused, never another
-        skill, and the version offered stays in use while there is one. Room for the size it
-        was offered at is held for each one still to come, and kept for one refused with no
-        version to use, as after a restart, so neither a new skill nor another's growth takes
-        its place."""
+        the one refused rather than one that was working. Of those, the ones unchanged since
+        the last reload offered them come first, so an edit that clashes with another is what
+        is refused, never the other. One that has more actions than it was offered with comes
+        after those that don't, so what it added is refused, never another skill. One of yours
+        refused for any reason keeps the version last offered while that is still allowed;
+        with none, as after a restart, it keeps its place at the count it was offered with, as
+        one whose file is still there but failed to load does, so neither a new skill nor
+        another's growth takes that room. Room for each one that grew and is still to come is
+        held the same way. A code skill that can't run for want of a sandbox keeps no place."""
         ids, actions, tools = set(), set(), set()
         builtin_ids = {item.manifest["id"] for item in found if item.kind == "builtin"}
         ours = {_namespace(name) for name in HANDLERS} | {
             _namespace(name) for item in found if item.manifest["source"] != "yours"
             for name in item.manifest["actions"]}
-        yours = 0
-        chosen, places = [], {}
+        chosen = []
+        places = self._unloaded(found, sandbox_problem)
+        yours = sum(places.values())
         held = {item.key: self.offered[item.key] for item in found if self._place(item) == GROWN}
 
         def budget(item: _Found) -> str:
@@ -799,27 +803,50 @@ class SkillHost:
             return unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
                 mine and _lookalike(item.manifest, ours)) or (budget(item) if mine else "")
 
-        for item in sorted(found, key=self._place):
+        for item in sorted(found, key=self._order):
+            mine = item.manifest["source"] == "yours"
             held.pop(item.key, None)
             problem = refusal(item)
-            if problem and self._place(item) == GROWN and problem == budget(item):
-                before = self.last_offered.get(item.key)
-                if before is not None and not refusal(before):
-                    # a broken edit's own reason, which says the same of the version kept
-                    problems.setdefault(item.key, f"{problem} {KEPT}")
-                    item, problem = before, ""
-                elif before is None:
-                    places[item.key] = self.offered[item.key]
-                    yours += self.offered[item.key]
+            before = self.last_offered.get(item.key) if problem and mine else None
+            if before is not None and before is not item and not refusal(before):
+                # a broken edit's own reason, which says the same of the version kept
+                problems.setdefault(item.key, f"{problem} {KEPT}")
+                item, problem = before, ""
             if problem:
                 problems[item.key] = problem
+                kept = self.offered.get(item.key) if mine else None
+                if kept is not None and not (item.kind == "code" and sandbox_problem):
+                    places[item.key] = kept
+                    yours += kept
                 continue
-            yours += len(item.manifest["actions"]) if item.manifest["source"] == "yours" else 0
+            yours += len(item.manifest["actions"]) if mine else 0
             ids.add(item.manifest["id"])
             actions.update(item.manifest["actions"])
             tools.update(name.replace(".", "_") for name in item.manifest["actions"])
             chosen.append(item)
         return chosen, places
+
+    def _unloaded(self, found: list[_Found], sandbox_problem: str) -> dict[str, int]:
+        """Yours that were offered and whose file or folder is still there, but didn't load, as
+        after an edit that broke one while Tux was off or grants a new host refuses, at the
+        count each was offered with. One taken out frees its place."""
+        loaded = {item.key for item in found}
+        places = {}
+        for key, count in self.offered.items():
+            path = Path(key)
+            if key in loaded or count is None or path.parent != self.user:
+                continue
+            if os.path.lexists(path) and not (sandbox_problem and path.is_dir()):
+                places[key] = count
+        return places
+
+    def _order(self, item: _Found) -> tuple[int, bool]:
+        """Where it is counted, and among yours that keep their place, those changed since the
+        last reload offered them after the others, so a clash refuses the change."""
+        before = self.last_offered.get(item.key)
+        changed = item.manifest["source"] == "yours" and (
+            before is None or before.manifest != item.manifest)
+        return self._place(item), changed
 
     def _place(self, item: _Found) -> int:
         """Where it is counted: built-in and bundled ones, and yours as loaded or smaller, keep

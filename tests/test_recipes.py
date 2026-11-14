@@ -1368,6 +1368,99 @@ class Host(Case):
                                           str(alarm): skillhost.over_budget(6, 1)})
         self.assertEqual(self.saved()["notes.yaml"], 1)
 
+    def full(self) -> tuple[Path, dict]:
+        """coins, deskstrip, notes and work loaded, six actions, and alarm refused for the
+        budget, with its reason as this build words it."""
+        self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")    # 6
+        alarm = self.alarm()
+        refused = self.host.reload()
+        self.assertEqual(list(refused), [str(alarm)])
+        return alarm, refused
+
+    def work_has_its_chat(self, host: SkillHost):
+        actions = host.current().actions
+        self.assertEqual(actions["work.chat"]["description"], "Open the work chat app")
+        self.assertNotIn("alarm.ring", actions)
+
+    async def test_an_edit_that_clashes_refuses_the_edit_not_the_skill_it_clashes_with(self):
+        """notes sorts before work. Renamed to work.chat, it took that action from work, which
+        nobody had edited, and alarm took the room work had."""
+        alarm, refused = self.full()
+        notes, work = self.user / "notes.yaml", self.user / "work.yaml"
+        before = notes.read_text()
+        notes.write_text(before.replace("notes.phone", "work.chat"))
+        clash = "Another skill already has the action work.chat."
+        problems = self.host.reload()
+        self.assertEqual(problems, {str(notes): f"{clash} {skillhost.KEPT}", **refused})
+        self.work_has_its_chat(self.host)
+        self.assertIn("notes.phone", self.host.current().actions, "its last version")
+        self.assertEqual(self.host.reload(), problems, "and stays so")
+        kept = {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1, "work.yaml": 3}
+        self.assertEqual(self.saved(), kept)
+        again = self.restart()
+        self.assertEqual(again.reload(), {str(work): clash, **refused},
+                         "after a restart the first by name loads, and work keeps its place")
+        self.assertNotIn("alarm.ring", again.current().actions)
+        self.assertEqual(self.saved(), kept)
+        notes.write_text(before)
+        self.assertEqual(again.reload(), refused)
+        self.work_has_its_chat(again)
+        third = self.restart()
+        self.assertEqual(third.reload(), refused)
+        self.work_has_its_chat(third)
+
+    async def check_grown_by(self, action: str, why: str):
+        alarm, refused = self.full()
+        notes = self.user / "notes.yaml"
+        before = notes.read_text()
+        self.grow("notes.yaml", action)
+        problems = self.host.reload()
+        self.assertEqual(problems, {str(notes): f"{why} {skillhost.KEPT}", **refused})
+        self.work_has_its_chat(self.host)
+        self.assertIn("notes.phone", self.host.current().actions, "its last version")
+        self.assertEqual(self.host.reload(), problems, "and stays so")
+        again = self.restart()
+        self.assertEqual(again.reload(), {str(notes): why, **refused}, "its place, at 1")
+        self.work_has_its_chat(again)
+        self.assertEqual(self.saved()["notes.yaml"], 1)
+        notes.write_text(before)
+        self.assertEqual(again.reload(), refused)
+        self.assertIn("notes.phone", again.current().actions)
+        self.assertEqual(self.restart().reload(), refused)
+
+    async def test_a_skill_grown_by_an_action_another_has_keeps_its_version_and_place(self):
+        await self.check_grown_by("work.chat", "Another skill already has the action work.chat.")
+
+    async def test_a_skill_grown_by_a_lookalike_keeps_its_version_and_place(self):
+        await self.check_grown_by("file.wipe", "Its action file.wipe starts like one built into "
+                                               "Tuxistant, so the model could take it for one.")
+
+    async def test_a_skill_broken_while_tux_was_off_keeps_its_place(self):
+        """At the restart notes didn't load, and alarm, refused before, took its room."""
+        alarm, refused = self.full()
+        notes = self.user / "notes.yaml"
+        before = notes.read_text()
+        kept = {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1, "work.yaml": 3}
+        for broken, why in (("id: [broken", "YAML"),
+                            (before.replace("ntfy.example", "other.example"),
+                             "now asks to reach other.example")):
+            with self.subTest(why):
+                notes.write_text(broken)
+                again = self.restart()
+                problems = again.reload()
+                self.assertEqual(set(problems), {str(notes), str(alarm)})
+                self.assertIn(why, problems[str(notes)])
+                self.assertEqual(problems[str(alarm)], refused[str(alarm)])
+                self.assertNotIn("alarm.ring", again.current().actions)
+                self.assertEqual(self.saved(), kept)
+                self.assertEqual(set(self.restart().reload()), {str(notes), str(alarm)})
+                notes.write_text(before)
+                self.assertEqual(again.reload(), refused)
+                self.assertIn("notes.phone", again.current().actions)
+        notes.unlink()
+        self.assertEqual(again.reload(), {}, "taken out, it frees its place")
+        self.assertIn("alarm.ring", again.current().actions)
+
     async def test_two_skills_that_grew_keep_their_places_after_a_restart(self):
         """coins' growth took the room notes had, and notes put back was one too many."""
         self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")    # 6
