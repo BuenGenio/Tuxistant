@@ -687,12 +687,14 @@ def _source(mail: Mail) -> str:
 
 async def _note(question: str, mail: Mail, config, seconds: float) -> str:
     """What one mail says about the question, or nothing. The fence is one a mail can't guess, so
-    it can't close it, and no angle bracket or link is left in what the model reads."""
+    it can't close it, and no angle bracket or link is left in what the model reads. Secrets are
+    hidden again in the very text the model reads: putting the lines, tags and links of a mail
+    together can join up a code that was in pieces, as one digit to a line is."""
     fence = f"===== {secrets.token_hex(8)} ====="
     whose = ("The user sent this email" if mail.by_user
              else f"Email from {mail.sender or 'unknown'}, sent")
-    subject = clean(URL.sub(" ", mail.subject), SUBJECT_CHARS)
-    body = clean(URL.sub(" ", mail.body[:BODY_CHARS * 2]), BODY_CHARS)
+    subject = _hide(clean(URL.sub(" ", mail.subject), SUBJECT_CHARS))
+    body = _hide(clean(URL.sub(" ", mail.body[:BODY_CHARS * 2]), BODY_CHARS))
     user = (f"Question: {question}\n\n{whose} on {mail.sent_on:%A} {mail.sent_on.day} "
             f"{mail.sent_on:%B %Y}:\n{fence}\nSubject: {subject}\n\n{body}\n{fence}")
     note = clean(URL.sub(" ", await _brain(config, READ, user, ANSWER_TOKENS, seconds)),
@@ -729,14 +731,15 @@ async def _answer(question: str, mails: list[Mail], config, deadline: float) -> 
                 f"{_source(mails[0])}.")
 
 
-async def _found(stems: list[Term]) -> list[Mail]:
+async def _found(stems: list[Term], deadline: float) -> list[Mail]:
     """From Thunderbird's index, or if Thunderbird holds no mail here, from the accounts in GNOME
-    Online Accounts. Never both: whoever reads mail in Thunderbird has it all there already."""
+    Online Accounts. Never both: whoever reads mail in Thunderbird has it all there already. The
+    accounts are given what is left of the deadline, less the time to read the answer."""
     try:
         return await asyncio.wait_for(asyncio.to_thread(find, stems), SEARCH_S + 2)
     except NoThunderbird:
         from . import goamail   # it reads this module's rules, so it is loaded after it
-        return await goamail.find(stems)
+        return await goamail.find(stems, deadline - ANSWER_S)
 
 
 async def search(args: dict, config, session) -> dict:
@@ -753,7 +756,7 @@ async def search(args: dict, config, session) -> dict:
     timer = asyncio.get_running_loop().call_later(NOTICE_AFTER_S, session.notice,
                                                   Speak(LOOKING, config["voice"]))
     try:
-        mails = await _found(stems)
+        mails = await _found(stems, deadline)
         if not mails:
             return {"message": NOTHING_FOUND}
         shown, said = await _answer(question, mails, config, deadline)

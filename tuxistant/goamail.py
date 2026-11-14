@@ -52,6 +52,7 @@ OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
 ACCOUNT, MAIL, OAUTH2 = GOA + ".Account", GOA + ".Mail", GOA + ".OAuth2Based"
 
 CALL_S = 4              # one call to Online Accounts, which may refresh a token first
+SIGN_IN_S = 5           # all of Online Accounts: connecting, listing, and every token at once
 CONNECT_S = 4           # reaching a mail server
 SEARCH_S = 7            # signing in, searching and fetching
 LOOKUP_S = 3            # then looking up who the best few are from
@@ -110,9 +111,13 @@ async def _connect() -> MessageBus:
     return await asyncio.wait_for(MessageBus().connect(), CALL_S)
 
 
-async def _call(bus, path: str, interface: str, member: str) -> list:
+def _left(until: float) -> float:
+    return max(0.1, min(CALL_S, until - time.monotonic()))
+
+
+async def _call(bus, path: str, interface: str, member: str, until: float) -> list:
     reply = await asyncio.wait_for(bus.call(Message(
-        destination=GOA, path=path, interface=interface, member=member)), CALL_S)
+        destination=GOA, path=path, interface=interface, member=member)), _left(until))
     if reply.message_type == MessageType.ERROR:
         raise Unusable(SIGN_IN_AGAIN)
     return reply.body
@@ -148,32 +153,49 @@ def _account(path: str, interfaces: dict) -> Account | None:
                    host[1] or host[2], port, not ssl_on, user)
 
 
-async def _sign_ins() -> tuple[list[tuple[Account, str]], str]:
-    """([(account, access token)], what to say if there are none to use). Online Accounts is
-    asked for tokens only, never for a password."""
+GOA_FAILED = (DBusError, TimeoutError, EOFError, OSError, IndexError, TypeError, ValueError)
+
+
+async def _sign_ins(until: float) -> tuple[list[tuple[Account, str]], str]:
+    """([(account, access token)], what to say if there are none to use), by until. Online
+    Accounts is asked for tokens only, never for a password, and for all of them at once: a
+    token past its hour is fetched again from the provider, which can be slow."""
     try:
-        bus = await _connect()
+        bus = await asyncio.wait_for(_connect(), _left(until))
     except (OSError, EOFError, LookupError, ValueError, TypeError, AuthError, DBusError,
             TimeoutError):
         return [], ""
     usable, problems = [], []
     try:
-        objects = (await _call(bus, ROOT, OBJECT_MANAGER, "GetManagedObjects"))[0]
+        objects = (await _call(bus, ROOT, OBJECT_MANAGER, "GetManagedObjects", until))[0]
+        accounts = []
         for path in sorted(objects if isinstance(objects, dict) else ()):
-            if not path.startswith(ACCOUNTS) or len(usable) == MAX_ACCOUNTS:
-                continue
             try:
-                account = _account(path, objects[path])
-                if account:
-                    token, *_ = await _call(bus, path, OAUTH2, "GetAccessToken")
-                    usable.append((account, _token(token)))
+                account = path.startswith(ACCOUNTS) and _account(path, objects[path])
             except Unusable as e:
                 problems.append(str(e))
-    except (Unusable, DBusError, TimeoutError, EOFError, OSError, IndexError, TypeError):
+                continue
+            if account and len(accounts) < MAX_ACCOUNTS:
+                accounts.append(account)
+        tokens = await asyncio.gather(*(_token_of(bus, account, until) for account in accounts),
+                                      return_exceptions=True)
+        for account, token in zip(accounts, tokens):
+            if isinstance(token, str):
+                usable.append((account, token))
+            elif isinstance(token, Unusable):
+                problems.append(str(token))
+            elif not isinstance(token, GOA_FAILED):
+                raise token
+    except (Unusable, *GOA_FAILED):
         pass    # no Online Accounts on this desktop
     finally:
         bus.disconnect()
     return usable, next(iter(problems), "")
+
+
+async def _token_of(bus, account: Account, until: float) -> str:
+    token, *_ = await _call(bus, account.path, OAUTH2, "GetAccessToken", until)
+    return _token(token)
 
 
 def _token(token) -> str:
@@ -244,17 +266,20 @@ class _Plain(_Bounded, imaplib.IMAP4):
         super().__init__(host, port, timeout=CONNECT_S)
 
     def starttls(self, ssl_context=None):
-        """imaplib's, except that anything sent after the server's yes and before TLS is
-        refused: imaplib would read it as if it came over TLS, so whoever sits on the network
-        could write the server's first answers."""
+        """imaplib's, except that anything but the server's yes is refused, whether it came
+        with the yes, before it or after it, and nothing said in the clear is kept: imaplib would
+        read it as if it came over TLS, so whoever sits on the network could write the server's
+        first answers, such as which folder holds the mail the user sent."""
         if "STARTTLS" not in self.capabilities:
             raise self.abort("no STARTTLS")
+        self.untagged_responses.clear()
         typ, _data = self._simple_command("STARTTLS")
-        if typ != "OK" or any(getattr(self, "_readbuf", ())):
+        if typ != "OK" or self.untagged_responses or any(getattr(self, "_readbuf", ())):
             raise self.abort("STARTTLS refused or tampered with")
         self.sock = ssl_context.wrap_socket(self.sock, server_hostname=self.host)
         self._file = self.sock.makefile("rb")
         self._tls_established = True
+        self.untagged_responses.clear()
         self._get_capabilities()
 
 
@@ -301,7 +326,9 @@ def _shown_name(name: bytes) -> str:
 def _boxes(imap) -> tuple[list[str], str | None]:
     """([where mail from others is], where mail the user sent is). Gmail's All Mail if there is
     one, as most of its mail is archived, or else the inbox. Folders marked Junk, Trash or
-    Drafts, or named as one, are never opened."""
+    Drafts, or named as one, are never opened. The inbox is never taken for either: whatever
+    else it is called, it is where anyone's mail comes in, so its mail is never the user's own.
+    Its name is the one name IMAP doesn't tell apart by case."""
     typ, data = imap.list()
     everything = sent = named_sent = None
     for line in data if typ == "OK" else ():
@@ -312,7 +339,8 @@ def _boxes(imap) -> tuple[list[str], str | None]:
         name, shown = found[3].decode(), _shown_name(found[3])
         delimiter = _shown_name(found[2]) if found[2] != b"NIL" else ""
         parts = shown.split(delimiter) if delimiter else [shown]
-        if flags & NEVER_OPENED or any(mail._junk(part) for part in [shown, *parts]):
+        if flags & NEVER_OPENED or any(mail._junk(part) for part in [shown, *parts]) \
+                or _inbox(shown):
             continue
         if b"\\all" in flags:
             everything = everything or name
@@ -321,6 +349,10 @@ def _boxes(imap) -> tuple[list[str], str | None]:
         elif mail.SENT.fullmatch(parts[-1].strip()):
             named_sent = named_sent or name
     return [everything or "INBOX"], sent or named_sent
+
+
+def _inbox(name: str) -> bool:
+    return name.upper() == "INBOX"
 
 
 def _ask(imap, command: str, *args) -> tuple:
@@ -576,18 +608,23 @@ def _search(account: Account, token: str, stems: list[mail.Term], until: tuple) 
             pass
 
 
-async def find(stems: list[mail.Term]) -> list[mail.Mail]:
+async def find(stems: list[mail.Term], deadline: float) -> list[mail.Mail]:
     """The mails most likely to hold the answer, best first, from every account that can be
-    searched, each in a thread of its own."""
-    accounts, problem = await _sign_ins()
+    searched, each in a thread of its own, all by deadline. Whatever signing in took comes off
+    the search, never off the time left to read the answer."""
+    accounts, problem = await _sign_ins(min(time.monotonic() + SIGN_IN_S, deadline))
     if not accounts:
         raise RuntimeError(problem or mail.NO_INDEX)
     started = time.monotonic()
-    until = (started + SEARCH_S, started + SEARCH_S + LOOKUP_S)
+    left = deadline - 1 - started   # a second for a thread to come back once its server is cut
+    if left <= 0:
+        raise RuntimeError(UNREACHABLE)
+    until = (started + min(SEARCH_S, left * SEARCH_S / (SEARCH_S + LOOKUP_S)),
+             started + min(SEARCH_S + LOOKUP_S, left))
     try:
         results = await asyncio.wait_for(asyncio.gather(*(
             asyncio.to_thread(_search, account, token, stems, until)
-            for account, token in accounts)), SEARCH_S + LOOKUP_S + 2)
+            for account, token in accounts)), until[1] - started + 1)
     except TimeoutError:
         raise RuntimeError(UNREACHABLE) from None
     if all(failed for _best, failed in results):

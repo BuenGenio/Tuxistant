@@ -222,6 +222,24 @@ class Secrets(Goa):
         self.assertEqual(await self.ask("482913"), ("", {"message": mail.NOTHING_FOUND}))
         self.assertEqual(len(self.model), before)
 
+    async def test_a_code_one_digit_to_a_block_is_hidden_once_its_lines_are_joined(self):
+        """An HTML mail can put each digit of a code in a block of its own, which reads as one
+        digit to a line until the lines are joined for the model."""
+        layouts = ('<div style="display:inline-block">{}</div>', "<tr><td>{}</td></tr>")
+        mails = [message(f"Verify your Acme account {n}", "Acme <account@acme.example>", None,
+                         html="<p>Hello, here is the code to verify your Acme account:</p><table>"
+                              + "".join(layout.format(digit) for digit in "482917")
+                              + "</table><p>Thanks, Acme</p>")
+                 for n, layout in enumerate(layouts)]
+        await self.mailbox(gmail(inbox=[(HELLO, 900), *((raw, 1) for raw in mails)]))
+        self.says = ["NOTHING", "NOTHING"]
+        await self.ask("Did Acme email me about my account?")
+        self.assertEqual(len(self.model), 2)
+        for call in range(2):
+            self.assertIn("verify your Acme account", self.read(call))
+            self.assertIn(mail.HIDDEN, self.read(call))
+            self.assertNotRegex(self.read(call), r"4\D{0,9}8\D{0,9}2\D{0,9}9\D{0,9}1\D{0,9}7")
+
     async def test_asking_for_one_is_refused_before_any_account_is_asked(self):
         server = await self.mailbox(gmail(inbox=[(PASSPORT, 13)]))
         said, told = await self.ask("What is my sign in code for the passport application?")
@@ -382,6 +400,43 @@ class Accounts(Goa):
         with self.assertRaisesRegex(RuntimeError, goamail.UNREACHABLE):
             await self.ask()
         self.assertEqual(server.signed_in_with, [])
+
+    async def test_answers_slipped_in_before_starttlss_yes_are_refused(self):
+        """Read as if they came over TLS, they could say the inbox is where sent mail is, and a
+        stranger's mail would pass for the user's own."""
+        server = await self.mailbox(
+            [Box("INBOX", "\\HasNoChildren", [(HELLO, 900), (SCAM, 1)]), Box("Sent", "\\Sent")],
+            "starttls", account={"ssl": False, "tls": True})
+        server.inject_before = b'* LIST (\\Sent) "/" "inbox"\r\n'
+        with self.assertRaisesRegex(RuntimeError, goamail.UNREACHABLE):
+            await self.ask()
+        self.assertEqual(server.signed_in_with, [])
+
+    async def test_the_inbox_is_never_taken_for_sent_mail(self):
+        """Whatever the server calls it, and in whatever case: mail in the inbox is anyone's."""
+        inbox = [(HELLO, 900), (SCAM, 1)]
+        await self.mailbox([Box("INBOX", "\\HasNoChildren", inbox),
+                            Box("inbox", "\\HasNoChildren \\Sent", inbox),
+                            Box("Inbox", "\\HasNoChildren \\Sent", inbox),
+                            Box("Sent", "\\HasNoChildren \\Sent")])
+        self.says = ["It was rejected."]
+        said, _ = await self.ask()
+        self.assertTrue(said.endswith(mail.NEW_SENDER), said)
+        self.assertNotIn("you sent", said)
+
+    async def test_slow_sign_ins_leave_time_to_read_the_answer(self):
+        """Online Accounts fetches a token past its hour again from the provider, which can be
+        slow, and three accounts' tokens are asked for at once, out of the search's own time."""
+        server = Server(CERT, KEY, gmail(inbox=[(HELLO, 900), (PASSPORT, 13)]))
+        self.addCleanup(server.close)
+        await self.accounts(*({"host": server.host, "slow": 2} for _ in range(3)))
+        self.says = ["Then."]
+        started = time.monotonic()
+        with mock.patch.object(mail, "LIMIT_S", 6), mock.patch.object(mail, "ANSWER_S", 1):
+            said, _ = await self.ask()
+        self.assertTrue(said.startswith("Then. That's from an email from notify.citizen"), said)
+        self.assertEqual(self.calls.made, ["GetAccessToken"] * 3)
+        self.assertLess(time.monotonic() - started, 6)
 
     async def test_an_account_set_up_to_skip_checks_is_left_alone(self):
         for unsafe in ({"accept_errors": True}, {"ssl": False, "tls": False}):

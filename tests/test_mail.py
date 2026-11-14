@@ -459,6 +459,14 @@ class Secrets(Base):
         self.assertIn(f"Subject: Your passport application code is {mail.HIDDEN}", self.read())
         self.assertIn(f"application is {mail.HIDDEN}", self.read())
 
+    async def test_a_code_one_digit_to_a_line_is_hidden_once_its_lines_are_joined(self):
+        """The model is shown a mail's lines joined into one, which puts the code together."""
+        self.index({**PASSPORT, "body": "Here is the code for your passport application:\n"
+                    + "\n".join("482913") + "\nIt expires soon."})
+        await self.ask("What about my passport application?")
+        self.assertIn(mail.HIDDEN, self.read())
+        self.assertNotRegex(self.read(), r"4\D{0,9}8\D{0,9}2\D{0,9}9\D{0,9}1\D{0,9}3")
+
     async def test_a_code_far_down_a_mail_is_hidden_too(self):
         """What the model is shown is cut from twice as much text as it holds, with links out."""
         links = " ".join(f"https://track.acme.example/{n:040d}" for n in range(80))

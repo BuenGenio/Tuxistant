@@ -9,6 +9,7 @@ LOGOUT. Its certificate is made for each test run and trusted only where a test 
 Online Accounts is three or four interfaces on a dbus-daemon of the test's own, with no service
 files, so nothing on the real bus is ever started or asked.
 """
+import asyncio
 import base64
 import email.message
 import email.utils
@@ -106,6 +107,7 @@ class Server:
         self.stall = 0              # seconds to wait before answering a SEARCH
         self.drip = False           # answer a SEARCH a byte at a time, never ending the line
         self.inject = b""           # sent in the clear straight after STARTTLS's OK
+        self.inject_before = b""    # and straight before it
         self.listener = socket.create_server(("127.0.0.1", 0))
         self.port = self.listener.getsockname()[1]
         self.threads = []
@@ -193,7 +195,8 @@ class Session:
     def do_STARTTLS(self, tag, _args):
         if self.server.mode != "starttls":
             return self.line(f"{tag} BAD no")
-        self.send(f"{tag} OK begin TLS\r\n".encode() + self.server.inject)
+        self.send(self.server.inject_before + f"{tag} OK begin TLS\r\n".encode()
+                  + self.server.inject)
         self.conn = self.server.context.wrap_socket(self.conn, server_side=True)
         self.file, self.tls = self.conn.makefile("rb"), True
 
@@ -432,8 +435,9 @@ class OAuth2Iface(ServiceInterface):
         self.spec, self.calls = spec, calls
 
     @method()
-    def GetAccessToken(self) -> "si":
+    async def GetAccessToken(self) -> "si":
         self.calls.made.append("GetAccessToken")
+        await asyncio.sleep(self.spec.get("slow", 0))  # refreshing it from the provider
         return [self.spec.get("token", TOKEN), 3600]
 
 
@@ -451,7 +455,7 @@ class PasswordIface(ServiceInterface):
 async def online_accounts(address: str, accounts: list[dict]) -> tuple[MessageBus, Calls]:
     """Online Accounts on the private bus at address, with these accounts. Each is a dict of
     host, and optionally oauth2 (default True), password, ssl, tls, accept_errors, attention,
-    mail_disabled, token and address."""
+    mail_disabled, token, slow (seconds a token takes) and address."""
     assert "tux-goa-bus-" in address, "only on the test's own bus"
     bus = await MessageBus(bus_address=address).connect()
     calls = Calls()
