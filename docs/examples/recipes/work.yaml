@@ -9,7 +9,7 @@ actions:
     description: Open the work chat app
     open: { app: com.slack.Slack }        # a desktop id; ".desktop" is optional
   work.sound:
-    description: Open the sound settings to pick a headset for a work call
+    description: Open the sound settings for a call
     open: { settings: sound }
   work.guestwifi:
     description: Say the guest Wi-Fi name and where the password is

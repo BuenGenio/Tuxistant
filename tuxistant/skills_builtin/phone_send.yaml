@@ -6,7 +6,7 @@ permissions:
   files_read: ["~"]
 actions:
   phone.send:
-    description: Send a file, such as a photo or a document, from this computer to the user's phone
+    description: Send a file from this computer to the user's phone
     params:
       file: { type: string, description: "A result number from file_find, like 1, or a path" }
       device: { type: string, description: "Only if the user named a device. Leave it out for their phone" }

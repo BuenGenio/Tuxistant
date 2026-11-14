@@ -533,6 +533,13 @@ class Manifests(unittest.TestCase):
             self.assertEqual(self.skills.actions[name]["permissions"], {})
             self.assertEqual(self.skills.actions[name]["risk"], "low")
 
+    def test_sending_keeps_its_measured_wording(self):
+        """Naming "a photo or a document" sent the photo request here, still without finding the photo,
+        and on the 4B model with Home Assistant only, the one description changed, it cost "Where's my
+        phone?" (9 of 10 to 3), 2026-11-13. Change it only with a measurement of that change alone."""
+        self.assertEqual(self.skills.actions["phone.send"]["description"],
+                         "Send a file from this computer to the user's phone")
+
     def test_the_model_sees_few_parameters(self):
         tools = {tool["name"]: tool["parameters"] for tool in self.skills.tools()}
         self.assertEqual(set(tools["phone_send"]["properties"]), {"file", "device"})

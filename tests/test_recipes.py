@@ -183,6 +183,15 @@ class Loading(Case):
         yours = [s for s in host.current().listing() if s["source"] == "yours"]
         self.assertEqual(sum(len(s["actions"]) for s in yours), skillhost.USER_TOOLS)
 
+    def test_the_sound_example_keeps_its_measured_wording(self):
+        """"Open the sound settings to pick a headset for a work call" stopped it taking "Show me the
+        Wi-Fi settings" as installed (9 of 30 to 0), but with Home Assistant only it lost "Where's my
+        phone?" 20 of 20 and about 23 of 1,970 routing tries, twice, on the 4B model, 2026-11-13."""
+        for folder in (EXAMPLES, FIXTURES):
+            work = recipes.load(folder / "work.yaml")
+            self.assertEqual(work["actions"]["work.sound"]["description"],
+                             "Open the sound settings for a call")
+
     def test_settings_pages_by_the_names_people_use(self):
         for said, page in (("sound", "sound"), ("Sound", "sound"), ("appearance", "background"),
                            ("Accessibility", "universal-access"),
