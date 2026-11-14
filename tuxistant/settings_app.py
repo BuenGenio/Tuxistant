@@ -1784,10 +1784,20 @@ class ManifestPage(Adw.NavigationPage):
             right_margin=12)
         self.text.update_property([Gtk.AccessibleProperty.LABEL], ["Manifest"])
         text = shown(details["manifest"])
-        if max(map(len, text.split("\n"))) > LONG_LINE:
-            self.text.set_wrap_mode(Gtk.WrapMode.CHAR)
         buffer = self.text.get_buffer()
         buffer.set_text(text)
+        # A wrap never draws a hyphen the file doesn't have: "b-itcoin" could read as another host.
+        whole = buffer.create_tag("whole", insert_hyphens=False)
+        buffer.apply_tag(whole, *buffer.get_bounds())
+        # Only a line too long to wrap at words in good time wraps anywhere, so the rest of the
+        # manifest still breaks between words.
+        wrap_anywhere = buffer.create_tag("long", wrap_mode=Gtk.WrapMode.CHAR)
+        for number, line in enumerate(text.split("\n")):
+            if len(line) > LONG_LINE:
+                start = buffer.get_iter_at_line(number)[1]
+                end = start.copy()
+                end.forward_to_line_end()
+                buffer.apply_tag(wrap_anywhere, start, end)
         self.tags = {kind: buffer.create_tag(kind) for kind in highlight.KINDS}
         self.tags[highlight.COMMENT].props.style = Pango.Style.ITALIC
         colour_text(buffer, self.tags, highlight.shown_spans(details["manifest"]))

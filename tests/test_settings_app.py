@@ -674,6 +674,11 @@ def stop_fake(process):
     process.stdout.close()
 
 
+def colours(at):
+    """The highlight tags at a place, leaving out the ones for the whole text and its wrapping."""
+    return [tag.props.name for tag in at.get_tags() if tag.props.name in sa.highlight.KINDS]
+
+
 def shot(window, name):
     folder = os.environ.get("TUX_SETTINGS_SHOTS")
     if not folder:
@@ -1317,8 +1322,11 @@ class Inner(unittest.TestCase):
         self.assertEqual(buffer.get_text(*buffer.get_bounds(), False), manifest)
         self.assertFalse(text.get_editable())
         self.assertTrue(text.get_monospace())
-        self.assertEqual([tag.props.name for tag in buffer.get_start_iter().get_tags()], ["key"],
+        self.assertEqual(colours(buffer.get_start_iter()), ["key"],
                          "the manifest is coloured: id is a key")
+        self.assertFalse(buffer.get_tag_table().lookup("whole").props.insert_hyphens,
+                         "a wrap never shows a hyphen the file doesn't have")
+        self.assertEqual(text.get_wrap_mode(), Gtk.WrapMode.WORD_CHAR)
         key = buffer.get_tag_table().lookup("key")
         style = Adw.StyleManager.get_default()
         self.assertTrue(key.props.foreground_set)
@@ -1381,20 +1389,22 @@ class Inner(unittest.TestCase):
                 self.assertLess(took, 1.0, f"{len(manifest)} characters took {took:.2f} s")
                 buffer = page.text.get_buffer()
                 self.assertEqual(buffer.get_text(*buffer.get_bounds(), False), manifest)
-                self.assertEqual([tag.props.name for tag in buffer.get_start_iter().get_tags()],
-                                 ["key"])
+                self.assertEqual(colours(buffer.get_start_iter()), ["key"])
+                self.assertEqual(page.text.get_wrap_mode(), Gtk.WrapMode.WORD_CHAR,
+                                 "the rest of the manifest still wraps between words")
+                long_tag = buffer.get_tag_table().lookup("long")
+                self.assertFalse(buffer.get_iter_at_line(0)[1].has_tag(long_tag))
                 if name == "long line":
-                    self.assertEqual(page.text.get_wrap_mode(), Gtk.WrapMode.CHAR)
                     _found, at = buffer.get_iter_at_line(8)
+                    self.assertTrue(at.has_tag(long_tag), "only the long line wraps anywhere")
                     toggles = 0
                     while at.forward_to_tag_toggle(None) and at.get_line() == 8:
                         toggles += 1
-                    self.assertLessEqual(toggles, 2 * sa.highlight.MAX_PER_LINE)
+                    self.assertLessEqual(toggles, 2 * sa.highlight.MAX_PER_LINE + 2)
                 else:
-                    self.assertEqual(page.text.get_wrap_mode(), Gtk.WrapMode.WORD_CHAR)
                     _found, last = buffer.get_iter_at_line(2399)
                     last.forward_chars(len("k2399: [x, 'y', 3, null]  "))
-                    self.assertEqual([tag.props.name for tag in last.get_tags()], ["comment"])
+                    self.assertEqual(colours(last), ["comment"])
                 dialog.pop_subpage()
                 settle(30)
                 del page
