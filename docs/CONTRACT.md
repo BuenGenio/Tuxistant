@@ -24,16 +24,16 @@ Methods:
 
 | Method | Signature | Meaning |
 |---|---|---|
-| `Toggle` | `() -> ()` | idle: start a VAD turn. Dictating: end the go as `DictateEnd` does, with no turn. Otherwise active: cancel |
-| `HoldStart` | `() -> ()` | Start a push-to-talk turn. A go that is dictating ends first, as `DictateEnd` ends it |
+| `Toggle` | `() -> ()` | idle: start a VAD turn, in a new conversation. Dictating: end the go as `DictateEnd` does, with no turn, and leave a kept conversation alone. Otherwise active: cancel. Idle or active, it ends a kept conversation (see "Follow-ups") |
+| `HoldStart` | `() -> ()` | Start a push-to-talk turn. A go that is dictating ends first, as `DictateEnd` ends it. Within 2 minutes of the last hold turn it carries on that conversation: see "Follow-ups" |
 | `HoldEnd` | `() -> ()` | Stop the mic, get the words, then answer a fact or ask the voice model. See "Facts" |
-| `Cancel` | `() -> ()` | Stop everything, back to idle |
+| `Cancel` | `() -> ()` | Stop everything, back to idle, and end the conversation |
 | `DictateStart` | `() -> ()` | Start dictating, from the shell only. See "Dictation" |
 | `DictateEnd` | `() -> ()` | Stop listening and type what was said |
 | `DictateToggle` | `() -> ()` | `DictateStart`, or `DictateEnd` if already dictating |
 | `GetState` | `() -> s` | Current state |
 | `GetConfig` | `() -> s` | `Config.public()` as JSON; never contains the API key, the Cloud key, the TP-Link password or the Home Assistant token, only whether each is set |
-| `SetConfig` | `(s key, s json_value) -> ()` | Validated by `Config.set`; emits `ConfigChanged`. A new `server` clears `api_key`: a key only goes to the server it was given for. In the same way a new `ha_server` clears `ha_token` |
+| `SetConfig` | `(s key, s json_value) -> ()` | Validated by `Config.set`; emits `ConfigChanged`. A new `server` clears `api_key`: a key only goes to the server it was given for. In the same way a new `ha_server` clears `ha_token`. A kept conversation's next hold connects afresh after a change to anything its session was opened with (see "Follow-ups", item 6) |
 | `ListVoices` | `() -> s` | `voices.catalog()` |
 | `PreviewVoice` | `(s voice) -> ()` | Speak a short sample in that voice, without changing config. Replies once it has been spoken; a failure is a D-Bus error |
 | `Say` | `(s text) -> ()` | Speak text in the configured voice |
@@ -75,10 +75,11 @@ Signals:
 | `DictationStarted` | `s id` | Note the focused window: the words are for that one |
 | `DictationMode` | `s id, s mode` | How this go stops: `hold` (let go of Fn), `tap` (tap Fn) or `shortcut` (the dictate shortcut again). Sent once known, never before `DictationStarted` for that id, and again only if it changes. Holds no words |
 | `TypeText` | `s id, s text, b only_copy` | Put the words where the cursor is, then reply with `Typed`. Sent to the shell alone, not broadcast. `only_copy` is true after the time limit |
+| `FollowUp` | `s question, s hint, i seconds` | The hold turn that just ended asked the user something. Sent after `StateChanged` `idle` and `Presence` false: show the blob, and the question with the hint under it, for `seconds`, whatever `Presence` says. A turn starting takes them down, and so does `FollowUp` with `seconds` 0. Plain text, like `Reply` |
 
 ## Locked screen
 
-GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged` and `GetActive` of `org.gnome.ScreenSaver` on `org.gnome.Shell.ScreenShield`, `/org/gnome/ScreenSaver`. While the shield is up it cancels any job and ignores `Toggle`, `HoldStart`, `Say` and `PreviewVoice`, in the controller, so that holding Fn is covered too. The timer scheduler waits for the initial lock check to finish. A failed or timed-out check keeps speech locked; an absent screen-shield service is treated as unlocked. A timer or reminder that comes due while the shield is up leaves its notification, and its words wait for the unlock, up to an hour for a timer or a day for a reminder: `Controller.say_when_free` refuses while the shield is up, as `say` does. With `timer_chime` on, which it isn't as installed, a chime with no words is played then through `Controller.sound`, the one thing that makes a sound on a locked screen.
+GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged` and `GetActive` of `org.gnome.ScreenSaver` on `org.gnome.Shell.ScreenShield`, `/org/gnome/ScreenSaver`. While the shield is up it cancels any job, ends the conversation (see "Follow-ups") and ignores `Toggle`, `HoldStart`, `Say` and `PreviewVoice`, in the controller, so that holding Fn is covered too. The timer scheduler waits for the initial lock check to finish. A failed or timed-out check keeps speech locked; an absent screen-shield service is treated as unlocked. A timer or reminder that comes due while the shield is up leaves its notification, and its words wait for the unlock, up to an hour for a timer or a day for a reminder: `Controller.say_when_free` refuses while the shield is up, as `say` does. With `timer_chime` on, which it isn't as installed, a chime with no words is played then through `Controller.sound`, the one thing that makes a sound on a locked screen.
 
 ## Approvals
 
@@ -86,7 +87,7 @@ GNOME Shell disables the extension at lock, so the daemon follows `ActiveChanged
 
 1. If the conversation has read something private (`session.tainted`) and the action's `network` permission names anything but `home`, it asks first. `home` means the server this install already talks to.
 2. The handler runs: in a thread, or on the event loop if it is `async def`. Only async handlers may use `session.confirm`, `busy`, `selection` and `execute`.
-3. An `Ask` goes to `session.confirm`, which puts up the card. Yes runs `ask.run` in a thread. Anything else returns `{"declined": true, ...}` to the model.
+3. An `Ask` goes to `session.confirm`, which puts up the card. Yes runs `ask.run` in a thread. Anything else returns `{"declined": true, ...}` to the model. A click on Deny also ends the conversation once that turn is over, so the next hold starts afresh (see "Follow-ups"); a card that runs out of time doesn't.
 4. Success with `files_read`, `shell` or `clipboard` sets `session.tainted`.
 
 ```mermaid
@@ -139,6 +140,19 @@ Steps 2 and 3 hand the results to a model with no tools, told to answer only fro
 The sorter's prompt matters more than it looks. Asked plainly, the model answers the question instead of sorting it, so the words go in as `Message: "..."` after fifteen worked examples. An empty thinking block takes four tokens before the first word, so the limit, `SORT_TOKENS`, is 12, which leaves room for the one word after it.
 
 A VAD turn can't be sorted, as the server replies by itself when it hears you stop. The same action is on its tool list, and the model picks it now and then.
+
+## Follow-ups
+
+`Talk` in `tuxistant/controller.py`. A hold turn doesn't end the conversation. Its connection to the server stays open, with the microphone shut, and the next hold within 2 minutes (`FOLLOW_ON_S`) carries on in it. The microphone still opens only while Fn is held.
+
+1. The new words go into the same session, so the model remembers what was said before. Between holds the client is parked: whatever the server sends is dropped, so no tool can run with no turn on screen.
+2. What the conversation has touched carries over in the same `Session`: `session.tainted`, so a card the last turn would have needed is needed now, and `session.found`.
+3. If Tux's own last words in a turn end in a question mark, the daemon sends `FollowUp(question, "Hold Fn to answer", 10)` once the turn has gone idle. Tux's own words are the voice model's last reply, or what a task answered when it is waiting for the user (item 4). Text the app reads out through `session.after`, such as an answer from mail, research or facts, never counts, as a stranger's mail or a web page can end in a question mark too. The extension shows the blob, the question and the hint for those 10 seconds, even with `hide_on_release` on.
+4. If `task.run` ended on a question, the planner keeps its model and what it has said so far in `session.waiting`. While that question is on screen, meaning a hold that starts within 12 seconds of the `FollowUp` (`QUESTION_HINT_S` plus `ANSWER_GRACE_S`, as Fn takes a moment to count as held), the words of that hold go to the planner as the answer, through `session.execute("task.run", ...)` with `session.replying` set, and the app says what it answers in the usual voice. Neither the fact sorter nor the voice model sees those words, and the voice model doesn't learn how the task went. A cloud task carried on this way shows no "Send this request to Claude?" card, as the answer is the words Whisper heard, not text the voice model wrote. A task is dropped instead if `server`, `api_key`, `cloud_enabled` or `cloud_api_key` changed after it started (`SENT_TO` and `planner.resumable`): its model holds the goal, its own replies and everything its tools returned, and all of that goes with each request, so carrying on would send it to a server or account the task never used. The words of that hold then go the usual way. The same change while a task runs, as it thinks, runs a tool or shows a card, stops it before its next request and before any more of its tools run, the first tool of a reply included (`planner._same`, checked again in the request's own thread): the app says "The settings changed, so I stopped that.", with "Part of it may already be done." if something ran, and the task doesn't wait for an answer. That covers Cloud turned off, or its key replaced, in the middle of a Cloud task. A later hold in the conversation drops the waiting task and goes the usual way, through the fact sorter and the voice model, which remembers its question while the connection lasts. So does a last reply that isn't a question.
+5. It ends, and the next hold starts a new conversation, after 2 minutes with no hold, on `Cancel`, on `Toggle` either way, on a lock, and at the end of a turn in which a card was answered with Deny. A new conversation has read nothing, waits on no task and has no model memory. One thing outlives a conversation, as it did before follow-ups: the paths of `file.find`'s latest results, for 5 minutes after they were found (`FOUND_MEMORY_S`), so "open the second one" still works after 2 quiet minutes or a `Toggle`. `Cancel`, a lock and Deny forget those too.
+6. The conversation goes on with a new connection, which keeps what it touched but not what the model remembers, if the server closed the connection meanwhile, a hold cut the last reply short, the last turn failed, the skills were reloaded since, or `server`, `api_key`, `pipeline`, `voice` or `instructions` changed since it connected (`SESSION_SETTINGS` in `tuxistant/realtime.py`), so the next words go to the server the settings name, never to the old one. The new connection never carries on a task that started before a new server or key (item 4). The old connection is closed. `transcribe_model` needs no new connection: each hold's words are fetched with it afresh.
+7. A VAD turn (`Toggle`) is a conversation of its own, with follow-ups only through `conversation_mode`, and is never carried on by a hold.
+8. Dictation is not part of the conversation and doesn't end it. A go that starts while a question is up takes the question down: the daemon sends `FollowUp("", "", 0)` and drops the waiting task, so the hold after the go goes the usual way, in the same conversation. `Toggle` or `HoldStart` during a go ends the go first, as `DictateEnd` does: `Toggle` then leaves the conversation alone, and `HoldStart` carries it on. A Fn shortcut that cancels a go (see "Fn helper") leaves it alone too; `Cancel` ends both.
 
 ## Mail
 
@@ -223,7 +237,7 @@ Nothing else may ever leave this helper. The daemon owns timing, in `tuxistant/f
 
 - Talk: `down` starts a `fn_hold_ms` timer; `other` or `up` cancels it; if it fires, `HoldStart`; `up` after that means `HoldEnd`.
 - A tap is a press under 0.3 s (`TAP_S`) with no `other`.
-- A `down` within 0.4 s (`SECOND_PRESS_S`) of a tap's `up` starts dictation straight away, and no talk timer. `other` before its `up` cancels it, because that was a Fn shortcut.
+- A `down` within 0.4 s (`SECOND_PRESS_S`) of a tap's `up` starts dictation straight away, and no talk timer. `other` before its `up` cancels it, because that was a Fn shortcut. That cancel stops the dictation and its words, and leaves a kept conversation alone.
 - Its `up` under 0.3 s after its `down` makes the go hands-free (`DictationMode` `tap`). If it is still down at 0.3 s, it is push-to-talk (`hold`), and its `up` ends the go.
 - Hands-free, any press of Fn that ends with no `other`, short or long, ends the go on its `up`, and starts no talk hold. A press with `other`, a Fn shortcut, neither ends nor drops it. The press that ends it is not a tap, so it can't start the next go.
 - Before each word, the daemon checks it is still dictating. The dictate shortcut, the talk shortcut, `Cancel`, a lock, a suspend or the time limit can end a hands-free go without Fn, and then the next taps start a new one.

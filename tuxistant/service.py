@@ -99,6 +99,11 @@ class Daemon(ServiceInterface):
                                   path=BUS_PATH, interface=BUS_NAME, member=name,
                                   signature=signature, body=list(body)))
 
+    def fn_keys(self) -> FnClient:
+        """Fn, through the helper. Another key pressed with Fn while dictating is a Fn shortcut,
+        so it stops the dictation and leaves the conversation alone."""
+        return fn_client(self.config, self.controller)
+
     def keep(self, coroutine):
         task = asyncio.create_task(coroutine)
         self.children.add(task)
@@ -327,6 +332,10 @@ class Daemon(ServiceInterface):
     def TypeText(self, id, text, only_copy) -> "ssb":
         return [id, text, only_copy]
 
+    @signal()
+    def FollowUp(self, question, hint, seconds) -> "ssi":
+        return [question, hint, seconds]
+
 
 async def watch_shell(bus, daemon):
     """Keeps track of who the shell is, so only it can answer a card."""
@@ -413,11 +422,14 @@ async def run(mic_factory=Mic, speaker_factory=Speaker) -> int:
 
 
 def fn_client(config, controller, path=None) -> FnClient:
-    """Fn reaches the controller here, inside this process, and not over the bus."""
+    """Fn reaches the controller here, inside this process, and not over the bus. Another key
+    pressed with Fn while dictating is a Fn shortcut, so it stops the dictation and leaves the
+    conversation alone."""
     return FnClient(
         config, controller.hold_start, controller.hold_end, path=path,
         on_dictate_start=controller.dictate_start, on_dictate_end=controller.dictate_end,
-        on_dictate_cancel=controller.cancel, on_dictate_mode=controller.dictate_mode,
+        on_dictate_cancel=lambda: controller.cancel(end_talk=False),
+        on_dictate_mode=controller.dictate_mode,
         dictating=lambda: controller.dictating)
 
 

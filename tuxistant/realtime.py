@@ -75,6 +75,10 @@ def _message(error: dict) -> str:
     return f"Server error: {error.get('message') or error.get('code') or 'unknown'}"
 
 
+# What a session is opened with and can't change after: a change to any of them needs a new one.
+SESSION_SETTINGS = ("server", "api_key", "pipeline", "voice", "instructions")
+
+
 class Realtime:
     """One session. Reports what happens by calling on_event with a tuple:
 
@@ -88,6 +92,8 @@ class Realtime:
     while an action runs, where "speak" waits for the end.
 
     confirm and selection are the controller's, set by the turn. Left alone, every Ask is refused.
+    A kept conversation hands the client from turn to turn, so on_event can be pointed elsewhere,
+    and connect() can be called again: the Session, with what the conversation touched, stays.
     """
 
     def __init__(self, config, skills, on_event, hold=False):
@@ -104,8 +110,28 @@ class Realtime:
         self.confirm = None
         self.selection = None
         self.record = None              # the action in progress
-        self.session = Session(skills, self._confirm, lambda s: on_event(("busy", s)),
-                               self._selection, self._act, lambda s: on_event(("notice", s)))
+        self.parked = False             # kept open between holds: nothing it is sent may act
+        self.opened_with = None         # SESSION_SETTINGS as they were at connect()
+        self.session = Session(skills, self._confirm, lambda s: self.on_event(("busy", s)),
+                               self._selection, self._act, lambda s: self.on_event(("notice", s)))
+
+    @property
+    def alive(self) -> bool:
+        """Connected, and the server hasn't hung up since."""
+        return self.ready and self.reader is not None and not self.reader.done()
+
+    @property
+    def outdated(self) -> bool:
+        """The settings changed since it connected, so it would send to the old server or answer
+        in the old voice."""
+        return self.opened_with != self._settings()
+
+    def _settings(self) -> tuple:
+        return tuple(self.config[key] for key in SESSION_SETTINGS)
+
+    def use(self, skills):
+        """New skills for the next connection. The session's tools are fixed when it opens."""
+        self.skills = self.session.skills = skills
 
     async def _confirm(self, ask: Ask) -> bool:
         """Says yes only if the controller did, and keeps the answer in the history."""
@@ -126,6 +152,10 @@ class Realtime:
 
     async def connect(self):
         """Opens the session and returns once the server has confirmed the setup."""
+        self.ready, self.reader, self.ws = False, None, None
+        self.called = self.to_report = self.owed = False
+        self.rounds = 0
+        self.opened_with = self._settings()
         server = self.config["server"]
         url = "{}/v1/realtime?model={}".format(
             _urls(server)[1], urllib.parse.quote(self.config["pipeline"], safe=""))
@@ -204,13 +234,14 @@ class Realtime:
 
     async def close(self, abort=False):
         """Ends the session. abort also stops whatever the server is still generating."""
+        ready, self.ready = self.ready, False
         if self.reader:
             self.reader.cancel()
             await asyncio.gather(self.reader, return_exceptions=True)
         if self.ws:
             try:
                 async with asyncio.timeout(CLOSE_TIMEOUT_S):
-                    if abort and self.ready:
+                    if abort and ready:
                         await self.ws.send(json.dumps({"type": "response.cancel"}))
                     await self.ws.close()
             except TimeoutError:
@@ -232,6 +263,8 @@ class Realtime:
         self.on_event(("failed", reason))
 
     async def _handle(self, event: dict):
+        if self.parked:     # a tool call with no turn to show it would run unseen
+            return
         kind = event.get("type")
         if kind == "input_audio_buffer.speech_started":
             self.on_event(("speech_started",))

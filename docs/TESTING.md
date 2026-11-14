@@ -6,7 +6,7 @@
 |---|---|---|
 | Everything local | `python3 -m unittest discover -s tests -t .` | Takes a few minutes, so run it in the background |
 | One module | `python3 -m unittest tests.test_files` | |
-| Real GNOME Shell, isolated | `tests/shell_harness/shot.sh <theme> <out.png>`, `tests/shell_harness/card.sh`, and `TUX_SCENARIO=dictation` or `dictation_real` for real typing into real windows | `gnome-shell`. Safe next to the desktop |
+| Real GNOME Shell, isolated | `tests/shell_harness/shot.sh <theme> <out.png>`, `tests/shell_harness/card.sh`, and `TUX_SCENARIO=dictation` or `dictation_real` for real typing into real windows, or `followup_real` for a question left on screen after a hold | `gnome-shell`. Safe next to the desktop |
 | A shell you can use | `tools/try-nested.sh` | `mutter-dev-bin`. Uses your real config, mic and speakers |
 | End to end | `TUXISTANT_LIVE=1 TUXISTANT_SERVER=host:8080 TUXISTANT_API_KEY=... python3 tests/shell_harness/test_e2e_live.py` | LocalAI |
 | Live protocol | `TUXISTANT_LIVE=1 TUXISTANT_SERVER=host:8080 TUXISTANT_API_KEY=... python3 -m unittest tests.test_realtime_live` | LocalAI. `TUXISTANT_SERVER` is required: without it the test fails rather than falling back to localhost |

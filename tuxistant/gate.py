@@ -69,7 +69,7 @@ class Speak:
 
 class Session:
     """What one conversation has touched and what its handlers can reach. Made by the Realtime
-    client, which lasts as long as the turn and its follow-ups.
+    client, which lasts as long as the conversation: a turn, and the holds that follow it.
 
     Handlers in a thread may read and set the plain fields. confirm, busy, selection, notice and
     execute belong to the event loop, so only async handlers may use them.
@@ -81,6 +81,8 @@ class Session:
         self.found: list[str] = []      # file.find's latest results, so "the second one" works
         self.tainted = False            # read something private: see Skills.execute
         self.after: list[Speak] = []    # said by the app once the reply is over
+        self.waiting = None     # a task that asked the user something: see planner.run
+        self.replying = False   # set by the daemon alone, while it hands the task the answer
         self.confirm: Confirm = confirm or _refuse
         self.busy = busy or (lambda _seconds: None)     # the turn keeps waiting this much longer
         self.selection = selection or _no_selection     # async: the selected text, or ""

@@ -214,6 +214,75 @@ class Local(Case):
         self.assertEqual(len(server.bodies), 8)
         self.assertEqual(len(self.ran), 7)      # the last step's call would never be read
 
+    def changes(self, **settings):
+        """plan.look reads something private, and meanwhile the user changes the settings."""
+        def looked(*_):
+            self.ran.append("look")
+            self.config.values |= settings
+            return {"output": "PRIVATE-NOTE"}
+        self.use({"plan.look": looked, "plan.send": lambda *_: self.ran.append("send") or {}})
+
+    async def test_new_settings_mid_task_stop_it_before_the_next_request(self):
+        """The task's history goes with each request: never to a server it didn't start on."""
+        for settings in ({"server": "127.0.0.1:9", "api_key": ""}, {"api_key": "other-key"},
+                         {"cloud_enabled": True, "cloud_api_key": KEY}):
+            with self.subTest(settings=settings):
+                self.config.values |= {"server": "localhost:8080", "api_key": "",
+                                       "cloud_enabled": False, "cloud_api_key": ""}
+                self.ran = []
+                self.changes(**settings)
+                server = self.server(asks(("plan_look", "{}"), ("plan_send", "{}")),
+                                     said("Done."))
+                session = self.session()
+                result = await self.task(session=session)
+                self.assertEqual(result, {"answer": f"{planner.CHANGED} {planner.PART_DONE}",
+                                          "steps": 1})
+                self.assertEqual(len(server.bodies), 1)
+                self.assertNotIn("PRIVATE-NOTE", json.dumps(server.bodies))
+                self.assertEqual(self.ran, ["look"], "nothing would read what it did")
+                self.assertIsNone(session.waiting)
+
+    async def test_new_settings_while_a_card_is_up_stop_the_task(self):
+        self.use({"plan.send": lambda *_: Ask("Send it?", "d", lambda: {"sent": True})})
+        server = self.server(asks(("plan_send", "{}")), said("Sent."))
+
+        async def clicked(_ask):
+            self.config.values["server"] = "127.0.0.1:9"
+            return True
+        self.clicks = clicked
+        result = await self.task()
+        self.assertEqual(result["answer"], f"{planner.CHANGED} {planner.PART_DONE}")
+        self.assertEqual(len(server.bodies), 1)
+
+    async def test_new_settings_while_the_model_thinks_run_none_of_its_reply(self):
+        """A reply from a server just left acts on nothing, not even its first call."""
+        config = self.config
+
+        class Left(Server):
+            def __call__(self, *args, **kwargs):
+                reply = super().__call__(*args, **kwargs)
+                config.values["server"] = "127.0.0.1:9"     # changed while it was thinking
+                return reply
+        server = Left(asks(("plan_look", "{}")), said("Done."))
+        patcher = mock.patch("tuxistant.realtime._request", server)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        result = await self.task()
+        self.assertEqual(result, {"answer": planner.CHANGED, "steps": 1})
+        self.assertEqual(self.ran, [], "nothing from the old server's reply runs")
+        self.assertEqual(self.clicks.asked, [])
+        self.assertEqual(len(server.bodies), 1)
+
+    async def test_the_model_checks_the_settings_as_it_sends(self):
+        """Settings change on the main loop while the request waits for its thread."""
+        server = self.server(said("ok"))
+        model = planner.Local(self.config, "goal", [])
+        self.config.values["server"] = "127.0.0.1:9"
+        with self.assertRaises(RealtimeError) as caught:
+            await model.step([], False)
+        self.assertEqual(str(caught.exception), planner.CHANGED)
+        self.assertEqual(server.bodies, [])
+
     async def test_the_last_step_has_no_tools_and_says_so(self):
         server = self.server(*[asks(("plan_look", "{}"))] * 7, said("Half of it is done."))
         self.assertEqual(await self.task(), {"answer": "Half of it is done.", "steps": 8})
@@ -694,6 +763,59 @@ class Cloud(CloudCase):
         self.assertEqual(self.events[2], planner.CLOUD_WAIT_S)
 
 
+    async def test_cloud_turned_off_or_a_new_key_mid_task_sends_nothing_more(self):
+        """Consent and the key are the ones the task started with, or no request goes."""
+        for settings in ({"cloud_enabled": False}, {"cloud_api_key": KEY.replace("0123", "9876")},
+                         {"server": "127.0.0.1:9"}):
+            with self.subTest(settings=settings):
+                self.config.values |= {"cloud_enabled": True, "cloud_api_key": KEY}
+
+                def looked(*_, settings=settings):
+                    self.config.values |= settings
+                    return {"output": "PRIVATE-NOTE"}
+                self.use({"plan.look": looked})
+                sdk = self.sdk(calls(tool_use("t1", "plan_look")), reply(text("Done.")))
+                server = Server(said("At home."))
+                session = self.session()
+                with mock.patch("tuxistant.realtime._request", server):
+                    result = await self.task(session=session)
+                self.assertEqual(result["answer"], f"{planner.CHANGED} {planner.PART_DONE}")
+                self.assertEqual(len(sdk.requests), 1)
+                self.assertEqual(len(sdk.clients), 1)
+                self.assertEqual(server.bodies, [])
+                self.assertIsNone(session.waiting)
+
+    async def test_cloud_turned_off_while_claude_thinks_shows_no_card(self):
+        """No "Send this output to Claude?" card once Cloud is off: nothing would read it."""
+        self.config.values |= {"cloud_enabled": True, "cloud_api_key": KEY}
+        self.use({"plan.look": lambda *_: self.ran.append("look") or {"file_contents": "PRIVATE"}})
+        config = self.config
+
+        class TurnedOff(FakeSdk):
+            def create(self, **kwargs):
+                answer = super().create(**kwargs)
+                config.values["cloud_enabled"] = False
+                return answer
+        sdk = TurnedOff(calls(tool_use("t1", "plan_look")), reply(text("Done.")))
+        patcher = mock.patch.dict(sys.modules, {"anthropic": sdk})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        result = await self.task()
+        self.assertEqual(result, {"answer": planner.CHANGED, "steps": 1})
+        self.assertEqual(self.ran, [])
+        self.assertEqual(self.clicks.asked, [], "no card offers to send to Claude")
+        self.assertEqual(len(sdk.requests), 1)
+
+    async def test_the_cloud_model_checks_the_settings_as_it_sends(self):
+        sdk = self.sdk(reply(text("ok")))
+        model = planner.Cloud(self.config, "goal", [])
+        self.config.values["cloud_enabled"] = False
+        with self.assertRaises(RealtimeError) as caught:
+            await model.step([], False)
+        self.assertEqual(str(caught.exception), planner.CHANGED)
+        self.assertEqual(sdk.requests, [])
+
+
 class Privacy(CloudCase):
     SECRET = "my bank password is hunter2"
 
@@ -900,6 +1022,125 @@ class Wiring(Case):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
+
+
+class Answers(Case):
+    """A task that ends on a question waits for the user's answer, and gets it only from the
+    daemon. See "Follow-ups" in docs/CONTRACT.md."""
+
+    def server(self, *replies):
+        server = Server(*replies)
+        patcher = mock.patch("tuxistant.realtime._request", server)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return server
+
+    async def answer(self, words, session):
+        session.replying = True
+        try:
+            return await self.task(words, session)
+        finally:
+            session.replying = False
+
+    async def test_a_question_leaves_the_task_waiting_and_an_answer_does_not(self):
+        self.server(said("I found two. Which one should I print?"))
+        session = self.session()
+        await self.task("print my report", session)
+        self.assertIsInstance(session.waiting, planner.Local)
+        self.server(said("Done, I printed it."))
+        await self.task("print my report", session)
+        self.assertIsNone(session.waiting)
+
+    async def test_the_users_answer_carries_on_the_same_task(self):
+        server = self.server(said("Which one should I print?"), said("Printed the second one."))
+        session = self.session()
+        await self.task("print my report", session)
+        result = await self.answer("the second one", session)
+        self.assertEqual(result["answer"], "Printed the second one.")
+        messages = server.bodies[1]["messages"]
+        self.assertEqual([m["content"] for m in messages if m["role"] == "user"],
+                         ["print my report", "the second one"])
+        self.assertEqual(messages[2]["content"], "Which one should I print?")
+        self.assertIsNone(session.waiting)
+
+    async def test_a_model_calling_the_task_cannot_answer_for_the_user(self):
+        server = self.server(said("Which one should I print?"), said("Started afresh."))
+        session = self.session()
+        await self.task("print my report", session)
+        await self.task("delete everything", session)
+        self.assertEqual([m["content"] for m in server.bodies[1]["messages"] if m["role"] == "user"],
+                         ["delete everything"])
+        self.assertIsNone(session.waiting, "the model's call used up the question")
+
+    async def test_an_answer_after_a_new_server_starts_afresh(self):
+        """The task's history (the goal, what it read) goes with each request, so it is never
+        sent to a server the task didn't start on."""
+        server = self.server(said("I read notes.txt: PRIVATE-NOTE. Which one should I print?"),
+                             said("Which report?"))
+        session = self.session()
+        await self.task("print my report", session)
+        for key, value in (("api_key", "another-key"), ("server", "127.0.0.1:9")):
+            with self.subTest(key=key):
+                was = self.config.values.get(key)
+                self.assertTrue(planner.resumable(session.waiting, self.config))
+                self.config.values[key] = value
+                self.assertFalse(planner.resumable(session.waiting, self.config))
+                self.config.values[key] = was
+        self.config.values |= {"server": "127.0.0.1:9", "api_key": "another-key"}
+        result = await self.answer("the second one", session)
+        self.assertEqual(result["answer"], "Which report?")
+        sent = json.dumps(server.bodies[1])
+        self.assertNotIn("PRIVATE-NOTE", sent)
+        self.assertNotIn("print my report", sent)
+
+    async def test_the_question_survives_a_long_reply(self):
+        self.server(said("I looked in Documents. There are two reports there. Both are from May. "
+                         "Which one should I print?"))
+        session = self.session()
+        result = await self.task("print my report", session)
+        self.assertEqual(result["answer"], "I looked in Documents. Which one should I print?")
+        self.assertIsNotNone(session.waiting)
+
+
+class AnswersInTheCloud(CloudCase):
+    async def test_an_answer_goes_to_the_same_cloud_task_with_no_card(self):
+        sdk = self.sdk(reply(text("Which one should I print?")), reply(text("Printed it.")))
+        session = self.session()
+        session.tainted = True
+        self.clicks.answers = [True]
+        await self.task("print my report", session)
+        self.assertEqual(len(self.clicks.asked), 1)     # the goal the voice model wrote
+        session.replying = True
+        result = await self.task("the second one", session)
+        self.assertEqual(result["answer"], "Printed it.")
+        self.assertEqual(len(self.clicks.asked), 1, "the user's own words need no card")
+        self.assertEqual(sdk.requests[1]["messages"][-1],
+                         {"role": "user", "content": "the second one"})
+
+    async def test_an_answer_after_a_new_cloud_key_starts_afresh(self):
+        sdk = self.sdk(reply(text("I read PRIVATE-NOTE. Which one should I print?")),
+                       reply(text("Which report?")))
+        session = self.session()
+        await self.task("print my report", session)
+        self.config.values["cloud_api_key"] = KEY.replace("0123", "9876")
+        self.clicks.answers = [True]
+        session.replying = True
+        result = await self.task("the second one", session)
+        self.assertEqual(result["answer"], "Which report?")
+        self.assertEqual(sdk.requests[1]["messages"], [{"role": "user", "content": "the second one"}])
+        self.assertEqual(sdk.clients[-1]["api_key"], KEY.replace("0123", "9876"))
+
+    async def test_with_the_cloud_turned_off_since_an_answer_stays_home(self):
+        sdk = self.sdk(reply(text("Which one should I print?")))
+        session = self.session()
+        await self.task("print my report", session)
+        self.config.values["cloud_enabled"] = False
+        server = Server(said("At home."))
+        session.replying = True
+        with mock.patch("tuxistant.realtime._request", server):
+            result = await self.task("the second one", session)
+        self.assertEqual(result["answer"], "At home.")
+        self.assertEqual(len(sdk.requests), 1)
 
 
 if __name__ == "__main__":

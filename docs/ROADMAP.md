@@ -31,6 +31,7 @@ Steps 1 to 3 of the plan below are built, and most of step 4. Step 5, recipe ski
 | Demo video | A 64 second draft from `tools/demo_video.py`: the real extension in an isolated shell, with scripted requests and synthesised voices, and it says so on screen. The owner accepted it on 2026-11-10. Not published anywhere yet |
 | Server kit | In `server/`, copied from the owner's working server with its host name and user id made general. That general copy has not yet set up a second machine |
 | Local code skills and their sandbox | Built and tested: your own skills load, change and go while the daemon runs, each in bubblewrap. Lights now runs this way. Not yet tried on the real desktop |
+| Follow-ups across Fn holds | Built: a hold within 2 minutes carries on the conversation, and a question stays on screen with "Hold Fn to answer". Tested with a stand-in server, and in an isolated GNOME Shell through the real service and extension. Not yet on the real desktop or the real server (check 27) |
 | Recipe skills | Built for 0.5.0 and tested with a pretend internet, a made-up app list and temporary folders. Not yet tried on the real desktop, and the four fixture recipes have not been run through `eval_routing` (checks 23 to 26) |
 | Community registry | Not started |
 
@@ -72,6 +73,7 @@ These were agreed with the owner, so don't reopen them without a reason.
 - **Themes are data**: a JSON file and a GLSL shader, and the website runs the same shaders.
 - **The site shows Now or Soon on every claim.** A feature moves to Now only once it has worked on a real machine.
 - **The site's macOS examples keep naming AirDrop, Spotlight and iPhone.** Tuxistant is meant to do those things on a Mac, so they stay, tagged Soon.
+- **Follow-ups across Fn holds (2026-11-13).** After a hold the connection stays open, and a hold within 2 minutes carries on the same conversation, with what it has read. A question stays on screen with "Hold Fn to answer", and a hold while it is up answers a task that asked; a later one goes the usual way. Only Tux's own question raises the hint, never text it reads out from mail or the web. Stop, a lock, Deny on a card, the shortcut or 2 quiet minutes end it, and a new server, key, voice or instructions give the next hold a new connection. Stop, a lock and Deny also forget the files it last found, which otherwise are remembered for 5 minutes into the next conversation, as before. The owner's report of a clarifying question nobody could answer settled it. See "Follow-ups" in [CONTRACT.md](CONTRACT.md).
 - **No D-Bus in recipes, in any form (2026-11-13).** A D-Bus method name doesn't say what a call will do, so no daemon code could write an honest card for one. Desktop actions come later as named entries in a fixed table in the daemon, each with its own card rule, which a recipe names by entry: never a bus, path or method in a manifest.
 
 ## Waiting on the owner
@@ -79,10 +81,9 @@ These were agreed with the owner, so don't reopen them without a reason.
 Don't act on these until they answer.
 
 1. **Custom domain.** A domain on GitHub Pages needs a `CNAME` file and DNS records.
-2. **Keeping the connection open about 2 minutes after each Fn hold**, so follow-ups work. Without it each hold is a new conversation and the model forgets the last one. Only `file.find` results carry over, for 5 minutes.
-3. **The Scanner theme's voice-lit bar**: keep it or not.
-4. **Adding weather and news to the website.**
-5. **What "journal" means**: a spoken diary saved as dated files, notes on calendar days, or a particular app. Calendar can use Evolution Data Server, so it follows the accounts in GNOME Online Accounts, and any change needs a card.
+2. **The Scanner theme's voice-lit bar**: keep it or not.
+3. **Adding weather and news to the website.**
+4. **What "journal" means**: a spoken diary saved as dated files, notes on calendar days, or a particular app. Calendar can use Evolution Data Server, so it follows the accounts in GNOME Online Accounts, and any change needs a card.
 
 ### Choices made while building, worth a look
 
@@ -143,6 +144,7 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 26. **Done 2026-11-13,** on the real server, ten repeats: see "Recipes and the budget" in [TESTING.md](TESTING.md). The recipe cases route 11 of 13 in both setups. Built-in routing moved by about 1.2 points, down as installed and up with Home Assistant only, and facts by +12 and -9, the usual reshuffle when the tool list changes, so `USER_TOOLS` stays at six. Still to do: tighten the `coins.price` and `work.sound` descriptions, which take "What's the price of gold?" (to no tool) and "Show me the Wi-Fi settings", and measure again with three or four recipe actions to see whether "Launch the calculator" and "Close Firefox" recover.
 
 27. Settings, a skill's page: open Weather, a recipe and a code skill you added. Each shows where it comes from, its permissions and risk, the tool name, description and parameters for each action, and the manifest, which Copy puts on the clipboard. "Open file" and "Open folder" open the right one. Change the home town on Weather, then Default device on Phone and see Send to phone agree. At a narrow width the page fits and nothing runs off the side. None of this has run on the real desktop.
+28. Follow-ups, after `./install.sh`, a logout and a daemon restart: hold Fn and ask "Find my CV and print it" with two CVs on disk, or anything that makes Tux ask back. The blob and the question should stay on screen about 10 seconds after it speaks, with "Hold Fn to answer", even with "hide on release" on. Hold Fn and say "the second one": the task should carry on, and History should show `task.run` for it. Then ask "What time is it?", wait a minute and ask "And in Tokyo?": it should be understood. Wait over 2 minutes and ask "And in Paris?": it should not. Read a file, then ask for the weather on the next hold: a card. After something that ends on a question, right-click the blob while the question is up, choose Stop, then ask for the weather: no card. Ask something, change the voice in Settings, and ask again within 2 minutes: the answer should be in the new voice. Let a question's hint go, then hold and ask the time: it should be answered, not taken as the answer. Whether LocalAI keeps an idle session open for 2 minutes has not been tried; if it doesn't, the follow-up still works with a new connection, but the model has forgotten. While the question is up, tap Fn twice and dictate a word into a text box: the question should go, and a hold after the go should be a new request, not the answer.
 
 Move site claims from Soon to Now only after the matching check passes.
 
@@ -169,7 +171,7 @@ Move site claims from Soon to Now only after the matching check passes.
 - Web search answers from snippets of other people's text, so a false page can make Tux say something false, out loud. It can't do anything.
 - It says what pages say, and doesn't know what's fiction. "The capital of Zubrowka" gets Lutz from a fan wiki, with no mention that it's from a film. "Aubrium" gets an Instagram tool of that name.
 - Wikipedia is the English one. A question in another language may find less.
-- Follow-up questions aren't understood: each hold is a new conversation, and "Who wrote it?" means nothing to a search.
+- The fact sorter sees only the words of the hold it is on. A follow-up such as "Who wrote it?" can be sorted as a fact and looked up as it is, without what "it" was. Follow-ups work when they reach the voice model.
 - The voice model never sees an answer the app read out, so it can't take questions about it.
 
 **Mail search:**
@@ -235,7 +237,7 @@ Move site claims from Soon to Now only after the matching check passes.
 - "Remind me to call the dentist tomorrow" may become a reminder at 9 in the morning or a calendar entry with a card, whichever tool the model picks.
 - With one timer set and nothing named, "stop" or "cancel" may reach `timer.cancel` and cancel it. It says which one it cancelled.
 - A reminder's label is said aloud to whoever is in the room, and shown in a notification.
-- Listing or cancelling marks the conversation as having read something private, so weather, news or a web search later in the same conversation asks for a click. Each Fn hold is a new conversation.
+- Listing or cancelling marks the conversation as having read something private, so weather, news or a web search later in the same conversation asks for a click. A conversation lasts across Fn holds until 2 minutes pass without one, or Stop, a lock, Deny on a card or the shortcut ends it.
 - At most 50 pending. `timers.json` is plain text, readable only by you, and clearing the history doesn't clear it.
 - Two unnamed timers of the same length can't be told apart by voice: "cancel the 10 minute timer" lists both and cancels neither, and "all" cancels both.
 - Do Not Disturb hides the banner. Tux still speaks.
@@ -258,7 +260,7 @@ Move site claims from Soon to Now only after the matching check passes.
 - With https the certificate must be one this computer trusts. A self-signed one is refused, and there is no setting to accept it.
 - Replies over 16 MB for the list of everything, or 1 MB for anything else, are refused.
 - Names are matched in English: "light", "lamp", "door" and the other kind words are English.
-- Asking about the house marks the conversation as having read something private, so weather, news or a web search later in the same conversation asks for a click. Each Fn hold is a new conversation.
+- Asking about the house marks the conversation as having read something private, so weather, news or a web search later in the same conversation asks for a click. A conversation lasts across Fn holds until 2 minutes pass without one, or Stop, a lock, Deny on a card or the shortcut ends it.
 - The address has to be saved before the token: a new address clears the token, and Settings says so.
 - Nothing checks the address and token when they are entered. A wrong one is only found when you ask for something.
 - The colour and brightness words are a copy of the Tapo skill's, in `tuxistant/colours.py`, so that this skill stands without it. A test fails if the two drift apart while both are here.

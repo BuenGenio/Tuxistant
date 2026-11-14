@@ -115,6 +115,7 @@ export class Blob {
         this._effect = null;
         this._wanted = false;
         this._held = false;    // its menu is open, so it stays even if the turn ends
+        this._waiting = false; // Tux asked something, so it stays for the answer a while
         this._running = false;
         this._state = 'idle';
         this._levelTarget = 0;
@@ -124,6 +125,10 @@ export class Blob {
 
     get visible() {
         return this._running;
+    }
+
+    get _kept() {
+        return this._wanted || this._held || this._waiting || this._preview !== null;
     }
 
     get rect() {
@@ -162,6 +167,11 @@ export class Blob {
 
     setHeld(held) {
         this._held = held;
+        this._sync();
+    }
+
+    setWaiting(waiting) {
+        this._waiting = waiting;
         this._sync();
     }
 
@@ -235,7 +245,7 @@ export class Blob {
     }
 
     _sync() {
-        const want = (this._wanted || this._held || this._preview !== null) && this._shown !== null;
+        const want = this._kept && this._shown !== null;
         if (!want || this._running)
             return;
         this._running = true;
@@ -276,7 +286,7 @@ export class Blob {
             }
         }
 
-        const want = this._wanted || this._held || this._preview !== null;
+        const want = this._kept;
         const v = this._values;
         v.u_time += dt;
         v.u_level = approach(v.u_level, level, level > v.u_level ? 0.04 : 0.16, dt);

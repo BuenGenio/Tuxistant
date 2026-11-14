@@ -8,6 +8,7 @@ but no file contents without a click.
 import asyncio
 import importlib
 import json
+import re
 import sys
 from typing import NamedTuple
 
@@ -56,6 +57,9 @@ NOT_SENT = "You said no, so nothing went to Claude."
 PART_DONE = "Part of it may already be done."
 UNREADABLE = "The model sent back something I could not read."
 NO_SDK = "The Claude library is not installed. Run the Tuxistant installer again to add it."
+# Where a task's requests go: its history goes along with each one. See resumable and _same.
+SENT_TO = ("server", "api_key", "cloud_enabled", "cloud_api_key")
+CHANGED = "The settings changed, so I stopped that."
 BAD_KEY = "The cloud key in the settings is not valid."
 REJECTED = "The cloud key was rejected."
 NOT_ALLOWED = "The cloud key is not allowed to do that."
@@ -95,9 +99,14 @@ class Local:
 
     def __init__(self, config, goal: str, tools: list[dict]):
         self.config = config
+        self.sent_to = _sent_to(config)
         self.tools = [{"type": "function", "function": {
             key: tool[key] for key in ("name", "description", "parameters")}} for tool in tools]
         self.messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": goal}]
+
+    def hear(self, answer: str):
+        """The user's answer to the question this task ended on."""
+        self.messages.append({"role": "user", "content": answer})
 
     async def step(self, outcomes: list[Outcome], last: bool) -> Reply:
         self.messages += [{"role": "tool", "tool_call_id": outcome.id, "content": outcome.text}
@@ -107,8 +116,12 @@ class Local:
             self.messages.append({"role": "user", "content": LAST_STEP})
         else:
             body["tools"] = self.tools
-        raw = await asyncio.to_thread(realtime._request, self.config, "/v1/chat/completions", body)
+        raw = await asyncio.to_thread(self._send, body)
         return self._read(raw)
+
+    def _send(self, body: dict) -> bytes:
+        _same(self)     # in the thread, as close to the request as it gets
+        return realtime._request(self.config, "/v1/chat/completions", body)
 
     def _read(self, raw: bytes) -> Reply:
         try:
@@ -146,10 +159,15 @@ class Cloud:
 
     def __init__(self, config, goal: str, tools: list[dict]):
         self.config = config
+        self.sent_to = _sent_to(config)
         self.tools = [{"name": tool["name"], "description": tool["description"],
                        "input_schema": tool["parameters"]} for tool in tools]
         self.messages = [{"role": "user", "content": goal}]
         self.client = None
+
+    def hear(self, answer: str):
+        """The user's answer to the question this task ended on. A new key starts a new task."""
+        self.messages.append({"role": "user", "content": answer})
 
     async def step(self, outcomes: list[Outcome], last: bool) -> Reply:
         if outcomes:
@@ -174,6 +192,7 @@ class Cloud:
     def _create(self):
         """Blocking, like the import, so it runs in a thread. Every failure becomes a fixed
         sentence: an SDK message isn't written to be spoken, and it must never carry the key."""
+        _same(self)     # consent and the key the task started with, or nothing goes
         sdk = _sdk()
         key = self.config["cloud_api_key"]
         if not valid_key(key):
@@ -201,8 +220,16 @@ class Cloud:
             raise RealtimeError(CLOUD_TROUBLE) from None
 
 
+def asks(text: str) -> bool:
+    """Whether text ends on a question, so that the user's next words are the answer."""
+    return bool(re.search(r"\?[\"'\u201d\u2019)\]]*\s*$", text or ""))
+
+
 def _spoken(text: str) -> str:
-    return " ".join(realtime.sentences(text)[:MAX_SENTENCES])
+    parts = realtime.sentences(text)
+    if len(parts) > MAX_SENTENCES and asks(parts[-1]):  # the question matters more than the rest
+        parts = parts[:MAX_SENTENCES - 1] + parts[-1:]
+    return " ".join(parts[:MAX_SENTENCES])
 
 
 def _failed(error: RealtimeError, acted: bool) -> str:
@@ -238,11 +265,16 @@ async def _work(model, session) -> dict:
             session.busy(model.wait_s)
             reply = await model.step(outcomes, step == MAX_STEPS)
             if not reply.calls:
-                return {"answer": _spoken(reply.text) or NO_ANSWER, "steps": step}
+                answer = _spoken(reply.text) or NO_ANSWER
+                if asks(answer):    # see "Follow-ups" in docs/CONTRACT.md
+                    session.waiting = model
+                return {"answer": answer, "steps": step}
             if step == MAX_STEPS:
                 break   # nothing would read what it did, so it does not run
             outcomes, told = [], {}
             for call in reply.calls:
+                _same(model)    # a reply from settings just left acts on nothing, not even its
+                #                 first call, and nothing would read what the rest of it did
                 session.busy(ACTION_WAIT_S)
                 asked = (call.name, call.arguments)     # a small model repeats itself, and the
                 result = told.get(asked) or await _act(call, session)   # answer is read out once
@@ -266,13 +298,43 @@ async def _work(model, session) -> dict:
     return {"answer": OUT_OF_STEPS, "steps": step}
 
 
+def _provider(config):
+    return Cloud if config["cloud_enabled"] and config["cloud_api_key"] else Local
+
+
+def _sent_to(config) -> tuple:
+    return tuple(config[key] for key in SENT_TO)
+
+
+def _same(model):
+    """A task stops once the settings its requests go by changed since it started, whether it
+    is thinking, running a tool or showing a card: the next request would carry everything it
+    has seen to a server or account it never used, or to Claude after Cloud was turned off."""
+    if _sent_to(model.config) != model.sent_to:
+        raise RealtimeError(CHANGED)
+
+
+def resumable(waiting, config) -> bool:
+    """Whether a task waiting for the user's answer may carry on. Its model holds everything the
+    task saw, and that goes with each request: Cloud turned off or on, or a new server or key,
+    since it started means it would go somewhere the task never sent it, so it starts afresh."""
+    return isinstance(waiting, _provider(config)) \
+        and getattr(waiting, "sent_to", None) == _sent_to(config)
+
+
 async def run(args, config, session) -> dict:
     goal = " ".join(str(args.get("goal") or "").split())[:MAX_GOAL_CHARS]
+    waiting, session.waiting = session.waiting, None    # one answer each, and only the daemon's
     if not goal:
         return {"answer": NOT_CLEAR, "steps": 0}
+    provider = _provider(config)
+    if session.replying and resumable(waiting, config):
+        # The user's own words, as Whisper heard them, answering the task's question. No voice
+        # model wrote them, so they can't carry what the conversation read.
+        waiting.hear(goal)
+        return await _work(waiting, session)
     tools = [tool for tool in session.skills.tools()
              if session.skills.action_name(tool["name"]) != ACTION]
-    provider = Cloud if config["cloud_enabled"] and config["cloud_api_key"] else Local
     # The voice model wrote the goal, and it may have seen something private in this conversation.
     if provider.leaves_home and session.tainted and not await session.confirm(
             Ask("Send this request to Claude?", goal, dict)):
