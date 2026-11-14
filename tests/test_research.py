@@ -518,6 +518,8 @@ class Clock(Rig):
         def hanging(url, config, seconds, **own):
             if "site2" in url:
                 time.sleep(2)   # as a name lookup can, where no clock in the thread reaches it
+                # and then gives up: the test is over by now, and its pretend web gone with it
+                raise webfetch.PageError(webfetch.UNREADABLE)
             return real(url, config, seconds, **own)
         started = time.monotonic()
         with mock.patch.object(webfetch, "fetch", hanging), \
@@ -570,6 +572,25 @@ class Clock(Rig):
 
         def slow(host, port):
             if host == "stormshadow":
+                time.sleep(0.3)
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", slow):
+            result = await self.ask()
+        self.assertEqual(result, {"message": research.ALL_FAILED})
+        self.assertEqual(self.web.dialled, [])
+
+    async def test_a_voice_server_named_in_settings_while_research_waits_is_refused(self):
+        """Settings change the config in place, here while Home Assistant is slow to look up. The
+        new voice server is on the open internet, at the pages' address."""
+        config = {**self.config, "ha_server": "http://homeassistant.local:8123"}
+        self.skills.config = config
+        self.web.names["newvoice.example"] = [PUBLIC]
+        real = self.web.resolve
+
+        def slow(host, port):
+            if host == "homeassistant.local":
+                time.sleep(0.3)     # by now research has read the settings, and waits for this
+                config["server"] = "newvoice.example:8080"
                 time.sleep(0.3)
             return real(host, port)
         with mock.patch.object(webfetch, "_resolve", slow):

@@ -867,12 +867,19 @@ def _card_detail(plan: Plan, request: Request, where: webfetch.Place) -> str:
 
 def _send_and_say(plan: Plan, request: Request, where: webfetch.Place, found: dict, config,
                   session) -> dict:
-    """In a thread, after any click: the request the card showed, to the addresses it showed."""
+    """In a thread, after any click: the request the card showed, to the addresses it showed.
+    They are checked again first if the settings have named a server since, as a card waits."""
+    deadline = time.monotonic() + SEND_S
     try:
+        where = webfetch.place_now(where, request.host, request.port, config, SEND_S)
         reply = webfetch.send(where, request.scheme, request.host, request.port, request.path,
-                              request.method, request.body, request.content_type, SEND_S)
-    except webfetch.PageError:
+                              request.method, request.body, request.content_type,
+                              max(deadline - time.monotonic(), 0))
+    except TimeoutError:
         return _say(session, config, NO_ANSWER.format(host=request.host))
+    except webfetch.PageError as e:
+        refused = NOT_THERE if str(e) == webfetch.NOT_ALLOWED else NO_ANSWER
+        return _say(session, config, refused.format(host=request.host))
     if not 200 <= reply.status < 300:
         said = SAID_NO if reply.status >= 400 else NO_ANSWER
         return _say(session, config, said.format(host=request.host))

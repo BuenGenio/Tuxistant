@@ -250,6 +250,20 @@ class Redirects(unittest.TestCase):
             webfetch.fetch("http://example.com/start", config)
         self.assertEqual(self.web.paths(), ["/start"])
 
+    def test_a_server_named_in_settings_between_hops_is_refused_at_the_next(self):
+        """Settings change the config in place. A hop is checked against them as they are."""
+        config = {**CONFIG}
+        self.web.names |= {"other.example": ["8.8.4.4"], "newvoice.example": ["8.8.4.4"]}
+        self.jump("http://other.example/page")
+        real = webfetch._get
+
+        def get(target, deadline):
+            config["server"] = "newvoice.example:8080"
+            return real(target, deadline)
+        with mock.patch.object(webfetch, "_get", get), self.assertRaises(PageError):
+            webfetch.fetch("http://example.com/start", config)
+        self.assertEqual(self.web.dialled, [PUBLIC])
+
     def test_every_hop_is_checked_not_just_the_first(self):
         self.jump("/two")
         self.jump("/three", "/two")
@@ -449,7 +463,8 @@ class Dripping(unittest.TestCase):
         threading.Thread(target=answer, daemon=True).start()
         port = listener.getsockname()[1]
         self.addCleanup(mock.patch.stopall)
-        mock.patch.object(webfetch, "own_servers", return_value=(set(), set())).start()
+        mock.patch.object(webfetch, "own_servers",
+                          lambda config, _: (webfetch._own_names(config), set())).start()
         mock.patch.object(webfetch, "_resolve", return_value=[PUBLIC]).start()
         mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
             ("127.0.0.1", port), timeout=2)).start()
@@ -493,7 +508,8 @@ class CutShort(unittest.TestCase):
     def serve(self, *steps):
         port = slow_server(self, steps)
         self.addCleanup(mock.patch.stopall)
-        mock.patch.object(webfetch, "own_servers", return_value=(set(), set())).start()
+        mock.patch.object(webfetch, "own_servers",
+                          lambda config, _: (webfetch._own_names(config), set())).start()
         mock.patch.object(webfetch, "_resolve", return_value=[PUBLIC]).start()
         mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
             ("127.0.0.1", port), timeout=2)).start()
@@ -676,6 +692,30 @@ class OwnServers(unittest.TestCase):
         self.assertEqual(len(found), 2)
         self.assertTrue(all("192.168.1.30" in addresses for addresses in found))
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 2)
+
+    def test_a_lookup_from_before_the_call_that_then_fails_is_followed_by_a_fresh_one(self):
+        """Sent before the network came up, by an earlier call, and joined by this one."""
+        up, real, sent = threading.Event(), self.web.resolve, []
+
+        def resolve(host, port):
+            if host == "homeassistant.local":
+                was_up = up.is_set()
+                sent.append(was_up)
+                time.sleep(0.2)
+                if not was_up:
+                    raise PageError("no network when it was sent")
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", resolve):
+            webfetch.start_own_lookups(self.config)
+            time.sleep(0.05)
+            up.set()
+            self.web.names["homeassistant.local"] = ["192.168.1.30"]
+            self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+        self.assertEqual(sent, [False, True])
+
+    def test_a_lookup_started_by_this_call_that_fails_is_not_tried_again(self):
+        webfetch.own_servers(self.config, 1)
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
 
     def test_a_page_at_a_voice_server_whose_lookup_failed_is_refused(self):
         """The voice server failed to look up, as before the network was up, and now answers

@@ -123,14 +123,16 @@ async def _open(hit: websearch.Hit, config, own, seconds: float):
     return hit, page
 
 
-async def _own(config, deadline: float):
-    """The install's own servers, for every page of this run. Their lookups started with the
-    search. One whose lookup failed is looked up again now, before the pages start their clocks,
-    as a failure isn't kept. None if one hasn't ended when only the answer's time is left."""
+async def _own(config, since: float, deadline: float):
+    """The install's own servers, for every page of this run, waited for before the pages start
+    their clocks. Their lookups started with the search, since: one with no answer kept is looked
+    up then, as a failure isn't kept, and one already running then that fails is followed by a
+    fresh one. None if one hasn't ended when only the answer's time is left. Each page checks
+    them again against the settings before it dials."""
     seconds = max(_left(deadline) - ANSWER_S, 0)
     try:
-        return await asyncio.wait_for(asyncio.to_thread(webfetch.own_servers, config, seconds),
-                                      seconds + 1)
+        return await asyncio.wait_for(
+            asyncio.to_thread(webfetch.own_servers, config, seconds, since), seconds + 1)
     except TimeoutError:
         return None
 
@@ -235,13 +237,14 @@ async def run(args: dict, config, session) -> dict:
     query = _topic(query)
     # Each page is checked against the install's own servers. They are looked up while the search
     # runs, and waited for before the pages start, so a slow one, such as Home Assistant away from
-    # home, costs no page its time. One whose lookup failed is looked up again then, as a failure
-    # isn't kept, and that is waited for before the pages start too.
+    # home, costs no page its time. A failure isn't kept, so a name whose last lookup failed is
+    # looked up again here.
+    since = time.monotonic()
     webfetch.start_own_lookups(config)
     hits = _candidates(await _search(query, config))
     if not hits:
         return {"message": NOTHING_FOUND}
-    pages = await _read(hits, config, await _own(config, deadline), deadline)
+    pages = await _read(hits, config, await _own(config, since, deadline), deadline)
     if not pages:
         return {"message": ALL_FAILED}
     notes, late = await _notes(query, pages, config, deadline)

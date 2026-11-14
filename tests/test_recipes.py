@@ -577,6 +577,8 @@ class Cards(Case):
         def slow(host, port):
             if host == "api.coins.example":
                 time.sleep(1)
+                # and then fails: the test is over, and the stand-ins for /proc gone with it
+                raise webfetch.PageError("no answer")
             return real(host, port)
         self.example("coins.yaml")
         self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
@@ -725,6 +727,76 @@ class Cards(Case):
         result, said = await self.call("coins_price", {"coin": "bitcoin"})
         self.assertEqual(said, ["api.coins.example didn't answer."])
         self.assertEqual((self.web.dialled, self.asked), ([], []))
+
+    async def test_a_lookup_running_from_before_the_call_that_fails_is_followed_by_a_fresh_one(self):
+        """The voice server's lookup was sent before the network came up, by an earlier call or
+        a research run, and fails only after this call has joined it. The address the network
+        gives now is looked up afresh and refused."""
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        self.web.names.pop("tuxserver")
+        up, real = threading.Event(), self.web.resolve
+
+        def resolve(host, port):
+            if host == "tuxserver":
+                was_up = up.is_set()
+                time.sleep(0.3)
+                if not was_up:
+                    raise webfetch.PageError("no network when it was sent")
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", resolve), \
+                mock.patch.object(recipes, "SEND_S", 2):
+            webfetch.start_own_lookups(CONFIG)
+            time.sleep(0.1)
+            up.set()
+            self.web.names["tuxserver"] = [PUBLIC]
+            result, said = await self.call("coins_price", {"coin": "bitcoin"})
+        self.assertEqual(said, ["That recipe's host, api.coins.example, isn't somewhere I'll "
+                                "send to."])
+        self.assertEqual((self.web.dialled, self.asked), ([], []))
+
+    def live(self) -> dict:
+        """Settings this test can change while a call runs, in place, as Config.set does."""
+        config = {**CONFIG}
+        self.host = SkillHost(config, self.builtin, self.bundled, self.user,
+                              launcher=lambda *_: None)
+        return config
+
+    async def test_a_server_named_in_settings_while_the_host_is_looked_up(self):
+        config = self.live()
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        self.web.names["newvoice.example"] = [PUBLIC]
+        real = self.web.resolve
+
+        def resolve(host, port):
+            if host == "api.coins.example":
+                config["server"] = "newvoice.example:8080"
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", resolve):
+            result, said = await self.call("coins_price", {"coin": "bitcoin"})
+        self.assertEqual(said, ["That recipe's host, api.coins.example, isn't somewhere I'll "
+                                "send to."])
+        self.assertEqual((self.web.dialled, self.asked), ([], []))
+
+    async def test_home_assistant_moved_in_settings_while_the_card_waits(self):
+        """The card was right when it was shown. After the click the request is judged again by
+        the settings as they are, and Home Assistant now answers at the device's address."""
+        config = self.live()
+        self.example("deskstrip.yaml")
+        self.route("/json/state", "{}")
+        self.web.names["ha2.lan"] = ["192.168.1.40"]
+
+        async def confirm(ask):
+            self.asked.append(ask)
+            config["ha_server"] = "http://ha2.lan:8123"
+            return True
+        session = Session(self.host.current(), confirm=confirm)
+        result, said = await self.call("deskstrip_brightness", {"level": "40"}, session)
+        self.assertEqual(len(self.asked), 1)
+        self.assertEqual(said, ["That recipe's host, 192.168.1.40, isn't somewhere I'll send "
+                                "to."])
+        self.assertEqual(self.web.dialled, [])
 
     async def test_home_assistant_s_address_is_kept_while_the_next_lookup_runs(self):
         """A minute on, ha.lan is slow to look up again. The address it gave last time is still
