@@ -534,14 +534,18 @@ class Controller:
                 await self._stop()
 
     async def toggle(self):
+        """While dictating, the talk shortcut ends the go as its own key would, and starts no turn."""
         async with self.lock:
-            if self.active:
+            if self.dictating:
+                await self._end_dictation()
+            elif self.active:
                 await self._stop()
             elif not self.locked:
                 self._start_turn(hold=False)
 
     async def hold_start(self):
         async with self.lock:
+            await self._end_dictation()
             await self._stop()
             if not self.locked:
                 self._start_turn(hold=True)
@@ -566,6 +570,7 @@ class Controller:
     async def say(self, text: str, voice: str | None = None) -> asyncio.Task | None:
         """Speaks text, replacing whatever was going on. The job's result is what went wrong."""
         async with self.lock:
+            await self._end_dictation()
             await self._stop()
             if self.locked:
                 return None
@@ -591,6 +596,13 @@ class Controller:
         async with self.lock:
             if not self.active:
                 self.job = asyncio.create_task(self._run(lambda: self._sound(pcm)))
+
+    async def _end_dictation(self):
+        """A go can run for minutes. Ended by anything but Cancel, a lock or losing the shell, it
+        keeps its words, or says why there were none, as if its own key had stopped it."""
+        if self.dictating:
+            self.dictation.finish()
+            await asyncio.wait({self.job})
 
     def _start_turn(self, hold: bool):
         self.turn = Turn(self, hold)

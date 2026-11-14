@@ -36,6 +36,7 @@ export class Caption {
         this._anchor = 'bottom-right';
         this._blobVisible = false;
         this._isError = false;
+        this._standing = () => '';
     }
 
     _addLabel(styleClass) {
@@ -76,13 +77,27 @@ export class Caption {
         this._present();
     }
 
-    showError(text) {
+    // standing() is a line that outlives the note, such as how to stop the go that is listening:
+    // above the note while it shows, and in its place after. It is asked each time, as it can end.
+    showError(text, standing = () => '') {
         this._clearLabels();
         this._isError = true;
+        this._standing = standing;
         this._reply.add_style_class_name('tuxistant-caption-error');
+        this._set(this._heard, standing() ?? '');
         this._set(this._reply, text);
         this._present();
-        this._hideIn(ERROR_MS);
+        this._hideIn(ERROR_MS, standing);
+    }
+
+    get showingError() {
+        return this._isError && this.actor.visible;
+    }
+
+    // The standing line changed or ended: a note on screen shows it as it is now.
+    restand() {
+        if (this.showingError)
+            this._set(this._heard, this._standing() ?? '');
     }
 
     // The turn is over: keep the text up for a moment. An error keeps its own, longer timer.
@@ -149,11 +164,15 @@ export class Caption {
         });
     }
 
-    _hideIn(ms) {
+    _hideIn(ms, standing = () => '') {
         this._cancelTimeout();
         this._timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
             this._timeoutId = 0;
-            this.hide();
+            const line = standing();
+            if (line)
+                this.showHeard(line);
+            else
+                this.hide();
             return GLib.SOURCE_REMOVE;
         });
     }

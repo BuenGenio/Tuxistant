@@ -56,6 +56,7 @@ export default class TuxistantExtension extends Extension {
         this._stateSignals = 0;
         this._presence = false;
         this._dictation = null;  // the id of the latest go, so a late mode for an old one is ignored
+        this._dictating = null;  // what the caption says for that go while it listens
 
         this._blob = new Blob({
             onContextMenu: () => this._openBlobMenu(),
@@ -226,6 +227,10 @@ export default class TuxistantExtension extends Extension {
     _setState(state) {
         const starting = this._state === 'idle' && state !== 'idle';
         this._state = state;
+        if (state !== 'listening') {
+            this._dictating = null;
+            this._caption?.restand();
+        }
         this._indicator.setState(state);
         this._blob.setState(state);
         this._blob.setWanted(this._presence && state !== 'idle');
@@ -263,6 +268,23 @@ export default class TuxistantExtension extends Extension {
         return stop ? `${DICTATING} ${stop}` : DICTATING;
     }
 
+    // How to stop the go that listens now, while it does. Words or a note from an earlier go,
+    // whose words were still at the server, must not take it off the screen.
+    _dictatingLine() {
+        return this._state === 'listening' ? this._dictating : null;
+    }
+
+    _showDictating(text) {
+        if (this._caption.showingError)
+            this._caption.restand();
+        else
+            this._caption.showHeard(text);
+    }
+
+    _showNote(note) {
+        this._caption.showError(note, () => this._dictatingLine());
+    }
+
     async _onSelectionWanted(id) {
         const text = await selectedText();
         if (this._daemon)
@@ -275,8 +297,11 @@ export default class TuxistantExtension extends Extension {
             return;
         this._send('Typed', new GLib.Variant('(ss)', [id, how]));
         const note = ranOut ? RAN_OUT : NOTES[how];
+        const line = this._dictatingLine();
         if (note)
-            this._toCaption(() => this._caption.showError(note));
+            this._toCaption(() => this._showNote(note));
+        else if (line)
+            this._toCaption(() => this._showDictating(line));
         else
             this._caption.hide();
     }
@@ -331,7 +356,7 @@ export default class TuxistantExtension extends Extension {
             this._lingerIfIdle();
             break;
         case 'Error':
-            this._toCaption(() => this._caption.showError(args[0]));
+            this._toCaption(() => this._showNote(args[0]));
             break;
         case 'ConfigChanged':
             this._onConfigChanged(args[0]);
@@ -355,11 +380,15 @@ export default class TuxistantExtension extends Extension {
         case 'DictationStarted':
             this._dictation = args[0];
             this._typist.expect(args[0]);
-            this._toCaption(() => this._caption.showHeard(DICTATING));
+            this._dictating = DICTATING;
+            this._toCaption(() => this._showDictating(DICTATING));
             break;
         case 'DictationMode':
-            if (args[0] === this._dictation && this._state !== 'idle')
-                this._toCaption(() => this._caption.showHeard(this._dictatingIn(args[1])));
+            if (args[0] === this._dictation && this._state !== 'idle') {
+                const text = this._dictatingIn(args[1]);
+                this._dictating = text;
+                this._toCaption(() => this._showDictating(text));
+            }
             break;
         case 'TypeText':
             this._onTypeText(...args);

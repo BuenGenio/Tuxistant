@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_daemon_fakes import CHUNK, Case, FakeSpeech, tone  # noqa: E402
 from tuxistant import controller, dictation  # noqa: E402
 from tuxistant.controller import NO_TYPING  # noqa: E402
-from tuxistant.dictation import NOT_TYPED, NOTHING_HEARD, TOO_SHORT, clean  # noqa: E402
+from tuxistant.dictation import NOT_TYPED, NOTHING_HEARD, SLEPT, TOO_SHORT, clean  # noqa: E402
 
 VOICE = tone(1.0)
 
@@ -383,15 +383,45 @@ class Flow(Case):
         self.assertEqual(http.uploads, [])
         self.assertEqual(rig.ctl.state, "idle")
 
-    async def test_talking_to_tux_ends_dictation(self):
-        http = self.speech(transcript="Hello.")
-        rig = self.rig_for(http)
+    async def typed_after(self, rig, end):
+        """A go ended by end(), not by its own key: its words still reach the window."""
+        await rig.ctl.dictate_start("shortcut")
+        await self.heard_all_of(rig)
+        await end()
+        self.assertFalse(rig.ctl.dictating)
+        await self.wait_for(rig, "TypeText")
+        request, text, only_copy = rig.of("TypeText")[0]
+        rig.ctl.typed(request, "typed")
+        await self.delivered(rig)
+        self.assertFalse(only_copy)
+        return text
+
+    async def test_talking_to_tux_ends_dictation_and_types_what_it_heard(self):
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        with mock.patch.object(rig.ctl, "_start_turn") as turn:
+            self.assertEqual(await self.typed_after(rig, rig.ctl.hold_start), "Hello. ")
+        turn.assert_called_once_with(hold=True)
+
+    async def test_the_talk_shortcut_ends_dictation_and_types_what_it_heard(self):
+        """A hands-free go can run five minutes: the talk shortcut must not throw it away."""
+        rig = self.rig_for(self.speech(transcript="A whole passage."))
+        with mock.patch.object(rig.ctl, "_start_turn") as turn:
+            self.assertEqual(await self.typed_after(rig, rig.ctl.toggle), "A whole passage. ")
+        turn.assert_not_called()
+        self.assertEqual(rig.of("Error"), [])
+        self.assertEqual(rig.ctl.state, "idle")
+
+    async def test_something_said_aloud_ends_dictation_and_types_what_it_heard(self):
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        with mock.patch.object(rig.ctl, "_say", mock.AsyncMock()):
+            self.assertEqual(await self.typed_after(rig, lambda: rig.ctl.say("Hi")), "Hello. ")
+
+    async def test_the_talk_shortcut_on_a_go_too_short_says_so(self):
+        rig = self.rig_for(self.speech(transcript="Hello."), mic_pcm=VOICE[:CHUNK])
         await rig.ctl.dictate_start()
         await self.heard_all_of(rig)
-        with mock.patch.object(rig.ctl, "_start_turn"):
-            await rig.ctl.hold_start()
-        self.assertEqual(http.uploads, [])
-        self.assertEqual(rig.ctl.dictation, None)
+        await rig.ctl.toggle()
+        self.assertEqual(rig.of("Error"), [TOO_SHORT])
 
     async def test_it_stops_by_itself_in_the_end_and_only_copies(self):
         rig = self.rig_for(self.speech(transcript="A long speech."), mic={})
@@ -403,6 +433,107 @@ class Flow(Case):
         rig.ctl.typed(request, "copied")
         await self.delivered(rig)
         self.assertEqual(rig.journal, ["mic.start", "mic.stop"])
+
+    async def test_tap_tap_while_a_reply_is_slow_to_stop_is_still_hands_free(self):
+        """Through the daemon's own Fn wiring and a real socket: dictate_start waits for the reply
+        to close, and the second tap's release, read after that, looked like a hold."""
+        from tests.test_daemon_fn import FakeHelper
+        from tuxistant import service
+        rig = self.rig_for(self.speech(transcript="Hello."))
+
+        async def closing():
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.35)
+
+        rig.ctl.job = asyncio.create_task(closing())
+        path = str(self.folder / "events.sock")
+        helper = FakeHelper(path)
+        await helper.start()
+        self.addAsyncCleanup(helper.stop)
+        fn = asyncio.create_task(service.fn_client(rig.config, rig.ctl, path=path).run())
+        self.addCleanup(fn.cancel)
+        await asyncio.wait_for(helper.connected.wait(), 2)
+        for word, then in (("down", 0.08), ("up", 0.1), ("down", 0.08), ("up", 0.8)):
+            await helper.send(word)
+            await asyncio.sleep(then)
+        (started,) = rig.of("DictationStarted")
+        self.assertEqual(rig.of("DictationMode"), [(started, "tap")])
+        self.assertEqual(rig.of("Error"), [])
+        self.assertTrue(rig.ctl.dictating)
+
+    def suspend(self):
+        """The boot clock runs on through a suspend and the monotonic one doesn't."""
+        asleep = [0.0]
+        for patch in (mock.patch.object(dictation, "asleep_s", lambda: asleep[0]),
+                      mock.patch.object(dictation, "SLEEP_CHECK_S", 0.01)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        return lambda: asleep.__setitem__(0, asleep[0] + 3600)
+
+    async def test_a_suspend_ends_a_hands_free_go_and_says_so(self):
+        """No key is held, so the helper sends nothing on waking, and nothing else would stop it."""
+        sleep = self.suspend()
+        http = self.speech(transcript="Hello.")
+        rig = self.rig_for(http)
+        for mode in ("tap", "shortcut"):
+            rig.signals.clear()
+            await rig.ctl.dictate_start(mode)
+            await self.heard_all_of(rig)
+            await asyncio.sleep(0.05)
+            self.assertTrue(rig.ctl.dictating, "a second without a suspend is no suspend")
+            sleep()
+            await rig.finished()
+            self.assertEqual(rig.of("Error"), [SLEPT], mode)
+            self.assertEqual(rig.ctl.state, "idle")
+            await asyncio.sleep(0.05)
+        self.assertEqual(rig.journal, ["mic.start", "mic.stop"] * 2)
+        self.assertEqual(http.uploads, [])
+        self.assertEqual(rig.of("TypeText"), [])
+
+    async def test_a_suspend_leaves_a_held_go_to_the_helper_letting_go(self):
+        sleep = self.suspend()
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        await rig.ctl.dictate_start()
+        await rig.ctl.dictate_mode("hold")
+        await self.heard_all_of(rig)
+        sleep()
+        await asyncio.sleep(0.1)
+        self.assertTrue(rig.ctl.dictating)
+        await rig.ctl.dictate_end()     # what the helper's release on waking does
+        await self.wait_for(rig, "TypeText")
+        rig.ctl.typed(rig.of("TypeText")[0][0], "typed")
+        await self.delivered(rig)
+        self.assertEqual(rig.of("Error"), [])
+
+    async def test_a_mic_that_dies_in_a_suspend_still_types_nothing(self):
+        sleep, waking = self.suspend(), asyncio.Event()
+
+        class DiesAsleep:
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            async def read(self):
+                await asyncio.sleep(0.005)
+                if waking.is_set():
+                    return b""
+                return VOICE[:CHUNK]
+
+        http = self.speech(transcript="Hello.")
+        rig = self.rig_for(http)
+        rig.ctl.make_mic = DiesAsleep
+        await rig.ctl.dictate_start("tap")
+        await asyncio.sleep(0.6)
+        sleep()
+        waking.set()
+        await rig.finished()
+        await asyncio.sleep(0.05)
+        self.assertEqual(rig.of("Error"), [SLEPT])
+        self.assertEqual(http.uploads, [])
 
     async def test_letting_go_is_typed_not_only_copied(self):
         rig = self.rig_for(self.speech(transcript="Hello."))

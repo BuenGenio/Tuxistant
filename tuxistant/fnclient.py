@@ -15,6 +15,11 @@ HOLD = "hold"           # the second press was held: letting go ends it
 TAP = "tap"             # the second press was a tap too: hands-free until the next Fn tap
 
 
+def _left(since: float, seconds: float) -> float:
+    """What is left of seconds counted from since, the time a key arrived."""
+    return max(0.0, since + seconds - time.monotonic())
+
+
 class FnClient:
     """The helper only reports keys; all timing is here. See "Fn helper" in the contract."""
 
@@ -42,15 +47,30 @@ class FnClient:
             except OSError:
                 await asyncio.sleep(RETRY_S)
                 continue
+            events = asyncio.Queue()
+            reading = asyncio.create_task(self._read(reader, events))
             try:
-                while line := await reader.readline():
-                    await self.handle(line.decode("ascii", "replace").strip())
+                while event := await events.get():
+                    await self.handle(*event)
             except (OSError, ValueError):
                 pass
             finally:
+                reading.cancel()
                 writer.close()
                 await self.lost()
             await asyncio.sleep(RETRY_S)
+
+    @staticmethod
+    async def _read(reader, events):
+        """Each key is timed as it arrives. Handling one can wait on the controller, stopping a
+        reply for up to 2 s, and a tap timed after that wait would look like a hold."""
+        try:
+            while line := await reader.readline():
+                events.put_nowait((line.decode("ascii", "replace").strip(), time.monotonic()))
+        except (OSError, ValueError):
+            pass
+        finally:
+            events.put_nowait(None)
 
     async def lost(self):
         """A lost helper must not leave the mic open: with no Fn, nothing could tap to stop it."""
@@ -64,8 +84,9 @@ class FnClient:
             self.holding = False
             await self.on_hold_end()
 
-    async def handle(self, word: str):
-        now = time.monotonic()
+    async def handle(self, word: str, now: float | None = None):
+        """now: when the key arrived from the helper."""
+        now = time.monotonic() if now is None else now
         self._forget_if_over()
         if word == "down":
             await self._down(now)
@@ -90,9 +111,10 @@ class FnClient:
             self.tapped_at = NONE
             await self.on_dictate_start()
             if self.dictating == "pressed":
-                self.timer = asyncio.create_task(self._still_down(TAP_S))
+                self.timer = asyncio.create_task(self._still_down(_left(now, TAP_S)))
         elif self.config["fn_hold_enabled"] and not self.holding and not self.dictating:
-            self.timer = asyncio.create_task(self._fire(self.config["fn_hold_ms"] / 1000))
+            self.timer = asyncio.create_task(
+                self._fire(_left(now, self.config["fn_hold_ms"] / 1000)))
 
     async def _up(self, now: float):
         self._disarm()

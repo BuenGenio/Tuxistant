@@ -23,7 +23,7 @@ import fake_daemon
 from fake_daemon import BUS_NAME, BUS_PATH, SETTLE_S, Test
 from tuxistant import controller as real_controller, service  # fake_daemon put it on the path
 from tuxistant.config import Config
-from tuxistant.dictation import TOO_SHORT
+from tuxistant.dictation import NOTHING_HEARD, TOO_SHORT
 from tuxistant.gate import MAX_DETAIL_CHARS, MAX_TITLE_CHARS, Ask, printable
 from tuxistant.history import History
 from tuxistant.skills import Skills
@@ -978,6 +978,53 @@ async def dictate_modes_of_an_old_go(d, report):
     await asyncio.sleep(0.3)
 
 
+async def dictate_hint_outlives_an_earlier_go(d, report):
+    """Go A's words were still at the server when go B began hands-free: what A brings, words or
+    a note, must not take B's stop hint off the screen."""
+    d.open("text")
+    await d.focus_on("text")
+
+    async def caption():
+        return await d.test.command("eval", code="""
+            const caption = Main.extensionManager.lookup('tuxistant@buengenio').stateObj._caption;
+            return [caption.actor.visible, caption._heard.text, caption._reply.text];
+        """)
+
+    d.daemon.StateChanged("listening")
+    d.daemon.DictationStarted("h-a")
+    await asyncio.sleep(0.1)
+    d.daemon.StateChanged("idle")
+    await asyncio.sleep(0.1)
+    d.daemon.StateChanged("listening")
+    d.daemon.DictationStarted("h-b")
+    d.daemon.DictationMode("h-b", "tap")
+    await asyncio.sleep(0.3)
+    d.daemon.TypeText("h-a", "earlier words ", False)
+    await asyncio.sleep(0.5)
+    report["carry_typed_how"] = d.how("h-a")
+    report["carry_after_words"] = await caption()
+    d.daemon.Error(NOTHING_HEARD)
+    await asyncio.sleep(0.3)
+    report["carry_with_note"] = await caption()
+    await asyncio.sleep(6.5)    # the caption's ERROR_MS
+    report["carry_after_note"] = await caption()
+    d.daemon.StateChanged("idle")
+    await asyncio.sleep(0.3)
+
+    # A go's own "too short" says nothing about stopping: it has stopped.
+    d.daemon.StateChanged("listening")
+    d.daemon.DictationStarted("h-c")
+    d.daemon.DictationMode("h-c", "tap")
+    await asyncio.sleep(0.3)
+    d.daemon.Error(TOO_SHORT)
+    d.daemon.StateChanged("idle")
+    await asyncio.sleep(0.3)
+    report["carry_own_short"] = await caption()
+    await asyncio.sleep(6.5)
+    report["carry_own_short_after"] = await caption()
+    await d.close_all()
+
+
 async def scenario_dictation(daemon, test, args):
     report = {}
     d = Dictating(Run(daemon, test, args))
@@ -985,6 +1032,7 @@ async def scenario_dictation(daemon, test, args):
         for step in (dictate_text_field, dictate_text_field_more, dictate_password, dictate_paste,
                      dictate_nothing_to_type_in, dictate_slow_apps,
                      dictate_focus_moves_during_the_save, dictate_modes_of_an_old_go,
+                     dictate_hint_outlives_an_earlier_go,
                      dictate_disabled_during_the_save):
             await step(d, report)
     finally:

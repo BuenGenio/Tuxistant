@@ -2,6 +2,7 @@
 import unittest
 
 from tests.test_approval_card import ShellRun, needs_shell, read_report, start
+from tuxistant.dictation import NOTHING_HEARD, TOO_SHORT
 
 
 @needs_shell
@@ -142,6 +143,19 @@ class Typing(ShellRun):
         self.assertEqual(self.report["old_mode_caption"], "Dictating…")
         self.assertEqual(self.report["new_mode_caption"], "Dictating… tap Fn to stop")
         self.assertEqual(self.report["unknown_mode_caption"], "Dictating…")
+
+    def test_an_earlier_gos_words_leave_the_stop_hint_up(self):
+        self.assertEqual(self.report["carry_typed_how"], "typed")
+        self.assertEqual(self.report["carry_after_words"][:2], [True, "Dictating… tap Fn to stop"])
+
+    def test_an_earlier_gos_note_shows_under_the_stop_hint_and_then_gives_way_to_it(self):
+        self.assertEqual(self.report["carry_with_note"],
+                         [True, "Dictating… tap Fn to stop", NOTHING_HEARD])
+        self.assertEqual(self.report["carry_after_note"], [True, "Dictating… tap Fn to stop", ""])
+
+    def test_a_gos_own_note_does_not_say_how_to_stop_it(self):
+        self.assertEqual(self.report["carry_own_short"], [True, "", TOO_SHORT])
+        self.assertFalse(self.report["carry_own_short_after"][0])
 
     def test_with_no_window_at_all_they_are_copied(self):
         self.assertEqual(self.report["no_window_how"], "copied")
