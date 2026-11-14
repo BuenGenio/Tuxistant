@@ -37,7 +37,7 @@ DEFAULTS = {
     "ha_token": "",               # a long-lived access token. As good as a key to the house
     "search_server": "",          # SearXNG host:port; empty: the server's host, port 8888
     "fact_lookup": True,          # questions of general knowledge are answered from Wikipedia
-    "mail_search": False,         # the one-time opt-in: answers may come from Thunderbird's mail
+    "mail_search": False,         # the one-time opt-in: answers may come from your mail
     "timer_chime": False,         # a short sound when a timer or reminder comes due, locked or not
     "say_tailscale_address": False,   # the IP address question also gets the Tailscale one
     "cloud_enabled": False,       # the one-time opt-in: multi-step requests may use a cloud model

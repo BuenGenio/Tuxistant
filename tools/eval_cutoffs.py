@@ -38,7 +38,8 @@ ACTIONS = {
     "app.open": ("apps._installed", "apps._default_for", "apps._launch"),
     "calendar.events": ("calendars.Eds", "calendars._backend"),
     "calendar.add": ("calendars.Eds", "calendars._backend"),
-    "mail.search": ("mail.ROOTS",),
+    # Thunderbird's index is a made-up one, so Online Accounts is never reached: blocked anyway.
+    "mail.search": ("mail.ROOTS", "goamail._connect"),
     "media.control": ("media._connect", "media._wpctl"),
     "media.playing": ("media._connect", "media._wpctl"),
     "timer.set": ("timers._attached", "timers.notify"),
@@ -225,6 +226,7 @@ def stand_ins(folder: Path) -> dict:
         "calendars._backend": NoCalendars,
         "mail.ROOTS": (str(folder / "mail"),),
         "mail.FREEMAIL": mail.FREEMAIL | {PROVIDER},    # the made-up mailbox's senders use it
+        "goamail._connect": blocked,    # the one way to Online Accounts and its tokens
         "media._connect": made_up_bus,
         "media._wpctl": MadeUpVolume(),
         # With no store the timer actions refuse and write nothing, so this is not the safety:

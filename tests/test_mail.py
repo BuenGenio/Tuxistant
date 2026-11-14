@@ -56,6 +56,11 @@ class Base(unittest.IsolatedAsyncioTestCase):
             patcher = mock.patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # Without Thunderbird, Online Accounts is asked next: never the real one.
+        patcher = mock.patch.dict("os.environ",
+                                  {"DBUS_SESSION_BUS_ADDRESS": f"unix:path={self.home}/no-bus"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def request(self, _config, path, body=None):
         self.model.append((path, body))
@@ -962,6 +967,10 @@ class Limits(Base):
             self.assertNotIn("mail_search", [tool["name"] for tool in Skills(
                 config={**CONFIG, "mail_search": off}).tools()])
         self.assertEqual(self.model, [])
+
+    def test_no_test_can_reach_the_real_online_accounts(self):
+        import os
+        self.assertEqual(os.environ.get("DBUS_SESSION_BUS_ADDRESS"), f"unix:path={self.home}/no-bus")
 
     async def test_no_thunderbird_says_so(self):
         self.assertFalse(mail.available())

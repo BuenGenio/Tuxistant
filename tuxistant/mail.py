@@ -1,4 +1,5 @@
-"""Your mail, from the index Thunderbird already keeps on this computer.
+"""Your mail, from the index Thunderbird already keeps on this computer, or without Thunderbird
+from an account in GNOME Online Accounts (see goamail.py), by the same rules.
 
 Thunderbird writes every message it has seen into one SQLite file, so that its own search is quick.
 Reading that file needs no password, no account and no network, and it is only ever opened
@@ -75,7 +76,8 @@ WHOLE_WORD = 4          # for the very word asked about, not only its first lett
 HIDDEN = "[hidden]"
 
 OFF = "Mail search is off. You can turn it on in Settings."
-NO_INDEX = "I couldn't find any mail from Thunderbird on this computer."
+NO_INDEX = ("I couldn't find any mail on this computer, from Thunderbird or from an account in "
+            "Online Accounts.")
 UNREADABLE = "I couldn't read Thunderbird's mail index just now."
 NOT_CLEAR = "I didn't catch what to look for in your mail."
 NOTHING_FOUND = "I couldn't find any mail about that."
@@ -225,6 +227,7 @@ class Term(NamedTuple):
     stem: str               # looked for anywhere in a mail, to find the ones worth a closer look
     starts: re.Pattern      # and then it has to start a word there
     whole: re.Pattern       # the word as it was asked, which counts for more than its start
+    word: str = ""          # that word, for a mail server that only matches whole words
 
 
 class Mail(NamedTuple):
@@ -263,12 +266,16 @@ def _open(path: Path) -> sqlite3.Connection:
     return db
 
 
+class NoThunderbird(RuntimeError):
+    """Thunderbird holds no mail here, so an account in GNOME Online Accounts is tried."""
+
+
 def _usable() -> sqlite3.Connection | None:
     """The newest index that opens and holds any mail: a new, empty profile hides no old one.
     None if there are indexes but none of them holds anything."""
     paths, opened = _indexes(), False
     if not paths:
-        raise RuntimeError(NO_INDEX)
+        raise NoThunderbird(NO_INDEX)
     for path in paths:
         try:
             db = _open(path)
@@ -332,7 +339,7 @@ def terms(question: str) -> list[Term]:
             stem, then = _stem(word)
             found.setdefault(stem, (word, Term(
                 stem, re.compile(rf"\b{re.escape(stem)}{then}", re.I),
-                re.compile(rf"\b{re.escape(word)}", re.I))))
+                re.compile(rf"\b{re.escape(word)}", re.I), word)))
     longest = sorted(found.values(), key=lambda pair: -len(pair[0]))[:MAX_TERMS]
     return [term for word, term in found.values() if (word, term) in longest]
 
@@ -467,17 +474,24 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
     rows = []
     try:
         for row in db.execute(query, values):
-            author, subject, body = _text(row[3]), _text(row[4]), _text(row[5])
-            if _about(stems, _searched(author), subject, body, every):
-                subject, body = _hide(subject), _hide(body)
-                if _about(stems, _searched(author), subject, body, every):
-                    rows.append((*row[:3], author, subject, body))
+            kept = _kept(stems, _text(row[3]), _text(row[4]), _text(row[5]), every)
+            if kept:
+                rows.append((*row[:3], *kept))
             if len(rows) == limit or time.monotonic() > deadline[0]:
                 break
     except sqlite3.OperationalError as e:
         if "interrupted" not in str(e):     # out of time: what was found so far will do
             raise
     return rows
+
+
+def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool) -> tuple | None:
+    """(author, subject, body) with secrets hidden, if the mail is about the question with them
+    hidden too: a mail found only by its code is not found."""
+    if not _about(stems, _searched(author), subject, body, every):
+        return None
+    subject, body = _hide(subject), _hide(body)
+    return (author, subject, body) if _about(stems, _searched(author), subject, body, every) else None
 
 
 def _about(stems: list[Term], author: str, subject: str, body: str, every: bool = False) -> bool:
@@ -612,20 +626,29 @@ def _known(db: sqlite3.Connection, owner: str, skipped: list[int], first: dict) 
     return first[owner] is not None and first[owner] <= now - SETTLED_DAYS * 86400
 
 
-def _settled(db: sqlite3.Connection, scored: list[tuple], skipped: list[int]) -> list[Mail]:
-    """The best few, with senders who first wrote more than a week ago ahead of those who
-    didn't, among mails holding as many of the words. Anyone can send a mail with the right
-    words in its subject today, and it would otherwise be read first. Several strangers don't
-    push a known sender out of sight: the rest of the best are looked at too."""
+def checked(scored: list[tuple]) -> list[tuple]:
+    """The ones whose senders are looked up: the best few, and more of the best, so that
+    several strangers don't push a known sender out of sight."""
     most = scored[0][0] if scored else 0
-    more = [item for item in scored[CHECKED:MAX_CHECKED] if item[0] == most]
-    first, best = {}, []
-    for held, points, _stamp_, mail, _row in scored[:CHECKED] + more:
+    return scored[:CHECKED] + [item for item in scored[CHECKED:MAX_CHECKED] if item[0] == most]
+
+
+def settled(scored: list[tuple], known) -> list[tuple]:
+    """(words held, known, how well, mail) for the best few, best first, with senders who first
+    wrote more than a week ago ahead of those who didn't, among mails holding as many of the
+    words. Anyone can send a mail with the right words in its subject today, and it would
+    otherwise be read first. known(address) says whether a sender is."""
+    best = []
+    for held, points, _stamp_, mail, _row in checked(scored):
         if not mail.by_user:
-            mail = mail._replace(known=_known(db, mail.owner, skipped, first))
+            mail = mail._replace(known=known(mail.owner))
         best.append((held, mail.known, points, mail))
-    best.sort(key=lambda item: item[:3], reverse=True)
-    return [item[3] for item in best]
+    return sorted(best, key=lambda item: item[:3], reverse=True)
+
+
+def _settled(db: sqlite3.Connection, scored: list[tuple], skipped: list[int]) -> list[Mail]:
+    first = {}
+    return [item[3] for item in settled(scored, lambda owner: _known(db, owner, skipped, first))]
 
 
 def find(stems: list[Term]) -> list[Mail]:
@@ -635,7 +658,7 @@ def find(stems: list[Term]) -> list[Mail]:
     try:
         db = _usable()
         if db is None:
-            return []
+            raise NoThunderbird(NO_INDEX)
         try:
             db.set_progress_handler(lambda: time.monotonic() > deadline[0], 10_000)
             skipped, sent = _folders(db)
@@ -706,6 +729,16 @@ async def _answer(question: str, mails: list[Mail], config, deadline: float) -> 
                 f"{_source(mails[0])}.")
 
 
+async def _found(stems: list[Term]) -> list[Mail]:
+    """From Thunderbird's index, or if Thunderbird holds no mail here, from the accounts in GNOME
+    Online Accounts. Never both: whoever reads mail in Thunderbird has it all there already."""
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(find, stems), SEARCH_S + 2)
+    except NoThunderbird:
+        from . import goamail   # it reads this module's rules, so it is loaded after it
+        return await goamail.find(stems)
+
+
 async def search(args: dict, config, session) -> dict:
     if config["mail_search"] is not True:   # "false" in a config file someone wrote by hand
         raise ValueError(OFF)
@@ -720,7 +753,7 @@ async def search(args: dict, config, session) -> dict:
     timer = asyncio.get_running_loop().call_later(NOTICE_AFTER_S, session.notice,
                                                   Speak(LOOKING, config["voice"]))
     try:
-        mails = await asyncio.wait_for(asyncio.to_thread(find, stems), SEARCH_S + 2)
+        mails = await _found(stems)
         if not mails:
             return {"message": NOTHING_FOUND}
         shown, said = await _answer(question, mails, config, deadline)
