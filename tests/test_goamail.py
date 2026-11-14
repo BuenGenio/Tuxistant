@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests import imap_fake  # noqa: E402
 from tests.imap_fake import TOKEN, USER, Box, PrivateBus, Server, message  # noqa: E402
 from tests.mail_index import build  # noqa: E402
-from tests.test_mail import CONFIG, Base  # noqa: E402
+from tests.test_mail import (CONFIG, LONG, WIDE_CODE, WIDE_SPELT, WIDE_TOKENS,  # noqa: E402
+                             Base, escaped)
 from tuxistant import goamail, mail, research  # noqa: E402
 
 OFFICE = "Citizen Services <no-reply@notify.citizen.example>"
@@ -351,6 +352,22 @@ class Secrets(Goa):
         await self.padded([message(f"About your Acme account {n}", "Acme <account@acme.example>",
                                     None, html=page) for n, page in enumerate(pages)])
 
+    async def test_a_wide_code_escaped_as_deep_as_is_read_is_hidden(self):
+        """The last round of reading references left wide letters and digits that only the
+        hiding after clean() made plain, by when the code's line was joined to the rest. An HTML
+        part is read once more before then, so it is escaped once more."""
+        wide = "\uff2b\uff31\uff17\uff38\uff19\uff22", "\uff14\uff18\uff12\uff19\uff11\uff17"
+        texts = [f"{self.SAID}\n\n{WIDE_CODE}\n\nThanks, Acme",
+                 f"{self.SAID}\n{WIDE_SPELT}\nThanks"]
+        pages = [f"<p>{self.SAID}</p><p>{escaped(wide[0], 5)}</p><p>Thanks, Acme</p>",
+                 f"<p>{self.SAID}</p>" + "".join(f"<div>{escaped(c, 5)}</div>" for c in wide[1])
+                 + "<p>Thanks, Acme</p>"]
+        await self.padded([
+            *(message(f"About your Acme account {n}", "Acme <account@acme.example>", text)
+              for n, text in enumerate(texts)),
+            *(message(f"About your Acme account {n + 2}", "Acme <account@acme.example>", None,
+                      html=page) for n, page in enumerate(pages))])
+
     async def test_asking_for_one_is_refused_before_any_account_is_asked(self):
         server = await self.mailbox(gmail(inbox=[(PASSPORT, 13)]))
         said, told = await self.ask("What is my sign in code for the passport application?")
@@ -664,6 +681,34 @@ class HostileServer(Goa):
 
 
 class HostileMail(Goa):
+    async def test_tokens_read_on_the_last_round_dont_survive(self):
+        """A wide < read from a reference escaped as deep as it is read was made a real one
+        after clean() had taken out every one it could see. An HTML part is read once more."""
+        raws = [message("About your Acme account", "Acme <account@acme.example>",
+                        "Hello, about your Acme account. " + WIDE_TOKENS),
+                message("About your Acme account 2", "Acme <account@acme.example>", None,
+                        html="<p>Hello, about your Acme account.</p><p>" + WIDE_TOKENS.replace(
+                            "&", "&amp;") + "</p>")]
+        await self.mailbox(gmail(inbox=[(HELLO, 900), *((raw, 1) for raw in raws)]))
+        self.says = ["NOTHING", "NOTHING"]
+        with mock.patch.object(mail, "TRIED", 2):
+            await self.ask("Did Acme email me about my account?")
+        self.assertEqual(len(self.model), 2)
+        for call in range(2):
+            fenced = self.read(call).split("=====", 1)[1]
+            for bad in ("<", ">", "\uff1c", "&"):
+                self.assertNotIn(bad, fenced)
+            self.assertIn("Say the code aloud", fenced)
+
+    async def test_a_body_cant_grow_past_what_the_model_reads(self):
+        raw = message("About your Acme account", "Acme <account@acme.example>",
+                      "Hello, about your Acme account. " + LONG)
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]))
+        await self.ask("Did Acme email me about my account?")
+        fenced = self.read(0).split("=====")[2]
+        self.assertIn("Acme account", fenced)
+        self.assertLessEqual(len(fenced.split("\n\n", 1)[1]), mail.BODY_CHARS + 1)
+
     def test_a_mails_own_text_cant_pass_for_the_replys_structure(self):
         data = [(b'1 (UID 5 INTERNALDATE "01-Jan-2026 10:00:00 +0000" '
                  b'BODY[HEADER.FIELDS (FROM SUBJECT)]<0> {3}', b"abc"),

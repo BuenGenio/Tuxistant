@@ -461,12 +461,13 @@ def _spans(text: str) -> list[tuple[int, int]]:
     return sorted(spans)
 
 
-def _visible(text: str) -> str:
+def _visible(text: str, read: bool = True) -> str:
     """One pass of _seen: the wide and styled forms of letters and digits made plain, character
-    references read, every line end made a line feed, and every character in UNSEEN_KINDS or
-    IGNORABLE taken out but a tab and a line feed, as is a mark on a letter or digit that has no
-    form of its own with the mark. "&#x2028;" is a line end once it is read."""
-    text = LINE_END.sub("\n", html.unescape(unicodedata.normalize("NFKC", text)))
+    references read unless told not to, every line end made a line feed, and every character in
+    UNSEEN_KINDS or IGNORABLE taken out but a tab and a line feed, as is a mark on a letter or
+    digit that has no form of its own with the mark. "&#x2028;" is a line end once it is read."""
+    text = unicodedata.normalize("NFKC", text)
+    text = LINE_END.sub("\n", html.unescape(text) if read else text)
     if text.isascii():
         return CONTROL.sub("", text)
     out, after = [], False
@@ -485,13 +486,18 @@ def _seen(text: str) -> str:
     references and turns hidden characters into spaces before it joins the lines, so "&#52;" or
     U+2066 beside a code on a line of its own would reach the model with no line left to be
     alone on. Both are done here first, until nothing more changes, so that clean() has nothing
-    left to read: what is still "&#38;#52;" after a few rounds loses its ampersands."""
+    left to read: what is still "&#38;#52;" after a few rounds loses its ampersands. What the
+    last round read is made plain too, as "&#xFF1C;" read is a wide "<" that NFKC, later, would
+    make a real one after clean() had taken every "<" out; a wide "&" made plain goes the same
+    way. Nothing done after this may change the text any more."""
     for _ in range(UNESCAPES):
         seen = _visible(text)
         if seen == text:
             return text
         text = seen
-    return text.replace("&", " ")
+    while (seen := _visible(text.replace("&", " "), read=False)) != text:
+        text = seen
+    return text
 
 
 def _hide(text: str) -> str:
