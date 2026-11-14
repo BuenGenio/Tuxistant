@@ -516,22 +516,30 @@ def _unhtml(text: str) -> str:
     return "\n".join(" ".join(line.split()) for line in html.unescape(text).splitlines())
 
 
-def _body(message) -> str:
-    """Its plain text, or its HTML as text. Attachments are never read."""
+def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
+    """(its plain text, or its HTML as text; whether that was cut short). Attachments are never
+    read. Where the fetch stopped short, only the part it stopped in, the last, was cut: a whole
+    plain part before an attachment or a long HTML part is read as it is."""
+    leaves = [part for part in message.walk() if not part.is_multipart()]
     plain = marked = None
-    for part in message.walk():
-        if part.is_multipart():
-            continue
+    for part in leaves:
         if part.get_filename() or str(part.get("Content-Disposition", "")).lower().startswith(
                 "attachment"):
             continue
         kind = part.get_content_type()
         if kind == "text/plain" and plain is None:
-            plain = _decoded(part)
+            plain = (_decoded(part), fetched_cut and part is leaves[-1])
         elif kind == "text/html" and marked is None:
-            marked = _decoded(part)
-    text = plain if plain and plain.strip() else _unhtml(marked or "")
-    return text[:mail.SCAN_CHARS]
+            marked = (_decoded(part), fetched_cut and part is leaves[-1])
+    text, cut = plain if plain and plain[0].strip() else (
+        (_unhtml(marked[0]), marked[1]) if marked else ("", False))
+    return text[:mail.SCAN_CHARS], cut or len(text) > mail.SCAN_CHARS
+
+
+def _subject_cut(message, header: bytes) -> bool:
+    """Whether the fetch of the header stopped inside the subject: it is the last line read."""
+    names = [name.lower() for name in message.keys()]
+    return len(header) >= HEADER_BYTES and names[-1:] == ["subject"] and names.count("subject") == 1
 
 
 def _select(imap, box: str) -> bool:
@@ -560,9 +568,9 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
         found = fetched.get(uid)
         message = found and _parsed(found.get(b"HEADER", b""), found.get(b"TEXT", b""))
         if message:
-            cut = len(found.get(b"TEXT", b"")) >= TEXT_BYTES     # it may end inside a code
-            kept = mail._kept(stems, _author(message), _subject(message), _body(message), every,
-                              cut)
+            body, body_cut = _body(message, len(found.get(b"TEXT", b"")) >= TEXT_BYTES)
+            kept = mail._kept(stems, _author(message), _subject(message), body, every,
+                              _subject_cut(message, found.get(b"HEADER", b"")), body_cut)
             if kept:
                 rows.append(((folder, uid), _stamp(found.get(b"INTERNALDATE")), folder, *kept))
     return rows

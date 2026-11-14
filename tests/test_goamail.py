@@ -23,8 +23,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests import imap_fake  # noqa: E402
 from tests.imap_fake import TOKEN, USER, Box, PrivateBus, Server, message  # noqa: E402
 from tests.mail_index import build  # noqa: E402
-from tests.test_mail import (CONFIG, GROWN, IN_PARTS, LONE_DIGIT, LONG, WIDE_CODE,  # noqa: E402
-                             WIDE_SPELT, WIDE_TOKENS, Base, escaped, straddling)
+from tests.test_mail import (CONFIG, GROWN, IN_PARTS, INTO_WORD_AFTER, LONE_DIGIT,  # noqa: E402
+                             LONG, TALK_PAST, WIDE_CODE, WIDE_SPELT, WIDE_TOKENS, WORD_AFTER,
+                             Base, escaped, straddling)
 from tuxistant import goamail, mail, research  # noqa: E402
 
 OFFICE = "Citizen Services <no-reply@notify.citizen.example>"
@@ -50,6 +51,22 @@ def setUpModule():
 def tearDownModule():
     BUS.close()
     FOLDER.cleanup()
+
+
+def with_attachment(subject: str, author: str, plain: str) -> bytes:
+    """A mail with a plain-text part and an attachment after it, longer than what is fetched."""
+    pdf = base64.encodebytes(bytes(range(256)) * 120).decode().replace("\n", "\r\n")
+    return (f"From: {author}\r\nTo: {USER}\r\nSubject: {subject}\r\n"
+            "Date: Fri, 13 Nov 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n"
+            'Content-Type: multipart/mixed; boundary="B"\r\n\r\n'
+            "--B\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + plain + "\r\n"
+            "--B\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; "
+            "filename=trip.pdf\r\nContent-Transfer-Encoding: base64\r\n\r\n" + pdf
+            + "--B--\r\n").encode()
+
+
+def text_of(raw: bytes) -> bytes:
+    return raw.partition(b"\r\n\r\n")[2]
 
 
 def gmail(inbox=(), sent=(), junk=(), archived=()) -> list[Box]:
@@ -680,6 +697,32 @@ class HostileServer(Goa):
         self.assertLess(time.monotonic() - started, 2.5)
 
 
+class CutShort(Goa):
+    """Only the part the fetch stopped in can have been cut, and only it loses its end."""
+    TRIP = ("Hi Sam, your flight to Lisbon is confirmed. It leaves Gatwick at 09:40 on Friday "
+            "3 May from gate 12, and your seat is 14C.")
+
+    async def test_a_whole_plain_part_before_an_attachment_is_read_whole(self):
+        raw = with_attachment("Your trip", "Air <bookings@air.example>", self.TRIP)
+        self.assertGreater(len(text_of(raw)), goamail.TEXT_BYTES)
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]))
+        await self.ask("Which seat did I get on the Lisbon flight?")
+        self.assertEqual(len(self.model), 1)
+        self.assertIn("your seat is 14C.", self.read(0))
+
+    def test_only_the_last_part_is_taken_to_be_cut(self):
+        long_html = "<p>" + "Hello. " * 3000 + "</p>"
+        cases = [(message("Trip", body=self.TRIP), True, True),
+                 (message("Trip", body=self.TRIP), False, False),
+                 (message("Trip", body=self.TRIP, html=long_html), True, False),
+                 (message("Trip", body=None, html=long_html), True, True),
+                 (with_attachment("Trip", "Air <bookings@air.example>", self.TRIP), True, False)]
+        for raw, fetched_cut, cut in cases:
+            head, _, text = raw.partition(b"\r\n\r\n")
+            parsed = goamail._parsed(head, text[:goamail.TEXT_BYTES])
+            self.assertEqual(goamail._body(parsed, fetched_cut)[1], cut)
+
+
 class HostileMail(Goa):
     async def test_tokens_read_on_the_last_round_dont_survive(self):
         """A wide < read from a reference escaped as deep as it is read was made a real one
@@ -753,6 +796,55 @@ class HostileMail(Goa):
         shown = self.read(0).split("=====")[2]
         self.assertNotRegex(shown, LONE_DIGIT)
         self.assertIn("Acme account", shown)
+
+    async def test_a_word_for_a_code_past_the_cut_still_hides_it(self):
+        def mail_with(lines):
+            return message("About your Acme account", "Acme <account@acme.example>",
+                           "Hello, about your Acme account." + "\n" * lines + WORD_AFTER)
+        short = goamail.TEXT_BYTES - INTO_WORD_AFTER - text_of(mail_with(0)).index(b"482913")
+        raw = mail_with(short // 2)
+        if short % 2:
+            raw = raw.replace(b"\r\n482913", b"\r\n 482913")
+        self.assertTrue(text_of(raw)[:goamail.TEXT_BYTES].endswith(
+            WORD_AFTER[:INTO_WORD_AFTER].encode()))
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]))
+        await self.ask("Did Acme email me about my account?")
+        shown = self.read(0).split("=====")[2]
+        self.assertNotIn("482913", shown)
+        self.assertIn("Acme account", shown)
+
+    async def test_sign_in_talk_past_the_cut_still_counts(self):
+        """Hidden whole, this mail's code is hidden, as it talks of signing in at the end."""
+        html = ("<p>Hello, about your Acme account.</p><p>" + TALK_PAST + "</p>"
+                + '<div class="x"></div>' * 900 + "<p>Please sign in within 10 minutes.</p>")
+        self.assertNotIn("482913", mail._hide(goamail._unhtml(html)))
+        raw = message("About your Acme account", "Acme <account@acme.example>", None, html=html)
+        self.assertGreater(len(text_of(raw)), goamail.TEXT_BYTES)
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]))
+        await self.ask("Did Acme email me about my account?")
+        shown = self.read(0).split("=====")[2]
+        self.assertNotIn("482913", shown)
+        self.assertIn("Acme account", shown)
+
+    async def test_a_subject_cut_where_the_header_is_fetched_to_leaves_no_part_of_a_code(self):
+        start = "Acme account: your sign-in code is "
+
+        def mail_with(pad):
+            return (f"From: Acme <account@acme.example>\r\nTo: {USER}\r\n"
+                    f"Subject: {start}{' ' * pad}{IN_PARTS}\r\n"
+                    "Date: Fri, 13 Nov 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n"
+                    "Content-Type: text/plain\r\n\r\nHello, about your Acme account.\r\n").encode()
+
+        def fetched(raw):
+            return imap_fake._fields(raw.partition(b"\r\n\r\n")[0], goamail.FIELDS.split())
+        raw = mail_with(goamail.HEADER_BYTES - 5 - fetched(mail_with(0)).index(IN_PARTS.encode()))
+        self.assertTrue(fetched(raw)[:goamail.HEADER_BYTES].endswith(b" 4 8 2"))
+        self.assertNotIn(IN_PARTS, mail._hide(start + IN_PARTS))
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]))
+        await self.ask("Did Acme email me about my account?")
+        subject, body = self.read(0).split("=====")[2].split("\n\n", 1)
+        self.assertNotRegex(subject, LONE_DIGIT)
+        self.assertIn("Acme account", subject + body)
 
     def test_a_mails_own_text_cant_pass_for_the_replys_structure(self):
         data = [(b'1 (UID 5 INTERNALDATE "01-Jan-2026 10:00:00 +0000" '

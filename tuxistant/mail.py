@@ -241,8 +241,8 @@ SPELT = re.compile(     # a run of lines of one character each, as one to an HTM
 # The end of a text that was cut short, read backwards: its last word, which the cut may have gone
 # through, and each number or single character before it, which may be the start of a code in
 # parts, as "4 8 2" is of "4 8 2 9 1 3" and is too short to hide by itself. A code in parts has at
-# most 14 (see SHAPED and ALONE), so no more than 13 go before the last word.
-CUT_TAIL = re.compile(r"\S*+(?:[\s-]++(?:\d++|[^\W_])(?!\w)){0,13}+[\s-]*+")
+# most 14 (see SHAPED and ALONE), and the last word may be an ordinary one after it.
+CUT_TAIL = re.compile(r"\S*+(?:[\s-]++(?:\d++|[^\W_])(?!\w)){0,14}+[\s-]*+")
 YEAR = re.compile(r"(?:19|20)\d\d")
 # Asking for one outright is refused, which is kinder than an answer with a gap in it.
 ASKS_FOR_ONE = re.compile(
@@ -446,8 +446,9 @@ def _searched(author: str) -> str:
     return NO_REPLY.sub(" ", ADDRESS_END.sub(r"\1", author.removesuffix(INDEX_TAIL)))
 
 
-def _spans(text: str) -> list[tuple[int, int]]:
-    """Where a secret may stand in a mail: see SECRET_WORD."""
+def _spans(text: str, talk: bool = False) -> list[tuple[int, int]]:
+    """Where a secret may stand in a mail: see SECRET_WORD. talk: take it that the mail talks of
+    signing in, as one cut short may have done so past the cut."""
     spans = []
     for word in SECRET_WORD.finditer(text):
         start, end = word.end(), word.end() + SECRET_REACH
@@ -462,7 +463,8 @@ def _spans(text: str) -> list[tuple[int, int]]:
         for number in NUMBER.finditer(text, max(0, word.start() - SECRET_BEFORE), word.start()):
             if not YEAR.fullmatch(number[0]):
                 spans.append(number.span())
-    found = [*(NUMBER.finditer(text) if SIGN_IN_TALK.search(text) else ()), *ALONE.finditer(text)]
+    talk = talk or SIGN_IN_TALK.search(text)
+    found = [*(NUMBER.finditer(text) if talk else ()), *ALONE.finditer(text)]
     spans += [one.span(one.lastindex or 0) for one in found if not YEAR.fullmatch(one[0].strip())]
     return sorted(spans)
 
@@ -521,18 +523,23 @@ def _hide(text: str, cut: bool = False) -> str:
     A mail server ends each line with a carriage return before the line feed, and a mail may end
     one with a line or paragraph separator, NEL, a vertical tab or a form feed. Any of these would
     keep a code from being seen alone on its line, so every line end is made a line feed first,
-    as the text is made what the model is shown (see _seen). A text that was cut short loses
-    what the cut may have split (see _uncut), as part of a code may be too short to hide."""
+    as the text is made what the model is shown (see _seen).
+
+    A text that was cut short is taken to talk of signing in, as the words that did may have been
+    past the cut, and it ends where _uncut would end it, as part of a code may be too short to
+    hide. Secrets are looked for in all of it, so a word for a code in what goes still hides the
+    code before it, and one that runs past that end is hidden whole."""
     text = _seen(text)
     text = SPELT.sub(lambda run: "".join(run[0].split()), SPACE.sub(" ", text))
-    if cut:
-        text = _uncut(text)
+    stop = len(_uncut(text)) if cut else len(text)
     out, at = [], 0
-    for start, end in _spans(text):
+    for start, end in _spans(text, cut):
+        if start >= stop:
+            break
         if end > at:
             out += [text[at:max(start, at)], HIDDEN]
             at = end
-    return "".join(out) + text[at:]
+    return "".join(out) + text[at:stop]
 
 
 def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[int],
@@ -551,14 +558,15 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
         values += likes * len(fields)
     query = (
         "SELECT m.id, m.date, m.folderID, t.c3author, t.c1subject, "
-        f"substr(t.c0body, 1, {SCAN_CHARS}) "
+        f"substr(t.c0body, 1, {SCAN_CHARS}), length(t.c0body) > {SCAN_CHARS} "
         "FROM messages m JOIN messagesText_content t ON t.docid = m.id "
         f"WHERE +m.deleted = 0 {_outside(skipped)} "
         f"AND ({(' AND ' if every else ' OR ').join(clauses)}) ORDER BY m.date DESC")
     rows = []
     try:
         for row in db.execute(query, values):
-            kept = _kept(stems, _text(row[3]), _text(row[4]), _text(row[5]), every)
+            kept = _kept(stems, _text(row[3]), _text(row[4]), _text(row[5]), every,
+                         body_cut=bool(row[6]))
             if kept:
                 rows.append((*row[:3], *kept))
             if len(rows) == limit or time.monotonic() > deadline[0]:
@@ -570,13 +578,13 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
 
 
 def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
-          cut: bool = False) -> tuple | None:
+          subject_cut: bool = False, body_cut: bool = False) -> tuple | None:
     """(author, subject, body) with secrets hidden, if the mail is about the question with them
-    hidden too: a mail found only by its code is not found. A body SCAN_CHARS long, or one the
-    caller says was cut, is taken to have been cut short there."""
+    hidden too: a mail found only by its code is not found. The caller says which of the subject
+    and the body was cut short where it was read (see _hide)."""
     if not _about(stems, _searched(author), subject, body, every):
         return None
-    subject, body = _hide(subject), _hide(body, cut or len(body) >= SCAN_CHARS)
+    subject, body = _hide(subject, subject_cut), _hide(body, body_cut)
     return (author, subject, body) if _about(stems, _searched(author), subject, body, every) else None
 
 
