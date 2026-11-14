@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests import imap_fake  # noqa: E402
 from tests.imap_fake import TOKEN, USER, Box, PrivateBus, Server, message  # noqa: E402
 from tests.mail_index import build  # noqa: E402
-from tests.test_mail import (CONFIG, LONG, WIDE_CODE, WIDE_SPELT, WIDE_TOKENS,  # noqa: E402
+from tests.test_mail import (CONFIG, GROWN, LONG, WIDE_CODE, WIDE_SPELT, WIDE_TOKENS,  # noqa: E402
                              Base, escaped)
 from tuxistant import goamail, mail, research  # noqa: E402
 
@@ -708,6 +708,19 @@ class HostileMail(Goa):
         fenced = self.read(0).split("=====")[2]
         self.assertIn("Acme account", fenced)
         self.assertLessEqual(len(fenced.split("\n\n", 1)[1]), mail.BODY_CHARS + 1)
+
+    async def test_hiding_cant_make_a_mail_longer_than_the_model_reads(self):
+        raw = message("About your Acme account" + GROWN[:300], "Acme <account@acme.example>",
+                      "Hello, about your Acme account." + GROWN)
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]))
+        await self.ask("Did Acme email me about my account?")
+        subject, body = self.read(0).split("=====")[2].split("\n\n", 1)
+        self.assertLessEqual(len(subject.removeprefix("\nSubject: ")), mail.SUBJECT_CHARS)
+        self.assertLessEqual(len(body), mail.BODY_CHARS + 1)
+        self.assertIn(mail.HIDDEN, body)
+        self.assertIn(mail.HIDDEN, subject)
+        self.assertNotIn("1234", subject + body)
+        self.assertIn("Acme account", body)
 
     def test_a_mails_own_text_cant_pass_for_the_replys_structure(self):
         data = [(b'1 (UID 5 INTERNALDATE "01-Jan-2026 10:00:00 +0000" '

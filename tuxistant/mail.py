@@ -752,6 +752,17 @@ def _source(mail: Mail) -> str:
     return f"an email from {mail.sender or 'an unknown sender'} on {_day(mail.sent_on)}"
 
 
+def _fit(text: str, limit: int) -> str:
+    """Text cut to the limit at the last space. Hiding comes after clean() has cut a mail to
+    length, and "[hidden]" is longer than the code it stands for, so "sign<b>in" that only clean()
+    makes "sign in" would let every number after it grow the mail past what the model reads. A
+    word cut through is left out, even with no space before it, as its first half may pass for a
+    code that the whole word was not."""
+    if len(text) <= limit:
+        return text
+    return text[:limit + 1].rsplit(" ", 1)[0] if " " in text[:limit + 1] else ""
+
+
 async def _note(question: str, mail: Mail, config, seconds: float) -> str:
     """What one mail says about the question, or nothing. The fence is one a mail can't guess, so
     it can't close it, and no angle bracket or link is left in what the model reads. Secrets are
@@ -760,8 +771,9 @@ async def _note(question: str, mail: Mail, config, seconds: float) -> str:
     fence = f"===== {secrets.token_hex(8)} ====="
     whose = ("The user sent this email" if mail.by_user
              else f"Email from {mail.sender or 'unknown'}, sent")
-    subject = _hide(clean(URL.sub(" ", mail.subject), SUBJECT_CHARS))
-    body = _hide(clean(URL.sub(" ", mail.body[:BODY_CHARS * 2]), BODY_CHARS))
+    subject = _fit(_hide(clean(URL.sub(" ", mail.subject), SUBJECT_CHARS)), SUBJECT_CHARS)
+    body = _fit(_hide(clean(URL.sub(" ", mail.body[:BODY_CHARS * 2]), BODY_CHARS)),
+                BODY_CHARS)
     user = (f"Question: {question}\n\n{whose} on {mail.sent_on:%A} {mail.sent_on.day} "
             f"{mail.sent_on:%B %Y}:\n{fence}\nSubject: {subject}\n\n{body}\n{fence}")
     note = clean(URL.sub(" ", await _brain(config, READ, user, ANSWER_TOKENS, seconds)),
