@@ -27,7 +27,7 @@ import re
 import shutil
 import tempfile
 from collections import ChainMap, Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import yaml
@@ -531,9 +531,34 @@ def _write_json(file: Path, data) -> None:
         raise
 
 
-def _read_loaded(file: Path) -> dict[str, int | None]:
-    """Names and the number of actions each was offered with. A list, as an earlier 0.5 build
-    kept, gives names alone, counted as they are now."""
+@dataclass(frozen=True)
+class _Place:
+    """What one of yours holds in the budget: the count it was offered with, and the fingerprint
+    of that manifest, its id and its actions, so no other skill takes those while it is refused
+    or broken, and a restart still knows whether it was edited since."""
+    count: int | None           # None: a name alone, from an earlier build, counted as it is now
+    digest: str = ""            # "" when not known, which counts as edited
+    skill_id: str = ""
+    actions: tuple = ()
+
+    @classmethod
+    def of(cls, item: "_Found") -> "_Place":
+        return cls(len(item.manifest["actions"]), _text_digest(item.text), item.manifest["id"],
+                   tuple(sorted(item.manifest["actions"])))
+
+    def saved(self) -> dict:
+        return {"count": self.count, "digest": self.digest, "id": self.skill_id,
+                "actions": list(self.actions)}
+
+
+def _text_digest(text: str) -> str:
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _read_loaded(file: Path) -> dict[str, _Place]:
+    """Names and what each holds. Counts alone, or a list of names, as earlier 0.5 builds kept,
+    give no fingerprint or names, and a list no counts either. Counts that add up past the
+    budget, which Tux never writes, are not trusted at all."""
     try:
         data = json.loads(file.read_text())
     except FileNotFoundError:
@@ -542,11 +567,38 @@ def _read_loaded(file: Path) -> dict[str, int | None]:
         log.warning("could not read %s, so the skills you added load in name order", file)
         return {}
     if isinstance(data, list):
-        return {name: None for name in data if _plain_name(name)}
+        return {name: _Place(None) for name in data if _plain_name(name)}
     if not isinstance(data, dict):
         return {}
-    return {name: count for name, count in data.items() if _plain_name(name)
-            and type(count) is int and 0 < count <= USER_TOOLS}
+    places = {}
+    for name, value in data.items():
+        place = _place_from(value)
+        if _plain_name(name) and place is not None:
+            places[name] = place
+    if sum(place.count or 0 for place in places.values()) > USER_TOOLS:
+        log.warning("%s holds more than %d actions, so the skills you added load in name order",
+                    file, USER_TOOLS)
+        return {}
+    return places
+
+
+def _place_from(value) -> _Place | None:
+    if type(value) is int:
+        return _Place(value) if 0 < value <= USER_TOOLS else None
+    if not isinstance(value, dict):
+        return None
+    count, digest = value.get("count"), value.get("digest")
+    skill_id, actions = value.get("id"), value.get("actions")
+    if type(count) is not int or not 0 < count <= USER_TOOLS:
+        return None
+    if not (isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest)):
+        digest = ""
+    if not (isinstance(skill_id, str) and SKILL_ID.fullmatch(skill_id)):
+        skill_id = ""
+    if not (isinstance(actions, list) and len(actions) <= count and all(
+            isinstance(name, str) and ACTION.fullmatch(name) for name in actions)):
+        actions = []
+    return _Place(count, digest, skill_id, tuple(sorted(set(actions))))
 
 
 def _plain_name(name) -> bool:
@@ -585,10 +637,10 @@ class SkillHost:
         self.problems: dict[str, str] = {}
         self.loaded = self.user.parent / LOADED
         self.saved = _read_loaded(self.loaded)
-        # what keeps its place in the budget, by key, with how many actions it was offered with:
-        # what the last reload loaded or kept a place for, or at start yours that kept one before
-        self.offered: dict[str, int | None] = {
-            str(self.user / name): count for name, count in self.saved.items()}
+        # what keeps its place in the budget, by key, with what it holds: what the last reload
+        # loaded or kept a place for, or at start yours that kept one before
+        self.offered: dict[str, _Place] = {
+            str(self.user / name): place for name, place in self.saved.items()}
         self.last_offered: dict[str, _Found] = {}   # by key, as the last reload offered them
         self.running: dict[str, _Running] = {}      # by folder
         self.last_good: dict[str, _Found] = {}      # by folder or file
@@ -652,20 +704,25 @@ class SkillHost:
             return dict(problems)
         self._swap(skills, running)
         self.problems, self.last_offered = problems, offered
-        self.offered = {key: len(item.manifest["actions"]) for key, item in offered.items()}
+        before = self.offered
+        self.offered = {key: _Place.of(item) for key, item in offered.items()}
         self.offered.update(places)
-        self._save_loaded()
+        if str(self.user) in problems:      # none of yours was seen, so none of them changed
+            self.offered.update((key, place) for key, place in before.items()
+                                if Path(key).parent == self.user)
+        else:
+            self._save_loaded()
         return dict(problems)
 
     def _save_loaded(self) -> None:
         """The order of the budget has to outlast a restart, or a skill refused for being one too
         many would take the place of one that worked, at the next login."""
-        names = {Path(key).name: count for key, count in self.offered.items()
-                 if Path(key).parent == self.user}
+        names = {Path(key).name: place for key, place in self.offered.items()
+                 if Path(key).parent == self.user and place.count is not None}
         if names == self.saved or not self.grants.writable:
             return
         try:
-            _write_json(self.loaded, names)
+            _write_json(self.loaded, {name: place.saved() for name, place in names.items()})
             self.saved = names
         except OSError as e:
             log.warning("could not save which skills were loaded: %s", e)
@@ -771,14 +828,16 @@ class SkillHost:
         """What loads, and the places kept for yours that were offered and aren't now.
         Yours that were loaded keep their place, ahead of new ones, so a file dropped in is
         the one refused rather than one that was working. Of those, the ones unchanged since
-        the last reload offered them come first, so an edit that clashes with another is what
-        is refused, never the other. One that has more actions than it was offered with comes
-        after those that don't, so what it added is refused, never another skill. One of yours
-        refused for any reason keeps the version last offered while that is still allowed;
-        with none, as after a restart, it keeps its place at the count it was offered with, as
-        one whose file is still there but failed to load does, so neither a new skill nor
-        another's growth takes that room. Room for each one that grew and is still to come is
-        held the same way. A code skill that can't run for want of a sandbox keeps no place."""
+        they were last offered come first. One that has more actions than it was offered with
+        comes after those that don't, so what it added is refused, never another skill. Each
+        one that keeps a place holds the id and actions it was last offered with and still
+        has, all of them if its file didn't load, so one that is new or edited can't take them,
+        whatever the order. One of yours refused for any reason keeps the version last offered
+        while that is still allowed; with none, as after a restart, it keeps its place and
+        those names, as one whose file is still there but failed to load does, so no other
+        skill takes that room or those names. Room for each one that grew and is still to come
+        is held the same way. A code skill that can't run for want of a sandbox keeps no
+        place."""
         ids, actions, tools = set(), set(), set()
         builtin_ids = {item.manifest["id"] for item in found if item.kind == "builtin"}
         ours = {_namespace(name) for name in HANDLERS} | {
@@ -786,8 +845,13 @@ class SkillHost:
             for name in item.manifest["actions"]}
         chosen = []
         places = self._unloaded(found, sandbox_problem)
-        yours = sum(places.values())
-        held = {item.key: self.offered[item.key] for item in found if self._place(item) == GROWN}
+        yours = sum(place.count for place in places.values())
+        held = {item.key: self.offered[item.key].count for item in found
+                if self._place(item) == GROWN}
+        reserved = dict(places) | {
+            item.key: _still_held(self.offered[item.key], item) for item in found
+            if item.manifest["source"] == "yours" and item.key in self.offered
+            and not (item.kind == "code" and sandbox_problem)}
 
         def budget(item: _Found) -> str:
             count, taken = len(item.manifest["actions"]), yours + sum(held.values())
@@ -801,6 +865,7 @@ class SkillHost:
             mine = item.manifest["source"] == "yours"
             unrunnable = mine and item.kind == "code" and sandbox_problem
             return unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
+                mine and self._edited(item) and _held_by_another(item, reserved)) or (
                 mine and _lookalike(item.manifest, ours)) or (budget(item) if mine else "")
 
         for item in sorted(found, key=self._order):
@@ -814,10 +879,11 @@ class SkillHost:
                 item, problem = before, ""
             if problem:
                 problems[item.key] = problem
-                kept = self.offered.get(item.key) if mine else None
-                if kept is not None and not (item.kind == "code" and sandbox_problem):
-                    places[item.key] = kept
-                    yours += kept
+                place = reserved.get(item.key) if mine else None
+                if place is not None and place.count is not None and not (
+                        item.kind == "code" and sandbox_problem):
+                    places[item.key] = place
+                    yours += place.count
                 continue
             yours += len(item.manifest["actions"]) if mine else 0
             ids.add(item.manifest["id"])
@@ -826,27 +892,30 @@ class SkillHost:
             chosen.append(item)
         return chosen, places
 
-    def _unloaded(self, found: list[_Found], sandbox_problem: str) -> dict[str, int]:
+    def _unloaded(self, found: list[_Found], sandbox_problem: str) -> dict[str, _Place]:
         """Yours that were offered and whose file or folder is still there, but didn't load, as
-        after an edit that broke one while Tux was off or grants a new host refuses, at the
-        count each was offered with. One taken out frees its place."""
+        after an edit that broke one while Tux was off or grants a new host refuses. One taken
+        out frees its place."""
         loaded = {item.key for item in found}
         places = {}
-        for key, count in self.offered.items():
+        for key, place in self.offered.items():
             path = Path(key)
-            if key in loaded or count is None or path.parent != self.user:
+            if key in loaded or place.count is None or path.parent != self.user:
                 continue
             if os.path.lexists(path) and not (sandbox_problem and path.is_dir()):
-                places[key] = count
+                places[key] = place
         return places
 
     def _order(self, item: _Found) -> tuple[int, bool]:
-        """Where it is counted, and among yours that keep their place, those changed since the
-        last reload offered them after the others, so a clash refuses the change."""
-        before = self.last_offered.get(item.key)
-        changed = item.manifest["source"] == "yours" and (
-            before is None or before.manifest != item.manifest)
-        return self._place(item), changed
+        """Where it is counted, and among yours that keep their place, those edited since they
+        were last offered after the others."""
+        return self._place(item), self._edited(item)
+
+    def _edited(self, item: _Found) -> bool:
+        """One of yours that is new, or edited since it was last offered, as far as is known."""
+        place = self.offered.get(item.key)
+        return item.manifest["source"] == "yours" and (
+            place is None or not place.digest or place.digest != _text_digest(item.text))
 
     def _place(self, item: _Found) -> int:
         """Where it is counted: built-in and bundled ones, and yours as loaded or smaller, keep
@@ -855,7 +924,7 @@ class SkillHost:
             return KEPT_PLACE
         if item.key not in self.offered:
             return NEW
-        before = self.offered[item.key]
+        before = self.offered[item.key].count
         return GROWN if before is not None and len(item.manifest["actions"]) > before \
             else KEPT_PLACE
 
@@ -1092,12 +1161,19 @@ def _namespace(action: str) -> str:
 
 
 def over_budget(yours: int, count: int) -> str:
-    """Why a skill with count actions doesn't fit beside the yours already loaded. One with more
-    than the budget never fits, whatever else is taken out, so it is told that instead."""
+    """Why a skill with count actions doesn't fit beside the yours already counted. One with
+    more than the budget never fits as it is, whatever else is taken out, so it is told how many
+    it may keep beside the rest instead."""
     if count > USER_TOOLS:
-        return (f"It has {count} actions, and the skills you add may bring {USER_TOOLS} at most "
-                "between them, as more would make Tux worse at choosing the right one. Take some "
-                f"out of it, leaving {USER_TOOLS} or fewer, to use it.")
+        alone = (f"It has {count} actions, and the skills you add may bring {USER_TOOLS} at most "
+                 "between them, as more would make Tux worse at choosing the right one.")
+        if not yours:
+            return f"{alone} Take some out of it, leaving {USER_TOOLS} or fewer, to use it."
+        if yours < USER_TOOLS:
+            return (f"{alone} Skills you added already bring {_counted(yours)}, so take some "
+                    f"out of it, leaving {USER_TOOLS - yours} or fewer, to use it beside them.")
+        return (f"{alone} Skills you added already bring {_counted(yours)}, so to use it, take "
+                "one of them out as well as some of its own.")
     return (f"Skills you added already bring {_counted(yours)}, and its {_counted(count)} would "
             f"take them past {USER_TOOLS}, which would make Tux worse at choosing the right one. "
             "Take one of them out to use this one.")
@@ -1105,6 +1181,31 @@ def over_budget(yours: int, count: int) -> str:
 
 def _counted(count: int) -> str:
     return f"{count} action" if count == 1 else f"{count} actions"
+
+
+def _still_held(place: _Place, item: _Found) -> _Place:
+    """What one of yours holds while its file is there: the id and actions it was last offered
+    with that it still has, so one an edit gives up is free for another."""
+    manifest = item.manifest
+    return replace(place, skill_id=place.skill_id if place.skill_id == manifest["id"] else "",
+                   actions=tuple(name for name in place.actions if name in manifest["actions"]))
+
+
+def _held_by_another(item: _Found, reserved: dict[str, _Place]) -> str:
+    """The id or an action another of yours holds, whether it loads or keeps its place."""
+    manifest = item.manifest
+    for key, place in reserved.items():
+        if key == item.key:
+            continue
+        if manifest["id"] == place.skill_id:
+            return f"Another skill already has the id {shown(place.skill_id, 100)}."
+        tools = {name.replace(".", "_") for name in place.actions}
+        for name in manifest["actions"]:
+            if name in place.actions:
+                return f"Another skill already has the action {shown(name, 60)}."
+            if name.replace(".", "_") in tools:
+                return f"The action {shown(name, 60)} would have the same tool name as another."
+    return ""
 
 
 def _lookalike(manifest: dict, ours: set) -> str:

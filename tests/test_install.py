@@ -769,7 +769,8 @@ class Docs(unittest.TestCase):
             problems = skillhost.offline({}, user=user).problems
         self.assertEqual(set(problems), {str(user / "b"), str(user / "d")},
                          "b worked in 0.4.0, c still fits, d is too big alone")
-        self.assertNotIn("already", problems[str(user / "d")])
+        self.assertTrue(problems[str(user / "d")].startswith("It has 7 actions"))
+        self.assertIn("some of its own", problems[str(user / "d")], "taking others out won't do")
         seven = "seven or more"
         self.assertEqual(skillhost.USER_TOOLS + 1, 7)
         rule = next(line for line in (ROOT / "docs/SKILLS.md").read_text().splitlines()

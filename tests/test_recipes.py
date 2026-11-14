@@ -7,6 +7,7 @@ import asyncio
 import inspect
 import ipaddress
 import json
+import os
 import socket
 import shutil
 import sys
@@ -1284,7 +1285,7 @@ class Host(Case):
         self.assertLessEqual({"work.chat", "work.sound", "coins.price"}, set(actions))
         self.assertNotIn("coins.hello", actions)
         self.assertEqual(self.host.reload(), grew, "and stays so")
-        saved = json.loads((self.user.parent / skillhost.LOADED).read_text())
+        saved = self.saved()
         self.assertEqual(saved, {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1,
                                  "work.yaml": 3}, "each at the size it was offered at")
         (self.user / "notes.yaml").unlink()
@@ -1305,7 +1306,7 @@ class Host(Case):
         self.assertLessEqual({"coins.price", "notes.phone", "work.chat"}, actions)
         self.assertFalse({"coins.hello", "notes.hello"} & actions)
         self.assertEqual(self.host.reload(), both, "and stays so")
-        saved = json.loads((self.user.parent / skillhost.LOADED).read_text())
+        saved = self.saved()
         self.assertEqual(saved, {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1,
                                  "work.yaml": 3})
         (self.user / "deskstrip.yaml").unlink()
@@ -1334,7 +1335,10 @@ class Host(Case):
             "alarm.ring": {"description": "Say it is time to get up", "say": "Get up."}}))
 
     def saved(self) -> dict:
-        return json.loads((self.user.parent / skillhost.LOADED).read_text())
+        """The count each of yours keeps its place at."""
+        data = json.loads((self.user.parent / skillhost.LOADED).read_text())
+        return {name: place["count"] if isinstance(place, dict) else place
+                for name, place in data.items()}
 
     async def test_a_skill_that_grew_while_tux_was_off_keeps_its_place_from_a_new_one(self):
         """With no version to keep, notes was refused and alarm, refused before, took its
@@ -1386,7 +1390,7 @@ class Host(Case):
         """notes sorts before work. Renamed to work.chat, it took that action from work, which
         nobody had edited, and alarm took the room work had."""
         alarm, refused = self.full()
-        notes, work = self.user / "notes.yaml", self.user / "work.yaml"
+        notes = self.user / "notes.yaml"
         before = notes.read_text()
         notes.write_text(before.replace("notes.phone", "work.chat"))
         clash = "Another skill already has the action work.chat."
@@ -1398,9 +1402,10 @@ class Host(Case):
         kept = {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1, "work.yaml": 3}
         self.assertEqual(self.saved(), kept)
         again = self.restart()
-        self.assertEqual(again.reload(), {str(work): clash, **refused},
-                         "after a restart the first by name loads, and work keeps its place")
-        self.assertNotIn("alarm.ring", again.current().actions)
+        self.assertEqual(again.reload(), {str(notes): clash, **refused},
+                         "after a restart too, with no version of notes to keep")
+        self.work_has_its_chat(again)
+        self.assertNotIn("notes.phone", again.current().actions)
         self.assertEqual(self.saved(), kept)
         notes.write_text(before)
         self.assertEqual(again.reload(), refused)
@@ -1460,6 +1465,178 @@ class Host(Case):
         notes.unlink()
         self.assertEqual(again.reload(), {}, "taken out, it frees its place")
         self.assertIn("alarm.ring", again.current().actions)
+
+    def edit(self, name: str, old: str, new: str) -> Path:
+        file = self.user / name
+        text = file.read_text()
+        self.assertIn(old, text)
+        file.write_text(text.replace(old, new))
+        return file
+
+    CLASH = "Another skill already has the action work.chat."
+
+    async def test_an_edit_never_takes_an_action_from_one_running_its_kept_version(self):
+        """work grew, so its last version was in use, and coins, which sorts first, edited to
+        have work.chat, took it from work."""
+        alarm, refused = self.full()
+        work = self.grow("work.yaml", "work.extra")
+        grew = f"{skillhost.GREW} {skillhost.KEPT}"
+        self.assertEqual(self.host.reload(), {str(work): grew, **refused})
+        coins = self.edit("coins.yaml", "coins.price", "work.chat")
+        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+                                              str(work): grew, **refused})
+        self.work_has_its_chat(self.host)
+        self.assertLessEqual({"work.guestwifi", "coins.price"}, set(self.host.current().actions))
+        again = self.restart()
+        self.assertEqual(again.reload(), {str(coins): self.CLASH, str(work): skillhost.GREW,
+                                          **refused}, "neither has a version to keep")
+        self.assertNotIn("alarm.ring", again.current().actions)
+
+    async def test_an_edit_never_takes_an_action_from_one_with_a_refused_edit_of_its_own(self):
+        """work's lookalike edit kept its count, so work counted as edited on every reload, and
+        coins, edited after it and sorting first, took work.chat."""
+        alarm, refused = self.full()
+        work = self.edit("work.yaml", "work.guestwifi", "file.guestwifi")
+        lookalike = (f"Its action file.guestwifi starts like one built into Tuxistant, so the "
+                     f"model could take it for one. {skillhost.KEPT}")
+        self.assertEqual(self.host.reload(), {str(work): lookalike, **refused})
+        coins = self.edit("coins.yaml", "coins.price", "work.chat")
+        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+                                              str(work): lookalike, **refused})
+        self.work_has_its_chat(self.host)
+        self.assertLessEqual({"work.guestwifi", "coins.price"}, set(self.host.current().actions))
+
+    async def test_two_edits_at_once_leave_each_skill_its_own_actions(self):
+        """As a sync or a checkout would: work's edit changed only a description, and coins,
+        sorting first, took work.chat."""
+        alarm, refused = self.full()
+        coins = self.edit("coins.yaml", "coins.price", "work.chat")
+        self.edit("work.yaml", "Open the work chat app", "Open the work chat app now")
+        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+                                              **refused})
+        actions = self.host.current().actions
+        self.assertEqual(actions["work.chat"]["description"], "Open the work chat app now")
+        self.assertIn("coins.price", actions)
+
+    async def test_an_action_an_edit_gives_up_is_free_for_another_at_once(self):
+        """work.chat is free once work's edit drops it, whichever skill is counted first."""
+        alarm, refused = self.full()
+        self.edit("work.yaml", "work.chat:", "work.talk:")
+        self.edit("coins.yaml", "coins.price", "work.chat")
+        self.assertEqual(self.host.reload(), refused)
+        self.assertLessEqual({"work.chat", "work.talk"}, set(self.host.current().actions))
+        self.assertEqual(self.restart().reload(), refused)
+
+    async def test_a_check_names_the_same_skills_as_the_daemon(self):
+        """tuxistant doctor reads the same folders with a host of its own, and named work."""
+        alarm, refused = self.full()
+        self.edit("notes.yaml", "notes.phone", "work.chat")
+        daemon = self.host.reload()
+        check = skillhost.offline(CONFIG, builtin=self.builtin, bundled=self.bundled,
+                                  user=self.user)
+        self.assertEqual(set(check.problems), set(daemon))
+        self.assertEqual(set(daemon), {str(self.user / "notes.yaml"), str(alarm)})
+
+    async def test_a_skill_broken_while_tux_was_off_keeps_its_id_from_a_copy(self):
+        """notes-copy was refused for notes' id. With notes broken at the restart the copy
+        loaded, and notes put right was refused for good."""
+        self.example("coins.yaml", "notes.yaml", "work.yaml")                        # 5
+        notes = self.user / "notes.yaml"
+        before = notes.read_text()
+        copy = self.add("notes-copy.yaml", before)
+        same_id = "Another skill already has the id org.example.notes."
+        self.assertEqual(self.host.reload(), {str(copy): same_id})
+        notes.write_text("id: [broken")
+        again = self.restart()
+        problems = again.reload()
+        self.assertEqual(set(problems), {str(notes), str(copy)})
+        self.assertEqual(problems[str(copy)], same_id)
+        self.assertNotIn("notes.phone", again.current().actions)
+        notes.write_text(before)
+        self.assertEqual(again.reload(), {str(copy): same_id})
+        self.assertIn("notes.phone", again.current().actions)
+
+    async def test_a_new_skill_cant_take_the_actions_of_one_that_keeps_its_place(self):
+        """notes grew by work.chat while Tux was off, so it was refused with its place and no
+        version. aa, dropped in with notes.phone, loaded, so notes put back was refused."""
+        self.example("coins.yaml", "notes.yaml", "work.yaml")                        # 5
+        notes = self.user / "notes.yaml"
+        before = notes.read_text()
+        self.grow("notes.yaml", "work.chat")
+        again = self.restart()
+        self.assertEqual(again.reload(), {str(notes): self.CLASH})
+        aa = self.add("aa.yaml", recipe(id="org.example.aa", permissions={}, actions={
+            "notes.phone": {"description": "Say hi", "say": "Hi."}}))
+        taken = {str(aa): "Another skill already has the action notes.phone."}
+        self.assertEqual(again.reload(), {str(notes): self.CLASH, **taken})
+        notes.write_text(before)
+        self.assertEqual(again.reload(), taken, "notes loads again once the change is undone")
+        self.assertIn("ntfy", str(again.current().actions["notes.phone"]))
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a folder whatever its mode")
+    async def test_a_folder_that_cant_be_read_forgets_no_place(self):
+        alarm, refused = self.full()
+        kept = self.saved()
+        os.chmod(self.user, 0)
+        try:
+            problems = self.host.reload()
+            saved = self.saved()
+        finally:
+            os.chmod(self.user, 0o755)
+        self.assertEqual(list(problems), [str(self.user)])
+        self.assertEqual(saved, kept)
+        self.assertEqual(self.host.reload(), refused)
+        self.work_has_its_chat(self.host)
+        self.assertEqual(self.restart().reload(), refused)
+
+    async def test_counts_past_the_budget_in_the_list_are_not_trusted(self):
+        """Tux never writes these, but a hand-edited file held twelve actions for two broken
+        skills, and nothing else could load."""
+        self.example("coins.yaml", "work.yaml")
+        loaded = self.user.parent / skillhost.LOADED
+        for held in ({"coins.yaml": 6, "work.yaml": 6},
+                     {"coins.yaml": {"count": 6}, "work.yaml": {"count": 6}}):
+            with self.subTest(held=held):
+                loaded.write_text(json.dumps(held))
+                (self.user / "coins.yaml").write_text("id: [broken")
+                (self.user / "work.yaml").write_text("id: [broken")
+                (self.user / "aa.yaml").unlink(missing_ok=True)
+                again = self.restart()
+                self.assertEqual(set(again.reload()),
+                                 {str(self.user / "coins.yaml"), str(self.user / "work.yaml")})
+                self.add("aa.yaml", recipe(id="org.example.aa", permissions={}, actions={
+                    "aa.x": {"description": "Say hi", "say": "Hi."}}))
+                self.assertNotIn(str(self.user / "aa.yaml"), again.reload())
+                self.assertIn("aa.x", again.current().actions)
+                self.assertLessEqual(sum(self.saved().values()), skillhost.USER_TOOLS)
+
+    def code(self, name: str, count: int) -> Path:
+        folder = self.user / name
+        folder.mkdir(exist_ok=True)
+        (folder / "skill.yaml").write_text(
+            f"id: org.example.{name}\nname: Code\ndescription: Code\nrun: [python3, m.py]\n"
+            "actions:\n" + "".join(f"  {name}.a{i}:\n    description: A\n"
+                                    for i in range(count)))
+        (folder / "m.py").write_text("")
+        return folder
+
+    async def test_a_skill_grown_past_six_is_told_what_would_fit(self):
+        """Told to leave six or fewer, its author would be refused again at four."""
+        self.example("coins.yaml", "deskstrip.yaml", "notes.yaml")                  # 3
+        big = self.code("big", 3)
+        self.assertEqual(self.host.reload(), {})
+        self.code("big", 7)
+        problem = self.host.reload()[str(big)]
+        self.assertIn("It has 7 actions", problem)
+        self.assertIn("already bring 3 actions", problem)
+        self.assertIn("leaving 3 or fewer", problem)
+        self.assertTrue(problem.endswith(skillhost.KEPT))
+        shutil.rmtree(big)
+        self.code("big", 4)
+        self.assertEqual(self.host.reload(), {str(big): f"{skillhost.GREW} {skillhost.KEPT}"})
+        self.assertIn("big.a2", self.host.current().actions)
+        self.assertTrue(skillhost.over_budget(6, 7).endswith(
+            "take one of them out as well as some of its own."), "none to leave beside them")
 
     async def test_two_skills_that_grew_keep_their_places_after_a_restart(self):
         """coins' growth took the room notes had, and notes put back was one too many."""
@@ -1551,7 +1728,7 @@ class Host(Case):
                          {str(self.user / "notes.yaml"): skillhost.over_budget(6, 1)},
                          "notes was put back after alarm took its place")
         self.assertIn("alarm.ring", third.current().actions)
-        saved = json.loads((self.user.parent / skillhost.LOADED).read_text())
+        saved = self.saved()
         self.assertEqual(saved, {"alarm.yaml": 1, "coins.yaml": 1, "deskstrip.yaml": 1,
                                  "work.yaml": 3})
 
@@ -1598,17 +1775,19 @@ class Host(Case):
     async def test_a_check_or_a_damaged_list_changes_nothing(self):
         self.example("coins.yaml")
         loaded = self.user.parent / skillhost.LOADED
-        self.assertEqual(json.loads(loaded.read_text()), {"coins.yaml": 1})
+        self.assertEqual(self.saved(), {"coins.yaml": 1})
         loaded.unlink()
         skillhost.offline(CONFIG, builtin=self.builtin, bundled=self.bundled, user=self.user)
         self.assertFalse(loaded.exists(), "a check saves nothing")
         for damaged in ('["../../x", 7, "coins.yaml"]', "[broken", '"coins.yaml"',
                         '{"coins.yaml": "1", "../x": 1}', '{"coins.yaml": true}',
-                        '{"coins.yaml": 0}', '{"coins.yaml": 1e9}'):
+                        '{"coins.yaml": 0}', '{"coins.yaml": 1e9}', '{"coins.yaml": {}}',
+                        '{"coins.yaml": {"count": 7}}', '{"coins.yaml": {"count": "1"}}',
+                        '{"coins.yaml": {"count": 1, "actions": "coins.price", "id": 5}}'):
             with self.subTest(damaged):
                 loaded.write_text(damaged)
                 self.assertEqual(self.restart().reload(), {})
-        self.assertEqual(json.loads(loaded.read_text()), {"coins.yaml": 1})
+        self.assertEqual(self.saved(), {"coins.yaml": 1})
         self.assertEqual({p.name for p in self.user.parent.iterdir()},
                          {"b", skillhost.GRANTS, skillhost.LOADED, "skills"}, "no temp file left")
 
