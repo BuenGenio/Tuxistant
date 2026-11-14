@@ -25,6 +25,7 @@ The plan starts from the same assumption as the rest of Tuxistant: a bad skill w
    - the recipe loads with no problem;
    - its id is `io.github.<the PR author>.*`;
    - the signature verifies against a key GitHub lists for the PR author;
+   - an update is signed with a key the author already had on `main`, and a key added once they have a skill published is vouched for by one of their earlier keys, or else the owner confirms it is them;
    - the licence is MIT or CC0, and the tags exist;
    - the author isn't suspended or banned.
 

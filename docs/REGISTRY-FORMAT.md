@@ -31,6 +31,7 @@ tags.yaml                                tags and categories
 keys/registry.pub                        the registry key's public half, as Tux ships it
 keys/moderation.pub                      the moderation key's public half
 authors/<login>/allowed_signers          the keys that may sign <login>'s recipes, with dates
+authors/<login>/allowed_signers.sig      that file signed with one of <login>'s earlier keys, when a key is added
 skills/<login>/<skill name>/recipe.yaml
 skills/<login>/<skill name>/recipe.yaml.sig
 skills/<login>/<skill name>/meta.yaml
@@ -42,9 +43,11 @@ published/index.json                     committed by the owner with its signatu
 published/index.json.sig
 published/revocations.json               committed by the moderation workflow with its signature
 published/revocations.json.sig
+skipped.yaml                             versions on main the index leaves out, signed by the owner;
+skipped.yaml.sig                         only there once one is needed
 ```
 
-A publisher's pull request may touch only `skills/<login>/`, `authors/<login>/allowed_signers` and, to propose a tag, `tags.yaml`, where `<login>` is the PR author. `moderation/` and `published/` change only through the moderation workflow or the owner. Pull requests are merged with squash or a merge commit, never rebased, so each first-parent commit on `main` is one reviewed change.
+A publisher's pull request may touch only `skills/<login>/`, `authors/<login>/allowed_signers` with its `.sig` and, to propose a tag, `tags.yaml`, where `<login>` is the PR author. `moderation/` and `published/` change only through the moderation workflow or the owner. Every other file, such as `skipped.yaml`, `keys/`, `.github/` and the tools, changes only in a pull request of its own: the check ends it with "Needs the owner" and exit status 3, and only the owner merges it, past the check. Beside anything under `skills/` or `authors/`, or `tags.yaml`, the check refuses it. Pull requests are merged with squash or a merge commit, never rebased, so each first-parent commit on `main` is one reviewed change.
 
 ## recipe.yaml and recipe.yaml.sig
 
@@ -99,6 +102,7 @@ ssh-keygen -Y sign -f <their key> -n tuxistant-logo logo.webp
 
 CI decodes every frame with glycin's loaders in their sandbox, then checks the rules above. It also renders `logo-still.png`, the first frame at 128 pixels, for lists and for anyone who turns animations off. The still is built from the signed logo, so its hash goes in the index and nobody signs it separately.
 
+## tags.yaml
 
 ```yaml
 categories:
@@ -126,19 +130,46 @@ io.github.example-ada namespaces="tuxistant-recipe",valid-after="20250301Z",vali
 
 The principal is always `io.github.<login>` and the namespace always `tuxistant-recipe`. No other options and no comments. At most 50 lines.
 
-How CI fills and checks it, on every pull request that touches `skills/<login>/`:
+How CI fills and checks it, on every pull request that touches `skills/<login>/` or `authors/<login>/`:
 
 1. It fetches `https://github.com/<login>.keys` for the PR author. These are the only keys that can be added.
 2. Each `recipe.yaml.sig` in the pull request must verify with `ssh-keygen -Y verify -f authors/<login>/allowed_signers -I io.github.<login> -n tuxistant-recipe`, at the current time, and with a key GitHub lists right now.
 3. A key GitHub lists that the file doesn't have is added by the pull request with `valid-after` set to the day CI first saw it. A listed key GitHub no longer has gets `valid-before` set to the day CI found it gone. CI prints the exact lines and refuses the pull request until they are there, so the reviewer sees every key change.
+4. An update to a skill that has a version on `main` must be signed with a key that is in `allowed_signers` on `main` already. A key starts signing updates only once the pull request that adds it is merged. An update signed with a key that signed no earlier version of that skill is listed for a maintainer to confirm.
+5. Once the author has a version on `main`, a pull request that adds a key needs `authors/<login>/allowed_signers.sig`: `allowed_signers` exactly as the pull request leaves it, signed with a key that is in it on `main` without a `valid-before`:
 
-So a key removed from GitHub stops new versions at once, while versions it signed earlier stay valid until moderation acts on them.
+   ```text
+   ssh-keygen -Y sign -f <an earlier key> -n tuxistant-keys authors/<login>/allowed_signers
+   ```
+
+   It is the armored signature text, at most 4 KiB, and must verify for `io.github.<login>` in namespace `tuxistant-keys` with one of those keys. One that doesn't verify refuses the pull request. With none, the check ends "Needs the owner" with exit status 3: nothing is refused, but only the owner may merge it, past the check, once they have confirmed some other way that it is the same person. An author with no version on `main` needs no `.sig`.
+
+Steps 4 and 5 are there because a GitHub login its owner gives up can be registered by someone else, who can also list the old owner's public keys on their account. A key removed from GitHub stops new versions at once, while versions it signed earlier stay valid until moderation acts on them. Neither the index build nor Tux reads `allowed_signers.sig`.
 
 ## moderation/revocations/&lt;id&gt;.yaml and moderation/lifted/&lt;id&gt;.yaml
 
 A revocation file holds one revocation entry (see "Revocations" below) in YAML, with `id` equal to its file name. Ids are whole numbers from 1, the next one being the highest so far plus 1, and never reused. The moderation workflow writes a suspension straight to `main`, and opens a pull request for a ban.
 
 A lifted file holds one lift entry, and only the owner merges one. Lifting is how a suspension or ban is undone; the revocation file stays.
+
+## skipped.yaml and skipped.yaml.sig
+
+The build checks every version on `main` again and stops when one fails, for example one merged on a stale check whose signature no longer verifies with `allowed_signers` as it was at the merge. `main` is never rewritten, so the owner leaves such a version out of the index with `skipped.yaml`:
+
+```yaml
+skipped:
+  - commit: "<the 40-digit commit the build names>"
+    skill: io.github.example-ada.tides
+    reason: Merged after its key was closed, so its signature doesn't verify.
+```
+
+`skipped` is the only field: 1 to 200 entries, each with exactly `commit` (the 40 small hex digits of a first-parent commit of `main` that changed that skill's `recipe.yaml`), `skill` (a skill id) and `reason`, text(300). No entry twice. At most 64 KiB. `skipped.yaml.sig` is made with
+
+```text
+ssh-keygen -Y sign -f <registry key> -n tuxistant-skip skipped.yaml
+```
+
+and is at most 4 KiB. The build counts the file only if the signature verifies for `tuxistant-registry` in namespace `tuxistant-skip` with a key in `keys/registry.pub`; otherwise, or when an entry names no such version, it stops. A version left out is never in the index, and its version stays used: CI refuses it again, and the build stops at a later version that reuses it. Tux never reads either file.
 
 ## What is published
 
@@ -169,7 +200,7 @@ The build takes a commit of `main`, a `seq` and a `date`, and is otherwise deter
 | `moderation_keys` | list of key | 1 to 3 `ssh-ed25519` keys that may sign `revocations.json` |
 | `categories` | list | As in `tags.yaml`: objects with `id`, `name`, `tags` |
 | `authors` | object | By login, every author with at least one version. See below |
-| `skills` | list | Every skill ever merged, sorted by id. See below |
+| `skills` | list | Every skill ever merged that has a version not left out by `skipped.yaml`, sorted by id. See below |
 | `revocations` | list | Every file in `moderation/revocations/`, sorted by id. See "Revocations" |
 | `lifted` | list | Every file in `moderation/lifted/`, sorted by id. See "Revocations" |
 
@@ -192,7 +223,7 @@ The build takes a commit of `main`, a `seq` and a `date`, and is otherwise deter
 | `author` | login | The login in the id |
 | `name` | text(100) | The newest version's `name` |
 | `summary`, `tags`, `licence`, `links` | | From `meta.yaml` at `commit` |
-| `versions` | list | 1 or more, oldest first: one for each first-parent commit of `main` that changed `recipe.yaml` |
+| `versions` | list | 1 or more, oldest first: one for each first-parent commit of `main` that changed `recipe.yaml`, apart from those `skipped.yaml` leaves out |
 | `versions[].version` | string | The recipe's `version` |
 | `versions[].date` | timestamp | The committer date of that commit |
 | `versions[].sha256` | string | 64 small hex digits: SHA-256 of `recipe.yaml`'s exact bytes |
@@ -253,18 +284,21 @@ The moderation workflow publishes it after every change to `moderation/revocatio
 
 ## Signatures and keys
 
-Every signature is `ssh-keygen -Y sign`, and Tux checks each with `ssh-keygen -Y verify` against an `allowed_signers` file it writes for that one check. The namespace is fixed per kind of file, so a signature made for one kind is refused for another.
+Every signature is `ssh-keygen -Y sign`, checked with `ssh-keygen -Y verify` against an `allowed_signers` file written for that one check. Tux checks the first four kinds below; the last two are checked only by the registry's CI and index build, and Tux never reads them. The namespace is fixed per kind of file, so a signature made for one kind is refused for another.
 
 | File | Namespace | Principal | Key |
 |---|---|---|---|
 | `recipe.yaml` | `tuxistant-recipe` | `io.github.<login>` | The publisher's, from the index |
+| `logo.<ext>` | `tuxistant-logo` | `io.github.<login>` | The publisher's, from the index |
 | `index.json` | `tuxistant-index` | `tuxistant-registry` | The registry key, shipped with Tux |
 | `revocations.json` | `tuxistant-revocations` | `tuxistant-moderation` | A key in the accepted index's `moderation_keys` |
+| `authors/<login>/allowed_signers` | `tuxistant-keys` | `io.github.<login>` | One of that publisher's keys on `main` without a `valid-before`. Not read by Tux |
+| `skipped.yaml` | `tuxistant-skip` | `tuxistant-registry` | The registry key, from `keys/registry.pub`. Not read by Tux |
 
 | Key | May sign | What Tux takes from it |
 |---|---|---|
-| Publisher key | That publisher's `recipe.yaml` files | One recipe's bytes |
-| Registry key | `index.json` | Everything in the index: skills, versions, hashes, publisher keys, tags, the moderation keys, revocations and lifts |
+| Publisher key | That publisher's `recipe.yaml` and logo files, and their `allowed_signers` to vouch for a new key | One recipe's bytes, or one logo's |
+| Registry key | `index.json`, and `skipped.yaml` for the index build | Everything in the index: skills, versions, hashes, publisher keys, tags, the moderation keys, revocations and lifts |
 | Moderation key | `revocations.json`, and the moderation workflow's git commits (namespace `git`, for people reading the log, never read by Tux) | New revocation entries, and nothing else |
 
 Tux ships the registry key as one `allowed_signers` line:
