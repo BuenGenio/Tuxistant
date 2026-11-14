@@ -150,7 +150,7 @@ Steps 4 and 5 are there because a GitHub login its owner gives up can be registe
 
 A revocation file holds one revocation entry (see "Revocations" below) in YAML, with `id` equal to its file name. Ids are whole numbers from 1, the next one being the highest so far plus 1, and never reused. The moderation workflow writes a suspension straight to `main`, and opens a pull request for a ban.
 
-A lifted file holds one lift entry, and only the owner merges one. Lifting is how a suspension or ban is undone; the revocation file stays.
+A lifted file holds one lift entry, and only the owner merges one. Lifting is how a suspension or ban is undone; the revocation file stays, and the published files leave it out.
 
 ## skipped.yaml and skipped.yaml.sig
 
@@ -185,9 +185,9 @@ Tux downloads `index.json`, `revocations.json`, their signatures, and `recipes/<
 
 ## index.json
 
-UTF-8 JSON, at most 4 MiB. Its signature is at most 4 KiB.
+UTF-8 JSON, at most 8 MiB. Its signature is at most 4 KiB.
 
-The build takes a commit of `main`, a `seq` and a `date`, and is otherwise deterministic: the same three give the same bytes, written with sorted keys, two-space indentation and a final newline. That lets the owner rebuild it offline, compare, and sign what they checked. CI refuses to deploy a `published/index.json` whose signature doesn't verify or which differs from its own rebuild.
+The build takes a commit of `main`, a `seq` and a `date`, and is otherwise deterministic: the same three give the same bytes, written with sorted keys, two-space indentation, characters outside ASCII as themselves in UTF-8 rather than as `\u` escapes, and a final newline. That lets the owner rebuild it offline, compare, and sign what they checked. CI refuses to deploy a `published/index.json` whose signature doesn't verify or which differs from its own rebuild.
 
 ### Top level
 
@@ -201,10 +201,12 @@ The build takes a commit of `main`, a `seq` and a `date`, and is otherwise deter
 | `categories` | list | As in `tags.yaml`: objects with `id`, `name`, `tags` |
 | `authors` | object | By login, every author with at least one version. See below |
 | `skills` | list | Every skill ever merged that has a version not left out by `skipped.yaml`, sorted by id. See below |
-| `revocations` | list | Every file in `moderation/revocations/`, sorted by id. At most 1000 of them in effect, that is with an id not in `lifted`. See "Revocations" |
-| `lifted` | list | Every file in `moderation/lifted/`, sorted by id, at most 10000. See "Revocations" |
+| `revocations` | list | The revocations in effect: every file in `moderation/revocations/` whose id has no file in `moderation/lifted/`, sorted by id, at most 1000. See "Revocations" |
+| `lifted` | list of integers | The id of every file in `moderation/lifted/`, sorted, at most 10000. Only the id is published |
 
-The two limits are what Tux keeps, so they are rules for the registry: Tux refuses an index past either as not in the format, and would stay on the index it had. The index build refuses to make one, CI refuses to deploy one, and the moderation workflow refuses a revocation that would put more than 1000 in effect. Below that, an index that lifts ids makes room.
+The two limits are what Tux keeps, so they are rules for the registry: Tux refuses an index past either, or one that lists a lifted id in `revocations`, as not in the format, and would stay on the index it had. The index build refuses to make one, CI refuses to deploy one, and the moderation workflow refuses a revocation that would put more than 1000 in effect. A lift takes its revocation out of `revocations` and adds one id to `lifted`, so it makes room for another revocation. A lift is never taken back, so 10000 is how many the registry can make in its life.
+
+They also keep the files small enough. Written as above, 1000 revocations with every field at its longest come to under 4.25 MiB, and 10000 lifted ids to under 0.25 MiB, which leaves at least 3.5 MiB of the index for everything else. The build and CI refuse an index over 8 MiB, and Tux refuses one as too big.
 
 ### authors.&lt;login&gt;
 
@@ -263,6 +265,8 @@ What Tux does: a covered skill is switched off with a notification giving the `r
 
 ### A lift entry
 
+What `moderation/lifted/<id>.yaml` holds. The index lists only its `id`.
+
 | Field | Type | Rule |
 |---|---|---|
 | `id` | integer | The id of the revocation it lifts |
@@ -273,16 +277,16 @@ What Tux does: a covered skill is switched off with a notification giving the `r
 
 ### revocations.json
 
-UTF-8 JSON, at most 1 MiB, with exactly these fields:
+UTF-8 JSON, at most 5 MiB, written as `index.json` is, with exactly these fields:
 
 | Field | Type | Rule |
 |---|---|---|
 | `format` | integer | `1` |
 | `seq` | integer | 1 or more, its own counter, one more each time it is published |
 | `date` | timestamp | When it was signed |
-| `revocations` | list | Every file in `moderation/revocations/` on `main`, sorted by id |
+| `revocations` | list | The revocations in effect on `main`: every file in `moderation/revocations/` whose id has no file in `moderation/lifted/`, sorted by id. So at most 1000, which at their longest come to under 4.25 MiB |
 
-The moderation workflow publishes it after every change to `moderation/revocations/`, so a suspension reaches Tux without waiting for the owner to sign an index. A ban merged by the owner is published the same way.
+The moderation workflow publishes it after every change to `moderation/revocations/`, so a suspension reaches Tux without waiting for the owner to sign an index. A ban merged by the owner is published the same way. A lift doesn't need it: Tux ends a revocation only when an index lists its id in `lifted`, and an entry a newer `revocations.json` leaves out stays.
 
 ## Signatures and keys
 

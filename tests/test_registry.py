@@ -77,7 +77,8 @@ def fingerprint(public: str) -> str:
 
 
 def dumped(data) -> bytes:
-    return (json.dumps(data, indent=2, sort_keys=True) + "\n").encode()
+    """As REGISTRY-FORMAT.md has the registry write its files."""
+    return (json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
 
 
 @unittest.skipUnless(KEYGEN, "ssh-keygen isn't installed")
@@ -167,9 +168,9 @@ class RegistryCase(unittest.TestCase):
                 "report": "https://github.com/example/tuxistant-skills/issues/7"}
 
     @staticmethod
-    def lift(id: int) -> dict:
-        return {"id": id, "reason": "It was fixed.", "date": "2026-11-20T08:00:00Z",
-                "actor": "owner", "report": None}
+    def lift(id: int) -> int:
+        """An index lists a lift by its id alone."""
+        return id
 
     def accept(self, index: dict, **publish) -> dict:
         self.publish(index, **publish)
@@ -428,11 +429,42 @@ class IndexTests(RegistryCase):
         entries = [self.entry(n, {"skill": "io.github.zz.x"})
                    for n in range(1, registry.MAX_LIVE + 2)]
         self.refused(self.accept, self.index(revocations=entries), contains="format")
-        self.accept(self.index(revocations=entries, lifted=[self.lift(1)]))
+        self.refused(self.accept, self.index(revocations=entries, lifted=[self.lift(1)]),
+                     contains="format")
+        self.accept(self.index(revocations=entries[1:], lifted=[self.lift(1)]))
         self.assertEqual(len(self.reg.in_effect()), registry.MAX_LIVE)
         lifts = [self.lift(n) for n in range(1, registry.MAX_LIFTED + 2)]
-        self.refused(self.accept, self.index(seq=2, revocations=entries, lifted=lifts),
-                     contains="format")
+        self.refused(self.accept, self.index(seq=2, lifted=lifts), contains="format")
+        self.accept(self.index(seq=2, lifted=lifts[:-1]))
+
+    def test_the_most_the_registry_can_publish_is_taken(self):
+        """Every limit at once, every field at its longest, written as the format says: both
+        files fit what Tux reads, and the revocations and lifts leave 3.5 MiB of the index."""
+        report = ("https://github.com/" + "a" * 39 + "/" + "r" * 100 + "/issues/"
+                  + "9" * 10)
+        top = 2 ** 53
+
+        def longest(id):
+            return {"id": id, "kind": "suspend", "reason": "\U0001F600" * 300,
+                    "date": "2026-11-19T16:05:00Z", "actor": "a" * 39, "report": report,
+                    "scope": {"skill": "io.github." + "a" * 39 + "." + "s" * 40,
+                              "versions": [f"{m:02d}" + "v" * 38 for m in range(50)]}}
+
+        live = [longest(id) for id in range(top - registry.MAX_LIVE + 1, top + 1)]
+        floor = top - registry.MAX_LIVE
+        lifts = list(range(floor - registry.MAX_LIFTED + 1, floor + 1))
+        index = self.index(seq=top, revocations=live, lifted=lifts)
+        part = dumped({"revocations": live, "lifted": lifts})
+        self.assertLess(len(part), registry.MAX_INDEX_BYTES - 3.5 * 1024 * 1024)
+        self.assertEqual(self.accept(index)["seq"], top)
+        self.assertEqual(len(self.reg.in_effect()), registry.MAX_LIVE)
+        # a revocations.json of the most in effect, ids the index hasn't seen yet
+        floor -= registry.MAX_LIFTED
+        found = [longest(id) for id in range(floor - registry.MAX_LIVE + 1, floor + 1)]
+        data = self.revoked(top, found)
+        self.assertLess(len(data), 4.5 * 1024 * 1024)
+        self.reg.accept_revocations(data, self.files["revocations.json.sig"])
+        self.assertEqual(len(self.new_registry().in_effect()), 2 * registry.MAX_LIVE)
 
     def test_a_held_copy_that_isnt_the_one_the_state_names_isnt_used(self):
         self.accept(self.index(seq=5))
@@ -522,7 +554,13 @@ class IndexTests(RegistryCase):
             "revocations out of order": {"revocations": [
                 self.entry(2, {"key": fingerprint(self.eve[1])}),
                 self.entry(1, {"key": fingerprint(self.eve[1])})]},
-            "a lift with an extra field": {"lifted": [{**self.lift(1), "scope": {}}]},
+            "a lift as an entry": {"lifted": [{"id": 1}]},
+            "a lift that is true": {"lifted": [True]},
+            "a lift of 0": {"lifted": [0]},
+            "lifts out of order": {"lifted": [2, 1]},
+            "a lift twice": {"lifted": [1, 1]},
+            "a lifted revocation still listed": {"revocations": [self.entry(
+                1, {"key": fingerprint(self.eve[1])})], "lifted": [1]},
         }
         for name, changes in top.items():
             with self.subTest(name):

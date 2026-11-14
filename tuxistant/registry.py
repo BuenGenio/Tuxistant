@@ -55,13 +55,13 @@ HELD_INDEX = "index.json"
 INDEX_NS, REVOCATIONS_NS, RECIPE_NS = "tuxistant-index", "tuxistant-revocations", "tuxistant-recipe"
 REGISTRY, MODERATION = "tuxistant-registry", "tuxistant-moderation"
 
-MAX_INDEX_BYTES = 4 * 1024 * 1024
-MAX_REVOCATIONS_BYTES = 1024 * 1024
+MAX_INDEX_BYTES = 8 * 1024 * 1024         # the revocations and lifts at their limits leave 3.5 MiB
+MAX_REVOCATIONS_BYTES = 5 * 1024 * 1024   # MAX_LIVE entries at their longest are under 4.5 MiB
 MAX_RECIPE_BYTES = 64 * 1024
 MAX_SIG_BYTES = 4 * 1024
 MAX_SHIPPED_BYTES = 4 * 1024
 MAX_STATE_BYTES = 16 * 1024 * 1024
-MAX_LIVE = 1000                 # revocations an index may have in effect, a rule for the registry
+MAX_LIVE = 1000                 # revocations in effect, the most an index lists
 MAX_LISTED = MAX_LIVE           # copies from the indexes Tux accepted, at most about 6.5 KB each
 MAX_MODERATED = 1000            # copies only a moderation key signed, the same size
 MAX_LIFTED = 10_000             # lifted ids; all three together fit in MAX_STATE_BYTES
@@ -97,7 +97,6 @@ INDEX_FIELDS = {"format", "seq", "date", "commit", "moderation_keys", "categorie
                 "skills", "revocations", "lifted"}
 REVOCATIONS_FIELDS = {"format", "seq", "date", "revocations"}
 REVOCATION_FIELDS = {"id", "kind", "scope", "reason", "date", "actor", "report"}
-LIFT_FIELDS = {"id", "reason", "date", "actor", "report"}
 AUTHOR_FIELDS = {"status", "keys"}
 AUTHOR_KEY_FIELDS = {"key", "fingerprint", "added", "removed"}
 CATEGORY_FIELDS = {"id", "name", "tags"}
@@ -354,16 +353,6 @@ def revocation(entry, where: str = "revocation") -> dict:
     return entry
 
 
-def _lift(entry, where: str) -> dict:
-    _exact(entry, LIFT_FIELDS, where)
-    _int(entry["id"], f"{where} id")
-    _text(entry["reason"], 300, f"{where} reason")
-    _time(entry["date"], f"{where} date")
-    _matching(LOGIN, entry["actor"], f"{where} actor")
-    _report(entry["report"], f"{where} report")
-    return entry
-
-
 def _by_id(entries: list, where: str) -> None:
     ids = [entry["id"] for entry in entries]
     if ids != sorted(set(ids)):
@@ -387,17 +376,17 @@ def parse_index(data: bytes, now: float | None) -> dict:
     if len(set(moderation)) != len(moderation):
         raise _bad("moderation keys")
     tags = _categories(index["categories"])
-    listed = _list(index["revocations"], "revocations", 0, 10 ** 5)
+    # the registry's own rules, so it can never publish an index every Tux would have to refuse:
+    # only revocations in effect, and lifts as bare ids, which at their limits fit in the index
+    listed = _list(index["revocations"], "revocations", 0, MAX_LIVE)
     revocations = [revocation(entry, f"revocation {n + 1}") for n, entry in enumerate(listed)]
-    lifted = [_lift(entry, f"lift {n + 1}")
-              for n, entry in enumerate(_list(index["lifted"], "lifts", 0, MAX_LIFTED))]
     _by_id(revocations, "revocations")
-    _by_id(lifted, "lifts")
-    lifted_ids = {entry["id"] for entry in lifted}
-    # the registry's own rule, so it can never publish an index every Tux would have to refuse
-    if sum(entry["id"] not in lifted_ids for entry in revocations) > MAX_LIVE:
+    lifted = [_int(id, "lifts") for id in _list(index["lifted"], "lifts", 0, MAX_LIFTED)]
+    if lifted != sorted(set(lifted)):
+        raise _bad("lifts order")
+    if not set(lifted).isdisjoint(entry["id"] for entry in revocations):
         raise _bad("revocations")
-    _authors(index["authors"], revocations, lifted_ids)
+    _authors(index["authors"], revocations)
     _skills(index["skills"], index["authors"], tags)
     return index
 
@@ -416,14 +405,14 @@ def _categories(categories) -> set:
     return set(tags)
 
 
-def _authors(authors, revocations: list, lifted: set) -> None:
+def _authors(authors, revocations: list) -> None:
     if not isinstance(authors, dict):
         raise _bad("authors")
     for login, author in authors.items():
         where = f"author {login[:40]}"
         _matching(LOGIN, login, where)
         _exact(author, AUTHOR_FIELDS, where)
-        if author["status"] != _status(login, revocations, lifted):
+        if author["status"] != _status(login, revocations):
             raise _bad(f"{where} status")
         for key in _list(author["keys"], f"{where} keys", 1, 50):
             _exact(key, AUTHOR_KEY_FIELDS, f"{where} keys")
@@ -434,9 +423,8 @@ def _authors(authors, revocations: list, lifted: set) -> None:
                 _day(key["removed"], f"{where} keys")
 
 
-def _status(login: str, revocations: list, lifted: set) -> str:
-    kinds = {entry["kind"] for entry in revocations
-             if entry["scope"].get("author") == login and entry["id"] not in lifted}
+def _status(login: str, revocations: list) -> str:
+    kinds = {entry["kind"] for entry in revocations if entry["scope"].get("author") == login}
     return "banned" if "ban" in kinds else "suspended" if "suspend" in kinds else "active"
 
 
@@ -550,7 +538,7 @@ def _with_index(kept: dict, index: dict) -> dict:
     lifts, by the index listing the same copy, and by the index no longer naming the key that
     signed them, which also ends that key's sequence number, so a leaked key that filled its
     share or raised the number past reach is undone by the index that retires it."""
-    lifted = set(kept["lifted"]) | {entry["id"] for entry in index["lifted"]}
+    lifted = set(kept["lifted"]) | set(index["lifted"])
     listed = {key: entry for key, entry in kept["listed"].items() if entry["id"] not in lifted}
     listed.update((_copy_key(entry), entry) for entry in index["revocations"]
                   if entry["id"] not in lifted)
