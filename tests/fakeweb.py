@@ -1,5 +1,6 @@
 """A pretend internet for tests: names come from a table and every connection goes to one
-server on loopback. Nothing here reaches a real network or a real resolver."""
+server on loopback, and this computer's addresses and routes are made up. Nothing here reaches a
+real network or a real resolver, or reads this computer's /proc or /sys."""
 import http.server
 import socket
 import threading
@@ -65,10 +66,12 @@ class Web:
         test.addCleanup(self.close)
         self.guests = []    # the networks of this computer's containers, made up
         self.house = []     # and the house's, made up: a more specific one wins
+        self.here = set()   # the addresses this computer holds, made up
         webfetch.forget_own_servers()
         test.addCleanup(webfetch.forget_own_servers)
         for name, new in (("_dial", self.dial), ("_resolve", self.resolve),
-                          ("kernel_routes", self.kernel_routes)):
+                          ("kernel_routes", self.kernel_routes),
+                          ("this_computer", lambda: set(self.here))):
             patcher = mock.patch.object(webfetch, name, new)
             patcher.start()
             test.addCleanup(patcher.stop)
@@ -94,6 +97,40 @@ class Web:
 
     def paths(self):
         return [path for path, _ in self.requests]
+
+
+class OffThisComputer:
+    """For a whole test module: what would read this computer's own /proc or /sys reads nothing
+    and notes the path, and stop() fails if anything tried. A test that wants addresses or routes
+    makes them up, as Web does. Set by hand rather than with mock, so a test's
+    mock.patch.stopall() can't take it away."""
+
+    def __init__(self):
+        self.read, self.saved = [], {}
+
+    def start(self):
+        real_read, real_guests = webfetch._read_proc, webfetch._guest_interfaces
+
+        def read_proc(path):
+            return "" if self.real(path) else real_read(path)
+
+        def guest_interfaces(root=webfetch.SYS_NET):
+            return set() if self.real(root) else real_guests(root)
+        for name, new in (("_read_proc", read_proc), ("_guest_interfaces", guest_interfaces)):
+            self.saved[name] = getattr(webfetch, name)
+            setattr(webfetch, name, new)
+
+    def real(self, path) -> bool:
+        if str(path).startswith(("/proc", "/sys")):
+            self.read.append(str(path))
+            return True
+        return False
+
+    def stop(self):
+        for name, real in self.saved.items():
+            setattr(webfetch, name, real)
+        if self.read:
+            raise AssertionError(f"read this computer's own {sorted(set(self.read))}")
 
 
 def slow_server(test, steps) -> int:

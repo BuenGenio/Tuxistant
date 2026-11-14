@@ -66,7 +66,7 @@ USER_IDLE_S = 300
 IGNORED_PARTS = frozenset({"__pycache__"})
 GRANTS = "skill-grants.json"    # next to the skills folder, so tests that move it move this too
 CODE_DIR = "skill-code"         # the checked copies that skills really run from
-LOADED = "skills-loaded.json"   # yours that were loaded, by name, so a restart keeps their place
+LOADED = "skills-loaded.json"   # yours that were loaded, by name, with how many actions each had
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
 ACTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+")
 PARAM = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}")
@@ -78,6 +78,11 @@ UPDATED = "That skill was just updated. Please ask again."
 USER_TOOLS = 6      # actions from skills you added, code and recipes together
 OVER_BUDGET = ("Tux already has six actions from skills you added, and more would make it worse "
                "at choosing the right one. Take one out to use this one.")
+GREW = ("This skill now has more actions than when it loaded, and with them Tux would have more "
+        "than six from skills you added. Take an action out of it, or take another skill out, "
+        "to use the new ones.")
+KEPT = "The last version that worked is still in use."
+KEPT_PLACE, GROWN, NEW = range(3)  # the order yours are counted in, for the budget
 NOT_YAML = "A recipe's file name has to end in .yaml."
 TOO_DEEP = "It is nested more than 16 levels deep, which no skill needs."
 
@@ -526,15 +531,22 @@ def _write_json(file: Path, data) -> None:
         raise
 
 
-def _read_names(file: Path) -> set[str]:
+def _read_loaded(file: Path) -> dict[str, int | None]:
+    """Names and the number of actions each was offered with. A list, as an earlier 0.5 build
+    kept, gives names alone, counted as they are now."""
     try:
         data = json.loads(file.read_text())
     except FileNotFoundError:
-        return set()
+        return {}
     except (OSError, ValueError):
         log.warning("could not read %s, so the skills you added load in name order", file)
-        return set()
-    return {name for name in data if _plain_name(name)} if isinstance(data, list) else set()
+        return {}
+    if isinstance(data, list):
+        return {name: None for name in data if _plain_name(name)}
+    if not isinstance(data, dict):
+        return {}
+    return {name: count for name, count in data.items() if _plain_name(name)
+            and type(count) is int and 0 < count <= USER_TOOLS}
 
 
 def _plain_name(name) -> bool:
@@ -572,10 +584,12 @@ class SkillHost:
         self.on_change = on_change
         self.problems: dict[str, str] = {}
         self.loaded = self.user.parent / LOADED
-        self.saved = _read_names(self.loaded)
-        # keys of what keeps its place in the budget: what the last reload loaded, or at start
-        # yours that loaded before the restart
-        self.offered: set[str] = {str(self.user / name) for name in self.saved}
+        self.saved = _read_loaded(self.loaded)
+        # what keeps its place in the budget, by key, with how many actions it was offered with:
+        # what the last reload loaded, or at start yours that loaded before the restart
+        self.offered: dict[str, int | None] = {
+            str(self.user / name): count for name, count in self.saved.items()}
+        self.last_offered: dict[str, _Found] = {}   # by key, as the last reload offered them
         self.running: dict[str, _Running] = {}      # by folder
         self.last_good: dict[str, _Found] = {}      # by folder or file
         self.stopping: set[asyncio.Task] = set()
@@ -637,18 +651,20 @@ class SkillHost:
             self.problems = problems
             return dict(problems)
         self._swap(skills, running)
-        self.problems, self.offered = problems, offered
+        self.problems, self.last_offered = problems, offered
+        self.offered = {key: len(item.manifest["actions"]) for key, item in offered.items()}
         self._save_loaded()
         return dict(problems)
 
     def _save_loaded(self) -> None:
         """The order of the budget has to outlast a restart, or a skill refused for being one too
         many would take the place of one that worked, at the next login."""
-        names = {Path(key).name for key in self.offered if Path(key).parent == self.user}
+        names = {Path(key).name: count for key, count in self.offered.items()
+                 if Path(key).parent == self.user}
         if names == self.saved or not self.grants.writable:
             return
         try:
-            _write_json(self.loaded, sorted(names))
+            _write_json(self.loaded, names)
             self.saved = names
         except OSError as e:
             log.warning("could not save which skills were loaded: %s", e)
@@ -752,7 +768,9 @@ class SkillHost:
 
     def _resolve(self, found: list[_Found], problems: dict, sandbox_problem: str) -> list[_Found]:
         """Yours that were loaded keep their place, ahead of new ones, so a file dropped in is
-        the one refused rather than one that was working."""
+        the one refused rather than one that was working. One that has more actions than it was
+        offered with comes after those that don't, so what it added is refused, never another
+        skill, and the version offered stays in use while there is one."""
         ids, actions, tools = set(), set(), set()
         builtin_ids = {item.manifest["id"] for item in found if item.kind == "builtin"}
         ours = {_namespace(name) for name in HANDLERS} | {
@@ -760,23 +778,44 @@ class SkillHost:
             for name in item.manifest["actions"]}
         yours = 0
         chosen = []
-        for item in sorted(found, key=lambda item: item.manifest["source"] == "yours"
-                           and item.key not in self.offered):
+
+        def refusal(item: _Found) -> str:
             mine = item.manifest["source"] == "yours"
             unrunnable = mine and item.kind == "code" and sandbox_problem
-            problem = unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
+            return unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
                 mine and _lookalike(item.manifest, ours)) or (
                 OVER_BUDGET if mine and yours + len(item.manifest["actions"]) > USER_TOOLS
                 else "")
+
+        for item in sorted(found, key=self._place):
+            problem = refusal(item)
+            if problem == OVER_BUDGET and self._place(item) == GROWN:
+                problem = GREW
+                before = self.last_offered.get(item.key)
+                if before is not None and not refusal(before):
+                    # a broken edit's own reason, which says the same of the version kept
+                    problems.setdefault(item.key, f"{GREW} {KEPT}")
+                    item, problem = before, ""
             if problem:
                 problems[item.key] = problem
                 continue
-            yours += len(item.manifest["actions"]) if mine else 0
+            yours += len(item.manifest["actions"]) if item.manifest["source"] == "yours" else 0
             ids.add(item.manifest["id"])
             actions.update(item.manifest["actions"])
             tools.update(name.replace(".", "_") for name in item.manifest["actions"])
             chosen.append(item)
         return chosen
+
+    def _place(self, item: _Found) -> int:
+        """Where it is counted: built-in and bundled ones, and yours as loaded or smaller, keep
+        the order they were found in; then yours that grew; then new ones."""
+        if item.manifest["source"] != "yours":
+            return KEPT_PLACE
+        if item.key not in self.offered:
+            return NEW
+        before = self.offered[item.key]
+        return GROWN if before is not None and len(item.manifest["actions"]) > before \
+            else KEPT_PLACE
 
     @staticmethod
     def _clash(item: _Found, ids, actions, tools, builtin_ids) -> str:
@@ -800,7 +839,7 @@ class SkillHost:
         """The new Skills, the processes it uses and the keys of what keeps its place in the
         budget. Nothing is swapped yet."""
         running, proxies, origins = {}, {}, {}
-        manifests, offered = [], set()
+        manifests, offered = [], {}
         for item in chosen:
             if item.kind == "recipe":
                 proxies.update(self.recipe_handlers(item.manifest))
@@ -812,14 +851,14 @@ class SkillHost:
                     entry = self._process_for(item)
                 except Exception as e:     # it still counts, so it keeps its place too
                     problems[item.key] = f"It could not be started: {e}"
-                    offered.add(item.key)
+                    offered[item.key] = item
                     continue
                 running[item.key] = entry
                 for name in item.manifest["actions"]:
                     proxies[name] = _proxy(entry, name)
             manifests.append(item.manifest)
             origins[item.manifest["id"]] = item.origin()
-            offered.add(item.key)
+            offered[item.key] = item
         handlers = ChainMap(proxies, HANDLERS)  # HANDLERS read live, so tests can patch it
         try:
             skills = Skills(config=self.config, manifests=manifests, handlers=handlers,

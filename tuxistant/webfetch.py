@@ -495,6 +495,17 @@ def _not_a_device(address: str, routes: list) -> bool:
     return any(ip in net for net in NOT_DEVICES if net.version == ip.version) or _guest(ip, routes)
 
 
+def _on_this_computer(addresses) -> bool:
+    """Whether any address is this computer's own, public ones too, or on the network of one of
+    its containers or virtual machines, whatever range that network was given. What answers
+    there runs here, and a port Docker publishes answers on every one of them."""
+    same = set(map(_same, addresses))
+    if same & this_computer():
+        return True
+    routes = kernel_routes()
+    return any(_not_a_device(address, routes) for address in same)
+
+
 def _is_address(text: str) -> bool:
     try:
         ipaddress.ip_address(text)
@@ -522,11 +533,8 @@ def place(host: str, port: int, own: tuple[set[str], set[str]], addresses=None) 
         raise PageError(NOT_ALLOWED)
     if addresses is None:
         addresses = _resolve(host, port)
-    same = set(map(_same, addresses))
-    if not addresses or same & own_addresses or same & this_computer():
-        raise PageError(NOT_ALLOWED)
-    routes = kernel_routes()
-    if any(_not_a_device(address, routes) for address in same):
+    if not addresses or own_addresses.intersection(map(_same, addresses)) or (
+            _on_this_computer(addresses)):
         raise PageError(NOT_ALLOWED)
     if all(map(public, addresses)):
         return Place(addresses, False, frozenset(names))
@@ -593,14 +601,17 @@ def _judge(scheme: str, host: str, port: int, path: str, addresses: list[str],
            own: tuple[set[str], set[str]]) -> Target:
     names, own_addresses = own
     # All of them must pass: a name with one public address and one private one is an attack.
+    # This computer and its guests come last, as finding them reads /proc and /sys.
     if (host in names or not addresses or not all(map(public, addresses))
-            or own_addresses.intersection(map(_same, addresses))):
+            or own_addresses.intersection(map(_same, addresses))
+            or _on_this_computer(addresses)):
         raise PageError(NOT_ALLOWED)
     return Target(scheme, host, port, path, addresses)
 
 
 def check(url: str, own: tuple[set[str], set[str]]) -> Target:
-    """Refuses anything but a plain address on the open internet, or returns where to connect."""
+    """Refuses anything but a plain address on the open internet, not this computer's or its
+    guests', or returns where to connect."""
     scheme, host, port, path = _parse(url)
     return _judge(scheme, host, port, path, _resolve(host, port), own)
 
