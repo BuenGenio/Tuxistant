@@ -10,6 +10,7 @@ import importlib
 import json
 import re
 import sys
+import time
 from typing import NamedTuple
 
 from . import realtime
@@ -29,8 +30,9 @@ LOCAL_WAIT_S = realtime.HTTP_TIMEOUT_S + 5
 
 VENDOR = DATA_DIR / "vendor"    # where install.sh puts the SDK
 CLOUD_TIMEOUT_S = 60
-CLOUD_RETRIES = 1
-CLOUD_WAIT_S = CLOUD_TIMEOUT_S * (CLOUD_RETRIES + 1) + 5
+CLOUD_RETRIES = 1          # Tux's own, each after a fresh check: the SDK retries nothing
+CLOUD_PAUSE_S = 1
+CLOUD_WAIT_S = (CLOUD_TIMEOUT_S + CLOUD_PAUSE_S) * (CLOUD_RETRIES + 1) + 5
 CLOUD_MAX_TOKENS = 8000     # the thinking counts too, and it is always on
 CLOUD_EFFORT = "low"        # someone is sitting in silence through every step
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
@@ -161,6 +163,8 @@ class Cloud:
     def __init__(self, config, goal: str, tools: list[dict]):
         self.config = config
         self.sent_to = _sent_to(config)
+        # Sent as they were when it started. _same checks they still are before every send.
+        self.key, self.model = config["cloud_api_key"], cloud_model(config)
         self.tools = [{"name": tool["name"], "description": tool["description"],
                        "input_schema": tool["parameters"]} for tool in tools]
         self.messages = [{"role": "user", "content": goal}]
@@ -179,6 +183,7 @@ class Cloud:
             self.messages.append({"role": "user", "content": blocks})
         _same(self)     # turned off, withdrawn, another model or key: before the thread too
         response = await asyncio.to_thread(self._create)
+        _same(self)     # turned off while it was out: nothing it says is read out or acted on
         # Before anything is read: a refusal or a cut can leave a tool call half written.
         if response.stop_reason == "refusal":
             raise RealtimeError(REFUSED)
@@ -193,33 +198,44 @@ class Cloud:
 
     def _create(self):
         """Blocking, like the import, so it runs in a thread. Every failure becomes a fixed
-        sentence: an SDK message isn't written to be spoken, and it must never carry the key."""
-        _same(self)     # consent and the key the task started with, or nothing goes
+        sentence: an SDK message isn't written to be spoken, and it must never carry the key.
+        The SDK would retry on its own, after the agreement may have gone, so it retries nothing
+        and this loop checks before each attempt instead."""
         sdk = _sdk()
-        key = self.config["cloud_api_key"]
-        if not valid_key(key):
+        if not valid_key(self.key):
             raise RealtimeError(BAD_KEY)
-        try:
-            if self.client is None:
-                self.client = sdk.Anthropic(api_key=key, timeout=CLOUD_TIMEOUT_S,
-                                            max_retries=CLOUD_RETRIES)
-            return self.client.beta.messages.create(
-                model=cloud_model(self.config),
-                max_tokens=CLOUD_MAX_TOKENS, output_config={"effort": CLOUD_EFFORT},
-                betas=[FALLBACK_BETA], fallbacks="default",     # a false refusal is retried
-                system=SYSTEM, tools=self.tools, messages=self.messages)
-        except sdk.AuthenticationError:
-            raise RealtimeError(REJECTED) from None
-        except sdk.PermissionDeniedError:
-            raise RealtimeError(NOT_ALLOWED) from None
-        except sdk.NotFoundError:
-            raise RealtimeError(NO_MODEL) from None
-        except sdk.RateLimitError:
-            raise RealtimeError(RATE_LIMITED) from None
-        except sdk.APIConnectionError:
-            raise RealtimeError(UNREACHABLE) from None
-        except Exception:   # the API's other errors, and whatever else is in there
-            raise RealtimeError(CLOUD_TROUBLE) from None
+        failure = None
+        for attempt in range(CLOUD_RETRIES + 1):
+            if attempt:
+                time.sleep(CLOUD_PAUSE_S)
+            try:
+                if self.client is None:
+                    self.client = sdk.Anthropic(api_key=self.key, timeout=CLOUD_TIMEOUT_S,
+                                                max_retries=0)
+                _same(self)     # the last thing before every send: consent, key and model
+                return self.client.beta.messages.create(
+                    model=self.model,
+                    max_tokens=CLOUD_MAX_TOKENS, output_config={"effort": CLOUD_EFFORT},
+                    betas=[FALLBACK_BETA], fallbacks="default",     # a false refusal is retried
+                    system=SYSTEM, tools=self.tools, messages=self.messages)
+            except RealtimeError:
+                raise
+            except Exception as e:      # kept, and spoken outside: a chained cause has the key
+                failure = e
+            if not isinstance(failure, (sdk.APIConnectionError, sdk.InternalServerError)):
+                break
+        _same(self)     # turned off while it was out: say that, not what went wrong
+        raise RealtimeError(_cloud_failure(sdk, failure)) from None
+
+
+def _cloud_failure(sdk, error: Exception) -> str:
+    for kind, sentence in ((sdk.AuthenticationError, REJECTED),
+                           (sdk.PermissionDeniedError, NOT_ALLOWED),
+                           (sdk.NotFoundError, NO_MODEL), (sdk.RateLimitError, RATE_LIMITED),
+                           (sdk.APIConnectionError, UNREACHABLE)):
+        if isinstance(error, kind):
+            return sentence
+    return CLOUD_TROUBLE    # the API's other errors, and whatever else is in there
 
 
 def asks(text: str) -> bool:
