@@ -225,6 +225,17 @@ def with_margin(frame):
             "width": frame["width"] + 2 * WINDOW_MARGIN, "height": frame["height"] + 2 * WINDOW_MARGIN}
 
 
+async def redraw(album):
+    """A page's shorter title left a dot of the last one's behind it, where only the title was
+    painted again. A size changed and changed back paints the whole window."""
+    for grow in (1, -1):
+        await album.test.command("eval", code=f"""const w = {SETTINGS}[0];
+            const r = w.get_frame_rect();
+            w.move_resize_frame(false, r.x, r.y, r.width, r.height + {grow});
+            return true;""")
+        await asyncio.sleep(0.5)
+
+
 async def settings(album):
     env = {**os.environ, "WAYLAND_DISPLAY": os.environ["TUX_WAYLAND_DISPLAY"],
            "GDK_BACKEND": "wayland", "GSK_RENDERER": "cairo", "ADW_DEBUG_COLOR_SCHEME": "prefer-dark"}
@@ -237,6 +248,7 @@ async def settings(album):
             await album.test.command("click", x=frame["x"] + SIDEBAR_X,
                                      y=frame["y"] + SIDEBAR_Y + index * SIDEBAR_STEP, button=1)
             await asyncio.sleep(1.0)
+            await redraw(album)
             await album.shoot(f"settings-{page}", with_margin(frame))
     finally:
         app.terminate()

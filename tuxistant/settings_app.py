@@ -588,7 +588,6 @@ class SettingsBox:
         self.switches = {}
         self.spins = {}  # key: (row, config units per unit shown)
         self.keys = {}   # name: (row, status, remove)
-        self.edits = set()  # the keys this box's rows save, so a test can see each has one home
         for name in self.ROWS:
             setattr(self, name, None)
 
@@ -597,7 +596,6 @@ class SettingsBox:
     def weather_rows(self, group):
         self.location = Adw.EntryRow(title="Home town", show_apply_button=True)
         self.location.connect("apply", self.on_location_apply)
-        self.edits.add("location")
         group.add(self.location)
         group.add(self._switch("fahrenheit", "Use Fahrenheit",
                                "Temperatures in Fahrenheit and wind in miles per hour"))
@@ -607,14 +605,12 @@ class SettingsBox:
         self.news = Adw.ComboRow(title="Source", use_markup=False)
         self.news.set_model(Gtk.StringList.new([name for name, _base, _feeds in SOURCES.values()]))
         self.news.connect("notify::selected", self.on_news)
-        self.edits.add("news_source")
         group.add(self.news)
         return "The source you choose sees your IP address when you ask"
 
     def calendar_rows(self, group):
         self.calendar = Adw.ComboRow(title="Add events to", use_markup=False)
         self.calendar.connect("notify::selected", self.on_calendar)
-        self.edits.add("calendar_add_to")
         group.add(self.calendar)
         return "Calendars come from the accounts in GNOME Settings, under Online Accounts"
 
@@ -634,7 +630,6 @@ class SettingsBox:
     def phone_rows(self, group):
         self.phone = Adw.ComboRow(title="Default device", use_markup=False)
         self.phone.connect("notify::selected", self.on_phone)
-        self.edits.add("phone_device")
         group.add(self.phone)
         return ""
 
@@ -647,7 +642,6 @@ class SettingsBox:
     def translation_rows(self, group):
         self.translate = Adw.EntryRow(title="LibreTranslate server", show_apply_button=True)
         self.translate.connect("apply", self.on_translate_apply)
-        self.edits.add("translate_server")
         self.translate.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.translate)
         return "Leave the server empty to use the main server's host, port 5000"
@@ -655,7 +649,6 @@ class SettingsBox:
     def search_rows(self, group):
         self.search = Adw.EntryRow(title="SearXNG server", show_apply_button=True)
         self.search.connect("apply", self.on_search_apply)
-        self.edits.add("search_server")
         self.search.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.search)
         return "Leave the server empty to use the main server's host, port 8888"
@@ -669,7 +662,6 @@ class SettingsBox:
     def lights_rows(self, group):
         self.tapo_email = Adw.EntryRow(title="TP-Link email", show_apply_button=True)
         self.tapo_email.connect("apply", self.on_tapo_email_apply)
-        self.edits.add("tapo_email")
         group.add(self.tapo_email)
         self.tapo_password, self.tapo_password_status, self.tapo_password_remove = self._key_row(
             "TP-Link password", "tapo_password")
@@ -679,7 +671,6 @@ class SettingsBox:
     def home_rows(self, group):
         self.home = Adw.EntryRow(title="Address", show_apply_button=True)
         self.home.connect("apply", self.on_home_apply)
-        self.edits.add("ha_server")
         self.home.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.home)
         self.home_token, self.home_token_status, self.home_token_remove = self._key_row(
@@ -690,14 +681,12 @@ class SettingsBox:
     def cloud_rows(self, group):
         self.cloud = Adw.SwitchRow(title="Use Claude for complex requests")
         self.cloud.connect("notify::active", self.on_cloud)
-        self.edits.add("cloud_enabled")
         group.add(self.cloud)
         self.cloud_key, self.cloud_key_status, self.cloud_key_remove = self._key_row(
             "Anthropic API key", "cloud_api_key")
         group.add(self.cloud_key)
         self.cloud_model = Adw.EntryRow(title="Model", show_apply_button=True)
         self.cloud_model.connect("apply", self.on_model_apply)
-        self.edits.add("cloud_model")
         group.add(self.cloud_model)
         return "For complex requests that need several steps"
 
@@ -710,7 +699,6 @@ class SettingsBox:
             icon_name="user-trash-symbolic", tooltip_text=f"Remove {title}",
             valign=Gtk.Align.CENTER, css_classes=["flat"], visible=False)
         remove.connect("clicked", self.on_key_remove, key)
-        self.edits.add(key)
         row.add_suffix(status)
         row.add_suffix(remove)
         self.keys[key] = (row, status, remove)
@@ -720,7 +708,6 @@ class SettingsBox:
         row = Adw.SwitchRow(title=title, subtitle=subtitle)
         row.connect("notify::active", self.on_switch, key)
         self.switches[key] = row
-        self.edits.add(key)
         return row
 
     def _spin(self, key, title, subtitle, low, high, step, scale=1, digits=0):
@@ -730,7 +717,6 @@ class SettingsBox:
         row.set_digits(digits)
         row.connect("notify::value", self.on_spin, key)
         self.spins[key] = (row, scale)
-        self.edits.add(key)
         return row
 
     def load(self):
@@ -1000,7 +986,6 @@ class GeneralPage(Adw.PreferencesPage, SettingsBox):
         group = Adw.PreferencesGroup(title="Connection")
         self.server = Adw.EntryRow(title="Server address", show_apply_button=True)
         self.server.connect("apply", self.on_server_apply)
-        self.edits.add("server")
         self.server.connect("changed", lambda row: row.remove_css_class("error"))
         group.add(self.server)
 
@@ -1015,7 +1000,6 @@ class GeneralPage(Adw.PreferencesPage, SettingsBox):
             first = next(iter(self.pipelines.values()), None)
             check = Gtk.CheckButton(group=first, valign=Gtk.Align.CENTER)
             check.connect("toggled", self.on_pipeline, name)
-            self.edits.add("pipeline")
             row = plain_row(name, note, activatable_widget=check)
             row.add_prefix(check)
             group.add(row)
@@ -1075,7 +1059,6 @@ class GeneralPage(Adw.PreferencesPage, SettingsBox):
         self.instructions.update_property(
             [Gtk.AccessibleProperty.LABEL], ["Assistant instructions"])
         self.instructions.get_buffer().connect("changed", self.on_instructions_changed)
-        self.edits.add("instructions")
         scroller = Gtk.ScrolledWindow(
             child=self.instructions, min_content_height=120, max_content_height=240,
             propagate_natural_height=True, hscrollbar_policy=Gtk.PolicyType.NEVER)

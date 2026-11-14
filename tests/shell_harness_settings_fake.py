@@ -95,7 +95,7 @@ DETAILS = {"org.example.markup": {
     # A line break in a name could fake a second file or another origin. 2,000 files, the most a
     # skill may have, mustn't hold the page either.
     "files": ["skill.yaml", "<b>main</b>.py", "x" * 300, "README\nskill.yaml"]
-             + [f"lib/f{i:04d}.py" for i in range(1996)],
+             + [f"lib/f{i:04d}_" + "n" * 190 + ".py" for i in range(1996)],
     "manifest": "# <span foreground=\"red\">red</span> &amp; <b>bold</b>\n" + "y" * 400 + "\n"
                 + "# <b>filler</b> &lt;\n" * 3098,
     "actions": [{"name": "markup.go", "offered": True, "held_back": "", "tool": {

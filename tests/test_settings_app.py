@@ -683,7 +683,7 @@ def dispose(window):
 def open_skill(window, skill_id):
     """A skill's page, as a click on its row opens it, once its details have come."""
     dialog = window.skills.dialog
-    if dialog and dialog.skill["id"] == skill_id:
+    if dialog and dialog.skill and dialog.skill["id"] == skill_id:   # not a settings-only page
         return dialog
     close_skill(window)
     window.views.set_visible_child_name("skills")
@@ -1312,7 +1312,14 @@ class Inner(unittest.TestCase):
         self.assertEqual(row.get_title(), MARKUP_NAME)
         started = time.monotonic()
         dialog = open_skill(self.win, "org.example.markup")
-        opening = time.monotonic() - started
+        painted = []    # the first frame after the rows went in, so their layout is counted
+        clock = self.win.get_frame_clock()
+        handler = clock.connect("after-paint", lambda _clock: painted.append(time.monotonic()))
+        self.win.queue_draw()
+        wait(lambda: painted, "the page to be drawn", 30)
+        clock.disconnect(handler)
+        opening = painted[0] - started
+        self.assertLess(opening, 2, "2,000 files with long names must not hold the page")
         for action in iter_children(dialog.actions):
             if isinstance(action, sa.SkillActionRow):
                 action.set_expanded(True)
@@ -1327,7 +1334,6 @@ class Inner(unittest.TestCase):
         self.assertFalse([text for text in texts if "\nComes with Tuxistant" in text],
                          "a folder's name can't fake a line saying where a skill comes from")
         self.assertIn(f"And {2000 - sa.MAX_FILES_SHOWN} more files", texts)
-        self.assertLess(opening, 2, "2,000 files must not hold the page")
         marked = [label.get_text() for label in labels_of(dialog) if label.get_use_markup()
                   and ("<" in label.get_label() or "&" in label.get_label())]
         self.assertEqual(marked, [], "no label holding a skill's text reads it as markup")
@@ -1369,15 +1375,86 @@ class Inner(unittest.TestCase):
         self.assertEqual(set(general.switches), {"conversation_mode", "fn_hold_enabled",
                                                  "hide_on_release", "dictation_enabled"})
         self.assertEqual(set(general.keys), {"api_key"})
-        found = {skill_id: set(self.skill_page(skill_id).edits) for skill_id in sa.SKILL_SETTINGS}
-        self.assertEqual(found, EXPECTED_SETTINGS)
-        from tuxistant.config import EDITABLE
-        on_skills = set().union(*found.values())
-        self.assertEqual(general.edits & on_skills, set(), "one home each")
-        self.assertEqual(general.edits | on_skills | {"voice", "theme"}, set(EDITABLE),
-                         "every setting has a home: General, a skill's page, Voice or Appearance")
         dialog = open_skill(self.win, "org.tuxistant.time")
         self.assertIsNone(dialog.settings, "a skill with nothing to set has no Settings group")
+
+    def test_21_f_z_every_setting_has_one_home(self):
+        """Every row on every page is used as a person would, and what reaches the daemon says
+        where each setting really is: once each, and none missing."""
+        from tuxistant.config import EDITABLE, SECRETS
+        stored = {key: control("Stored", key, signature="s")[0] for key in SECRETS}
+        before = dict(self.win.config)
+        found = {}
+        for skill_id in sa.SKILL_SETTINGS:
+            dialog = open_skill(self.win, skill_id)
+            box = dialog.settings
+            if box.phone:
+                wait(lambda: box.devices is not None, "the phones")
+            if box.calendar:
+                wait(lambda: isinstance(box.calendars, list), "the calendars")
+            found[skill_id] = self.sent_by(dialog.page)
+        close_skill(self.win)
+        self.win.views.set_visible_child_name("general")
+        general = self.sent_by(self.win.general)
+        forget()
+        self.win.voices.choose(before["voice"])
+        self.win.appearance.choose(before["theme"])
+        wait(lambda: len(saved()) == 2, "the voice and theme to save")
+        elsewhere = {key for key, _value in saved()}
+        for key, value in stored.items():
+            control("Change", key, value, signature="ss")
+        self.assertEqual(found, EXPECTED_SETTINGS)
+        on_skills = set().union(*found.values())
+        self.assertEqual(general & on_skills, set(), "one home each")
+        self.assertEqual(general | on_skills | elsewhere, set(EDITABLE),
+                         "every setting has a home: General, a skill's page, Voice or Appearance")
+        wait(lambda: {k: self.win.config.get(k) for k in before} == before, "all put back")
+
+    def sent_by(self, root) -> set:
+        """The keys SetConfig was sent while each setting row under root was changed and put
+        back."""
+        forget()
+        for widget in list(iter_children(root)):
+            if isinstance(widget, Adw.SwitchRow):
+                was = widget.get_active()
+                widget.set_active(not was)
+                alert = self.win.get_visible_dialog()
+                if isinstance(alert, Adw.AlertDialog):      # Cloud asks first
+                    alert.emit("response", "enable")
+                    alert.force_close()
+                widget.set_active(was)
+            elif isinstance(widget, Adw.SpinRow):
+                was = widget.get_value()
+                widget.set_value(was + widget.get_adjustment().get_step_increment())
+                widget.set_value(was)
+            elif isinstance(widget, Adw.PasswordEntryRow):
+                widget.set_text("one-home-test")
+                widget.emit("apply")
+                remove = next(b for b in iter_children(widget) if isinstance(b, Gtk.Button)
+                              and b.get_icon_name() == "user-trash-symbolic")
+                remove.emit("clicked")
+            elif isinstance(widget, Adw.EntryRow):
+                widget.emit("apply")    # what it shows now, saved again
+            elif isinstance(widget, Adw.ComboRow):
+                was, count = widget.get_selected(), widget.get_model().get_n_items()
+                self.assertGreater(count, 1, widget.get_title())
+                widget.set_selected((was + 1) % count)
+                widget.set_selected(was)
+            elif isinstance(widget, Gtk.CheckButton) and not widget.get_active():
+                chosen = next(c for c in iter_children(root) if isinstance(c, Gtk.CheckButton)
+                              and c.get_active())
+                widget.set_active(True)
+                chosen.set_active(True)
+            elif isinstance(widget, Gtk.TextView) and widget.get_editable():
+                buffer = widget.get_buffer()
+                was = buffer.get_text(*buffer.get_bounds(), False)
+                save = next(b for b in iter_children(root) if isinstance(b, Gtk.Button)
+                            and b.get_label() == "Save")
+                for text in (was + " ", was):
+                    buffer.set_text(text)
+                    save.emit("clicked")
+        settle(sa.SAVE_DELAY_MS + 300)      # a spin saves once you stop
+        return {key for key, _value in saved()}
 
     def test_21_g_a_setting_two_skills_use_agrees_on_both(self):
         page = self.skill_page("org.tuxistant.phone")
