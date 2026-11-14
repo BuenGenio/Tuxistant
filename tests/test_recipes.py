@@ -1289,6 +1289,36 @@ class Host(Case):
         self.assertEqual(self.host.reload(), {}, "room for the new action now")
         self.assertIn("coins.hello", self.host.current().actions)
 
+    async def test_two_skills_that_grow_one_after_the_other_both_keep_their_last_version(self):
+        """coins' growth fitted once notes had grown too, and took the room notes' last
+        version needed."""
+        self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")    # 1+1+1+3
+        coins = self.grow("coins.yaml", "coins.hello")
+        kept = f"{skillhost.GREW} {skillhost.KEPT}"
+        self.assertEqual(self.host.reload(), {str(coins): kept})
+        notes = self.grow("notes.yaml", "notes.hello")
+        both = {str(coins): kept, str(notes): kept}
+        self.assertEqual(self.host.reload(), both)
+        actions = set(self.host.current().actions)
+        self.assertLessEqual({"coins.price", "notes.phone", "work.chat"}, actions)
+        self.assertFalse({"coins.hello", "notes.hello"} & actions)
+        self.assertEqual(self.host.reload(), both, "and stays so")
+        saved = json.loads((self.user.parent / skillhost.LOADED).read_text())
+        self.assertEqual(saved, {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1,
+                                 "work.yaml": 3})
+        (self.user / "deskstrip.yaml").unlink()
+        self.assertEqual(self.host.reload(), {str(notes): kept}, "the room goes in name order")
+        self.assertIn("coins.hello", self.host.current().actions)
+        self.assertIn("notes.phone", self.host.current().actions)
+
+    async def test_two_skills_that_grow_at_once_both_keep_their_last_version(self):
+        self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")
+        coins = self.grow("coins.yaml", "coins.hello")
+        notes = self.grow("notes.yaml", "notes.hello")
+        kept = f"{skillhost.GREW} {skillhost.KEPT}"
+        self.assertEqual(self.host.reload(), {str(coins): kept, str(notes): kept})
+        self.assertLessEqual({"coins.price", "notes.phone"}, set(self.host.current().actions))
+
     async def test_a_skill_that_grew_while_tux_was_off_never_pushes_out_another(self):
         self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")
         file = self.grow("coins.yaml", "coins.hello")

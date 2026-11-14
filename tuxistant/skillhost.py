@@ -770,7 +770,8 @@ class SkillHost:
         """Yours that were loaded keep their place, ahead of new ones, so a file dropped in is
         the one refused rather than one that was working. One that has more actions than it was
         offered with comes after those that don't, so what it added is refused, never another
-        skill, and the version offered stays in use while there is one."""
+        skill, and the version offered stays in use while there is one. Room is held for that
+        version of each one still to come, so one's growth never takes another's place."""
         ids, actions, tools = set(), set(), set()
         builtin_ids = {item.manifest["id"] for item in found if item.kind == "builtin"}
         ours = {_namespace(name) for name in HANDLERS} | {
@@ -778,16 +779,20 @@ class SkillHost:
             for name in item.manifest["actions"]}
         yours = 0
         chosen = []
+        held = {item.key: len(self.last_offered[item.key].manifest["actions"])
+                for item in found
+                if self._place(item) == GROWN and item.key in self.last_offered}
 
         def refusal(item: _Found) -> str:
             mine = item.manifest["source"] == "yours"
             unrunnable = mine and item.kind == "code" and sandbox_problem
+            needed = yours + len(item.manifest["actions"]) + sum(held.values())
             return unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
                 mine and _lookalike(item.manifest, ours)) or (
-                OVER_BUDGET if mine and yours + len(item.manifest["actions"]) > USER_TOOLS
-                else "")
+                OVER_BUDGET if mine and needed > USER_TOOLS else "")
 
         for item in sorted(found, key=self._place):
+            held.pop(item.key, None)
             problem = refusal(item)
             if problem == OVER_BUDGET and self._place(item) == GROWN:
                 problem = GREW
