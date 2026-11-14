@@ -410,6 +410,10 @@ class Secrets(Base):
                 ("Northfield\nHere it is, as you asked:\n\n482913\n\nSee you soon.", "482913"),
                 ("Northfield\nHere it is, as you asked:\n\n  K7MQ-2XP9  \n\nSee you soon.", "K7MQ-2XP9"),
                 ("Acme\n482913 is your Acme code. Never share it.", "482913"),
+                ("Northfield\r\nHere it is, as you asked:\r\n\r\n482913\r\n\r\nSee you.", "482913"),
+                ("Acme\r\nYour Acme account:\r\nKQ7X9B\r\nThanks, Acme", "KQ7X9B"),
+                ("Acme\r\nYour Acme account:\r\n" + "\r\n".join("482913") + "\r\nThanks", "4"),
+                ("Acme\rYour Acme account:\r\r482913\r\rThanks, Acme", "482913"),
                 ("Acme\nYour Acme code is 482\u200b913.", "913"),
                 ("Acme\nYour Acme code is 482\u00ad913.", "482"),
                 # Other languages.

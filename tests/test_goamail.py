@@ -270,6 +270,27 @@ class Secrets(Goa):
             for code in ("482917", "KQ7X9B"):
                 self.assertNotRegex(self.read(call), r"\W{0,9}".join(code))
 
+    async def test_a_code_alone_on_a_line_ended_by_crlf_is_hidden(self):
+        """A real server sends a mail's lines ended by CRLF, and a plain-text code alone on its
+        line, or spelt out one character to a line, is hidden as the same lines with LF are."""
+        said = "Hello. Here is what you need for your Acme account:"
+        codes = ("\n482917\n", "\nKQ7X9B\n", "\n".join("482917"), "\n".join("KQ7X9B"))
+        mails = [message(f"About your Acme account {n}", "Acme <account@acme.example>",
+                         f"{said}\n{code}\nThanks, Acme")
+                 for n, code in enumerate(codes)]
+        for raw in mails:
+            self.assertIn(b"account:\r\n", raw)
+        await self.mailbox(gmail(inbox=[(HELLO, 900), *((raw, 1) for raw in mails)]))
+        self.says = ["NOTHING"] * len(mails)
+        with mock.patch.object(mail, "TRIED", len(mails)):
+            await self.ask("Did Acme email me about my account?")
+        self.assertEqual(len(self.model), len(mails))
+        for call in range(len(mails)):
+            self.assertIn("Acme account", self.read(call))
+            self.assertIn(mail.HIDDEN, self.read(call))
+            for code in ("482917", "KQ7X9B"):
+                self.assertNotRegex(self.read(call), r"\W{0,9}".join(code))
+
     async def test_asking_for_one_is_refused_before_any_account_is_asked(self):
         server = await self.mailbox(gmail(inbox=[(PASSPORT, 13)]))
         said, told = await self.ask("What is my sign in code for the passport application?")

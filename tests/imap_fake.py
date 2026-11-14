@@ -43,8 +43,9 @@ def certificate(folder: Path) -> tuple[Path, Path]:
 
 def message(subject="Hello", author="Someone <someone@people.example>", body="Hello.",
             html=None, dated=None, extra=()) -> bytes:
-    """A mail as it would arrive. html adds an HTML part, or is the only part when body is None.
-    dated is the Date line its sender wrote, in days ago."""
+    """A mail as it would arrive, with its lines ended by CRLF as a real server sends them.
+    html adds an HTML part, or is the only part when body is None. dated is the Date line its
+    sender wrote, in days ago."""
     mail = email.message.EmailMessage()
     mail["From"] = author
     mail["To"] = USER
@@ -60,7 +61,7 @@ def message(subject="Hello", author="Someone <someone@people.example>", body="He
             mail.set_content(html, subtype="html")
         else:
             mail.add_alternative(html, subtype="html")
-    return mail.as_bytes()
+    return mail.as_bytes(policy=mail.policy.clone(linesep="\r\n"))
 
 
 class Box:

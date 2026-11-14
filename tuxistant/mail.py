@@ -450,7 +450,10 @@ def _spans(text: str) -> list[tuple[int, int]]:
 def _hide(text: str) -> str:
     """A mail's text with whatever may be a sign-in code or a password taken out. Odd spaces
     are made plain first, as the model would read "482\u00a0913" as the code it is, and a code
-    spelt out one character to a line is put on a line of its own, as the model would read it."""
+    spelt out one character to a line is put on a line of its own, as the model would read it.
+    A mail server ends each line with a carriage return before the line feed, and that would
+    keep a code from being seen alone on its line, so the line endings are made plain first."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = SPELT.sub(lambda run: "".join(run[0].split()), UNSEEN.sub("", SPACE.sub(" ", text)))
     out, at = [], 0
     for start, end in _spans(text):
