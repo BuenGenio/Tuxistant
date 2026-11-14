@@ -440,6 +440,14 @@ class Limits(unittest.TestCase):
                 self.assertIn("real page", webfetch.fetch("http://example.com/", CONFIG).text)
 
 
+def only_example(host, _port):
+    """Names for a test with no pretend web: the page's, and no other, so no own server answers
+    at the page's address."""
+    if host == "example.com":
+        return [PUBLIC]
+    raise PageError("no such name")
+
+
 class Dripping(unittest.TestCase):
     """A server that keeps sending, slowly: each read succeeds, so only a clock can end it."""
 
@@ -464,8 +472,8 @@ class Dripping(unittest.TestCase):
         port = listener.getsockname()[1]
         self.addCleanup(mock.patch.stopall)
         mock.patch.object(webfetch, "own_servers",
-                          lambda config, _: (webfetch._own_names(config), set())).start()
-        mock.patch.object(webfetch, "_resolve", return_value=[PUBLIC]).start()
+                          lambda config, *_: (webfetch._own_names(config), set())).start()
+        mock.patch.object(webfetch, "_resolve", only_example).start()
         mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
             ("127.0.0.1", port), timeout=2)).start()
 
@@ -509,8 +517,8 @@ class CutShort(unittest.TestCase):
         port = slow_server(self, steps)
         self.addCleanup(mock.patch.stopall)
         mock.patch.object(webfetch, "own_servers",
-                          lambda config, _: (webfetch._own_names(config), set())).start()
-        mock.patch.object(webfetch, "_resolve", return_value=[PUBLIC]).start()
+                          lambda config, *_: (webfetch._own_names(config), set())).start()
+        mock.patch.object(webfetch, "_resolve", only_example).start()
         mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
             ("127.0.0.1", port), timeout=2)).start()
 
@@ -692,6 +700,45 @@ class OwnServers(unittest.TestCase):
         self.assertEqual(len(found), 2)
         self.assertTrue(all("192.168.1.30" in addresses for addresses in found))
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 2)
+
+    def page_looked_up_slowly(self, meanwhile):
+        """news.example, at a public address, takes a while to look up, and meanwhile runs once
+        it has started."""
+        self.web.names["news.example"] = [PUBLIC]
+        real = webfetch._resolve
+
+        def resolve(host, port):
+            if host == "news.example":
+                meanwhile()
+                time.sleep(0.2)
+            return real(host, port)
+        return mock.patch.object(webfetch, "_resolve", resolve)
+
+    def test_a_server_named_in_settings_while_the_page_is_looked_up(self):
+        """Settings name a new voice server at the page's address after the hop's own servers
+        were looked up, while the page's host is. Nothing waits between the check and the dial."""
+        config = {**self.config, "ha_server": ""}
+        self.web.names["newvoice.example"] = [PUBLIC]
+        webfetch.own_servers(config, 1)
+
+        def move():
+            config["server"] = "newvoice.example:8080"
+        with self.page_looked_up_slowly(move), self.assertRaises(PageError):
+            webfetch.fetch("http://news.example/", config, 2)
+        self.assertEqual(self.web.dialled, [])
+
+    def test_an_answer_an_own_server_gave_while_the_page_was_looked_up(self):
+        """Research's own servers came with Home Assistant's lookup failed. While the page's host
+        is looked up, another request finds Home Assistant at the page's address."""
+        own = webfetch.own_servers(self.config, 1)
+        self.assertNotIn(PUBLIC, own[1])
+
+        def home():
+            self.web.names["homeassistant.local"] = [PUBLIC]
+            webfetch.own_servers(self.config, 1)
+        with self.page_looked_up_slowly(home), self.assertRaises(PageError):
+            webfetch.fetch("http://news.example/", self.config, 2, own=own)
+        self.assertEqual(self.web.dialled, [])
 
     def test_a_lookup_from_before_the_call_that_then_fails_is_followed_by_a_fresh_one(self):
         """Sent before the network came up, by an earlier call, and joined by this one."""

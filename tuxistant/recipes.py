@@ -843,8 +843,9 @@ async def _call(plan: Plan, args: dict, config, session):
     detail = _card_detail(plan, request, where)
     if len(detail) > MAX_DETAIL_CHARS:      # a cut card would hide what it cut
         return _say(session, config, TOO_LONG)
+    shown = time.monotonic()
     return Ask(_card_title(request), detail,
-               lambda: _send_and_say(plan, request, where, found, config, session),
+               lambda: _send_and_say(plan, request, where, found, config, session, shown),
                timeout_s=CARD_S)
 
 
@@ -866,12 +867,13 @@ def _card_detail(plan: Plan, request: Request, where: webfetch.Place) -> str:
 
 
 def _send_and_say(plan: Plan, request: Request, where: webfetch.Place, found: dict, config,
-                  session) -> dict:
+                  session, shown: float | None = None) -> dict:
     """In a thread, after any click: the request the card showed, to the addresses it showed.
-    They are checked again first if the settings have named a server since, as a card waits."""
+    They are judged again first, by the servers the settings name now and what those have
+    answered since, as both can change while a card waits. shown: when the card was."""
     deadline = time.monotonic() + SEND_S
     try:
-        where = webfetch.place_now(where, request.host, request.port, config, SEND_S)
+        where = webfetch.place_now(where, request.host, request.port, config, SEND_S, shown)
         reply = webfetch.send(where, request.scheme, request.host, request.port, request.path,
                               request.method, request.body, request.content_type,
                               max(deadline - time.monotonic(), 0))

@@ -798,6 +798,34 @@ class Cards(Case):
                                 "to."])
         self.assertEqual(self.web.dialled, [])
 
+    async def home_assistant_answers_during_the_card(self, meanwhile):
+        """Home Assistant's lookup fails when the desk strip's request is judged, as away from
+        home. While the card waits, it answers at the strip's address."""
+        self.example("deskstrip.yaml")
+        self.route("/json/state", "{}")
+        self.web.names.pop("ha.lan")
+
+        async def confirm(ask):
+            self.asked.append(ask)
+            self.web.names["ha.lan"] = ["192.168.1.40"]
+            meanwhile()
+            return True
+        session = Session(self.host.current(), confirm=confirm)
+        result, said = await self.call("deskstrip_brightness", {"level": "40"}, session)
+        self.assertEqual(len(self.asked), 1)
+        self.assertEqual(said, ["That recipe's host, 192.168.1.40, isn't somewhere I'll send "
+                                "to."])
+        self.assertEqual(self.web.dialled, [])
+
+    async def test_an_answer_home_assistant_gave_while_the_card_waited(self):
+        """Another request looks it up meanwhile, and keeps the answer."""
+        await self.home_assistant_answers_during_the_card(
+            lambda: webfetch.own_servers(CONFIG, 1))
+
+    async def test_home_assistant_with_no_answer_is_looked_up_again_after_the_card(self):
+        """Nothing looks it up meanwhile: the click does."""
+        await self.home_assistant_answers_during_the_card(lambda: None)
+
     async def test_home_assistant_s_address_is_kept_while_the_next_lookup_runs(self):
         """A minute on, ha.lan is slow to look up again. The address it gave last time is still
         refused meanwhile, rather than dropped for want of a quick answer."""

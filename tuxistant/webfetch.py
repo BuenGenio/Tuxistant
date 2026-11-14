@@ -215,18 +215,26 @@ def _own_names(config) -> set[str]:
     return {_name(host) for host in _own_hosts(config)}
 
 
-def _own_now(config, own, deadline: float) -> tuple[set[str], set[str]]:
+def _own_now(config, own, deadline: float, since: float | None = None) -> tuple[set[str], set[str]]:
     """own, if it was judged against every server the settings name now, or else the servers
-    looked up again by deadline. Settings change the config in place, at any moment, so this is
-    asked just before each request is dialled. If they change again while it waits, it looks
-    again, and gives up after a few tries with TimeoutError."""
+    looked up again by deadline, since as for own_servers. Either way with every answer the
+    servers have given since, which costs no wait. Settings change the config in place, at any
+    moment, so this is asked just before each request is dialled. If they change again while it
+    waits, it looks again, and gives up after a few tries with TimeoutError."""
     tries = 0
     while own is None or not _own_names(config) <= own[0]:
         if tries == OWN_TRIES:
             raise TimeoutError
         tries += 1
-        own = own_servers(config, max(deadline - time.monotonic(), 0))
-    return own
+        own = own_servers(config, max(deadline - time.monotonic(), 0), since)
+    return own[0], own[1] | _own_kept(config)
+
+
+def _own_kept(config) -> set[str]:
+    """What the servers the settings name have answered with, kept: no wait."""
+    with _own_lock:
+        kept = [_own_addresses.get(host) for host in _own_hosts(config)]
+    return set().union(*(entry[1] for entry in kept if entry))
 
 
 def _start_own_lookups(hosts) -> list[_Lookup]:
@@ -493,13 +501,18 @@ def recipe_place(host: str, port: int, config, seconds: float) -> Place:
     return place(host, port, own, addresses)
 
 
-def place_now(where: Place, host: str, port: int, config, seconds: float) -> Place:
-    """where, judged again if the settings have named a server since it was, as they can change
-    while a card waits. TimeoutError if a new one hasn't answered within seconds."""
-    if _own_names(config) <= where.own:
-        return where
-    own = _own_now(config, None, time.monotonic() + seconds)
-    return place(host, port, own, where.addresses)
+def place_now(where: Place, host: str, port: int, config, seconds: float,
+              since: float | None = None) -> Place:
+    """where, judged again just before it is dialled, by the servers the settings name now and
+    every address they have answered with since, as both can change while a card waits: another
+    request may look up a server whose lookup had failed. After a card, since is when it was
+    shown, and a server with no answer kept is looked up afresh and waited for, as for
+    own_servers. TimeoutError if one hasn't answered within seconds."""
+    deadline = time.monotonic() + seconds
+    own = None if since is not None else (set(where.own), set())
+    if own is None:
+        own = own_servers(config, seconds, since)
+    return place(host, port, _own_now(config, own, deadline), where.addresses)
 
 
 def _path(parts) -> str:
@@ -508,8 +521,8 @@ def _path(parts) -> str:
     return f"{path}?{query}" if query else path
 
 
-def check(url: str, own: tuple[set[str], set[str]]) -> Target:
-    """Refuses anything but a plain address on the open internet, or returns where to connect."""
+def _parse(url: str) -> tuple[str, str, int, str]:
+    """(scheme, host, port, path), or PageError for anything but a plain http or https address."""
     # urlsplit quietly drops tabs and line breaks, which would change what was checked.
     if len(url) > MAX_URL_CHARS or any(c <= " " or c == "\x7f" for c in url):
         raise PageError(NOT_ALLOWED)
@@ -520,14 +533,23 @@ def check(url: str, own: tuple[set[str], set[str]]) -> Target:
         raise PageError(NOT_ALLOWED) from None
     if parts.scheme not in SCHEMES or not host or parts.username is not None:
         raise PageError(NOT_ALLOWED)     # any "@" at all gives a username, even an empty one
-    port = port or SCHEMES[parts.scheme]
-    addresses = _resolve(host, port)
+    return parts.scheme, host, port or SCHEMES[parts.scheme], path
+
+
+def _judge(scheme: str, host: str, port: int, path: str, addresses: list[str],
+           own: tuple[set[str], set[str]]) -> Target:
     names, own_addresses = own
     # All of them must pass: a name with one public address and one private one is an attack.
     if (_name(host) in names or not addresses or not all(map(public, addresses))
             or own_addresses.intersection(map(_same, addresses))):
         raise PageError(NOT_ALLOWED)
-    return Target(parts.scheme, host, port, path, addresses)
+    return Target(scheme, host, port, path, addresses)
+
+
+def check(url: str, own: tuple[set[str], set[str]]) -> Target:
+    """Refuses anything but a plain address on the open internet, or returns where to connect."""
+    scheme, host, port, path = _parse(url)
+    return _judge(scheme, host, port, path, _resolve(host, port), own)
 
 
 def _dial(address: str, port: int, seconds: float) -> socket.socket:
@@ -727,11 +749,18 @@ def fetch(url: str, config, seconds: float = TOTAL_S, own=None) -> Page:
     is still being looked up."""
     deadline = time.monotonic() + seconds
     for _ in range(MAX_REDIRECTS + 1):
-        try:    # each address is checked against the servers the settings name as it is dialled
-            own = _own_now(config, own, deadline)
+        scheme, host, port, path = _parse(url)
+        if _name(host) in _own_names(config):
+            raise PageError(NOT_ALLOWED)
+        since = time.monotonic()
+        if own is None:     # looked up alongside the page's host
+            start_own_lookups(config)
+        addresses = _resolve(host, port)
+        try:    # after the host's lookup, so nothing waits between this and the dial
+            own = _own_now(config, own, deadline, since)
         except TimeoutError:
             raise PageError(UNREADABLE) from None
-        location, kind, text = _get(check(url, own), deadline)
+        location, kind, text = _get(_judge(scheme, host, port, path, addresses, own), deadline)
         if location is None:
             words = _words(text, kind)
             if len(words) < MIN_PAGE_CHARS:
