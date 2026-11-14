@@ -361,7 +361,8 @@ class IndexTests(RegistryCase):
         file = self.state / "state.json"
         good = file.read_bytes()
         damaged = (b"x" * (registry.MAX_STATE_BYTES + 1), b"{not json", b"[]",
-                   good.replace(b'"seen": {}', b'"seen": {"1": 1}'),
+                   good.replace(b'"listed": {}', b'"listed": {"1": 1}'),
+                   good.replace(b'"moderated": {}', b'"moderated": {"k": {}}'),
                    good.replace(b'"lifted": []', b'"lifted": ["1"]'),
                    good.replace(b'"seq": 5', b'"seq": "5"'))
         for data in damaged:
@@ -412,6 +413,26 @@ class IndexTests(RegistryCase):
             self.assertEqual(self.reg.kept()["index"]["seq"], 5)
             self.assertEqual(len(self.reg.in_effect()), 10 * (seq - 1))
             self.refused(self.accept, self.index(seq=1), contains="older list of skills")
+
+    def test_a_damaged_state_names_the_folder_it_is_really_in(self):
+        """XDG_STATE_HOME moves it, so the sentence can't name ~/.local/state."""
+        self.accept(self.index())
+        (self.state / "state.json").write_bytes(b"{not json")
+        message = self.refused(self.new_registry().kept, contains="damaged")
+        self.assertIn(f"Removing state.json in {self.state} starts it again.", message)
+        with mock.patch.object(registry.Path, "home", return_value=self.root):
+            self.refused(self.new_registry().kept, contains="Removing state.json in ~/state ")
+
+    def test_an_index_with_more_revocations_in_effect_than_tux_keeps_breaks_the_format(self):
+        """A rule for the registry, so it can't publish an index every Tux would refuse."""
+        entries = [self.entry(n, {"skill": "io.github.zz.x"})
+                   for n in range(1, registry.MAX_LIVE + 2)]
+        self.refused(self.accept, self.index(revocations=entries), contains="format")
+        self.accept(self.index(revocations=entries, lifted=[self.lift(1)]))
+        self.assertEqual(len(self.reg.in_effect()), registry.MAX_LIVE)
+        lifts = [self.lift(n) for n in range(1, registry.MAX_LIFTED + 2)]
+        self.refused(self.accept, self.index(seq=2, revocations=entries, lifted=lifts),
+                     contains="format")
 
     def test_a_held_copy_that_isnt_the_one_the_state_names_isnt_used(self):
         self.accept(self.index(seq=5))
@@ -623,10 +644,10 @@ class RevocationTests(RegistryCase):
     def test_a_lifted_id_is_forgotten_with_every_copy(self):
         self.take(1, [self.entry(1, {"author": "ada"}), self.entry(2, {"author": "ada"})])
         self.accept(self.index(seq=2, lifted=[self.lift(1)]))
-        self.assertEqual([entry["id"] for entry in self.reg.kept()["seen"].values()], [2])
+        self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [2])
 
-    def test_no_more_revocations_than_the_state_can_hold_and_a_lift_makes_room(self):
-        with mock.patch.object(registry, "MAX_SEEN", 3):
+    def test_no_more_moderation_copies_than_the_state_can_hold_and_a_lift_makes_room(self):
+        with mock.patch.object(registry, "MAX_MODERATED", 3):
             self.take(1, [self.entry(n, {"author": "ada"}) for n in (1, 2, 3)])
             self.refused(self.take, 2, [self.entry(4, {"author": "ada"})],
                          contains="more revoked skills")
@@ -634,10 +655,23 @@ class RevocationTests(RegistryCase):
             self.accept(self.index(seq=2, lifted=[self.lift(1)]))
             self.take(2, [self.entry(4, {"author": "ada"})])
             self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [2, 3, 4])
-            with mock.patch.object(registry, "MAX_LIFTED", 1):
-                self.refused(self.accept, self.index(seq=3, lifted=[self.lift(1), self.lift(2)]),
+            with mock.patch.object(registry, "MAX_LIFTED", 2):
+                self.accept(self.index(seq=3, lifted=[self.lift(1), self.lift(2)]))
+                held = self.reg.kept()["lifted"]
+                self.refused(self.accept, self.index(seq=4, lifted=[self.lift(1), self.lift(5)]),
                              contains="more revoked skills")
-            self.assertEqual(self.reg.index()["seq"], 2)
+                self.assertEqual(self.reg.kept()["lifted"], held)
+            self.assertEqual(self.reg.index()["seq"], 3)
+
+    def test_a_copy_the_index_lists_doesnt_count_against_the_moderation_share(self):
+        """The moderation workflow lists every revocation ever made, so the ones an index
+        already carries mustn't fill the share for the ones it doesn't."""
+        two = [self.entry(n, {"skill": "io.github.ada.nothing"}) for n in (1, 2)]
+        self.accept(self.index(seq=2, revocations=two))
+        with mock.patch.object(registry, "MAX_MODERATED", 1):
+            self.take(1, two + [self.entry(3, {"skill": "io.github.ada.nothing"})])
+            self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [1, 2, 3])
+            self.assertEqual(sum(map(len, self.reg.kept()["moderated"].values())), 1)
 
     def test_the_most_the_state_can_hold_fits_in_what_tux_reads_back(self):
         report = ("https://github.com/" + "a" * 39 + "/" + "r" * 100 + "/issues/"
@@ -645,21 +679,34 @@ class RevocationTests(RegistryCase):
         worst = {"kind": "suspend", "reason": "\U0001F600" * 300,
                  "date": "2026-11-19T16:05:00Z", "actor": "a" * 39, "report": report}
         top = 2 ** 53
-        seen = {}
-        for n in range(registry.MAX_SEEN):
-            entry = {**worst, "id": top - n,
-                     "scope": {"skill": "io.github." + "a" * 39 + "." + "s" * 40,
-                               "versions": [f"{m:02d}" + "v" * 38 for m in range(50)]}}
-            seen[registry._copy_key(registry.revocation(entry))] = entry
+
+        def copies(ids):
+            out = {}
+            for n in ids:
+                entry = {**worst, "id": n,
+                         "scope": {"skill": "io.github." + "a" * 39 + "." + "s" * 40,
+                                   "versions": [f"{m:02d}" + "v" * 38 for m in range(50)]}}
+                out[registry._copy_key(registry.revocation(entry))] = entry
+            return out
+
+        listed = copies(range(top - registry.MAX_LISTED + 1, top + 1))
+        keys = [self.moderation[1], self.eve[1], self.other[1]]
+        floor = top - registry.MAX_LISTED - registry.MAX_MODERATED
+        ids = list(range(floor + 1, floor + registry.MAX_MODERATED + 1))
+        third = len(ids) // 3
+        moderated = {keys[0]: copies(ids[:third]), keys[1]: copies(ids[third:2 * third]),
+                     keys[2]: copies(ids[2 * third:])}
         held = {"seq": top, "sha256": "f" * 64}
-        state = {"index": held, "revocations": held, "seen": seen,
-                 "lifted": list(range(top - registry.MAX_SEEN - registry.MAX_LIFTED,
-                                      top - registry.MAX_SEEN))}
+        state = {"index": held, "revocations": {**held, "key": keys[0]}, "listed": listed,
+                 "moderated": moderated,
+                 "lifted": list(range(floor - registry.MAX_LIFTED + 1, floor + 1))}
         data = registry._dumps(state)
         self.assertLessEqual(len(data), registry.MAX_STATE_BYTES)
         registry._private_folder(self.state)
         (self.state / "state.json").write_bytes(data)
-        self.assertEqual(len(self.new_registry().kept()["seen"]), registry.MAX_SEEN)
+        kept = self.new_registry().kept()
+        self.assertEqual(len(kept["listed"]), registry.MAX_LISTED)
+        self.assertEqual(sum(map(len, kept["moderated"].values())), registry.MAX_MODERATED)
 
     def test_only_an_index_lifts_and_a_lifted_id_stays_lifted(self):
         self.take(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"})])
@@ -690,6 +737,86 @@ class RevocationTests(RegistryCase):
         for scope, skill_id, version, expected in cases:
             self.assertEqual(registry.covers({"scope": scope}, skill_id, version, key), expected,
                              (scope, skill_id, version))
+
+
+class LeakedModerationKeyTests(RegistryCase):
+    """A leaked moderation key can switch skills off and nothing more. A review found it could
+    fill the copies Tux keeps so that every later index was refused, the registry's new bans and
+    the index retiring the key among them, and raise its sequence number out of reach of every
+    later moderator."""
+
+    def setUp(self):
+        super().setUp()
+        self.base = self.index(skills=[self.skill("bluetooth", [
+            self.version(BLUETOOTH, "1.0.0"), self.version(BLUETOOTH, "1.1.0")])])
+        self.accept(self.base)
+        self.file = self.reg.install(self.reg.check("io.github.ada.bluetooth", "1.0.0"))
+
+    def take(self, seq, entries, signer=None):
+        self.revoked(seq, entries, signer=signer)
+        return self.reg.accept_revocations(self.files["revocations.json"],
+                                           self.files["revocations.json.sig"])
+
+    def junk(self, seq, count):
+        """Ids the registry never used and can't guess, for a skill nobody has."""
+        return self.take(seq, [self.entry(10 ** 12 + n, {"skill": "io.github.zz.x"})
+                               for n in range(count)])
+
+    def later(self, seq, moderation_keys=None, **changes):
+        return self.index(seq=seq, skills=self.base["skills"],
+                          moderation_keys=moderation_keys or [self.moderation[1]], **changes)
+
+    def ban(self, seq, moderation_keys=None):
+        return self.later(seq, moderation_keys,
+                          authors={"ada": {**self.base["authors"]["ada"], "status": "banned"}},
+                          revocations=[self.entry(1, {"author": "ada"}, "ban", "Malware.")])
+
+    def test_a_full_moderation_share_never_stops_the_registrys_index(self):
+        self.junk(1, registry.MAX_MODERATED)
+        self.refused(self.junk, 2, registry.MAX_MODERATED + 1, contains="more revoked skills")
+        self.publish(self.ban(2))
+        changes = self.reg.refresh()
+        self.assertNotIn("index", self.reg.problems)
+        self.assertEqual(self.reg.index()["seq"], 2)
+        self.assertEqual([(change["off"], change["kind"]) for change in changes], [(True, "ban")])
+        self.refused(self.reg.check, "io.github.ada.bluetooth", "1.0.0", contains="for good")
+
+    def test_the_index_that_retires_a_key_takes_the_copies_only_it_signed(self):
+        self.junk(1, registry.MAX_MODERATED)
+        self.accept(self.ban(2, [self.other[1]]))
+        self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [1])
+        self.assertEqual([(change["off"], change["kind"]) for change in self.reg.apply()],
+                         [(True, "ban")])
+        self.take(1, [self.entry(2, {"skill": "io.github.ada.other"})], signer=self.other)
+        self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [1, 2])
+        self.refused(self.junk, 3, 1, contains="isn't signed")
+        self.assertEqual([entry["id"] for entry in self.new_registry().in_effect()], [1, 2])
+
+    def test_a_key_the_index_still_names_keeps_its_copies_and_its_number(self):
+        self.take(4, [self.entry(2, {"skill": "io.github.ada.other"})])
+        self.accept(self.later(2, [self.moderation[1], self.other[1]]))
+        self.assertEqual([entry["id"] for entry in self.reg.in_effect()], [2])
+        self.refused(self.take, 3, [], signer=self.other, contains="older list of revoked")
+
+    def test_a_number_raised_out_of_reach_ends_with_the_key(self):
+        self.take(2 ** 53, [])
+        self.accept(self.later(2, [self.other[1]]))
+        self.take(5, [self.entry(1, {"author": "ada"}, reason="Gone bad.")], signer=self.other)
+        self.assertEqual([(change["off"], change["reason"]) for change in self.reg.apply()],
+                         [(True, "Gone bad.")])
+        self.refused(self.take, 4, [], signer=self.other, contains="older list of revoked")
+
+    def test_a_switch_off_by_a_retired_key_stays_until_it_is_lifted(self):
+        self.take(1, [self.entry(7, {"author": "ada"}, reason="Junk.")])
+        self.reg.apply()
+        self.accept(self.later(2, [self.other[1]]))
+        self.assertEqual(self.reg.in_effect(), [])
+        self.assertEqual(self.reg.apply(), [])
+        self.assertIn(self.file.name, registry.switched_off(self.skills))
+        self.refused(self.reg.install, self.reg.check("io.github.ada.bluetooth", "1.1.0"),
+                     contains="Junk.")
+        self.accept(self.later(3, [self.other[1]], lifted=[self.lift(7)]))
+        self.assertEqual([change["off"] for change in self.reg.apply()], [False])
 
 
 class RecipeTests(RegistryCase):
@@ -876,6 +1003,23 @@ class InstalledTests(RegistryCase):
         self.assertEqual(registry.installed(self.skills)[self.file.name]["version"], "1.0.0")
         self.assertIn('"1.0.0"', self.file.read_text())
         self.assertIn(self.file.name, registry.switched_off(self.skills))
+
+    def test_a_narrower_copy_of_the_same_id_doesnt_end_a_switch_off_tux_lost(self):
+        self.revoked(1, [self.entry(7, {"author": "ada"}, reason="Gone bad.")])
+        self.reg.refresh()
+        before = registry.switched_off(self.skills)
+        self.assertIn(self.file.name, before)
+        shutil.rmtree(self.state)
+        self.reg = self.new_registry()
+        self.accept(self.index(seq=2, skills=self.base["skills"]))
+        self.revoked(1, [self.entry(7, {"skill": "io.github.ada.bluetooth",
+                                        "versions": ["1.0.0"]}, reason="Narrow.")])
+        self.reg.refresh()
+        self.assertEqual(registry.switched_off(self.skills), before)
+        self.refused(self.reg.install, self.reg.check("io.github.ada.bluetooth", "1.1.0"),
+                     contains="Gone bad.")
+        self.assertEqual(registry.installed(self.skills)[self.file.name]["version"], "1.0.0")
+        self.assertEqual(registry.switched_off(self.skills), before)
 
     def test_an_update_its_revocation_doesnt_cover_ends_the_switch_off(self):
         self.suspend({"skill": "io.github.ada.bluetooth", "versions": ["1.0.0"]})

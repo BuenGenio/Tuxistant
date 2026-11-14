@@ -13,8 +13,11 @@ JSON parser.
 
 The moderation key can only add revocations. Every distinct copy of an id Tux accepts is kept and
 in effect, so a copy signed first can neither narrow nor hide a later one, and only an index the
-registry key signed can lift an id. A state file Tux can't read refuses everything until it is
-fixed, as starting again from nothing would forget the newest sequence numbers and revocations.
+registry key signed can lift an id. The index's copies and the moderation keys' are kept apart,
+each with its own limit, so moderation copies never stop an index, and an index that retires a
+moderation key takes the copies only that key signed, and its sequence number, with it. A state
+file Tux can't read refuses everything until it is fixed, as starting again from nothing would
+forget the newest sequence numbers and revocations.
 
 No network here: fetch(path, limit) -> bytes is handed in, and tests pass a fake.
 """
@@ -57,10 +60,12 @@ MAX_REVOCATIONS_BYTES = 1024 * 1024
 MAX_RECIPE_BYTES = 64 * 1024
 MAX_SIG_BYTES = 4 * 1024
 MAX_SHIPPED_BYTES = 4 * 1024
-MAX_STATE_BYTES = 8 * 1024 * 1024
-MAX_SEEN = 1000                 # revocation copies in effect: at most about 6.5 KB each, written
-MAX_LIFTED = 10_000             # lifted ids; both together fit in MAX_STATE_BYTES
-STATE_FIELDS = {"index", "revocations", "seen", "lifted"}
+MAX_STATE_BYTES = 16 * 1024 * 1024
+MAX_LIVE = 1000                 # revocations an index may have in effect, a rule for the registry
+MAX_LISTED = MAX_LIVE           # copies from the indexes Tux accepted, at most about 6.5 KB each
+MAX_MODERATED = 1000            # copies only a moderation key signed, the same size
+MAX_LIFTED = 10_000             # lifted ids; all three together fit in MAX_STATE_BYTES
+STATE_FIELDS = {"index", "revocations", "listed", "moderated", "lifted"}
 VERIFY_S = 10
 AHEAD_S = 24 * 3600             # an index dated further ahead of the clock than this is refused
 KEYGEN_PATH = "/usr/bin:/bin"   # never the caller's PATH, so a planted ssh-keygen isn't run
@@ -109,8 +114,8 @@ SHIPPED_DAMAGED = "The registry key that came with Tuxistant is damaged, so noth
 SUSPENDED = "The skills registry has switched it off: {reason}"
 BANNED = "The skills registry has switched it off for good, and you can remove it: {reason}"
 STATE_DAMAGED = ("Tux's record of the skills registry is damaged, so it won't take anything from "
-                 "the registry until it is fixed. Removing state.json in "
-                 "~/.local/state/tuxistant/registry starts it again.")
+                 "the registry until it is fixed. Removing state.json in {folder} starts it "
+                 "again.")
 TOO_MANY = ("The skills registry has more revoked skills than Tux can keep track of, so Tux kept "
             "the list it had.")
 
@@ -385,10 +390,14 @@ def parse_index(data: bytes, now: float | None) -> dict:
     listed = _list(index["revocations"], "revocations", 0, 10 ** 5)
     revocations = [revocation(entry, f"revocation {n + 1}") for n, entry in enumerate(listed)]
     lifted = [_lift(entry, f"lift {n + 1}")
-              for n, entry in enumerate(_list(index["lifted"], "lifts", 0, 10 ** 5))]
+              for n, entry in enumerate(_list(index["lifted"], "lifts", 0, MAX_LIFTED))]
     _by_id(revocations, "revocations")
     _by_id(lifted, "lifts")
-    _authors(index["authors"], revocations, {entry["id"] for entry in lifted})
+    lifted_ids = {entry["id"] for entry in lifted}
+    # the registry's own rule, so it can never publish an index every Tux would have to refuse
+    if sum(entry["id"] not in lifted_ids for entry in revocations) > MAX_LIVE:
+        raise _bad("revocations")
+    _authors(index["authors"], revocations, lifted_ids)
     _skills(index["skills"], index["authors"], tags)
     return index
 
@@ -527,15 +536,51 @@ def _copy_key(entry: dict) -> str:
     return f"{entry['id']}:{hashlib.sha256(text.encode()).hexdigest()}"
 
 
-def _taken(kept: dict, entries: list, lifts: list = ()) -> dict:
-    """kept with these revocations and lifts added. A lifted id's copies are dropped, as a lifted
-    id stays lifted, which is also how the registry makes room."""
-    lifted = set(kept["lifted"]) | {entry["id"] for entry in lifts}
-    seen = {key: entry for key, entry in kept["seen"].items() if entry["id"] not in lifted}
-    seen.update((_copy_key(entry), entry) for entry in entries if entry["id"] not in lifted)
-    if len(seen) > MAX_SEEN or len(lifted) > MAX_LIFTED:
+def _held_copies(kept: dict) -> dict:
+    """Every copy Tux holds, from the indexes and from the moderation keys, by copy key."""
+    held = dict(kept["listed"])
+    for copies in kept["moderated"].values():
+        held.update(copies)
+    return held
+
+
+def _with_index(kept: dict, index: dict) -> dict:
+    """kept with an index's revocations and lifts added. A lifted id's copies are dropped, as a
+    lifted id stays lifted. Moderation copies never refuse an index: they only shrink here, by
+    lifts, by the index listing the same copy, and by the index no longer naming the key that
+    signed them, which also ends that key's sequence number, so a leaked key that filled its
+    share or raised the number past reach is undone by the index that retires it."""
+    lifted = set(kept["lifted"]) | {entry["id"] for entry in index["lifted"]}
+    listed = {key: entry for key, entry in kept["listed"].items() if entry["id"] not in lifted}
+    listed.update((_copy_key(entry), entry) for entry in index["revocations"]
+                  if entry["id"] not in lifted)
+    if len(listed) > MAX_LISTED or len(lifted) > MAX_LIFTED:
         raise Refused(TOO_MANY)
-    return {**kept, "seen": seen, "lifted": sorted(lifted)}
+    named = set(index["moderation_keys"])
+    moderated = {}
+    for signer, copies in kept["moderated"].items():
+        copies = {key: entry for key, entry in copies.items()
+                  if entry["id"] not in lifted and key not in listed}
+        if signer in named and copies:
+            moderated[signer] = copies
+    held = kept["revocations"]
+    return {**kept, "listed": listed, "moderated": moderated, "lifted": sorted(lifted),
+            "revocations": held if held and held["key"] in named else None}
+
+
+def _with_moderation(kept: dict, signer: str, entries: list) -> dict:
+    """kept with the copies one moderation key signed added. Only these count against
+    MAX_MODERATED, so filling it refuses revocations.json and never an index."""
+    lifted = set(kept["lifted"])
+    copies = dict(kept["moderated"].get(signer, {}))
+    copies.update((_copy_key(entry), entry) for entry in entries if entry["id"] not in lifted)
+    copies = {key: entry for key, entry in copies.items() if key not in kept["listed"]}
+    moderated = {**kept["moderated"], signer: copies}
+    if not copies:
+        del moderated[signer]
+    if sum(map(len, moderated.values())) > MAX_MODERATED:
+        raise Refused(TOO_MANY)
+    return {**kept, "moderated": moderated}
 
 
 def covers(entry: dict, skill_id: str, version: str, key: str) -> bool:
@@ -631,7 +676,7 @@ class Registry:
         kept = copy.deepcopy(self.kept())   # kept in memory only once it is on disk
         digest = hashlib.sha256(data).hexdigest()
         _not_older(kept.get("index"), index["seq"], digest, "list of skills")
-        kept = _taken(kept, index["revocations"], index["lifted"])
+        kept = _with_index(kept, index)
         kept["index"] = {"seq": index["seq"], "sha256": digest}
         state = _state_bytes(kept)
         _write(self.state / HELD_INDEX, data)       # before the state that names it
@@ -663,24 +708,33 @@ class Registry:
             raise Refused(NO_INDEX)
         if len(data) > MAX_REVOCATIONS_BYTES:
             raise Refused("The registry's list of revoked skills is too big, so it wasn't used.")
-        signers = [f'{MODERATION} namespaces="{REVOCATIONS_NS}" {key}'
-                   for key in index["moderation_keys"]]
-        verify(data, signature, signers, MODERATION, REVOCATIONS_NS,
-               "The registry's list of revoked skills", self._work())
+        signer = self._moderation_key(data, signature, index["moderation_keys"])
         found = parse_revocations(data)
         kept = copy.deepcopy(self.kept())   # kept in memory only once it is on disk
         digest = hashlib.sha256(data).hexdigest()
         _not_older(kept.get("revocations"), found["seq"], digest, "list of revoked skills")
-        kept = _taken(kept, found["revocations"])
-        kept["revocations"] = {"seq": found["seq"], "sha256": digest}
+        kept = _with_moderation(kept, signer, found["revocations"])
+        kept["revocations"] = {"seq": found["seq"], "sha256": digest, "key": signer}
         self._save(kept, _state_bytes(kept))
         return found
 
+    def _moderation_key(self, data: bytes, signature: bytes, keys: list) -> str:
+        """The moderation key that signed it, one key per check so Tux knows which, as an index
+        that retires a key takes the copies it signed with it."""
+        for n, key in enumerate(keys):
+            try:
+                verify(data, signature, [f'{MODERATION} namespaces="{REVOCATIONS_NS}" {key}'],
+                       MODERATION, REVOCATIONS_NS, "The registry's list of revoked skills",
+                       self._work())
+                return key
+            except Refused:
+                if n == len(keys) - 1:
+                    raise
+
     def in_effect(self) -> list[dict]:
-        kept = self.kept()
-        lifted = set(kept["lifted"])
-        return sorted((entry for entry in kept["seen"].values() if entry["id"] not in lifted),
-                      key=lambda entry: entry["id"])
+        lifted = set(self.kept()["lifted"])
+        return sorted((entry for entry in _held_copies(self.kept()).values()
+                       if entry["id"] not in lifted), key=lambda entry: entry["id"])
 
     def covering(self, skill_id: str, version: str, key: str) -> dict | None:
         """The revocation in effect that covers this version, a ban before a suspension."""
@@ -745,10 +799,10 @@ class Registry:
         records = installed(self.skills)
         record = records.get(name)
         off = record.get("off") if record else None
-        # an update ends a switch-off only if Tux knows the revocation and it doesn't cover the
-        # new version; after a lost state Tux doesn't know it, and only a lift ends it
-        if off and off["revocation"] not in self.kept()["lifted"] and not any(
-                entry["id"] == off["revocation"] for entry in self.in_effect()):
+        # an update ends a switch-off only if Tux holds the very copy that made it, which the
+        # check above found doesn't cover the new version. Another copy of the same id, maybe
+        # narrower, isn't enough, and after a lost state Tux holds none: only a lift ends it
+        if off and not self._ended_or_held(off):
             raise Refused(switched_off_because(off["kind"], off["reason"]))
         if target.exists() or target.is_symlink():
             if not record or record["id"] != checked.skill_id or target.is_symlink():
@@ -774,16 +828,18 @@ class Registry:
     def apply(self) -> list[dict]:
         """Switch off each installed recipe a revocation in effect covers, and back on each one
         whose revocation was lifted. Returns what changed, for a notification."""
+        self.kept()     # a damaged state is refused here too, with nothing installed
         records = installed(self.skills)
-        lifted = set(self.kept()["lifted"])
         changes = []
         for name, record in records.items():
             was = record.get("off")
-            still = was if was and was["revocation"] not in lifted else None
+            # a switch-off whose copy Tux no longer holds, after a lost state or a retired
+            # moderation key, outlasts it and isn't swapped for another copy: only a lift ends it
+            if was and not self._ended_or_held(was):
+                continue
             hit = self.covering(record["id"], record["version"], record["key"])
-            # a switch-off kept on disk outlasts a lost state: only a lift ends it
-            now = ({"revocation": hit["id"], "kind": hit["kind"], "reason": hit["reason"]}
-                   if hit else still)
+            now = ({"revocation": hit["id"], "kind": hit["kind"], "reason": hit["reason"],
+                    "copy": _copy_key(hit)} if hit else None)
             if now == was:
                 continue
             if now:
@@ -797,6 +853,12 @@ class Registry:
             if self.on_change:
                 self.on_change()
         return changes
+
+    def _ended_or_held(self, off: dict) -> bool:
+        """Whether Tux knows how a switch-off stands: its id was lifted, or Tux holds the copy
+        that made it. A record without the copy is from before Tux kept it, and is held on."""
+        return (off["revocation"] in self.kept()["lifted"]
+                or off.get("copy") in _held_copies(self.kept()))
 
     # The state folder
 
@@ -876,20 +938,29 @@ def _state_bytes(kept: dict) -> bytes:
 def _read_state(file: Path) -> dict:
     """The state Tux wrote, or an empty one if there is none. Anything else, too big, not JSON
     or not in the shape Tux writes, is refused rather than read as empty."""
+    damaged = Refused(STATE_DAMAGED.format(folder=_shown(file.parent)))
     try:
         if file.stat().st_size > MAX_STATE_BYTES:
-            raise Refused(STATE_DAMAGED)
+            raise damaged
         data = json.loads(file.read_bytes())
     except FileNotFoundError:
-        return {"index": None, "revocations": None, "seen": {}, "lifted": []}
+        return {"index": None, "revocations": None, "listed": {}, "moderated": {}, "lifted": []}
     except (OSError, ValueError, RecursionError):
         log.warning("could not read %s", file)
-        raise Refused(STATE_DAMAGED) from None
+        raise damaged from None
     try:
         return _state(data)
     except (Refused, KeyError, TypeError):
         log.warning("%s isn't in the shape Tux writes", file)
-        raise Refused(STATE_DAMAGED) from None
+        raise damaged from None
+
+
+def _shown(folder: Path) -> str:
+    """The folder as the user would type it, so the sentence names the real one."""
+    try:
+        return f"~/{folder.relative_to(Path.home())}"
+    except (ValueError, RuntimeError):
+        return str(folder)
 
 
 def _state(data) -> dict:
@@ -897,20 +968,36 @@ def _state(data) -> dict:
     lifted = _list(data["lifted"], "lifted", 0, MAX_LIFTED)
     if any(type(n) is not int or n < 1 for n in lifted) or lifted != sorted(set(lifted)):
         raise _bad("lifted")
-    seen = data["seen"]
-    if not isinstance(seen, dict) or len(seen) > MAX_SEEN:
-        raise _bad("seen")
-    for key, entry in seen.items():
+    listed = _copies(data["listed"], set(lifted), MAX_LISTED)
+    moderated = data["moderated"]
+    if not isinstance(moderated, dict):
+        raise _bad("moderated")
+    for signer, copies in moderated.items():
+        key_fingerprint(signer, "state", {"ssh-ed25519"})
+        if not copies or set(_copies(copies, set(lifted), MAX_MODERATED)) & set(listed):
+            raise _bad("moderated")
+    if sum(map(len, moderated.values())) > MAX_MODERATED:
+        raise _bad("moderated")
+    revoked = _held(data["revocations"], {"key"})
+    if revoked:
+        key_fingerprint(revoked["key"], "state", {"ssh-ed25519"})
+    return {"index": _held(data["index"]), "revocations": revoked, "listed": listed,
+            "moderated": moderated, "lifted": lifted}
+
+
+def _copies(copies, lifted: set, most: int) -> dict:
+    if not isinstance(copies, dict) or len(copies) > most:
+        raise _bad("state")
+    for key, entry in copies.items():
         if key != _copy_key(revocation(entry)) or entry["id"] in lifted:
-            raise _bad("seen")
-    return {"index": _held(data["index"]), "revocations": _held(data["revocations"]),
-            "seen": seen, "lifted": lifted}
+            raise _bad("state")
+    return copies
 
 
-def _held(value) -> dict | None:
+def _held(value, more: set = frozenset()) -> dict | None:
     if value is None:
         return None
-    _exact(value, {"seq", "sha256"}, "state")
+    _exact(value, {"seq", "sha256"} | more, "state")
     _int(value["seq"], "state")
     _matching(SHA256, value["sha256"], "state")
     return value
@@ -930,9 +1017,11 @@ def installed(skills: Path) -> dict:
 
 
 def _off_ok(off) -> bool:
+    # "copy" may be missing, from before Tux recorded it: such a switch-off is held until lifted
     return off is None or (isinstance(off, dict) and type(off.get("revocation")) is int
                            and off.get("kind") in ("suspend", "ban")
-                           and isinstance(off.get("reason"), str))
+                           and isinstance(off.get("reason"), str)
+                           and isinstance(off.get("copy", ""), str))
 
 
 def switched_off(skills: Path) -> dict[str, tuple[str, str]]:

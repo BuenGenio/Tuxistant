@@ -201,8 +201,10 @@ The build takes a commit of `main`, a `seq` and a `date`, and is otherwise deter
 | `categories` | list | As in `tags.yaml`: objects with `id`, `name`, `tags` |
 | `authors` | object | By login, every author with at least one version. See below |
 | `skills` | list | Every skill ever merged that has a version not left out by `skipped.yaml`, sorted by id. See below |
-| `revocations` | list | Every file in `moderation/revocations/`, sorted by id. See "Revocations" |
-| `lifted` | list | Every file in `moderation/lifted/`, sorted by id. See "Revocations" |
+| `revocations` | list | Every file in `moderation/revocations/`, sorted by id. At most 1000 of them in effect, that is with an id not in `lifted`. See "Revocations" |
+| `lifted` | list | Every file in `moderation/lifted/`, sorted by id, at most 10000. See "Revocations" |
+
+The two limits are what Tux keeps, so they are rules for the registry: Tux refuses an index past either as not in the format, and would stay on the index it had. The index build refuses to make one, CI refuses to deploy one, and the moderation workflow refuses a revocation that would put more than 1000 in effect. Below that, an index that lifts ids makes room.
 
 ### authors.&lt;login&gt;
 
@@ -307,7 +309,7 @@ Tux ships the registry key as one `allowed_signers` line:
 tuxistant-registry namespaces="tuxistant-index" ssh-ed25519 AAAAC3Nza...
 ```
 
-A new registry key ships in a Tuxistant release, and for one release both lines may be shipped. The moderation key is named by the index rather than shipped, so the owner can replace it with a signed index if it leaks. Revocations it already signed stay, which is safe as they only switch things off, and the owner can lift any that were wrong.
+A new registry key ships in a Tuxistant release, and for one release both lines may be shipped. The moderation key is named by the index rather than shipped, so the owner can replace it with a signed index if it leaks. That index takes with it the revocations only the old key signed, so build it from a commit of `main` that has every revocation the key made while it was trusted: those come back as the index's own. A skill the old key already switched off stays off until its id is lifted, so the owner lifts any that were wrong.
 
 ## How Tux checks
 
@@ -320,15 +322,17 @@ A new registry key ships in a Tuxistant release, and for one release both lines 
 
 **Revocations.** Tux fetches `revocations.json` and its signature and takes revocations from it only if:
 
-1. The signature verifies for `tuxistant-moderation` in namespace `tuxistant-revocations` with one of the accepted index's `moderation_keys`, each written as its own `allowed_signers` line.
+1. The signature verifies for `tuxistant-moderation` in namespace `tuxistant-revocations` with one of the accepted index's `moderation_keys`. Tux checks one key at a time, each written as its own `allowed_signers` file, so it knows which key signed.
 2. It has exactly the four fields above, `format` is 1, and every entry is a valid revocation entry. Anything else refuses the whole file.
-3. `seq` is higher than the one Tux holds for this file, or equal with the same bytes.
+3. `seq` is higher than the one Tux holds for this file, or equal with the same bytes. Tux forgets the number it holds when it accepts an index that no longer names the key that signed it, so a leaked key can't raise the number out of reach of the key that replaces it. The old key's files no longer verify, so nothing older can come back that way.
 
 **When a revocation is in effect.** Tux keeps every valid revocation entry it has accepted, from either file. Two copies of an id that differ in anything are both kept, and every copy is in effect. So a later copy can't narrow an entry, and a copy signed first can't hide a later one: a leaked moderation key that claims the next ids for nothing doesn't cancel the bans the registry later gives those ids. An entry that a newer file leaves out stays. A revocation is in effect until an accepted index lists its id in `lifted`, which ends every copy of it, and a lifted id stays lifted. So the moderation key can only add revocations: it can't lift one, change one, or touch anything else, and only the registry key can undo it.
 
-Tux keeps at most 1000 copies in effect and 10000 lifted ids, which together fit in the 8 MiB state file it reads back. A file that would take it past either is refused and Tux keeps what it had; an index that lifts ids makes room, and its own new entries count after its lifts. If the state file is there but too big or not what Tux wrote, Tux takes no index and no revocations until it is removed or put right, rather than starting again from nothing, which would forget the newest sequence numbers and every revocation seen.
+Tux keeps the copies from indexes apart from the copies only a moderation key signed, and notes which moderation key signed each of those. A moderation copy that an index lists is kept as the index's. When Tux accepts an index that no longer names a moderation key, it drops the copies only that key signed. They were never the registry's, and a skill one of them already switched off stays off until its id is lifted.
 
-**Installing.** A revocation that arrives while the card is open still stops the install. An update ends a switch-off only if Tux holds the revocation and it doesn't cover the new version. After a lost state Tux doesn't hold it, so the update is refused until the id is lifted.
+Tux keeps at most 1000 copies from indexes, the limit the index itself has, 1000 copies only a moderation key signed, and 10000 lifted ids, which together fit in the 16 MiB state file it reads back. Moderation copies never stop an index: a `revocations.json` that would take Tux past its 1000 is refused, and Tux keeps what it had, until an index lifts ids or retires the key. An index that would take Tux past the index copies or the lifted ids is refused; within the format's limits that can only happen if the registry changed or removed a revocation or lift file. Its own new entries count after its lifts. If the state file is there but too big or not what Tux wrote, Tux takes no index and no revocations until it is removed or put right, rather than starting again from nothing, which would forget the newest sequence numbers and every revocation seen.
+
+**Installing.** A revocation that arrives while the card is open still stops the install. Tux records the exact copy that switched a skill off. An update ends the switch-off only if Tux still holds that copy and no copy in effect covers the new version. Another copy of the same id isn't enough, even a narrower one. After a lost state, or once an index retires the key that signed the copy, Tux doesn't hold it, so the update is refused until the id is lifted, and the switch-off isn't swapped for another copy either.
 
 **A recipe.** To install or update a version, Tux takes its entry from the accepted index and installs it only if:
 
