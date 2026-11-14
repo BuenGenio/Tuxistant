@@ -586,10 +586,14 @@ def install_html(skill, current, sample) -> str:
         return ""
     by_hand = ('<li><span class="tag tag-soon">Soon</span> By hand: the recipe, its signature and '
                'the commands that check them.</li>' if sample else by_hand_html(skill, current))
+    card = ("Install will show you a card with the hosts it reaches and its risk first, and Tux "
+            "will check the file's hash and signature itself." if sample else
+            "Install shows you a card with the hosts it reaches and its risk first, and Tux checks "
+            "the file's hash and signature itself.")
     return f"""<section class="section" id="install" aria-labelledby="install-title">
     <h2 id="install-title">Install</h2>
     <ol class="steps">
-      <li><span class="tag tag-soon">Soon</span> In Tuxistant's Settings, open Skills, then Browse, and search for {esc(skill["name"])}. Install shows you a card with the hosts it reaches and its risk first, and Tux checks the file's hash and signature itself.</li>
+      <li><span class="tag tag-soon">Soon</span> In Tuxistant's Settings, open Skills, then Browse, and search for {esc(skill["name"])}. {card}</li>
       {by_hand}
     </ol>
   </section>"""
@@ -637,9 +641,11 @@ def skill_html(skill, sample) -> str:
         actions = '<p class="muted">Not shown, as Tux wouldn\'t load the file.</p>'
     why = (f'{risk_badge(current["risk"])} {esc(risk_why(current["risk"], current["permissions"]))}'
            if loaded else f'<span class="revoked">{esc(REFUSED + current["problem"])}</span>')
-    buttons = (['<a class="btn" href="#install">Install</a>'] if loaded else []) + (
-        [] if sample else [f'<a class="btn" href="{esc(report_url(skill, current))}" '
-                           'rel="nofollow noopener">Report this skill</a>'])
+    # The sample has nothing to install or report, so its pages have neither button.
+    buttons = [] if sample else (
+        (['<a class="btn" href="#install">Install</a>'] if loaded else [])
+        + [f'<a class="btn" href="{esc(report_url(skill, current))}" '
+           'rel="nofollow noopener">Report this skill</a>'])
     links = "".join(f'<a href="{esc(link["url"])}" rel="nofollow noopener ugc">'
                     f'{esc(link["title"])}</a>' for link in skill["links"])
     history = "".join(version_html(skill, skill["versions"], i)
@@ -690,7 +696,10 @@ def build(dist: Path, folder: Path, shell) -> int:
         page.parent.mkdir()
         page.write_text(shell(skill["name"], skill["summary"], 2, skill_html(skill, sample),
                               sample))
-        for version in [] if sample else skill["versions"]:
+        # Only versions Tux would install: not a revoked one, nor one its loader refuses.
+        served = [] if sample else [v for v in skill["versions"]
+                                    if not v["revoked"] and v["loaded"]]
+        for version in served:
             target = out / "recipes" / f"{version['sha256']}.yaml"
             target.parent.mkdir(exist_ok=True)
             target.write_bytes(version["bytes"])

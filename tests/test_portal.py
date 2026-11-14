@@ -162,6 +162,11 @@ class BuiltPortal(BuiltSite):
                 self.assertNotIn(offer, html, page)
         self.assertFalse((self.skills / "recipes").exists())
         self.assertIn("nothing to install or report", self.page(TIDES))
+        for page in self.pages:
+            self.assertNotIn('href="#install"', page.read_text(), page)
+            self.assertNotIn('class="buttons"', page.read_text(), page)
+        self.assertIn("Install will show you a card", self.page(TIDES))
+        self.assertNotIn("Install shows you", self.page(TIDES))
 
     def test_browse_doesnt_say_the_registry_works_today(self):
         lede = re.search(r'<p class="lede">([^<]+)</p>', self.page())[1]
@@ -291,6 +296,20 @@ class OpenRegistry(BuiltSite):
         served = self.skills / "recipes" / f"{version['sha256']}.yaml"
         self.assertEqual(hashlib.sha256(served.read_bytes()).hexdigest(), version["sha256"])
         self.assertEqual(served.with_name(served.name + ".sig").read_text(), version["sig"])
+        self.assertIn('href="#install"', tides)
+        self.assertIn("Install shows you a card", tides)
+
+    def test_only_versions_tux_would_install_are_served(self):
+        served = {p.name for p in (self.skills / "recipes").iterdir()}
+        suspended = self.index["skills"][0]["versions"][0]       # tides 1.0.0
+        self.assertEqual(suspended["version"], "1.0.0")
+        self.assertNotIn(f"{suspended['sha256']}.yaml", served)
+        self.assertNotIn(f"{suspended['sha256']}.yaml.sig", served)
+        weather = next(s for s in self.index["skills"]
+                       if s["id"] == "io.github.example-eve.weather-now")
+        self.assertNotIn(f"{weather['versions'][0]['sha256']}.yaml", served)
+        current = self.index["skills"][0]["versions"][-1]
+        self.assertIn(f"{current['sha256']}.yaml", served)
 
 
 class HostileRegistry(unittest.TestCase):
@@ -415,6 +434,11 @@ class HostileRegistry(unittest.TestCase):
                       "Reaches no network"):
             self.assertNotIn(offer, page)
         self.assertIn("Report this skill", page)
+        refused = registry.skill(bluetooth)["versions"][-1]["sha256"]
+        self.assertFalse((skills / "recipes" / f"{refused}.yaml").exists())
+        self.assertFalse((skills / "recipes" / f"{refused}.yaml.sig").exists())
+        tides = registry.skill(TIDES)["versions"][-1]["sha256"]
+        self.assertTrue((skills / "recipes" / f"{tides}.yaml").exists())
 
     def test_revocations_hide_skills_until_the_index_lifts_them(self):
         registry = Registry(self)
