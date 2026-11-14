@@ -3,6 +3,7 @@ site lives under /Tuxistant/ there, so nothing may start from the root of the do
 import base64
 import contextlib
 import hashlib
+from html import escape as html_escape
 import importlib.util
 import io
 import json
@@ -14,12 +15,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 
+def load_build():
+    spec = importlib.util.spec_from_file_location("site_build", ROOT / "website/build.py")
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    return build
+
+
+def releases_shown(html):
+    """Each row of the releases list: version, the rest of the row, and what it added."""
+    return re.findall(r'<li class="release[^"]*"><span class="rel-version">(.*?)</span>(.*?)'
+                      r'<span class="rel-added">([^<]*)</span></li>', html)
+
+
 class BuiltSite(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        spec = importlib.util.spec_from_file_location("site_build", ROOT / "website/build.py")
-        build = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(build)
+        build = load_build()
         folder = tempfile.TemporaryDirectory()
         cls.addClassCleanup(folder.cleanup)
         build.DIST = Path(folder.name) / "dist"
@@ -156,6 +168,127 @@ class BuiltSite(unittest.TestCase):
                               r"\{ animation-play-state: paused")
         for page in self.pages:
             self.assertIn('tabindex="0"', self.ticker(page)[1][0][0], page)
+
+
+    def test_the_main_download_stays_on_the_newest_stable_release(self):
+        releases = json.loads((ROOT / "website/src/releases.json").read_text())
+        linux = releases["linux"]
+        stable = [entry["version"] for entry in releases["history"] if entry["channel"] == "stable"]
+        self.assertEqual(linux["channel"], "stable")
+        self.assertEqual(linux["version"], stable[0])
+        self.assertIn(f"v{linux['version']}.tar.gz", linux["url"])
+        for page in self.pages:
+            data = json.loads(re.search(r'<script type="application/json" id="strings">(.*?)</script>',
+                                        page.read_text(), re.S)[1])
+            self.assertEqual(data["releases"]["linux"], linux, page)
+
+    def test_the_preview_is_a_secondary_link_that_says_it_is_untried(self):
+        preview = json.loads((ROOT / "website/src/releases.json").read_text())["preview"]
+        for page in self.pages:
+            strings = self.strings(page)
+            line = re.search(r'<p class="dl-preview">(.*?)</p>', page.read_text())[1]
+            self.assertIn(f'<a href="{preview["url"]}">', line, page)
+            self.assertIn(f'<a href="{preview["page"]}">', line, page)
+            self.assertIn(strings["previewUntried"], line, page)
+            self.assertIn(preview["version"], line, page)
+
+    def test_the_releases_list_is_newest_first_and_links_each_release(self):
+        history = json.loads((ROOT / "website/src/releases.json").read_text())["history"]
+        for page in self.pages:
+            code = "en" if page.parent == self.dist else page.parent.name
+            strings = self.strings(page)
+            rows = releases_shown(page.read_text())
+            self.assertEqual(len(rows), len(history), page)
+            for entry, (version, rest, added) in zip(history, rows):
+                self.assertEqual(version, f'<a href="{entry["page"]}">{entry["version"]}</a>', page)
+                self.assertIn(f'<time dir="ltr" datetime="{entry["date"]}">', rest, page)
+                self.assertIn(f'>{strings[entry["channel"]]}</span>', rest, page)
+                self.assertNotIn("chan-planned", rest, "the real site lists only what is out")
+                self.assertEqual(added, html_escape(entry["added"][code]), page)
+
+    def test_every_language_tags_the_preview_claims_as_english_does(self):
+        english = [status for status, _ in self.strings(self.pages[0])["previewCaps"]]
+        self.assertTrue(english)
+        for page in self.pages:
+            caps = self.strings(page)["previewCaps"]
+            self.assertEqual([status for status, _ in caps], english, page)
+            shown = re.search(r'<ul class="caps caps-row">(.*?)</ul>', page.read_text(), re.S)[1]
+            self.assertEqual(len(re.findall(r'<li class="cap">', shown)), len(caps), page)
+
+    def test_the_real_site_holds_no_local_preview(self):
+        self.assertFalse((self.dist / "LOCAL-PREVIEW").exists())
+        upcoming = json.loads((ROOT / "website/preview/upcoming.json").read_text())
+        for page in self.pages:
+            html = page.read_text()
+            self.assertNotIn("local-preview", html, page)
+            self.assertNotIn(upcoming["banner"]["en"], html, page)
+            for entry in upcoming["releases"]:
+                self.assertNotIn(f">{entry['version']}<", html, page)
+
+
+class LocalPreview(unittest.TestCase):
+    """The preview of planned releases: built beside the real site, and never deployed."""
+
+    @classmethod
+    def setUpClass(cls):
+        build = load_build()
+        folder = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(folder.cleanup)
+        build.DIST = Path(folder.name) / "dist"
+        build.DIST_PREVIEW = Path(folder.name) / "dist-preview"
+        with contextlib.redirect_stdout(io.StringIO()):
+            build.main(["--preview", str(ROOT / "website/preview/upcoming.json")])
+        cls.build = build
+        cls.pages = sorted(build.DIST_PREVIEW.glob("**/index.html"))
+        cls.upcoming = json.loads((ROOT / "website/preview/upcoming.json").read_text())
+
+    def test_it_is_written_beside_the_real_site_not_into_it(self):
+        self.assertFalse(self.build.DIST.exists())
+        self.assertTrue((self.build.DIST_PREVIEW / "LOCAL-PREVIEW").exists())
+        self.assertEqual(len(self.pages), 5)
+
+    def test_every_page_says_it_is_a_local_preview(self):
+        for page in self.pages:
+            code = "en" if page.parent == self.build.DIST_PREVIEW else page.parent.name
+            self.assertIn(f'<p class="local-preview" role="note">{html_escape(self.upcoming["banner"][code])}</p>',
+                          page.read_text(), page)
+
+    def test_planned_releases_are_marked_planned_with_their_dates(self):
+        planned = self.upcoming["releases"]
+        for page in self.pages:
+            rows = releases_shown(page.read_text())
+            for entry, (version, rest, _) in zip(planned, rows):
+                self.assertEqual(version, entry["version"], "nothing to link to yet")
+                self.assertIn('class="chan chan-planned"', rest, page)
+                self.assertIn(f'<time dir="ltr" datetime="{entry["date"]}">{entry["date"]}</time>', rest, page)
+            self.assertEqual(len(rows), len(planned) + len(json.loads(
+                (ROOT / "website/src/releases.json").read_text())["history"]), page)
+
+    def test_every_claim_is_still_soon(self):
+        for page in self.pages:
+            shown = re.search(r'<ul class="caps caps-row">(.*?)</ul>', page.read_text(), re.S)[1]
+            self.assertNotIn("tag-now", shown, page)
+            code = "en" if page.parent == self.build.DIST_PREVIEW else page.parent.name
+            for _, claim in self.upcoming["claims"][code]:
+                self.assertIn(html_escape(claim), shown, page)
+
+    def test_its_inline_scripts_are_allowed_by_its_csp(self):
+        for page in self.pages:
+            text = page.read_text()
+            policy = re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', text)[1]
+            for script in re.findall(r"<script>(.*?)</script>", text, re.S):
+                digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
+                self.assertIn(f"'sha256-{digest}'", policy, page)
+            self.assertNotRegex(text, r"""(href|src)=["']/(?!/)""", page)
+
+    def test_deploy_builds_the_real_site_and_refuses_a_preview(self):
+        deploy = (ROOT / "website/deploy.sh").read_text()
+        self.assertNotIn("--preview", deploy)
+        self.assertNotIn("dist-preview", deploy)
+        self.assertRegex(deploy, r"python3 build\.py\n")
+        self.assertRegex(deploy, r"if \[ -e dist/LOCAL-PREVIEW \]; then .*exit 1")
+        self.assertLess(deploy.index("LOCAL-PREVIEW"), deploy.index("git push"))
+        self.assertIn("dist-preview/", (ROOT / "website/.gitignore").read_text().split())
 
 
 if __name__ == "__main__":

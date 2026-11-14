@@ -205,6 +205,8 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .btn-main[aria-disabled="true"] { background: var(--panel); color: var(--muted); border: 1px solid var(--line); cursor: default; }
 .dl-meta { margin: 6px 0 0; color: var(--muted); font-size: 0.88rem; }
 .dl-meta a { color: var(--text); }
+.dl-preview { margin: 2px 0 0; color: var(--muted); font-size: 0.84rem; }
+.dl-preview a { color: var(--text); }
 
 /* Works with: a slim strip. Two copies of one list sit side by side and each slides by its own
    width plus the gap, so the second lands exactly where the first began. No script. */
@@ -274,6 +276,35 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .versions th, .versions td { padding: 8px 10px; border-block-end: 1px solid var(--line); text-align: start; }
 .versions th { color: var(--muted); font-size: 0.82rem; font-weight: 600; }
 
+/* New in the preview: the hero's pills, wrapped in rows. */
+.lead { margin: 4px 0 10px; color: var(--muted); font-size: 0.94rem; }
+.caps-row { flex-direction: row; flex-wrap: wrap; gap: 7px; }
+
+/* Releases, newest first: one line each on a wide screen, two on a phone. */
+.sub { margin: 16px 0 4px; font-size: 1.05rem; font-weight: 700; }
+/* Each row is a subgrid of the list, so the columns line up and are only as wide as their contents. */
+.releases { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); margin: 0; padding: 0; list-style: none; font-size: 0.94rem; }
+.release {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 7px 10px;
+  border-block-end: 1px solid var(--line);
+}
+.rel-version { font-weight: 700; }
+.rel-when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.rel-added { color: var(--muted); }
+.chan { justify-self: start; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 0.74rem; font-weight: 700; white-space: nowrap; }
+.chan-stable { color: var(--now); }
+.chan-preview { color: var(--soon); }
+.chan-planned { color: var(--accent); border-style: dashed; border-color: var(--accent); }
+.is-planned .rel-version { color: var(--muted); }
+
+/* Only in a local preview build. */
+.local-preview { margin: 8px 0 0; padding: 5px 12px; border: 1px dashed var(--accent); border-radius: 10px; color: var(--accent); font-size: 0.84rem; text-align: center; }
+
 .support {
   display: flex;
   align-items: center;
@@ -305,6 +336,10 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   .cap { padding: 4px 9px; font-size: 0.8rem; border-radius: 11px; }
   .examples { grid-template-columns: minmax(0, 1fr); }
   .versions .needs { display: none; }
+  .releases { grid-template-columns: auto auto minmax(0, 1fr); }
+  .caps-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .caps-row .cap span { overflow-wrap: anywhere; }     /* a long word, such as Configurações, at 320 px */
+  .rel-added { grid-column: 1 / -1; }
   .support { flex-direction: column; align-items: stretch; }
 }
 

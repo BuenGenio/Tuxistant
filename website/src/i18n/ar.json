@@ -7,7 +7,7 @@
   "appearance": "المظهر", "modes": { "auto": "تلقائي", "light": "فاتح", "dark": "داكن" },
   "caps": [
     ["now", "إجابات صوتية خلال ثانية تقريبًا"], ["now", "اضغط مفتاحًا مطوّلًا وتحدث"], ["now", "27 صوتًا للاختيار"], ["now", "غيّر المظهر بالسمات"], ["now", "يعمل على شبكتك الخاصة"],
-    ["soon", "يعثر على ملفاتك"], ["soon", "يرسل الملفات إلى هاتفك"], ["now", "يترجم أثناء حديثك"], ["soon", "ينفّذ الأوامر بموافقتك"], ["soon", "مهارات من المجتمع"]
+    ["soon", "يعثر على ملفاتك"], ["soon", "يرسل الملفات إلى هاتفك"], ["now", "يترجم أثناء حديثك"], ["soon", "ينفّذ الأوامر بموافقتك"], ["soon", "شارك المهارات عبر سجل مُراجَع"]
   ],
   "themes": { "tux": "تكس المُصغي", "orb": "الكرة", "waves": "الأمواج", "scanner": "الماسح" },
   "showTheme": "عرض السمة",
@@ -36,8 +36,15 @@
   },
   "versionsTitle": "الإصدارات", "colSystem": "النظام", "colVersion": "الإصدار", "colStatus": "الحالة", "colNeeds": "المتطلبات",
   "preview": "تجريبي", "stable": "مستقر", "planned": "مخطط له", "linuxNeeds": "GNOME 50 وخادم LocalAI خاص بك", "tbd": "يُعلن لاحقًا",
+  "previewTry": "جرّب النسخة التجريبية {version}", "previewUntried": "لم تُجرَّب بعد على سطح مكتب حقيقي", "releaseNotes": "ملاحظات الإصدار",
+  "previewTitle": "الجديد في النسخة التجريبية", "previewLead": "جاهزة، لكنها لم تُجرَّب بعد على سطح مكتب حقيقي. تصبح كل منها «متاح» بعد أن تعمل على واحد.",
+  "previewCaps": [
+    ["soon", "يشغّل الموسيقى ويوقفها ويتخطاها"], ["soon", "مؤقتات وتذكيرات"], ["soon", "يتحكم في Home Assistant لديك"], ["soon", "يبحث ويتقصّى في الويب"],
+    ["soon", "يجيب عن المعلومات من ويكيبيديا"], ["soon", "يجيب من بريدك"], ["soon", "مهاراتك الخاصة في بيئة معزولة"], ["soon", "يفتح التطبيقات وصفحات الإعدادات"]
+  ],
+  "releasesTitle": "سجل الإصدارات",
   "donateTitle": "ساعد في بناء الإصدار القادم", "donateText": "دعمك يموّل إصداري macOS وWindows.",
   "credit": "رسم Larry Ewing شخصية Tux باستخدام The GIMP. شعار Home Assistant من Home Assistant، معروض هنا بلون واحد، بموجب ترخيص CC BY-NC-SA 4.0.",
   "worksWith": "يعمل مع",
-  "trademarks": "Linux، GNOME، BBC، The Kyiv Independent، Google Calendar، Tapo، Open-Meteo، LibreTranslate، Home Assistant، Spotify، CNN، Windows وmacOS علامات تجارية لمالكيها، وتُذكر هنا فقط لبيان ما يعمل معه Tuxistant أو سيعمل معه. لا يرعاه أي منهم ولا يزكّيه."
+  "trademarks": "Linux، GNOME، BBC، The Kyiv Independent، Google Calendar، Tapo، Open-Meteo، LibreTranslate، Wikipedia، Home Assistant، Spotify، CNN، Windows وmacOS علامات تجارية لمالكيها، وتُذكر هنا فقط لبيان ما يعمل معه Tuxistant أو سيعمل معه. لا يرعاه أي منهم ولا يزكّيه."
 }

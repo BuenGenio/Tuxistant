@@ -7,7 +7,7 @@
   "appearance": "Appearance", "modes": { "auto": "Auto", "light": "Light", "dark": "Dark" },
   "caps": [
     ["now", "Spoken answers in about a second"], ["now", "Hold a key and talk"], ["now", "27 voices to choose from"], ["now", "Swap the look with themes"], ["now", "Runs on your own network"],
-    ["soon", "Finds your files"], ["soon", "Sends files to your phone"], ["now", "Translates as you speak"], ["soon", "Runs commands, with your OK"], ["soon", "Skills from the community"]
+    ["soon", "Finds your files"], ["soon", "Sends files to your phone"], ["now", "Translates as you speak"], ["soon", "Runs commands, with your OK"], ["soon", "Share skills in a reviewed registry"]
   ],
   "themes": { "tux": "Listening Tux", "orb": "Orb", "waves": "Waves", "scanner": "Scanner" },
   "showTheme": "Show theme",
@@ -36,8 +36,15 @@
   },
   "versionsTitle": "Versions", "colSystem": "System", "colVersion": "Version", "colStatus": "Status", "colNeeds": "Needs",
   "preview": "Preview", "stable": "Stable", "planned": "Planned", "linuxNeeds": "GNOME 50 and your own LocalAI server", "tbd": "To be announced",
+  "previewTry": "Try the {version} preview", "previewUntried": "not yet tried on a real desktop", "releaseNotes": "Release notes",
+  "previewTitle": "New in the preview", "previewLead": "Built, but not yet tried on a real desktop. Each becomes Now once it has.",
+  "previewCaps": [
+    ["soon", "Plays, pauses and skips music"], ["soon", "Timers and reminders"], ["soon", "Controls your Home Assistant"], ["soon", "Searches and researches the web"],
+    ["soon", "Answers facts from Wikipedia"], ["soon", "Answers from your mail"], ["soon", "Your own skills, in a sandbox"], ["soon", "Opens apps and Settings pages"]
+  ],
+  "releasesTitle": "Releases",
   "donateTitle": "Help build the next version", "donateText": "Your support pays for macOS and Windows versions.",
   "credit": "Tux was drawn by Larry Ewing with The GIMP. The Home Assistant logo is by Home Assistant, shown here in one colour, under CC BY-NC-SA 4.0.",
   "worksWith": "Works with",
-  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Home Assistant, Spotify, CNN, Windows and macOS are trademarks of their owners, named only to say what Tuxistant works with or will. None of them sponsors or endorses it."
+  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Home Assistant, Spotify, CNN, Windows and macOS are trademarks of their owners, named only to say what Tuxistant works with or will. None of them sponsors or endorses it."
 }

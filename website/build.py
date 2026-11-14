@@ -5,7 +5,11 @@ Adding a language means adding src/i18n/<code>.json with the same keys as en.jso
 SITE_URL adds canonical and hreflang URLs; deploy.sh sets it. Links are relative, so the same pages
 work at a domain's root and under /Tuxistant/ on GitHub Pages. Pages can't set response headers,
 so the security policy is a meta tag in each page.
+
+--preview UPCOMING.json builds a local preview of planned releases into dist-preview/ instead, with a
+banner on every page. It is only for looking at: git ignores dist-preview/ and deploy.sh refuses it.
 """
+import argparse
 import base64
 import hashlib
 import html
@@ -13,11 +17,13 @@ import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "src"
 DIST = HERE / "dist"
+DIST_PREVIEW = HERE / "dist-preview"     # --preview: local only, git ignores it, deploy.sh refuses it
 THEMES = HERE.parent / "themes"
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
 DONATE = "https://buymeacoffee.com/buengenio"
@@ -174,6 +180,121 @@ def versions_html(strings, releases):
     return "".join(rows)
 
 
+def release_in(releases, version):
+    return next(entry for entry in releases["history"] if entry["version"] == version)
+
+
+def preview_html(strings, releases):
+    """The secondary link under the main download: the newest preview, and that it is one. A planned
+    preview (only in a local preview build) has nothing to link to yet, so it shows its date."""
+    preview = releases["preview"]
+    if not preview:     # null once a stable release is newer than any preview
+        return ""
+    text = esc(fill(strings["previewTry"], version=preview["version"]))
+    if preview["url"]:
+        line = (f'<a href="{esc(preview["url"])}">{text}</a>, {esc(strings["previewUntried"])} · '
+                f'<a href="{esc(preview["page"])}">{esc(strings["releaseNotes"])}</a>')
+    else:
+        line = f'{text} · {planned_html(strings, release_in(releases, preview["version"]))}'
+    return f'<p class="dl-preview">{line}</p>'
+
+
+def planned_html(strings, entry):
+    return (f'<span class="chan chan-planned">{esc(strings["planned"])}</span> '
+            f'<time dir="ltr" datetime="{entry["date"]}">{entry["date"]}</time>')
+
+
+def releases_html(code, strings, releases):
+    """Newest first: version, date, stable or preview, and one line of what it added."""
+    rows = []
+    for entry in releases["history"]:
+        version, date = esc(entry["version"]), entry["date"]
+        if entry.get("planned"):
+            version_html, when = version, planned_html(strings, entry)
+        else:
+            version_html = f'<a href="{esc(entry["page"])}">{version}</a>'
+            when = f'<time dir="ltr" datetime="{date}">{date}</time>'
+        rows.append(f'<li class="release{" is-planned" if entry.get("planned") else ""}">'
+                    f'<span class="rel-version">{version_html}</span><span class="rel-when">{when}</span>'
+                    f'<span class="chan chan-{entry["channel"]}">{esc(strings[entry["channel"]])}</span>'
+                    f'<span class="rel-added">{esc(entry["added"][code])}</span></li>')
+    return "".join(rows)
+
+
+def preview_caps_html(strings):
+    return "".join(f'<li class="cap">{tag(strings, status)}<span>{esc(text)}</span></li>'
+                   for status, text in strings["previewCaps"])
+
+
+def local_preview_html(strings):
+    """The banner on every page of a local preview build. The real site has none."""
+    if "localPreview" not in strings:
+        return ""
+    return f'<div class="wrap"><p class="local-preview" role="note">{esc(strings["localPreview"])}</p></div>'
+
+
+def fill(text, **values):
+    return re.sub(r"\{(\w+)\}", lambda match: values[match[1]], text)
+
+
+def version_key(version):
+    return tuple(int(part) for part in version.split("."))
+
+
+def check_releases(releases, languages):
+    """releases.json drives the download, the preview link and the list, so a slip there stops
+    the build instead of showing a wrong or dead link."""
+    history = releases["history"]
+    versions = [entry["version"] for entry in history]
+    if versions != sorted(versions, key=version_key, reverse=True) or len(set(versions)) != len(versions):
+        raise SystemExit("releases.json: history must list each version once, newest first")
+    for entry in history:
+        where = f"releases.json: {entry['version']}"
+        if not re.fullmatch(r"\d{4}-\d\d-\d\d", entry["date"]):
+            raise SystemExit(f"{where} needs a date as YYYY-MM-DD")
+        if entry["channel"] not in ("stable", "preview"):
+            raise SystemExit(f"{where} must be stable or preview")
+        if bool(entry.get("planned")) == bool(entry.get("page")):
+            raise SystemExit(f"{where} links its release page, or is planned and links nothing")
+        missing = set(languages) - set(entry["added"])
+        if missing:
+            raise SystemExit(f"{where} says what it added in every language, not {sorted(missing)}")
+    linux, preview = releases["linux"]["version"], releases["preview"]
+    if linux not in versions or release_in(releases, linux).get("planned"):
+        raise SystemExit("releases.json: the main download must be a released version in history")
+    if not preview:
+        return
+    if preview["version"] not in versions:
+        raise SystemExit("releases.json: the preview must be in history")
+    if version_key(preview["version"]) <= version_key(linux):
+        raise SystemExit("releases.json: the preview must be newer than the main download, or null")
+    if bool(preview["url"]) != bool(preview["page"]) or (
+            bool(preview["url"]) == bool(release_in(releases, preview["version"]).get("planned"))):
+        raise SystemExit("releases.json: a released preview has a download and a page, a planned one neither")
+
+
+def apply_upcoming(path, languages, releases):
+    """A local preview of the site once the planned releases ship: their entries go on top of the
+    history, the preview link names the newest, its claims join the preview's, and every page gets
+    a banner. Claims stay Soon, since nothing planned has worked on a real machine."""
+    upcoming = json.loads(Path(path).read_text())
+    for entry in upcoming["releases"]:
+        if not entry.get("planned"):
+            raise SystemExit(f"{path}: {entry['version']} isn't out, so it is planned")
+    releases["history"] = upcoming["releases"] + releases["history"]
+    releases["preview"] = upcoming.get("preview", releases["preview"])
+    for code, strings in languages.items():
+        missing = [key for key in ("banner", "claims") if code not in upcoming[key]]
+        if missing:
+            raise SystemExit(f"{path} has no {' or '.join(missing)} in {code}")
+        claims = upcoming["claims"][code]
+        if any(status != "soon" for status, _ in claims):
+            raise SystemExit(f"{path}: every claim in {code} is soon until it has worked on a real machine")
+        strings["previewCaps"] = strings["previewCaps"] + claims
+        strings.update(upcoming.get("strings", {}).get(code, {}))
+        strings["localPreview"] = upcoming["banner"][code]
+
+
 def page(code, strings, languages, releases, detect, policy):
     caps_a, caps_b = caps_html(strings)
     tabs, panels = panels_html(strings)
@@ -189,7 +310,7 @@ def page(code, strings, languages, releases, detect, policy):
                        f'<link rel="canonical" href="{SITE_URL}{path_for(code)}">')
     data = {k: strings[k] for k in ("dlFor", "dlSoon", "dlPending", "dlMeta", "dlPlanned",
                                     "preview", "stable", "planned", "themes", "showTheme")}
-    data["releases"] = releases
+    data["releases"] = {os_id: releases[os_id] for os_id, _ in OS_ORDER}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"
     head_script = f"<script>{MODE_SCRIPT}</script>"
@@ -222,7 +343,7 @@ def page(code, strings, languages, releases, detect, policy):
     <a class="btn btn-coffee" href="{DONATE}" rel="noopener">{esc(strings['donate'])}</a>
   </div>
 </header>
-<main>
+<main>{local_preview_html(strings)}
   <section class="hero wrap">
     <h1>Tuxistant</h1>
     <p class="tagline">{esc(strings['tagline'])}</p>
@@ -236,6 +357,7 @@ def page(code, strings, languages, releases, detect, policy):
     <div class="download">
       <a class="btn btn-main" id="download" aria-disabled="true"></a>
       <p class="dl-meta"><span id="dl-meta-text"></span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
+      {preview_html(strings, releases)}
     </div>
   </section>
   <div class="wrap"><div class="ticker">{ticker_html(strings)}</div></div>
@@ -244,12 +366,19 @@ def page(code, strings, languages, releases, detect, policy):
     <div class="tabs" role="tablist" aria-labelledby="examples-title">{tabs}</div>
     {panels}
   </section>
+  <section class="section wrap" id="preview" aria-labelledby="preview-title">
+    <h2 id="preview-title">{esc(strings['previewTitle'])}</h2>
+    <p class="lead">{esc(strings['previewLead'])}</p>
+    <ul class="caps caps-row">{preview_caps_html(strings)}</ul>
+  </section>
   <section class="section wrap" id="versions" aria-labelledby="versions-title">
     <h2 id="versions-title">{esc(strings['versionsTitle'])}</h2>
     <table class="versions">
       <thead><tr><th scope="col">{esc(strings['colSystem'])}</th><th scope="col">{esc(strings['colVersion'])}</th><th scope="col">{esc(strings['colStatus'])}</th><th scope="col" class="needs">{esc(strings['colNeeds'])}</th></tr></thead>
       <tbody>{versions_html(strings, releases)}</tbody>
     </table>
+    <h3 class="sub" id="releases-title">{esc(strings['releasesTitle'])}</h3>
+    <ol class="releases" aria-labelledby="releases-title">{releases_html(code, strings, releases)}</ol>
   </section>
   <section class="wrap">
     <div class="support">
@@ -282,27 +411,44 @@ def csp_hash(script):
     return "'sha256-" + base64.b64encode(hashlib.sha256(script.encode()).digest()).decode() + "'"
 
 
-def main():
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description="Builds the site into dist/.")
+    parser.add_argument("--preview", metavar="UPCOMING.json",
+                        help="build a local preview of planned releases into dist-preview/ instead")
+    return parser.parse_args(argv)
+
+
+def main(argv=()):
+    options = parse_args(argv)
     languages = load_languages()
     releases = json.loads((SRC / "releases.json").read_text())
+    dist = DIST
+    if options.preview:
+        apply_upcoming(options.preview, languages, releases)
+        dist = DIST_PREVIEW
+    check_releases(releases, languages)
     detect = detect_script(list(languages))
     policy = (f"default-src 'none'; script-src 'self' {csp_hash(MODE_SCRIPT)} {csp_hash(detect)}; "
               "style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'")
 
-    shutil.rmtree(DIST, ignore_errors=True)
-    DIST.mkdir()
+    shutil.rmtree(dist, ignore_errors=True)
+    dist.mkdir()
     for code, strings in languages.items():
-        target = DIST / path_for(code).strip("/") / "index.html"
+        target = dist / path_for(code).strip("/") / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(page(code, strings, languages, releases, detect, policy))
-    shutil.copy(SRC / "style.css", DIST)
-    shutil.copy(SRC / "app.js", DIST)
-    shutil.copy(SRC / "favicon.svg", DIST)
-    (DIST / "themes.js").write_text(themes_js())
-    (DIST / ".nojekyll").touch()    # served as they are, with no Jekyll build first
-    (DIST / "robots.txt").write_text("User-agent: *\nAllow: /\n")
-    print(f"built {len(languages)} languages into {DIST}")
+    shutil.copy(SRC / "style.css", dist)
+    shutil.copy(SRC / "app.js", dist)
+    shutil.copy(SRC / "favicon.svg", dist)
+    (dist / "themes.js").write_text(themes_js())
+    (dist / ".nojekyll").touch()    # served as they are, with no Jekyll build first
+    (dist / "robots.txt").write_text("User-agent: *\nAllow: /\n")
+    if options.preview:     # deploy.sh refuses a folder holding this file
+        (dist / "LOCAL-PREVIEW").write_text("A local preview of planned releases. Never deploy it.\n")
+        (dist / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
+    print(f"built {len(languages)} languages into {dist}"
+          + (" (a local preview, never to be deployed)" if options.preview else ""))
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

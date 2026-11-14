@@ -7,7 +7,7 @@
   "appearance": "Aparência", "modes": { "auto": "Automático", "light": "Claro", "dark": "Escuro" },
   "caps": [
     ["now", "Respostas faladas em um segundo"], ["now", "Segure uma tecla e fale"], ["now", "27 vozes para escolher"], ["now", "Mude o visual com temas"], ["now", "Funciona na sua própria rede"],
-    ["soon", "Encontra seus arquivos"], ["soon", "Envia arquivos para o celular"], ["now", "Traduz enquanto você fala"], ["soon", "Executa comandos com sua permissão"], ["soon", "Habilidades da comunidade"]
+    ["soon", "Encontra seus arquivos"], ["soon", "Envia arquivos para o celular"], ["now", "Traduz enquanto você fala"], ["soon", "Executa comandos com sua permissão"], ["soon", "Compartilhe habilidades num registro revisado"]
   ],
   "themes": { "tux": "Tux ouvindo", "orb": "Orbe", "waves": "Ondas", "scanner": "Scanner" },
   "showTheme": "Mostrar tema",
@@ -36,8 +36,15 @@
   },
   "versionsTitle": "Versões", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
   "preview": "Prévia", "stable": "Estável", "planned": "Planejada", "linuxNeeds": "GNOME 50 e seu próprio servidor LocalAI", "tbd": "A anunciar",
+  "previewTry": "Experimente a prévia {version}", "previewUntried": "ainda não testada num computador real", "releaseNotes": "Notas da versão",
+  "previewTitle": "Novidades da prévia", "previewLead": "Já estão prontas, mas ainda não foram testadas num computador real. Cada uma passa para Já quando funcionar em um.",
+  "previewCaps": [
+    ["soon", "Toca, pausa e pula músicas"], ["soon", "Timers e lembretes"], ["soon", "Controla seu Home Assistant"], ["soon", "Pesquisa e investiga na web"],
+    ["soon", "Responde fatos com a Wikipédia"], ["soon", "Responde com seus e-mails"], ["soon", "Suas próprias habilidades, isoladas"], ["soon", "Abre apps e páginas de Configurações"]
+  ],
+  "releasesTitle": "Histórico de versões",
   "donateTitle": "Ajude a criar a próxima versão", "donateText": "Seu apoio financia as versões para macOS e Windows.",
   "credit": "O Tux foi desenhado por Larry Ewing com o The GIMP. O logotipo do Home Assistant é do Home Assistant, aqui em uma só cor, sob a licença CC BY-NC-SA 4.0.",
   "worksWith": "Funciona com",
-  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Home Assistant, Spotify, CNN, Windows e macOS são marcas dos seus respectivos donos, citadas apenas para dizer com o que o Tuxistant funciona ou vai funcionar. Nenhum deles o patrocina ou endossa."
+  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Home Assistant, Spotify, CNN, Windows e macOS são marcas dos seus respectivos donos, citadas apenas para dizer com o que o Tuxistant funciona ou vai funcionar. Nenhum deles o patrocina ou endossa."
 }

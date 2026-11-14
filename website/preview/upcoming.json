@@ -1,0 +1,212 @@
+{
+  "about": "A local preview of the site once the current rounds ship: python3 website/build.py --preview website/preview/upcoming.json writes website/dist-preview/. Never deployed. Planned entries carry their planned date, and every claim stays Soon.",
+  "preview": {
+    "version": "0.5.0",
+    "url": null,
+    "page": null
+  },
+  "releases": [
+    {
+      "version": "0.6.0",
+      "date": "2026-11-19",
+      "channel": "preview",
+      "planned": true,
+      "added": {
+        "en": "Skills shared through a reviewed community registry, and mail through GNOME Online Accounts",
+        "es": "Habilidades compartidas en un registro comunitario revisado, y correo a través de las Cuentas en línea de GNOME",
+        "pt": "Habilidades compartilhadas num registro comunitário revisado, e e-mail pelas Contas on-line do GNOME",
+        "zh": "通过经审核的社区目录共享技能，并通过 GNOME 在线帐户使用邮件",
+        "ar": "مشاركة المهارات عبر سجل مجتمعي مُراجَع، والبريد عبر حسابات GNOME على الإنترنت"
+      }
+    },
+    {
+      "version": "0.5.0",
+      "date": "2026-11-15",
+      "channel": "preview",
+      "planned": true,
+      "added": {
+        "en": "Recipe skills in one YAML file, a Settings page for each skill, hands-free dictation, answering Tux by holding Fn, and Cloud only once you agree",
+        "es": "Habilidades receta en un solo archivo YAML, una página de Configuración por habilidad, dictado sin manos, responder a Tux manteniendo Fn y la nube solo si aceptas",
+        "pt": "Habilidades receita num único arquivo YAML, uma página de Configurações por habilidade, ditado sem as mãos, responder ao Tux segurando Fn e a nuvem só se você aceitar",
+        "zh": "单个 YAML 文件写成的配方技能、每个技能各有设置页面、免手持听写、按住 Fn 回答 Tux，以及须经你同意才启用的云端",
+        "ar": "مهارات الوصفات في ملف YAML واحد، وصفحة إعدادات لكل مهارة، وإملاء دون استخدام اليدين، والرد على Tux بالضغط المطوّل على Fn، والسحابة فقط بعد موافقتك"
+      }
+    }
+  ],
+  "claims": {
+    "en": [
+      [
+        "soon",
+        "Recipe skills: one YAML file, no code"
+      ],
+      [
+        "soon",
+        "Night light and Do Not Disturb by voice"
+      ],
+      [
+        "soon",
+        "Each skill on its own page in Settings"
+      ],
+      [
+        "soon",
+        "Tailscale address only when switched on"
+      ],
+      [
+        "soon",
+        "Hands-free dictation: double-tap Fn"
+      ],
+      [
+        "soon",
+        "Answer Tux's questions by holding Fn again"
+      ],
+      [
+        "soon",
+        "Cloud only after you agree"
+      ]
+    ],
+    "es": [
+      [
+        "soon",
+        "Habilidades receta: un archivo YAML, sin código"
+      ],
+      [
+        "soon",
+        "Luz nocturna y No molestar por voz"
+      ],
+      [
+        "soon",
+        "Cada habilidad con su página en Configuración"
+      ],
+      [
+        "soon",
+        "Dirección de Tailscale solo si la activas"
+      ],
+      [
+        "soon",
+        "Dictado sin manos: toca Fn dos veces"
+      ],
+      [
+        "soon",
+        "Responde a Tux manteniendo Fn otra vez"
+      ],
+      [
+        "soon",
+        "La nube solo si aceptas"
+      ]
+    ],
+    "pt": [
+      [
+        "soon",
+        "Habilidades receita: um arquivo YAML, sem código"
+      ],
+      [
+        "soon",
+        "Luz noturna e Não Perturbe por voz"
+      ],
+      [
+        "soon",
+        "Cada habilidade com sua página nas Configurações"
+      ],
+      [
+        "soon",
+        "Endereço do Tailscale só se você ativar"
+      ],
+      [
+        "soon",
+        "Ditado sem as mãos: toque duas vezes em Fn"
+      ],
+      [
+        "soon",
+        "Responda ao Tux segurando Fn de novo"
+      ],
+      [
+        "soon",
+        "Nuvem só se você aceitar"
+      ]
+    ],
+    "zh": [
+      [
+        "soon",
+        "配方技能：一个 YAML 文件，无需代码"
+      ],
+      [
+        "soon",
+        "语音开关夜灯和勿扰模式"
+      ],
+      [
+        "soon",
+        "每个技能在设置中都有自己的页面"
+      ],
+      [
+        "soon",
+        "仅在你开启时使用 Tailscale 地址"
+      ],
+      [
+        "soon",
+        "免手持听写：双击 Fn"
+      ],
+      [
+        "soon",
+        "再次按住 Fn 回答 Tux 的问题"
+      ],
+      [
+        "soon",
+        "须经你同意才使用云端"
+      ]
+    ],
+    "ar": [
+      [
+        "soon",
+        "مهارات الوصفات: ملف YAML واحد بلا برمجة"
+      ],
+      [
+        "soon",
+        "الإضاءة الليلية وعدم الإزعاج بالصوت"
+      ],
+      [
+        "soon",
+        "لكل مهارة صفحتها في الإعدادات"
+      ],
+      [
+        "soon",
+        "عنوان Tailscale فقط عند تفعيله"
+      ],
+      [
+        "soon",
+        "إملاء دون يدين: انقر Fn مرتين"
+      ],
+      [
+        "soon",
+        "أجب عن أسئلة Tux بالضغط على Fn مجددًا"
+      ],
+      [
+        "soon",
+        "السحابة فقط بعد موافقتك"
+      ]
+    ]
+  },
+  "strings": {
+    "en": {
+      "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Tailscale, Home Assistant, Spotify, CNN, Windows and macOS are trademarks of their owners, named only to say what Tuxistant works with or will. None of them sponsors or endorses it."
+    },
+    "es": {
+      "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Tailscale, Home Assistant, Spotify, CNN, Windows y macOS son marcas de sus respectivos dueños y se nombran solo para decir con qué funciona o funcionará Tuxistant. Ninguno lo patrocina ni lo avala."
+    },
+    "pt": {
+      "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Tailscale, Home Assistant, Spotify, CNN, Windows e macOS são marcas dos seus respectivos donos, citadas apenas para dizer com o que o Tuxistant funciona ou vai funcionar. Nenhum deles o patrocina ou endossa."
+    },
+    "zh": {
+      "trademarks": "Linux、GNOME、BBC、The Kyiv Independent、Google Calendar、Tapo、Open-Meteo、LibreTranslate、Wikipedia、Tailscale、Home Assistant、Spotify、CNN、Windows 和 macOS 均为其各自所有者的商标，在此提及仅为说明 Tuxistant 现已支持或即将支持的对象。它们均未赞助或认可 Tuxistant。"
+    },
+    "ar": {
+      "trademarks": "Linux، GNOME، BBC، The Kyiv Independent، Google Calendar، Tapo، Open-Meteo، LibreTranslate، Wikipedia، Tailscale، Home Assistant، Spotify، CNN، Windows وmacOS علامات تجارية لمالكيها، وتُذكر هنا فقط لبيان ما يعمل معه Tuxistant أو سيعمل معه. لا يرعاه أي منهم ولا يزكّيه."
+    }
+  },
+  "banner": {
+    "en": "Local preview of the site once 0.5.0 and 0.6.0 ship. Not deployed, and the dates are plans.",
+    "es": "Vista previa local del sitio cuando salgan 0.5.0 y 0.6.0. No está publicada y las fechas son previstas.",
+    "pt": "Prévia local do site quando saírem a 0.5.0 e a 0.6.0. Não está publicada e as datas são planejadas.",
+    "zh": "本地预览：0.5.0 和 0.6.0 发布后的网站样子。未上线，日期均为计划。",
+    "ar": "معاينة محلية للموقع بعد صدور 0.5.0 و0.6.0. غير منشورة، والتواريخ مخطط لها."
+  }
+}
