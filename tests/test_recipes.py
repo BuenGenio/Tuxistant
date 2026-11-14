@@ -826,6 +826,26 @@ class Cards(Case):
         """Nothing looks it up meanwhile: the click does."""
         await self.home_assistant_answers_during_the_card(lambda: None)
 
+    async def test_servers_settings_can_save_with_an_underscore_or_a_hyphen(self):
+        config = self.live()
+        config |= {"server": "tux_server:8080", "ha_server": "home_assistant.lan:8123",
+                   "search_server": "-voice.lan:8888", "translate_server": "voice-.lan:5000"}
+        self.web.names |= {"tux_server": ["192.168.1.20"], "home_assistant.lan": ["192.168.1.30"],
+                           "-voice.lan": ["192.168.1.157"], "voice-.lan": ["192.168.1.158"]}
+        self.example("coins.yaml")
+        self.route("/v1/price/bitcoin?currency=usd", json.dumps({"usd": 2}))
+        result, said = await self.call("coins_price", {"coin": "bitcoin"})
+        self.assertEqual(said, ["One bitcoin is 2 dollars."])
+
+    async def test_a_server_settings_could_never_save_says_so(self):
+        """An edited config.json, with a backslash the resolver reads as an escape."""
+        config = self.live()
+        config["server"] = "voic\\e.lan:8080"
+        self.example("coins.yaml")
+        result, said = await self.call("coins_price", {"coin": "bitcoin"})
+        self.assertEqual(said, [webfetch.BAD_SETTING])
+        self.assertEqual((self.web.dialled, self.asked), ([], []))
+
     async def test_home_assistant_s_address_is_kept_while_the_next_lookup_runs(self):
         """A minute on, ha.lan is slow to look up again. The address it gave last time is still
         refused meanwhile, rather than dropped for want of a quick answer."""

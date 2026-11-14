@@ -831,6 +831,8 @@ async def _call(plan: Plan, args: dict, config, session):
             webfetch.recipe_place, request.host, request.port, config, SEND_S), SEND_S)
     except TimeoutError:
         return _say(session, config, NO_ANSWER.format(host=request.host))
+    except webfetch.UncheckableSetting as e:
+        return _say(session, config, str(e))
     except webfetch.PageError as e:
         refused = NOT_THERE if str(e) == webfetch.NOT_ALLOWED else NO_ANSWER
         return _say(session, config, refused.format(host=request.host))
@@ -879,6 +881,8 @@ def _send_and_say(plan: Plan, request: Request, where: webfetch.Place, found: di
                               max(deadline - time.monotonic(), 0))
     except TimeoutError:
         return _say(session, config, NO_ANSWER.format(host=request.host))
+    except webfetch.UncheckableSetting as e:
+        return _say(session, config, str(e))
     except webfetch.PageError as e:
         refused = NOT_THERE if str(e) == webfetch.NOT_ALLOWED else NO_ANSWER
         return _say(session, config, refused.format(host=request.host))

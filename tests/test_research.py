@@ -598,6 +598,19 @@ class Clock(Rig):
         self.assertEqual(result, {"message": research.ALL_FAILED})
         self.assertEqual(self.web.dialled, [])
 
+    async def test_servers_settings_can_save_with_an_underscore_or_a_hyphen(self):
+        self.skills.config = {**self.config, "server": "tux_server:8080",
+                              "ha_server": "home_assistant.lan:8123",
+                              "translate_server": "-voice.lan:5000"}
+        self.web.names |= {"tux_server": ["192.168.1.20"], "home_assistant.lan": ["192.168.1.30"],
+                           "-voice.lan": ["192.168.1.157"]}
+        self.assertIn("site1.example", self.said(await self.ask()))
+
+    async def test_a_server_settings_could_never_save_says_so(self):
+        self.skills.config = {**self.config, "server": "voic\\e.lan:8080"}
+        self.assertEqual(await self.ask(), {"message": webfetch.BAD_SETTING})
+        self.assertEqual(self.web.dialled, [])
+
     async def test_a_cancel_stops_the_steps(self):
         def slow(_config, _path, _body):
             time.sleep(0.2)

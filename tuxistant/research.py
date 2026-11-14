@@ -133,7 +133,7 @@ async def _own(config, since: float, deadline: float):
     try:
         return await asyncio.wait_for(
             asyncio.to_thread(webfetch.own_servers, config, seconds, since), seconds + 1)
-    except TimeoutError:
+    except (TimeoutError, webfetch.UncheckableSetting):   # each page then refuses on its own
         return None
 
 
@@ -231,16 +231,19 @@ async def run(args: dict, config, session) -> dict:
     query = websearch.question(args, "question")
     if not query:
         raise ValueError(NOT_CLEAR)
-    session.busy(LIMIT_S + WAIT_MARGIN_S)
-    session.notice(Speak(LOOKING, config["voice"]))
-    deadline = time.monotonic() + LIMIT_S
-    query = _topic(query)
     # Each page is checked against the install's own servers. They are looked up while the search
     # runs, and waited for before the pages start, so a slow one, such as Home Assistant away from
     # home, costs no page its time. A failure isn't kept, so a name whose last lookup failed is
     # looked up again here.
     since = time.monotonic()
-    webfetch.start_own_lookups(config)
+    try:
+        webfetch.start_own_lookups(config)
+    except webfetch.UncheckableSetting as e:    # no page could be checked: say why, and stop
+        return {"message": str(e)}
+    session.busy(LIMIT_S + WAIT_MARGIN_S)
+    session.notice(Speak(LOOKING, config["voice"]))
+    deadline = time.monotonic() + LIMIT_S
+    query = _topic(query)
     hits = _candidates(await _search(query, config))
     if not hits:
         return {"message": NOTHING_FOUND}

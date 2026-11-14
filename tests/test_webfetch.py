@@ -19,7 +19,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tuxistant import webfetch  # noqa: E402
+from tuxistant import homeassistant, webfetch  # noqa: E402
+from tuxistant.config import clean_server  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.webfetch import PageError, clean, public  # noqa: E402
 from tests.fakeweb import PUBLIC, WORDS, Web, slow_server  # noqa: E402
@@ -818,16 +819,38 @@ class OwnServers(unittest.TestCase):
         self.assertIn("2606:4700::1111", webfetch.own_servers(config, 1)[0])
 
     def test_a_server_in_the_settings_the_resolver_would_read_otherwise(self):
-        """Every request fails closed until it is put right."""
-        config = {**self.config, "server": "voic\\e.example:8080"}
-        with self.assertRaises(TimeoutError):
-            webfetch.own_servers(config, 1)
-        with self.assertRaises(PageError) as caught:
-            webfetch.fetch("http://example.com/", config, 1)
-        self.assertEqual(str(caught.exception), webfetch.UNREADABLE)
-        with self.assertRaises(TimeoutError):
-            webfetch.recipe_place("example.com", 443, config, 1)
+        """Only an edited config.json can hold it. Every request fails closed until it is put
+        right, and says why."""
+        config = {**self.config, "server": "voic\\e.lan:8080"}
+        self.assertIsNone(clean_server("voic\\e.lan:8080"))
+        for request in (lambda: webfetch.own_servers(config, 1),
+                        lambda: webfetch.fetch("http://example.com/", config, 1),
+                        lambda: webfetch.recipe_place("example.com", 443, config, 1),
+                        lambda: webfetch.start_own_lookups(config)):
+            with self.assertRaises(PageError) as caught:
+                request()
+            self.assertEqual(str(caught.exception), webfetch.BAD_SETTING)
         self.assertEqual(self.web.dialled, [])
+
+    def test_every_server_settings_can_save_is_checked_by(self):
+        """Settings keep an underscore, or a hyphen at either end of a label, and the resolver
+        looks those up as written. No page may name them, but they are servers to refuse."""
+        for key, value in (("server", "tux_server:8080"), ("ha_server", "home_assistant.lan:8123"),
+                           ("search_server", "-voice.lan:8888"),
+                           ("translate_server", "voice-.lan:5000")):
+            host = value.partition(":")[0]
+            self.web.names[host] = ["8.8.4.4"]
+            self.assertIsNotNone(clean_server(value))
+            self.assertIsNotNone(homeassistant.clean_server(value))
+            config = {**self.config, key: value}
+            with self.subTest(value):
+                names, addresses = webfetch.own_servers(config, 1)
+                self.assertIn(host, names)
+                self.assertIn("8.8.4.4", addresses)
+                self.assertIn("real page", webfetch.fetch("http://example.com/", config, 1).text)
+                with self.assertRaises(PageError) as caught:
+                    webfetch.fetch(f"http://{host}/", config, 1)
+                self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
 
     def test_port_0_is_not_port_80(self):
         with self.assertRaises(PageError) as caught:

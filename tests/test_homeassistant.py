@@ -2100,7 +2100,9 @@ class Wired(WithHome):
     def test_it_stands_without_the_lights_skill(self):
         source = (ROOT / "tuxistant" / "homeassistant.py").read_text()
         self.assertEqual(re.findall(r"^from \. import (.+)$", source, re.M), ["colours"])
-        self.assertEqual(re.findall(r"^from \.(\w+) import", source, re.M), ["gate"])
+        self.assertEqual(re.findall(r"^from \.(\w+) import", source, re.M), ["gate", "servers"])
+        self.assertNotRegex((ROOT / "tuxistant" / "servers.py").read_text(),
+                            r"(?m)^from |^import (?!re$)")
         self.assertNotRegex((ROOT / "tuxistant" / "colours.py").read_text(), r"import.*\blights\b")
 
     def test_both_skills_hear_colours_the_same_way(self):

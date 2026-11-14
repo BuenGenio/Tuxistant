@@ -27,6 +27,7 @@ from html.parser import HTMLParser
 from typing import NamedTuple
 
 from .realtime import _urls
+from .servers import SERVER_NAME_RE
 
 TOTAL_S = 8             # the whole fetch, however many redirects it takes
 CONNECT_S = 4
@@ -72,6 +73,8 @@ HOST = re.compile(rf"{LABEL}(\.{LABEL})*")
 MAX_HOST_CHARS = 253
 
 NOT_ALLOWED = "That address isn't one I'll read."
+BAD_SETTING = ("A server address in Settings has characters I can't check, so I'm not sending "
+               "anything until it's fixed in Settings.")
 UNREADABLE = "That page couldn't be read."
 HIDDEN_CATEGORIES = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
 TAG = re.compile(r"<[^<>]*>")    # not [^>]: that goes quadratic on a page of a million "<"
@@ -86,6 +89,14 @@ BLOCK_TAGS = {"p", "div", "li", "ul", "ol", "br", "tr", "td", "th", "table", "se
 
 class PageError(Exception):
     """This page won't be read. The message is a sentence, and it never repeats the address."""
+
+
+class UncheckableSetting(PageError):
+    """A server in Settings written so the resolver may look up a name no check here sees. Nothing
+    is judged, and so nothing sent, until it is put right, and the reason is said."""
+
+    def __init__(self):
+        super().__init__(BAD_SETTING)
 
 
 class Target(NamedTuple):
@@ -198,16 +209,18 @@ def _same(address: str) -> str:
 def _server_host(server: str) -> str | None:
     """The host of a server in the settings, as _name gives it, so it compares with a page's or a
     recipe's however either is spelled. None if there is none, or IDNA can't encode it: then no
-    one can look it up, this install included. TimeoutError if it isn't an address or a plain
-    name, as the resolver may read it as a name no check here sees: every request is refused
-    until it is put right."""
+    one can look it up, this install included. Settings keep an underscore, or a hyphen at the
+    end of a label, and the resolver looks those up as written, so they are fine here though no
+    page may name them. Anything else, which only an edited config.json can hold, such as a
+    backslash the resolver reads as an escape: UncheckableSetting."""
     try:
         host = urllib.parse.urlsplit(_urls(server)[0]).hostname
         name = _name(host) if host else None
     except (ValueError, UnicodeError):      # config.json can hold anything
         return None
-    if name is not None and not _plain_host(name):
-        raise TimeoutError
+    if name is not None and not (_is_address(name) or (len(name) <= MAX_HOST_CHARS
+                                                         and SERVER_NAME_RE.fullmatch(name))):
+        raise UncheckableSetting
     return name
 
 
@@ -239,11 +252,9 @@ def own_servers(config, seconds: float, since: float | None = None) -> tuple[set
 
 
 def start_own_lookups(config):
-    """Starts what own_servers will need, without waiting for it."""
-    try:
-        _start_own_lookups(_own_hosts(config))
-    except TimeoutError:    # a server in the settings no request may be judged by: own_servers says
-        pass
+    """Starts what own_servers will need, without waiting for it. UncheckableSetting, at once, if
+    Settings hold a server no request can be judged by."""
+    _start_own_lookups(_own_hosts(config))
 
 
 def _own_hosts(config) -> list[str]:
@@ -792,11 +803,8 @@ def fetch(url: str, config, seconds: float = TOTAL_S, own=None) -> Page:
     deadline = time.monotonic() + seconds
     for _ in range(MAX_REDIRECTS + 1):
         scheme, host, port, path = _parse(url)
-        try:
-            if host in _own_names(config):
-                raise PageError(NOT_ALLOWED)
-        except TimeoutError:
-            raise PageError(UNREADABLE) from None
+        if host in _own_names(config):
+            raise PageError(NOT_ALLOWED)
         since = time.monotonic()
         if own is None:     # looked up alongside the page's host
             start_own_lookups(config)
