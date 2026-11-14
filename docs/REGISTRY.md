@@ -53,6 +53,17 @@ The site and its host are never trusted. If GitHub Pages served something else, 
 | Registry key | The owner, offline | The index, at each merge | Serious: a new key ships with the next Tuxistant release. Mitigated because Tux still checks each recipe's publisher signature and pinned hash |
 | Moderation key | CI, as a secret | Revocation entries only | Someone can switch skills off, but never add or change one. Switching off is the safe direction, so this key can live where moderation needs to be fast |
 
+## Logos
+
+A skill can have a logo, still or animated: PNG and APNG, WebP, AVIF or GIF, square, up to 512 pixels and 512 KiB, signed by the publisher like the recipe. [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md#logos) has the exact rules.
+
+- **No SVG.** An SVG can carry scripts and links to other servers. The raster formats are only pixels.
+- **Decoded in a sandbox.** Image decoders are a common way in, so Settings and Browse decode logos with glycin, GNOME's image library. It runs each decoder in a sandbox of its own, not in Settings. The daemon never decodes a logo, and the model never sees one.
+- **Checked before it is shown.** Tux shows a logo only when its hash matches the index and the publisher's signature verifies, as for a recipe.
+- **Calm by default.** A logo animates only while its skill's page is open and only if animations are on in GNOME's settings. Lists and everyone with animations off see the still first frame. CI refuses a logo that flashes more than three times a second.
+- **Built-in skills get logos too.** They are drawn for Tuxistant as one set, so the Skills page looks the same with or without shared skills.
+- **Moderation covers logos.** The report form has "the logo is misleading or offensive", and suspending a skill hides its logo too.
+
 ## Tags and categories
 
 A tag is one word or short phrase: `weather`, `smart-home`, `prices`, `transport`, `notes`. A category is a named collection of tags, chosen by the registry, not by publishers: "Home" holds `smart-home`, `lights` and `heating`, and "Information" holds `weather`, `prices` and `transport`. Publishers pick tags from the list in `tags.yaml`. A new tag is proposed in the same pull request and approved with it. The portal and the Browse page show categories first, then tags inside them.

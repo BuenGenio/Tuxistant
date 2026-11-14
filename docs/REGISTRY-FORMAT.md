@@ -34,6 +34,8 @@ authors/<login>/allowed_signers          the keys that may sign <login>'s recipe
 skills/<login>/<skill name>/recipe.yaml
 skills/<login>/<skill name>/recipe.yaml.sig
 skills/<login>/<skill name>/meta.yaml
+skills/<login>/<skill name>/logo.<ext>   optional: png, webp, avif or gif, see Logos
+skills/<login>/<skill name>/logo.<ext>.sig
 moderation/revocations/<id>.yaml         one per revocation, never edited or deleted
 moderation/lifted/<id>.yaml              one per lifted revocation, same id
 published/index.json                     committed by the owner with its signature
@@ -79,7 +81,24 @@ links:
 
 At most 4 KiB.
 
-## tags.yaml
+## Logos
+
+A skill may have one logo, `logo.png`, `logo.webp`, `logo.avif` or `logo.gif`, signed like the recipe:
+
+```text
+ssh-keygen -Y sign -f <their key> -n tuxistant-logo logo.webp
+```
+
+| Rule | |
+|---|---|
+| Formats | PNG and APNG, WebP (still or animated), AVIF (still or image sequence), GIF. The first bytes must match the extension. No SVG, which can hold scripts and links, and no other format |
+| Size | Square, 128 to 512 pixels a side. At most 256 KiB still, 512 KiB animated |
+| Animation | At most 120 frames and 8 seconds a loop, each frame at least 20 ms. No more than three flashes a second (WCAG 2.3.1), which CI measures from the change in brightness between frames |
+| Contents of the file | Nothing but the image: no EXIF, XMP or text chunks, and no ICC profile other than plain sRGB. CI refuses these rather than strips them, as it can't change signed bytes |
+| What it shows | Not Tuxistant's, GNOME's or another project's mark unless the publisher owns it, and nothing a report form would call offensive. Reviewers check this by eye |
+
+CI decodes every frame with glycin's loaders in their sandbox, then checks the rules above. It also renders `logo-still.png`, the first frame at 128 pixels, for lists and for anyone who turns animations off. The still is built from the signed logo, so its hash goes in the index and nobody signs it separately.
+
 
 ```yaml
 categories:
@@ -182,6 +201,7 @@ The build takes a commit of `main`, a `seq` and a `date`, and is otherwise deter
 | `versions[].sig` | string | The whole of `recipe.yaml.sig` at that commit, with its line breaks and final newline |
 | `versions[].permissions` | object | `{}` or `{"network": [<1 to 4 hosts>]}`, exactly as the loader returns it. The hosts are what Browse lists |
 | `versions[].risk` | string | `risk_of()` of those permissions: `low` without hosts, `medium` with them |
+| `versions[].logo` | object or null | null without a logo. Otherwise `type` (`png`, `webp`, `avif`, `gif`), `sha256`, `size`, `width`, `height`, `frames` (1 for a still), `duration_ms` (0 for a still), `key` and `sig` as for the recipe (namespace `tuxistant-logo`), and `still_sha256` for `logo-still.png`. A new logo makes a new version, and the change summary says so |
 
 A skill whose folder is deleted keeps its entry, so installed copies can still be checked against it.
 
