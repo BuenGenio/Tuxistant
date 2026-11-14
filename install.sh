@@ -195,6 +195,8 @@ install_cloud_sdk
 
 echo "Tuxistant is installed. What remains:"
 echo "  1. Log out and back in once (Wayland only loads a new extension at login)."
+echo "     That restarts the daemon too. Until then a daemon already running stays the old version,"
+echo "     Cloud rules and all. To restart only the daemon now: systemctl --user restart tuxistant"
 echo "  2. gnome-extensions enable $UUID"
 if [ "$fn_helper" = 0 ]; then
     echo "Holding Fn to talk needs the helper: run ./install.sh without --no-fn-helper."
