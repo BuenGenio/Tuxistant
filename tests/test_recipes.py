@@ -1710,6 +1710,27 @@ class Host(Case):
         self.assertEqual(actions["deskstrip.brightness"]["skill"], "org.example.notes")
         self.assertEqual(actions["coins.price"]["skill"], "org.example.deskstrip")
 
+    async def test_a_skill_blocked_by_two_holders_still_swaps(self):
+        """q's edit wanted names of both p and r, and only the first holder found was freed,
+        so all three stayed refused."""
+        def write(p, q, r):
+            self.say_recipe("p.yaml", "org.example.p", *p)
+            self.say_recipe("q.yaml", "org.example.q", *q)
+            self.say_recipe("r.yaml", "org.example.r", *r)
+        before, after = (["p.go"], ["q.a", "q.b"], ["r.go"]), (["q.a"], ["p.go", "r.go"], ["q.b"])
+        write(*before)
+        self.assertEqual(self.host.reload(), {})
+        write(*after)
+        self.assertEqual(self.host.reload(), {})
+        write(*before)
+        self.assertEqual(self.host.reload(), {}, "and back")
+        write(*after)
+        again = self.restart()
+        self.assertEqual(again.reload(), {}, "after a restart too")
+        owners = {name: spec["skill"] for name, spec in again.current().actions.items()}
+        self.assertEqual((owners["q.a"], owners["p.go"], owners["q.b"]),
+                         ("org.example.p", "org.example.q", "org.example.r"))
+
     async def test_a_swap_with_an_edit_that_is_refused_takes_nothing(self):
         """notes' edit starts like a built-in, so it is refused and its last version, with
         notes.phone, stays in use: coins can't have notes.phone."""
@@ -1832,6 +1853,163 @@ class Host(Case):
         self.assertEqual(len(removed), skillhost.MAX_REMOVED)
         self.assertNotIn("org.example.old0", removed, "the oldest go")
         self.assertIn(f"org.example.old{skillhost.MAX_REMOVED + 9}", removed)
+
+    def say_recipe(self, name: str, skill_id: str, *actions: str) -> Path:
+        return self.add(name, recipe(id=skill_id, permissions={}, actions={
+            action: {"description": "Say hi", "say": "Hi."} for action in actions}))
+
+    def asks_evil(self) -> Path:
+        """coins, loaded, then edited to reach evil.example too, which it wasn't allowed."""
+        file = self.add("coins.yaml", (EXAMPLES / "coins.yaml").read_text())
+        self.example("work.yaml")
+        grown = file.read_text().replace("network: [api.coins.example]",
+                                         "network: [api.coins.example, evil.example]")
+        file.write_text(grown.replace("actions:\n", "actions:\n  coins.leak:\n    description: "
+                                      "Leak\n    get: https://evil.example/x\n", 1))
+        self.assertIn("now asks to reach evil.example", self.host.reload()[str(file)])
+        return file
+
+    async def test_grants_fixed_or_taken_out_count_without_a_restart(self):
+        """While the file was broken it was never read again, so skills stayed refused until a
+        restart, though the docs said fixing or taking it out was enough."""
+        self.example("coins.yaml", "work.yaml")
+        good = self.grants().read_text()
+        self.grants().write_text("{broken")
+        host = self.restart()
+        why = skillhost.BROKEN_GRANTS.format(file=self.grants())
+        self.assertEqual(host.reload(), {str(self.user / "coins.yaml"): why})
+        self.grants().write_text(good)
+        self.assertEqual(host.reload(), {}, "fixed")
+        self.grants().write_text("{broken")
+        third = self.restart()
+        self.assertEqual(third.reload(), {str(self.user / "coins.yaml"): why})
+        self.grants().unlink()
+        self.assertEqual(third.reload(), {}, "taken out")
+        self.assertIn("org.example.coins", json.loads(self.grants().read_text()))
+
+    async def test_grants_damaged_while_tux_runs_are_left_alone(self):
+        self.example("coins.yaml")
+        self.grants().write_text("{damaged while running")
+        self.example("work.yaml")       # a new skill to note, so the file would be written
+        self.assertEqual(self.grants().read_text(), "{damaged while running")
+
+    async def test_grants_behind_a_link_that_leads_nowhere_allow_nothing(self):
+        """As with a data folder on a drive that isn't there: the link counted as no file, so
+        coins.leak loaded and the link was replaced."""
+        file = self.asks_evil()
+        target = self.root / "drive" / skillhost.GRANTS
+        target.parent.mkdir()
+        shutil.move(self.grants(), target)
+        self.grants().symlink_to(target)
+        target.parent.rename(self.root / "unmounted")
+        again = self.restart()
+        self.assertEqual(again.reload(),
+                         {str(file): skillhost.BROKEN_GRANTS.format(file=self.grants())})
+        self.assertNotIn("coins.leak", again.current().actions)
+        self.assertTrue(self.grants().is_symlink(), "left as it was")
+        (self.root / "unmounted").rename(target.parent)
+        self.assertIn("now asks to reach evil.example", again.reload()[str(file)])
+        self.assertTrue(self.grants().is_symlink(), "written through, not replaced")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a folder whatever its mode")
+    async def test_a_folder_that_couldnt_be_read_lets_no_refused_edit_through(self):
+        """Every skill was marked taken out while the folder couldn't be read, so the next
+        reload allowed coins what it had been refused, and cleared what it saved."""
+        file = self.asks_evil()
+        os.chmod(self.user, 0)
+        try:
+            self.host.reload()
+        finally:
+            os.chmod(self.user, 0o755)
+        self.assertFalse(any(record.get("removed") for record in
+                             json.loads(self.grants().read_text()).values()))
+        self.assertIn("now asks to reach evil.example", self.host.reload()[str(file)])
+        self.assertNotIn("coins.leak", self.host.current().actions)
+
+    def removed(self, count: int, at, **extra) -> None:
+        data = json.loads(self.grants().read_text())
+        for i in range(count):
+            data[f"org.example.old{i}"] = {"permissions": {}, "config": [], "folder": f"o{i}",
+                                           "removed": True, "removed_at": at(i)}
+        self.grants().write_text(json.dumps({**data, **extra}))
+
+    async def test_pruning_never_clears_a_skill_that_is_here_or_one_of_tuxistant_s(self):
+        """org.tuxistant.lights' record, taken out long ago, had its state deleted; records
+        dated in the future pushed a skill just renamed to the front; and records with no date
+        counted as the oldest of all."""
+        self.example("coins.yaml")
+        lights = {"permissions": {}, "config": [], "folder": "x", "removed": True,
+                  "removed_at": 1}
+        self.removed(5, lambda i: time.time() + 10 ** 6 + i,
+                     **{"org.tuxistant.lights": lights,
+                        "org.example.nodate": {**lights, "removed_at": None}})
+        data = json.loads(self.grants().read_text())
+        del data["org.example.nodate"]["removed_at"]
+        self.grants().write_text(json.dumps(data))
+        (self.user / "coins.yaml").rename(self.user / "zcoins.yaml")
+        with mock.patch.object(skillhost, "MAX_REMOVED", 2), \
+                mock.patch.object(SkillHost, "_clear_state") as cleared:
+            self.restart().reload()
+        gone = sorted(call.args[0] for call in cleared.call_args_list)
+        self.assertNotIn("org.tuxistant.lights", gone)
+        self.assertNotIn("org.example.coins", gone, "here, under another name")
+        self.assertNotIn("org.example.nodate", gone, "dated now, as first seen")
+        left = json.loads(self.grants().read_text())
+        self.assertIn("org.tuxistant.lights", left)
+        self.assertIn("org.example.coins", left)
+        self.assertTrue(gone and set(gone) <= {f"org.example.old{i}" for i in range(5)})
+
+    async def test_a_record_with_no_folder_counts_as_taken_out(self):
+        self.example("coins.yaml")
+        self.grants().write_text(json.dumps({**json.loads(self.grants().read_text()),
+                                             "org.example.odd": {"permissions": None}}))
+        self.restart().reload()
+        self.assertTrue(json.loads(self.grants().read_text())["org.example.odd"]["removed"])
+
+    async def test_one_skill_can_t_have_two_actions_with_one_tool_name(self):
+        """a.one_x and a_one.x are both a_one_x to the model. After a restart the place
+        counted the skill twice and left both names to anyone."""
+        file = self.say_recipe("aa.yaml", "org.example.aa", "aa.one_x", "aa_one.x")
+        self.assertIn("would have the same tool name", self.host.reload()[str(file)])
+        folder = self.user / "code"
+        folder.mkdir()
+        (folder / "m.py").write_text("")
+        (folder / "skill.yaml").write_text(
+            "id: org.example.code\nname: C\ndescription: C\nrun: [python3, m.py]\nactions:\n"
+            "  code.a_b:\n    description: A\n  code_a.b:\n    description: B\n")
+        self.assertIn("would have the same tool name", self.host.reload()[str(folder)])
+        held = {"count": 2, "id": "org.example.aa", "actions": ["aa.one_x", "aa_one.x"]}
+        (self.user.parent / skillhost.LOADED).write_text(json.dumps({"aa.yaml": held}))
+        place = skillhost._read_loaded(self.user.parent / skillhost.LOADED)["aa.yaml"]
+        self.assertEqual(set(place.actions), {"aa.one_x", "aa_one.x"}, "one entry, one claim")
+
+    async def test_a_name_freed_too_late_is_taken_at_once(self):
+        """h's edit, which gives h.go up, loaded, but freeing it for s's edit left h's growth
+        past the budget, so s waited, told h kept h.go until an edit without it loads, and
+        tuxistant doctor, reading what was saved, saw s's edit load."""
+        self.say_recipe("f.yaml", "org.example.f", "f.one", "f.two")
+        self.say_recipe("g.yaml", "org.example.g", "g.go")
+        self.say_recipe("h.yaml", "org.example.h", "h.go")
+        s = self.say_recipe("e.yaml", "org.example.s", "s.go")
+        self.assertEqual(self.host.reload(), {})
+        self.say_recipe("h.yaml", "org.example.h", "h.two", "h.three")
+        self.say_recipe("e.yaml", "org.example.s", "h.go", "s.two")
+        first = self.host.reload(again=0)       # as it was: no second look
+        self.assertEqual(first, {str(s): "The skill in h.yaml has the action h.go, which an edit "
+                                         "to it that has just loaded gives up, so it is free "
+                                         "from the next time Tux reads your skills folder, "
+                                         f"which it does again at once. {skillhost.KEPT}"})
+        self.say_recipe("h.yaml", "org.example.h", "h.go")
+        self.say_recipe("e.yaml", "org.example.s", "s.go")
+        self.assertEqual(self.host.reload(), {})
+        self.say_recipe("h.yaml", "org.example.h", "h.two", "h.three")
+        self.say_recipe("e.yaml", "org.example.s", "h.go", "s.two")
+        problems = self.host.reload()
+        self.assertIn("h.three", self.host.current().actions)
+        self.assertNotIn("h.go", problems.get(str(s), ""), "its own growth is what is left")
+        check = skillhost.offline(CONFIG, builtin=self.builtin, bundled=self.bundled,
+                                  user=self.user)
+        self.assertEqual(set(check.problems), set(problems))
 
     async def test_a_check_names_the_same_skills_as_the_daemon(self):
         """tuxistant doctor reads the same folders with a host of its own, and named work."""

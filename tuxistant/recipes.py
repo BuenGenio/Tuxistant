@@ -29,7 +29,8 @@ import yaml
 from . import apps, desktop, webfetch
 from .gate import APP_SAYS, MAX_DETAIL_CHARS, Ask, Speak, shown
 from .skillhost import (HOST, MAX_ACTION_TEXT, MAX_MANIFEST_BYTES, PARAM, Unaliased, _bracketed,
-                        _schema_ok, _text, action_description, action_name, load_yaml, skill_id)
+                        _schema_ok, _text, action_description, action_name, distinct_tools,
+                        load_yaml, skill_id)
 
 FIELDS = {"id", "name", "description", "version", "permissions", "actions"}
 ACTION_FIELDS = {"description", "params", "required", "get", "post", "open", "desktop", "json",
@@ -229,8 +230,10 @@ def _actions(actions, hosts: set) -> dict:
     if len(actions) > MAX_ACTIONS:
         raise ValueError(f"A recipe may have at most {MAX_ACTIONS} actions.")
     checked = {}
-    for name, action in actions.items():
+    for name in actions:
         action_name(name)
+    distinct_tools(actions)
+    for name, action in actions.items():
         if not isinstance(action, dict):
             raise ValueError(f"The action {name} has to be a mapping of fields.")
         unknown = set(action) - ACTION_FIELDS

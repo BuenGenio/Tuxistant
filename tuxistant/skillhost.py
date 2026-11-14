@@ -70,12 +70,12 @@ GRANTS = "skill-grants.json"    # next to the skills folder, so tests that move 
 CODE_DIR = "skill-code"         # the checked copies that skills really run from
 LOADED = "skills-loaded.json"   # yours that keep their place, by name, with their counts
 MAX_STATE_BYTES = 1 << 20       # the most either of those two files is read up to
-MAX_PASSES = 8                  # how often a reload tries again with names an edit gave up
-MAX_REMOVED = 64                # records kept of skills taken out, the newest
-BROKEN_GRANTS = ("Tux couldn't read what your skills were allowed, in {file}, so it allows "
-                 "nothing new that a skill you added asks for, such as the network or a setting, "
-                 "until that file is fixed or taken out. Taking it out allows your skills again "
-                 "from then on.")
+MAX_PASSES = 16                 # how often a reload tries again with names an edit gave up
+MAX_REMOVED = 1000              # records kept of skills taken out, the newest, ~150 bytes each
+BROKEN_GRANTS = ("Tux couldn't read what your skills were allowed, in {file}, so until that "
+                 "file is fixed or taken out it allows no skill you added the network or a "
+                 "setting, even one it allowed before. Taking the file out allows every skill of "
+                 "yours what it asks for now, edits that were refused included.")
 NOT_A_SKILL = ("It is no longer a recipe or a skill folder, so nothing of it is in use, but it "
                "keeps its place and its names until you take it out.")
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
@@ -193,6 +193,8 @@ def _actions(manifest: dict, bundled: bool) -> dict:
     checked = {}
     for name, action in actions.items():
         action_name(name)
+    distinct_tools(actions)
+    for name, action in actions.items():
         if not isinstance(action, dict) or set(action) - ACTION_FIELDS:
             raise ValueError(f"The action {name} has fields it shouldn't have.")
         description = action_description(name, action)
@@ -219,6 +221,18 @@ def action_name(name) -> str:
         raise ValueError(f"The action {shown(name, 60)} needs a name like skill.do, in small "
                          "letters.")
     return name
+
+
+def distinct_tools(names) -> None:
+    """Two actions of one skill the model would see as the same tool, such as a.one_x and
+    a_one.x, are refused."""
+    seen = {}
+    for name in names:
+        tool = name.replace(".", "_")
+        if tool in seen:
+            raise ValueError(f"Its actions {shown(seen[tool], 60)} and {shown(name, 60)} would "
+                             "have the same tool name. Rename one of them.")
+        seen[tool] = name
 
 
 def action_description(name: str, action: dict) -> str:
@@ -471,22 +485,33 @@ class _Grants:
             self._records = self._read()
         return self._records
 
+    def refresh(self) -> None:
+        """A file that couldn't be read is read again at each reload, so fixing it or taking it
+        out counts at once."""
+        if self.broken:
+            self._records, self.broken, self._dirty = None, "", False
+
     def _read(self) -> dict:
         """What was allowed. A file that is there but can't be read as one of these is left as
         it is, and while it is, nothing new is allowed. A record of the wrong shape counts as
         one that allowed nothing."""
-        try:
-            data = _read_json(self.file)
-        except FileNotFoundError:
-            return {}
-        except (OSError, ValueError, RecursionError) as e:
-            data = e
+        data = self._data()
         if not isinstance(data, dict):
-            log.warning("could not read %s, so skills you added are allowed nothing new until "
-                        "it is fixed or taken out: %s", self.file, data)
+            log.warning("could not read %s, so skills you added are allowed nothing they ask "
+                        "for until it is fixed or taken out: %s", self.file, data)
             self.broken = BROKEN_GRANTS.format(file=self.file)
             return {}
         return {key: _grant_record(value) for key, value in data.items()}
+
+    def _data(self):
+        """What the file holds, {} when there is none, or the error. A link that leads nowhere,
+        such as onto a drive that isn't there, is an error, not a missing file."""
+        try:
+            return _read_json(self.file)
+        except FileNotFoundError as e:
+            return e if os.path.lexists(self.file) else {}
+        except (OSError, ValueError, RecursionError) as e:
+            return e
 
     def problem(self, manifest: dict, folder: Path) -> str:
         record = self.records.get(manifest["id"])   # reads the file, which may find it broken
@@ -525,20 +550,39 @@ class _Grants:
             return bool(more)
         return False
 
-    def gone(self, user: Path) -> None:
-        if not self.records:     # nothing to mark, or a file that couldn't be read
-            return
-        for record in self.records.values():
-            if not record.get("removed") and not (user / str(record.get("folder"))).exists():
-                record["removed"], record["removed_at"] = True, int(time.time())
-                self._dirty = True
+    def gone(self, user: Path) -> set[str]:
+        """Marks removed each record whose file or folder is really not there, and dates those
+        with none. Only call it when the folder could be listed. Returns the ids marked or
+        dated."""
+        marked, now = set(), int(time.time())
+        for key, record in self.records.items():
+            if record.get("removed"):
+                if "removed_at" not in record:      # first seen now, so not pruned now either
+                    record["removed_at"], self._dirty = now, True
+                    marked.add(key)
+                continue
+            folder = record.get("folder")
+            if _plain_name(folder):
+                try:
+                    (user / folder).lstat()
+                    continue
+                except FileNotFoundError:
+                    pass
+                except OSError:         # there, but not readable now: not gone
+                    continue
+            record["removed"], record["removed_at"], self._dirty = True, now, True
+            marked.add(key)
+        return marked
 
-    def prune(self) -> list[str]:
+    def prune(self, keep: set[str]) -> list[str]:
         """The ids of skills taken out longest ago, past the newest MAX_REMOVED, whose records
-        are dropped, so the file stays small. One of those that comes back is new."""
-        removed = sorted((record.get("removed_at", 0), key)
+        are dropped, so the file stays small. One of those that comes back is new. Never one in
+        keep, one of Tuxistant's own, or one marked removed in this same reload."""
+        now = time.time()
+        removed = sorted((min(record.get("removed_at", now), now), key)
                          for key, record in self.records.items() if record.get("removed"))
-        dropped = [key for _, key in removed[:max(len(removed) - MAX_REMOVED, 0)]]
+        dropped = [key for _, key in removed[:max(len(removed) - MAX_REMOVED, 0)]
+                   if key not in keep and not key.startswith(RESERVED)]
         for key in dropped:
             del self.records[key]
             self._dirty = True
@@ -547,8 +591,15 @@ class _Grants:
     def save(self) -> None:
         if not self._dirty or not self.writable or self.broken:
             return
+        on_disk = self._data()      # damaged since it was read: leave it, and allow nothing
+        if not isinstance(on_disk, dict):
+            self.broken = BROKEN_GRANTS.format(file=self.file)
+            log.warning("%s was damaged while Tux ran, so it is left as it is: %s", self.file,
+                        on_disk)
+            return
         try:
-            _write_json(self.file, self.records)
+            _write_json(self.file.resolve() if self.file.is_symlink() else self.file,
+                        self.records)
             self._dirty = False
         except OSError as e:
             log.warning("could not save what skills were allowed: %s", e)
@@ -566,9 +617,11 @@ def _grant_record(value) -> dict:
                   isinstance(network, list) and all(isinstance(h, str) for h in network)))
               and isinstance(config, list) and all(isinstance(key, str) for key in config)
               and isinstance(value.get("removed", False), bool)
-              and isinstance(value.get("folder", ""), str)
-              and type(value.get("removed_at", 0)) in (int, float))
+              and isinstance(value.get("folder", ""), str))
     if shaped:
+        at = value.get("removed_at", 0)
+        if type(at) not in (int, float) or not math.isfinite(at):
+            value = {key: field for key, field in value.items() if key != "removed_at"}
         return value
     folder = value.get("folder")
     return {**allowed_nothing, "folder": folder if isinstance(folder, str) else ""}
@@ -658,8 +711,8 @@ def _unshared(places: dict[str, _Place]) -> dict[str, _Place]:
     """An id, action or tool name that two entries claim, which Tux never writes, is left to
     neither, so a hand edit can't keep a skill from another's names."""
     ids = Counter(place.skill_id for place in places.values() if place.skill_id)
-    tools = Counter(name.replace(".", "_") for place in places.values()
-                    for name in place.actions)
+    tools = Counter(tool for place in places.values()       # each entry counted once
+                    for tool in {name.replace(".", "_") for name in place.actions})
     return {name: replace(place, skill_id=place.skill_id if ids[place.skill_id] == 1 else "",
                           actions=tuple(action for action in place.actions
                                         if tools[action.replace(".", "_")] == 1))
@@ -771,15 +824,18 @@ class SkillHost:
         if problems:
             log.info("skill problems: %s", problems)
 
-    def reload(self) -> dict[str, str]:
+    def reload(self, again: int = 2) -> dict[str, str]:
         """Builds a new Skills from what is on disk and swaps it in. A skill that fails keeps its
-        last version that worked, if it has one. Never raises: a reload runs on every save."""
+        last version that worked, if it has one. Never raises: a reload runs on every save.
+        When an edit that gave a name up loaded too late in _settle for another to take it, it
+        reloads again, up to again times, so the other needn't wait for the next change."""
         problems: dict[str, str] = {}
         try:
+            self.grants.refresh()
             found = self._scan(problems)
             sandbox_problem = self._sandbox_problem()
-            chosen, places, problems = self._settle(found, problems, sandbox_problem)
-            self._grant(chosen)
+            chosen, places, problems, late = self._settle(found, problems, sandbox_problem)
+            self._grant(chosen, found, listed=str(self.user) not in problems)
             skills, running, offered = self._build(chosen, problems, sandbox_problem)
         except Exception as e:
             log.exception("reloading the skills failed")
@@ -798,6 +854,8 @@ class SkillHost:
                                      if Path(key).parent == self.user)
         else:
             self._save_loaded()
+        if late and again:
+            return self.reload(again - 1)
         return dict(problems)
 
     def _save_loaded(self) -> None:
@@ -893,15 +951,18 @@ class SkillHost:
             raise ValueError(problem)
         return _Found(str(file), manifest, kind="recipe", text=text)
 
-    def _grant(self, chosen: list[_Found]) -> None:
+    def _grant(self, chosen: list[_Found], found: list[_Found], listed: bool) -> None:
         for item in chosen:
             if item.kind != "builtin" and item.manifest["source"] == "yours" and (
                     self.grants.grant(item.manifest, Path(item.key))) and item.kind == "code":
                 self._clear_state(item.manifest["id"])  # a recipe keeps nothing
-        self.grants.gone(self.user)
-        for skill_id in self.grants.prune():    # back later, it is new, so it keeps nothing
-            if SKILL_ID.fullmatch(skill_id):    # a key from the file, which may be anything
-                self._clear_state(skill_id)
+        if listed:      # a folder that couldn't be read shows nothing gone
+            marked = self.grants.gone(self.user)
+            here = {item.manifest["id"] for item in found} | marked | {
+                place.skill_id for place in self.offered.values() if place.skill_id}
+            for skill_id in self.grants.prune(here):    # back later, it is new, so it keeps
+                if SKILL_ID.fullmatch(skill_id):        # nothing; a key from the file is
+                    self._clear_state(skill_id)         # checked first, as it may be anything
         self.grants.save()
 
     def _clear_state(self, skill_id: str) -> None:
@@ -913,28 +974,40 @@ class SkillHost:
 
     def _settle(self, found: list[_Found], scanned: dict, sandbox_problem: str):
         """_resolve, then again with the names an edit gives up freed while that edit is
-        otherwise allowed, as when two skills swap actions, as long as every skill whose names
-        were freed then loads that edit. Otherwise the pass before stands, so a name is never
-        taken from a skill that ends up on its kept version or keeping its place."""
+        otherwise allowed, as when skills swap actions, widening the skills freed so to every
+        edited one that blocks another, as long as needed. A pass counts only if every skill
+        whose names were freed then loads that edit; otherwise the last that counted stands,
+        so a name is never taken from a skill that ends up on its kept version or its place."""
         current = {item.key: item for item in found}
-        released, rejected = frozenset(), set()
-        best = self._resolve(found, dict(scanned), sandbox_problem, released)
+        trying, rejected = frozenset(), set()
+        best = None     # the first pass frees nothing, so it always counts
         for _ in range(MAX_PASSES):
-            chosen, places, problems, blockers, waiting = best
+            result = self._resolve(found, dict(scanned), sandbox_problem, trying)
+            chosen, _, _, blockers, waiting, _ = result
             loads = {item.key for item in chosen if current.get(item.key) is item}
-            candidates = {key for key in blockers - released - rejected
-                          if key in current and self._edited(current[key])
-                          and (key in loads or key in waiting)}
-            if not candidates:
-                break
-            trial = self._resolve(found, dict(scanned), sandbox_problem, released | candidates)
-            loads = {item.key for item in trial[0] if current.get(item.key) is item}
-            failed = (released | candidates) - loads
-            if failed:
+            failed = trying - loads
+            if not failed:
+                best = result
+            more = {key for key in blockers - trying - rejected
+                    if key in current and self._edited(current[key])
+                    and (key in loads or key in waiting)}
+            if more:
+                trying |= more
+            elif failed:        # nothing more to free: let those go, and try without them
                 rejected |= failed
-                continue
-            released, best = released | candidates, trial
-        return best[:3]
+                trying -= failed
+            else:
+                break
+        chosen, places, problems, _, _, held_by = best
+        loads = {item.key for item in chosen if current.get(item.key) is item}
+        late = False
+        for key, holder in held_by.items():     # an edit that gave the name up loaded after all
+            if holder in loads and key in problems and not _holders(
+                    current[key], {holder: _still_held(self.offered[holder], current[holder])}):
+                reason = _held_reason(current[key], self.offered[holder], holder, freed=True)
+                problems[key] = f"{reason} {KEPT}" if problems[key].endswith(KEPT) else reason
+                late = True
+        return chosen, places, problems, late
 
     def _resolve(self, found: list[_Found], problems: dict, sandbox_problem: str,
                  released: frozenset = frozenset()):
@@ -967,6 +1040,7 @@ class SkillHost:
             if item.manifest["source"] == "yours" and item.key in self.offered
             and not (item.kind == "code" and sandbox_problem)}
         blockers, waiting = set(), set()    # who holds names refused to others; who waits
+        held_by: dict[str, str] = {}        # one refused for a held name, to its holder
         owners: dict[str, str] = {}         # an id or tool name of yours chosen, to its key
 
         def budget(item: _Found) -> str:
@@ -981,15 +1055,18 @@ class SkillHost:
             mine = item.manifest["source"] == "yours"
             unrunnable = mine and item.kind == "code" and sandbox_problem
             problem = unrunnable or self._clash(item, ids, actions, tools, builtin_ids)
-            if problem:     # one of yours that loads may have it, maybe as a kept version
-                holder = "" if unrunnable or not mine else _owner(item, owners)
+            if problem:     # ones of yours that load may have it, maybe as a kept version
+                holders = set() if unrunnable or not mine else _owners(item, owners)
             elif mine and self._edited(item):
-                holder = _held_by_another(item, reserved)
+                holders = _holders(item, reserved)
+                holder = min(holders, default="")
                 problem = holder and _held_reason(item, reserved[holder], holder)
+                if holder and note:
+                    held_by[item.key] = holder
             else:
-                holder = ""
-            if holder and note:
-                blockers.add(holder)
+                holders = set()
+            if holders and note:
+                blockers.update(holders)
                 waiting.add(item.key)
             return problem or (mine and _lookalike(item.manifest, ours)) or (
                 budget(item) if mine else "")
@@ -1018,7 +1095,7 @@ class SkillHost:
             actions.update(item.manifest["actions"])
             tools.update(name.replace(".", "_") for name in item.manifest["actions"])
             chosen.append(item)
-        return chosen, places, problems, blockers, waiting
+        return chosen, places, problems, blockers, waiting, held_by
 
     def _unloaded(self, found: list[_Found], problems: dict,
                   sandbox_problem: str) -> dict[str, _Place]:
@@ -1321,15 +1398,13 @@ def _still_held(place: _Place, item: _Found) -> _Place:
                    actions=tuple(name for name in place.actions if name in manifest["actions"]))
 
 
-def _held_by_another(item: _Found, reserved: dict[str, _Place]) -> str:
-    """The key of another of yours that holds the id or an action of this one, whether it
-    loads or keeps its place."""
+def _holders(item: _Found, reserved: dict[str, _Place]) -> set[str]:
+    """The keys of others of yours that hold the id or an action of this one, whether they
+    load or keep their place."""
     tools = {name.replace(".", "_") for name in item.manifest["actions"]}
-    for key, place in reserved.items():
-        if key != item.key and (item.manifest["id"] == place.skill_id or tools & {
-                name.replace(".", "_") for name in place.actions}):
-            return key
-    return ""
+    return {key for key, place in reserved.items()
+            if key != item.key and (item.manifest["id"] == place.skill_id or tools & {
+                name.replace(".", "_") for name in place.actions})}
 
 
 def _names(manifest: dict) -> set:
@@ -1337,14 +1412,17 @@ def _names(manifest: dict) -> set:
     return {f"id:{manifest['id']}"} | {name.replace(".", "_") for name in manifest["actions"]}
 
 
-def _owner(item: _Found, owners: dict[str, str]) -> str:
-    return next((owners[name] for name in _names(item.manifest)
-                 if owners.get(name, item.key) != item.key), "")
+def _owners(item: _Found, owners: dict[str, str]) -> set[str]:
+    return {owners[name] for name in _names(item.manifest)
+            if owners.get(name, item.key) != item.key}
 
 
-def _held_reason(item: _Found, place: _Place, holder: str) -> str:
-    """Which name the skill in holder has, and until when."""
-    until = ("which it keeps until it is taken out of your skills folder, or an edit to it "
+def _held_reason(item: _Found, place: _Place, holder: str, freed=False) -> str:
+    """Which name the skill in holder has, and until when; freed, when an edit to it without
+    that has loaded, in a pass of _settle that couldn't free it for this one at once."""
+    until = ("which an edit to it that has just loaded gives up, so it is free from the next "
+             "time Tux reads your skills folder, which it does again at once." if freed else
+             "which it keeps until it is taken out of your skills folder, or an edit to it "
              "without that loads.")
     where = shown(Path(holder).name, 60)
     if item.manifest["id"] == place.skill_id:
