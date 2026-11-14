@@ -68,6 +68,8 @@ CASES = [
     ("Where's that invoice I downloaded last week?", {"file_find"}),
     ("Open the PDF called annual report", {"file_find", "file_open"}),
     ("Send my CV to my phone", {"file_find", "phone_send", "task_run"}),
+    # A file to find and send, never to clear out: it went to file_trash, older than a day.
+    ("Send the photo from yesterday to my phone", {"file_find", "phone_send", "task_run"}),
     ("Open my CV", {"file_find", "file_open"}),
     ("Find my tax return for 2024 and send it to my phone", {"task_run", "file_find"}),
     ("Where's my phone?", {"phone_ring"}),
@@ -281,7 +283,6 @@ RECIPE_CASES = [
     ("What's the price of gold?", {"web_search"}),
     ("How much is an Apple share?", {"web_search"}),
     ("Send a note to my phone saying back at six", {"notes_phone"}),
-    ("Send the photo from yesterday to my phone", {"file_find", "phone_send", "task_run"}),
     ("Open the work chat", {"work_chat"}),
     ("What's the guest Wi-Fi password?", {"work_guestwifi"}),
     ("Open the sound settings for my call", {"work_sound", "app_open"}),

@@ -453,6 +453,23 @@ class YourSkills(unittest.TestCase):
             self.assertEqual(source.count("offline("), 1, tool)
 
 
+class RoutingCases(unittest.TestCase):
+    """Read from the source: importing eval_routing would start a run."""
+
+    def cases(self, name: str) -> dict:
+        tree = ast.parse((ROOT / "tools" / "eval_routing.py").read_text())
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and node.targets[0].id == name:
+                return dict(ast.literal_eval(node.value))
+        raise AssertionError(name)
+
+    def test_sending_a_photo_is_asked_in_every_setup_and_never_trashes(self):
+        """It went to file_trash with or without recipes, so it can't wait for TUX_EVAL_RECIPES."""
+        text = "Send the photo from yesterday to my phone"
+        self.assertNotIn(text, self.cases("RECIPE_CASES"))
+        self.assertEqual(self.cases("CASES")[text], {"file_find", "phone_send", "task_run"})
+
+
 class LiveCutoff(unittest.IsolatedAsyncioTestCase):
     async def test_every_unexpected_action_is_blocked_before_a_handler_runs(self):
         """Every action, offered or not: one left out of the model's list can still be named."""
