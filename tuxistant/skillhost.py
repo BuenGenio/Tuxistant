@@ -25,6 +25,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import tempfile
 from collections import ChainMap, Counter
 from dataclasses import dataclass, replace
@@ -67,6 +68,7 @@ IGNORED_PARTS = frozenset({"__pycache__"})
 GRANTS = "skill-grants.json"    # next to the skills folder, so tests that move it move this too
 CODE_DIR = "skill-code"         # the checked copies that skills really run from
 LOADED = "skills-loaded.json"   # yours that keep their place, by name, with their counts
+MAX_STATE_BYTES = 1 << 20       # the most either of those two files is read up to
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
 ACTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+")
 PARAM = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}")
@@ -461,10 +463,10 @@ class _Grants:
 
     def _read(self) -> dict:
         try:
-            data = json.loads(self.file.read_text())
+            data = _read_json(self.file)
         except FileNotFoundError:
             return {}
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             log.warning("could not read %s, so skills are allowed again from now", self.file)
             return {}
         return {key: value for key, value in data.items() if isinstance(value, dict)} \
@@ -518,6 +520,22 @@ class _Grants:
             log.warning("could not save what skills were allowed: %s", e)
 
 
+def _read_json(file: Path):
+    """A small JSON file of Tux's own. Anything but a regular file, such as a pipe that would
+    never end, or one past MAX_STATE_BYTES, is refused with an OSError unread."""
+    fd = os.open(file, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError(f"{file} is not a file")
+        if info.st_size > MAX_STATE_BYTES:
+            raise OSError(f"{file} is larger than {MAX_STATE_BYTES} bytes")
+        text = handle.read(MAX_STATE_BYTES + 1)
+    if len(text) > MAX_STATE_BYTES:
+        raise OSError(f"{file} is larger than {MAX_STATE_BYTES} bytes")
+    return json.loads(text)     # RecursionError for one nested too deep
+
+
 def _write_json(file: Path, data) -> None:
     """Whole or not at all, so a crash halfway leaves the last copy."""
     file.parent.mkdir(parents=True, exist_ok=True)
@@ -560,10 +578,10 @@ def _read_loaded(file: Path) -> dict[str, _Place]:
     give no fingerprint or names, and a list no counts either. Counts that add up past the
     budget, which Tux never writes, are not trusted at all."""
     try:
-        data = json.loads(file.read_text())
+        data = _read_json(file)
     except FileNotFoundError:
         return {}
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         log.warning("could not read %s, so the skills you added load in name order", file)
         return {}
     if isinstance(data, list):
@@ -579,7 +597,19 @@ def _read_loaded(file: Path) -> dict[str, _Place]:
         log.warning("%s holds more than %d actions, so the skills you added load in name order",
                     file, USER_TOOLS)
         return {}
-    return places
+    return _unshared(places)
+
+
+def _unshared(places: dict[str, _Place]) -> dict[str, _Place]:
+    """An id, action or tool name that two entries claim, which Tux never writes, is left to
+    neither, so a hand edit can't keep a skill from another's names."""
+    ids = Counter(place.skill_id for place in places.values() if place.skill_id)
+    tools = Counter(name.replace(".", "_") for place in places.values()
+                    for name in place.actions)
+    return {name: replace(place, skill_id=place.skill_id if ids[place.skill_id] == 1 else "",
+                          actions=tuple(action for action in place.actions
+                                        if tools[action.replace(".", "_")] == 1))
+            for name, place in places.items()}
 
 
 def _place_from(value) -> _Place | None:
@@ -830,14 +860,14 @@ class SkillHost:
         the one refused rather than one that was working. Of those, the ones unchanged since
         they were last offered come first. One that has more actions than it was offered with
         comes after those that don't, so what it added is refused, never another skill. Each
-        one that keeps a place holds the id and actions it was last offered with and still
-        has, all of them if its file didn't load, so one that is new or edited can't take them,
-        whatever the order. One of yours refused for any reason keeps the version last offered
-        while that is still allowed; with none, as after a restart, it keeps its place and
-        those names, as one whose file is still there but failed to load does, so no other
-        skill takes that room or those names. Room for each one that grew and is still to come
-        is held the same way. A code skill that can't run for want of a sandbox keeps no
-        place."""
+        one of yours that was offered holds the id and actions it was last offered with,
+        whatever an edit to it says, so one that is new or edited can't take them, whatever the
+        order; what an edit gives up is free once that edit has loaded, from the next reload.
+        One of yours refused for any reason keeps the version last offered while that is still
+        allowed; with none, as after a restart, it keeps its place and those names, as one
+        whose file is still there but failed to load does, so no other skill takes that room
+        or those names. Room for each one that grew and is still to come is held the same way.
+        A code skill that can't run for want of a sandbox keeps no place."""
         ids, actions, tools = set(), set(), set()
         builtin_ids = {item.manifest["id"] for item in found if item.kind == "builtin"}
         ours = {_namespace(name) for name in HANDLERS} | {
@@ -849,7 +879,7 @@ class SkillHost:
         held = {item.key: self.offered[item.key].count for item in found
                 if self._place(item) == GROWN}
         reserved = dict(places) | {
-            item.key: _still_held(self.offered[item.key], item) for item in found
+            item.key: self.offered[item.key] for item in found
             if item.manifest["source"] == "yours" and item.key in self.offered
             and not (item.kind == "code" and sandbox_problem)}
 
@@ -1181,14 +1211,6 @@ def over_budget(yours: int, count: int) -> str:
 
 def _counted(count: int) -> str:
     return f"{count} action" if count == 1 else f"{count} actions"
-
-
-def _still_held(place: _Place, item: _Found) -> _Place:
-    """What one of yours holds while its file is there: the id and actions it was last offered
-    with that it still has, so one an edit gives up is free for another."""
-    manifest = item.manifest
-    return replace(place, skill_id=place.skill_id if place.skill_id == manifest["id"] else "",
-                   actions=tuple(name for name in place.actions if name in manifest["actions"]))
 
 
 def _held_by_another(item: _Found, reserved: dict[str, _Place]) -> str:

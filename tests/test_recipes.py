@@ -1518,14 +1518,146 @@ class Host(Case):
         self.assertEqual(actions["work.chat"]["description"], "Open the work chat app now")
         self.assertIn("coins.price", actions)
 
-    async def test_an_action_an_edit_gives_up_is_free_for_another_at_once(self):
-        """work.chat is free once work's edit drops it, whichever skill is counted first."""
+    async def test_an_action_an_edit_gives_up_is_free_from_the_next_reload(self):
+        """work.chat stays work's until work's edit that drops it has loaded, so coins, edited
+        at the same time to have it, waits one reload, whichever is counted first."""
         alarm, refused = self.full()
         self.edit("work.yaml", "work.chat:", "work.talk:")
-        self.edit("coins.yaml", "coins.price", "work.chat")
+        coins = self.edit("coins.yaml", "coins.price", "work.chat")
+        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+                                              **refused})
+        self.assertLessEqual({"work.talk", "coins.price"}, set(self.host.current().actions))
         self.assertEqual(self.host.reload(), refused)
         self.assertLessEqual({"work.chat", "work.talk"}, set(self.host.current().actions))
         self.assertEqual(self.restart().reload(), refused)
+
+    def rename_and_lookalike(self, name="work.yaml") -> str:
+        """work.chat renamed and work.guestwifi made to start like a built-in: refused, so the
+        last version, with work.chat, stays in use. Returns the reason."""
+        self.edit(name, "work.chat:", "work.talk:")
+        self.edit(name, "work.guestwifi:", "file.guestwifi:")
+        return ("Its action file.guestwifi starts like one built into Tuxistant, so the model "
+                "could take it for one.")
+
+    async def test_a_refused_edit_keeps_the_actions_its_last_version_uses(self):
+        """work's refused edit dropped work.chat, and coins, edited to have it, took it from
+        the version of work still in use, which lost all three actions."""
+        alarm, refused = self.full()
+        work = self.user / "work.yaml"
+        why = self.rename_and_lookalike()
+        kept = {str(work): f"{why} {skillhost.KEPT}"}
+        self.assertEqual(self.host.reload(), {**kept, **refused})
+        coins = self.edit("coins.yaml", "coins.price", "work.chat")
+        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+                                              **kept, **refused})
+        self.work_has_its_chat(self.host)
+        self.assertLessEqual({"work.guestwifi", "coins.price"}, set(self.host.current().actions))
+
+    async def test_a_refused_growth_keeps_the_actions_its_last_version_uses(self):
+        alarm, refused = self.full()
+        work = self.edit("work.yaml", "work.chat:", "work.talk:")
+        self.grow("work.yaml", "work.extra")
+        grew = {str(work): f"{skillhost.GREW} {skillhost.KEPT}"}
+        self.assertEqual(self.host.reload(), {**grew, **refused})
+        coins = self.edit("coins.yaml", "coins.price", "work.chat")
+        self.assertEqual(self.host.reload(), {str(coins): f"{self.CLASH} {skillhost.KEPT}",
+                                              **grew, **refused})
+        self.work_has_its_chat(self.host)
+        self.assertIn("work.guestwifi", self.host.current().actions)
+
+    async def test_a_refused_growth_keeps_the_id_its_last_version_uses(self):
+        alarm, refused = self.full()
+        notes = self.edit("notes.yaml", "org.example.notes", "org.example.notes2")
+        self.grow("notes.yaml", "notes.more")
+        grew = {str(notes): f"{skillhost.GREW} {skillhost.KEPT}"}
+        self.assertEqual(self.host.reload(), {**grew, **refused})
+        work = self.edit("work.yaml", "org.example.work", "org.example.notes")
+        same_id = f"Another skill already has the id org.example.notes. {skillhost.KEPT}"
+        self.assertEqual(self.host.reload(), {str(work): same_id, **grew, **refused})
+        actions = self.host.current().actions
+        self.assertEqual(actions["notes.phone"]["skill"], "org.example.notes")
+        self.assertEqual(actions["work.chat"]["skill"], "org.example.work")
+
+    async def test_a_refused_edit_keeps_its_last_version_s_actions_after_a_restart(self):
+        """The place kept at the restart held only what the edit still had, so aa, refused
+        before, loaded with work.chat, and work put back was refused for good."""
+        self.example("coins.yaml", "notes.yaml", "work.yaml")                        # 5
+        work = self.user / "work.yaml"
+        before = work.read_text()
+        why = self.rename_and_lookalike()
+        self.assertEqual(self.host.reload(), {str(work): f"{why} {skillhost.KEPT}"})
+        aa = self.add("aa.yaml", recipe(id="org.example.aa", permissions={}, actions={
+            "work.chat": {"description": "Say hi", "say": "Hi."}}))
+        taken = {str(aa): self.CLASH}
+        self.assertEqual(self.host.reload(), {str(work): f"{why} {skillhost.KEPT}", **taken})
+        again = self.restart()
+        self.assertEqual(again.reload(), {str(work): why, **taken})
+        self.assertEqual(self.saved()["work.yaml"], 3)
+        work.write_text(before)
+        self.assertEqual(again.reload(), taken, "work loads again once the change is undone")
+        self.work_has_its_chat(again)
+
+    async def test_names_two_entries_claim_are_left_to_neither(self):
+        """A hand edit gave work.chat to notes as well, so with notes broken work, once
+        edited, was refused for it."""
+        alarm, refused = self.full()
+        loaded = self.user.parent / skillhost.LOADED
+        data = json.loads(loaded.read_text())
+        data["notes.yaml"]["actions"] = ["work.chat"]
+        loaded.write_text(json.dumps(data))
+        notes = self.user / "notes.yaml"
+        notes.write_text("id: [broken")
+        self.edit("work.yaml", "Open the work chat app", "Open the work chat app now")
+        again = self.restart()
+        self.assertEqual(set(again.reload()), {str(notes), str(alarm)}, "notes keeps its place")
+        self.assertIn("work.chat", again.current().actions)
+
+    def start_within(self, seconds=10) -> dict:
+        """A new host and its first reload, in a thread, so one that never returns fails."""
+        result = {}
+
+        def start():
+            try:
+                host = self.restart()
+                result["problems"] = host.reload()
+                result["host"] = host
+            except BaseException as e:      # the test reports it
+                result["error"] = e
+        thread = threading.Thread(target=start, daemon=True)
+        thread.start()
+        thread.join(seconds)
+        self.assertFalse(thread.is_alive(), "Tux never got past reading its own file")
+        if "error" in result:
+            raise result["error"]
+        return result
+
+    async def test_a_damaged_file_of_tux_s_own_never_stops_it_starting(self):
+        """Nested too deep, json raises RecursionError, which nothing caught; a pipe would
+        block start for good; and a huge file was read whole and trusted."""
+        alarm, refused = self.full()
+        for name in (skillhost.LOADED, skillhost.GRANTS):
+            file = self.user.parent / name
+            text = file.read_text()
+            for how in ("deep", "pipe", "huge"):
+                with self.subTest(file=name, how=how):
+                    file.unlink()
+                    if how == "deep":
+                        file.write_text("[" * 200000 + "]" * 200000)
+                    elif how == "pipe":
+                        os.mkfifo(file)
+                    else:       # what was saved, and more than a megabyte besides
+                        data = json.loads(text)
+                        file.write_text(json.dumps({**data, "x" * skillhost.MAX_STATE_BYTES: 1}))
+                    started = self.start_within()
+                    actions = started["host"].current().actions
+                    self.assertIn("time.now", actions)
+                    if name == skillhost.LOADED:     # not trusted, so counted by name
+                        self.assertIn("alarm.ring", actions)
+                        self.assertIn(str(self.user / "work.yaml"), started["problems"])
+                    else:
+                        self.assertEqual(started["problems"], refused)
+                    file.unlink()
+                    file.write_text(text)
 
     async def test_a_check_names_the_same_skills_as_the_daemon(self):
         """tuxistant doctor reads the same folders with a host of its own, and named work."""
