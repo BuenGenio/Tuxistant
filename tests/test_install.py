@@ -697,6 +697,212 @@ class Docs(unittest.TestCase):
     def test_docs_credit_original_artwork(self):
         self.assertIn("drawn from scratch", (ROOT / "docs/THEMES.md").read_text())
 
+    def test_skills_md_names_every_first_word_a_skill_you_add_cant_use(self):
+        from tuxistant import skillhost
+        rules = next(line for line in (ROOT / "docs/SKILLS.md").read_text().splitlines()
+                     if line.startswith("**What it can't do.**"))
+        listed = re.search(r"Those first words are (.*?)\.", rules)
+        self.assertIsNotNone(listed, "SKILLS.md lists them, as 0.4.0 skills can trip on them")
+        named = re.findall(r"`([a-z]+)`", listed[1])
+        words = {skillhost._namespace(word) for word in named}
+        self.assertEqual(words, built_in_first_words())
+        stripped = {word for word in words if word not in named}
+        self.assertEqual(stripped, set(), "a word refused as it is compared is named as well")
+        # and the host refuses exactly those, judged as for a code skill but with no sandbox
+        with tempfile.TemporaryDirectory() as tmp:
+            user = Path(tmp, "skills")
+            user.mkdir()
+            for word in sorted(words) + ["zebra"]:
+                for form in (word, word + "s"):
+                    (user / f"{form}-{word}.yaml").write_text(
+                        f"id: org.example.{form}\nname: X\ndescription: Y\npermissions: {{}}\n"
+                        f"actions:\n  {form}_extra.get:\n    description: Get\n    say: Hi\n")
+            problems = skillhost.offline({}, user=user).problems
+            refused = {Path(key).stem for key, why in problems.items() if "starts like" in why}
+            self.assertEqual(refused, {f"{form}-{word}" for word in words
+                                       for form in (word, word + "s")})
+            self.assertEqual(set(problems), {str(user / f"{name}.yaml") for name in refused})
+
+    def test_each_release_says_what_changes_for_the_one_before_and_what_to_do(self):
+        sections = changelog_sections()
+        for (heading, body), (older, _) in zip(sections, sections[1:]):
+            older = re.match(r"\d+\.\d+\.\d+", older)
+            if older is None or tuple(map(int, older[0].split("."))) < (0, 2, 0):
+                continue
+            with self.subTest(heading):
+                self.assertRegex(
+                    body, rf"(?m)^\w+ changes? reach(es)? what {re.escape(older[0])} already did:$")
+                self.assertRegex(body, r"(?m)^After updating, ")
+
+    def test_the_upgrade_note_on_code_skills_matches_the_rules(self):
+        from tuxistant import skillhost
+        body = next(body for _, body in changelog_sections()
+                    if "reach what 0.4.0 already did" in body)
+        note = next(line for line in body.splitlines() if "loaded in 0.4.0" in line)
+        words = re.findall(r"`([a-z]+)`", re.search(r"may not be (.*?), so ", note)[1])
+        self.assertGreater(len(words), 1)
+        self.assertEqual({skillhost._namespace(word) for word in words}, built_in_first_words())
+        self.assertLessEqual({skillhost._namespace(word) for word in words}, set(words),
+                             "each word is named as the rule compares it, so `new` beside `news`")
+        self.assertEqual(skillhost.USER_TOOLS, 6)
+        self.assertIn("six actions", note)
+        self.assertIn("anchors", note)
+        self.assertIn('"Skills with problems"', note)
+        self.assertIn('"Skills with problems"', (ROOT / "tuxistant/settings_app.py").read_text())
+
+    def test_what_the_docs_say_of_the_budget_holds_without_a_note_of_what_loaded(self):
+        """0.4.0 wrote no skills-loaded.json, so at the first start after it every skill is new:
+        one that was working can be refused, and one past USER_TOOLS alone is refused anyway."""
+        from tuxistant import skillhost
+        sizes = {"a": 4, "b": 3, "c": 2, "d": skillhost.USER_TOOLS + 1}
+        with tempfile.TemporaryDirectory() as tmp:
+            user = Path(tmp, "skills")
+            for name, count in sizes.items():
+                folder = user / name
+                folder.mkdir(parents=True)
+                (folder / "main.py").write_text("")
+                (folder / skillhost.MANIFEST).write_text(
+                    f"id: org.example.{name}\nname: X\ndescription: Y\nrun: [python3, main.py]\n"
+                    "actions:\n" + "".join(f"  {name}x.a{i}:\n    description: Do\n"
+                                            for i in range(count)))
+            self.assertFalse((user.parent / skillhost.LOADED).exists())
+            problems = skillhost.offline({}, user=user).problems
+        self.assertEqual(set(problems), {str(user / "b"), str(user / "d")},
+                         "b worked in 0.4.0, c still fits, d is too big alone")
+        self.assertNotIn("already", problems[str(user / "d")])
+        seven = "seven or more"
+        self.assertEqual(skillhost.USER_TOOLS + 1, 7)
+        rule = next(line for line in (ROOT / "docs/SKILLS.md").read_text().splitlines()
+                    if line.startswith("**Six actions in all.**"))
+        self.assertIn(skillhost.LOADED, rule)
+        self.assertNotIn("never one that was working", rule)
+        self.assertIn("first start after updating from 0.4.0", rule)
+        self.assertIn("one that was working can be refused", rule)
+        self.assertIn(f"One skill with {seven} actions is refused", rule)
+        body = changelog_sections()[0][1]
+        entry = next(line for line in body.splitlines()
+                     if line.startswith("- Skills you add, code skills and recipes together"))
+        self.assertIn("first start after 0.4.0", entry)
+        self.assertIn(f"One skill with {seven} actions is refused", entry)
+        note = next(line for line in body.splitlines() if "loaded in 0.4.0" in line)
+        self.assertIn(f"for one with {seven}", note, "taking another out can't bring it back")
+
+    def test_a_reach_list_counts_its_items(self):
+        numbers = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5, "Six": 6}
+        counted = 0
+        for heading, body in changelog_sections():
+            said = re.search(r"(?m)^(\w+) changes? reach(?:es)? what [\d.]+ already did:\n\n"
+                             r"((?:- .*\n)+)", body)
+            if said:
+                counted += 1
+                with self.subTest(heading):
+                    self.assertEqual(numbers[said[1]], said[2].count("\n"))
+        self.assertGreaterEqual(counted, 3)
+
+    def test_the_reach_list_names_follow_ups_carrying_a_conversation_over(self):
+        from tuxistant import controller
+        body = changelog_sections()[0][1]
+        reach = body.split("already did:\n\n", 1)[1].split("\n\n", 1)[0]
+        self.assertEqual(controller.FOLLOW_ON_S, 120)
+        item = next(line for line in reach.splitlines() if "Fn hold within 2 minutes" in line)
+        self.assertIn("card", item)
+        # Only what reads_private calls private makes a later request need a card, so each
+        # thing the item says a hold read has to be one of those.
+        from tuxistant import skills
+        actions = skills.Skills().actions
+        reads = {"mail": "mail.search", "files": "file.find", "calendar": "calendar.events",
+                 "selected text": "translate.selection", "command output": "shell.run",
+                 "home": "home.status", "the web": "web.search", "research": "research.run",
+                 "the news": "news.headlines", "the weather": "weather.forecast"}
+        said = re.search(r"after a hold that read (?:your )?(.+?)\.", item)
+        self.assertTrue(said, item)
+        for source in re.split(r", (?:or )?| or ", said[1]):
+            with self.subTest(source):
+                self.assertIn(source, reads, "name a source this test knows")
+                self.assertTrue(skills.reads_private(actions[reads[source]]["permissions"]))
+
+    def test_the_security_table_gives_each_protection_one_status(self):
+        readme = (ROOT / "README.md").read_text()
+        table = readme.split("| Protection | Status |\n", 1)[1].split("\n\n", 1)[0]
+        seen = {}
+        for row in table.splitlines()[1:]:
+            protection = row.split("|")[1].strip()
+            for topic in re.split(r", | and ", protection):
+                self.assertNotIn(topic.casefold(), seen, f"{protection!r} and "
+                                 f"{seen.get(topic.casefold())!r}")
+                seen[topic.casefold()] = protection
+
+    def test_readme_says_every_kind_of_thing_a_recipe_can_do(self):
+        from tuxistant import recipes
+        said = {"get": "asks a host", "post": "asks a host", "open": "opens an app",
+                "desktop": "desktop actions", "say": "says a sentence"}
+        not_effects = {"description", "params", "required", "json", "text", "pick"}
+        sentence = next(line for line in (ROOT / "README.md").read_text().splitlines()
+                        if "Or write a recipe" in line)
+        for effect in recipes.ACTION_FIELDS - not_effects:
+            with self.subTest(effect):
+                self.assertIn(said[effect], sentence)
+
+    def test_readme_counts_the_tests_it_names_as_the_suite_does(self):
+        readme = (ROOT / "README.md").read_text()
+        counted = re.findall(r"\[tests/(test_\w+)\.py\]\(tests/\1\.py\) (?:has|keeps) (\d+)", readme)
+        self.assertGreaterEqual(len(counted), 2)
+        for module, count in counted:
+            with self.subTest(module):
+                suite = unittest.defaultTestLoader.loadTestsFromName(f"tests.{module}")
+                self.assertEqual(suite.countTestCases(), int(count))
+
+    def test_the_changelog_says_where_a_model_name_is_refused_as_the_code_does(self):
+        from tuxistant import config
+        text = (ROOT / "CHANGELOG.md").read_text()
+        sentence = next(s for s in re.split(r"(?<=\.) ", text) if config.NOT_A_MODEL in s)
+        self.assertIn(f"{config.MAX_MODEL_CHARS} characters", sentence)
+        self.assertFalse(config.valid_model(" claude-x "), "D-Bus refuses the spaces")
+        apply = re.search(r"def on_model_apply\(self, row\):\n(.*)\n",
+                          (ROOT / "tuxistant/settings_app.py").read_text())[1]
+        self.assertIn("get_text().strip()", apply, "Settings trims them")
+        self.assertIn("Settings trims", sentence)
+
+    def test_a_switch_the_newest_entry_announces_is_marked_untried_and_has_a_check(self):
+        labels = re.findall(r'_switch\("\w+", "([^"]+)"',
+                            (ROOT / "tuxistant/settings_app.py").read_text())
+        self.assertIn("Say my Tailscale address", labels)
+        roadmap = (ROOT / "docs/ROADMAP.md").read_text()
+        checks = roadmap.split("## Check on the real desktop", 1)[1].split("\n## ", 1)[0]
+        for bullet in re.findall(r"(?m)^- .*$", changelog_sections()[0][1]):
+            for label in labels:
+                if f'"{label.casefold()}"' in bullet.casefold():
+                    with self.subTest(label):
+                        self.assertIn("not yet tried on a real desktop", bullet.casefold())
+                        self.assertIn(label.casefold(), checks.casefold())
+
+    def test_the_real_desktop_checks_are_numbered_in_order(self):
+        roadmap = (ROOT / "docs/ROADMAP.md").read_text()
+        checks = roadmap.split("## Check on the real desktop", 1)[1].split("\n## ", 1)[0]
+        numbers = [int(n) for n in re.findall(r"(?m)^(\d+)\. ", checks)]
+        self.assertEqual(numbers, list(range(1, len(numbers) + 1)))
+
+
+def changelog_sections():
+    """(heading, body) for each "## " section of CHANGELOG.md, newest first."""
+    parts = re.split(r"(?m)^## (.+)$", (ROOT / "CHANGELOG.md").read_text())
+    return list(zip(parts[1::2], parts[2::2]))
+
+
+def built_in_first_words():
+    """What _resolve calls ours: the first word of every built-in and bundled action, as
+    _namespace reads it."""
+    import yaml
+    from tuxistant import skillhost
+    from tuxistant.skills import BUILTIN, HANDLERS
+    names = set(HANDLERS)
+    for file in BUILTIN.glob("*.yaml"):
+        names |= set(yaml.safe_load(file.read_text())["actions"])
+    for folder in skillhost.BUNDLED.iterdir():
+        if (folder / skillhost.MANIFEST).is_file():
+            names |= set(skillhost.load_code_manifest(folder, True)["actions"])
+    return {skillhost._namespace(name) for name in names}
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -76,8 +76,6 @@ ACTION_FIELDS = {"description", "params", "required"}
 REFUSED_PERMISSIONS = ("shell", "files_read", "files_write", "clipboard")
 UPDATED = "That skill was just updated. Please ask again."
 USER_TOOLS = 6      # actions from skills you added, code and recipes together
-OVER_BUDGET = ("Tux already has six actions from skills you added, and more would make it worse "
-               "at choosing the right one. Take one out to use this one.")
 NOT_YAML = "A recipe's file name has to end in .yaml."
 TOO_DEEP = "It is nested more than 16 levels deep, which no skill needs."
 
@@ -168,12 +166,14 @@ def _unbracketed(text: str) -> str:
     return text.replace("<", " ").replace(">", " ")
 
 
-def _actions(manifest: dict) -> dict:
+def _actions(manifest: dict, bundled: bool) -> dict:
     actions = manifest.get("actions")
     if not isinstance(actions, dict) or not actions:
         raise ValueError("It declares no actions.")
     if len(actions) > MAX_ACTIONS:
-        raise ValueError(f"It declares more than {MAX_ACTIONS} actions.")
+        # one of yours is told the limit it really has to meet, not one that would refuse it again
+        raise ValueError(f"It declares more than {MAX_ACTIONS} actions." if bundled
+                         else over_budget(0, len(actions)))
     checked = {}
     for name, action in actions.items():
         action_name(name)
@@ -325,7 +325,7 @@ def load_code_manifest(folder: Path, bundled: bool) -> dict:
             "version": _text(manifest, "version", required=False),
             "run": _run(manifest, folder), "permissions": _permissions(manifest),
             "config": _config(manifest, bundled), "timeout_s": _timeout(manifest),
-            "actions": _actions(manifest), "source": "bundled" if bundled else "yours"}
+            "actions": _actions(manifest, bundled), "source": "bundled" if bundled else "yours"}
 
 
 def _skipped(name: str, is_dir: bool) -> bool:
@@ -766,8 +766,8 @@ class SkillHost:
             unrunnable = mine and item.kind == "code" and sandbox_problem
             problem = unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
                 mine and _lookalike(item.manifest, ours)) or (
-                OVER_BUDGET if mine and yours + len(item.manifest["actions"]) > USER_TOOLS
-                else "")
+                over_budget(yours, len(item.manifest["actions"]))
+                if mine and yours + len(item.manifest["actions"]) > USER_TOOLS else "")
             if problem:
                 problems[item.key] = problem
                 continue
@@ -1008,6 +1008,22 @@ def _namespace(action: str) -> str:
     file_trash.now are file_delete and file_trash_now to it, beside file_find and file_trash."""
     word = re.split(r"[._]", action, maxsplit=1)[0].casefold()
     return word[:-1] if word.endswith("s") and len(word) > 1 else word
+
+
+def over_budget(yours: int, count: int) -> str:
+    """Why a skill with count actions doesn't fit beside the yours already loaded. One with more
+    than the budget never fits, whatever else is taken out, so it is told that instead."""
+    if count > USER_TOOLS:
+        return (f"It has {count} actions, and the skills you add may bring {USER_TOOLS} at most "
+                "between them, as more would make Tux worse at choosing the right one. Take some "
+                f"out of it, leaving {USER_TOOLS} or fewer, to use it.")
+    return (f"Skills you added already bring {_counted(yours)}, and its {_counted(count)} would "
+            f"take them past {USER_TOOLS}, which would make Tux worse at choosing the right one. "
+            "Take one of them out to use this one.")
+
+
+def _counted(count: int) -> str:
+    return f"{count} action" if count == 1 else f"{count} actions"
 
 
 def _lookalike(manifest: dict, ours: set) -> str:
