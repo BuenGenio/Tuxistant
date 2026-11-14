@@ -254,6 +254,33 @@ class Refused(Case):
         write_skill(self.bundled, "demo", text=bundled.replace("demo.hello", "demo.shipped"))
         self.assertNotIn(str(self.bundled / "demo"), self.host.reload())
 
+    def many(self, name: str, word: str, count: int) -> Path:
+        text = MANIFEST.format(id=f"org.example.{word}", action=f"{word}.a0", permissions="{}",
+                               config="[]", timeout=15)
+        text += "".join(f"  {word}.a{i}:\n    description: Do {i}\n" for i in range(1, count))
+        return write_skill(self.user, name, text=text)
+
+    def test_one_skill_past_the_budget_alone_is_told_so(self):
+        """0.4.0 allowed 32 actions to each skill. Nothing else was added, so telling it to take
+        another skill out would be untrue and wouldn't help."""
+        folder = self.many("big", "big", skillhost.USER_TOOLS + 1)
+        problem = self.host.reload()[str(folder)]
+        self.assertIn(f"It has {skillhost.USER_TOOLS + 1} actions", problem)
+        self.assertNotIn("already", problem)
+        self.assertEqual(self.processes, [])
+
+    def test_the_budget_says_how_many_are_already_taken(self):
+        """At the first start after 0.4.0 nothing was noted as loaded, so folders count in the
+        order they sort by name, and one that was working can be the one refused."""
+        self.assertFalse((self.user.parent / skillhost.LOADED).exists())
+        self.many("a", "alpha", 4)
+        b = self.many("b", "beta", 3)
+        self.many("c", "gamma", 2)
+        problems = self.host.reload()
+        self.assertEqual(problems, {str(b): skillhost.over_budget(4, 3)})
+        self.assertIn("already bring 4 actions, and its 3", problems[str(b)])
+        self.assertIn("gamma.a1", self.host.current().actions, "a later one that fits loads")
+
     def test_bad_ids_and_action_names(self):
         for manifest in ({"id": "../../etc"}, {"id": "Org.Example"}, {"id": "noprefix"},
                          {"action": "Demo.Hello"}, {"action": "nodot"}):

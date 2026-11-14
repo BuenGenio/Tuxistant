@@ -76,8 +76,6 @@ ACTION_FIELDS = {"description", "params", "required"}
 REFUSED_PERMISSIONS = ("shell", "files_read", "files_write", "clipboard")
 UPDATED = "That skill was just updated. Please ask again."
 USER_TOOLS = 6      # actions from skills you added, code and recipes together
-OVER_BUDGET = ("Tux already has six actions from skills you added, and more would make it worse "
-               "at choosing the right one. Take one out to use this one.")
 NOT_YAML = "A recipe's file name has to end in .yaml."
 TOO_DEEP = "It is nested more than 16 levels deep, which no skill needs."
 
@@ -766,8 +764,8 @@ class SkillHost:
             unrunnable = mine and item.kind == "code" and sandbox_problem
             problem = unrunnable or self._clash(item, ids, actions, tools, builtin_ids) or (
                 mine and _lookalike(item.manifest, ours)) or (
-                OVER_BUDGET if mine and yours + len(item.manifest["actions"]) > USER_TOOLS
-                else "")
+                over_budget(yours, len(item.manifest["actions"]))
+                if mine and yours + len(item.manifest["actions"]) > USER_TOOLS else "")
             if problem:
                 problems[item.key] = problem
                 continue
@@ -1008,6 +1006,18 @@ def _namespace(action: str) -> str:
     file_trash.now are file_delete and file_trash_now to it, beside file_find and file_trash."""
     word = re.split(r"[._]", action, maxsplit=1)[0].casefold()
     return word[:-1] if word.endswith("s") and len(word) > 1 else word
+
+
+def over_budget(yours: int, count: int) -> str:
+    """Why a skill with count actions doesn't fit beside the yours already loaded. One with more
+    than the budget never fits, whatever else is taken out, so it is told that instead."""
+    if count > USER_TOOLS:
+        return (f"It has {count} actions, and the skills you add may bring {USER_TOOLS} at most "
+                "between them, as more would make Tux worse at choosing the right one. Take some "
+                f"out of it, leaving {USER_TOOLS} or fewer, to use it.")
+    return (f"Skills you added already bring {yours} actions, and its {count} would take them "
+            f"past {USER_TOOLS}, which would make Tux worse at choosing the right one. Take one "
+            "of them out to use this one.")
 
 
 def _lookalike(manifest: dict, ours: set) -> str:
