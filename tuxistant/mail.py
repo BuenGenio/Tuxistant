@@ -186,6 +186,8 @@ SENT_MAIL = 60          # and the folders of mail the user sent
 # rather than too little: a promo code and a booking's reference go too. A code can come one
 # character to a line, as one to an HTML block does, or one to a table cell, with a space between:
 # either way it is read as the code it is.
+# Every line end str.splitlines knows, as HTML's lines are split on in goamail._unhtml.
+LINE_END = re.compile(r"\r\n|[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 SPACE = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
 UNSEEN = re.compile(r"[\u200b-\u200f\u2060\ufeff\u00ad]")
 SECRET_WORD = re.compile(
@@ -451,9 +453,10 @@ def _hide(text: str) -> str:
     """A mail's text with whatever may be a sign-in code or a password taken out. Odd spaces
     are made plain first, as the model would read "482\u00a0913" as the code it is, and a code
     spelt out one character to a line is put on a line of its own, as the model would read it.
-    A mail server ends each line with a carriage return before the line feed, and that would
-    keep a code from being seen alone on its line, so the line endings are made plain first."""
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    A mail server ends each line with a carriage return before the line feed, and a mail may end
+    one with a line or paragraph separator, NEL, a vertical tab or a form feed. Any of these would
+    keep a code from being seen alone on its line, so every line end is made a line feed first."""
+    text = LINE_END.sub("\n", text)
     text = SPELT.sub(lambda run: "".join(run[0].split()), UNSEEN.sub("", SPACE.sub(" ", text)))
     out, at = [], 0
     for start, end in _spans(text):
