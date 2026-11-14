@@ -94,6 +94,7 @@ CLOUD_DETAILS = (
 )
 CLOUD_AGREE = "I understand and agree"
 CLOUD_POLICY = f"{CLOUD_PROVIDER}'s privacy policy"
+RESTART_TO_AGREE = "Tuxistant must be restarted before it can ask you to agree"
 MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September",
           "October", "November", "December")     # not the locale's: the rest is in English
 SENT_AS = "As the model gets it"
@@ -364,15 +365,31 @@ def cloud_body(model: str) -> str:
     return CLOUD_BODY.format(provider=CLOUD_PROVIDER, model=shown(model))
 
 
+def older_daemon(config: dict) -> bool:
+    """A daemon that hasn't restarted since an update sends no cloud_consent. It can't record an
+    agreement, and uses the cloud with the switch and a key alone, as it always did."""
+    return "cloud_consent" not in config
+
+
 def cloud_on(config: dict) -> bool:
-    """What the switch shows: on only with an agreement that covers what is sent now."""
+    """What the switch shows: on only with an agreement that covers what is sent now. With an
+    older daemon, what it holds, so that Cloud can still be switched off."""
+    if older_daemon(config):
+        return config.get("cloud_enabled") is True
     return config.get("cloud_enabled") is True and cloud.cloud_agreed(config)
 
 
 def cloud_note(config: dict) -> str:
     """Says where requests really go, which takes the switch, the agreement and a key. The same
-    test as the daemon's, config.cloud_in_use, so the two can't disagree."""
+    test as the daemon's, config.cloud_in_use, so the two can't disagree, or an older daemon's."""
     nothing = f"nothing goes to {CLOUD_PROVIDER}"
+    if older_daemon(config):
+        if config.get("cloud_enabled") is not True:
+            return f"Nothing goes to {CLOUD_PROVIDER}. {RESTART_TO_AGREE}"
+        if not config.get("cloud_key_set"):
+            return f"No API key yet, so {nothing}. {RESTART_TO_AGREE}"
+        return (f"{RESTART_TO_AGREE}. Until then, requests with several steps go to "
+                f"{CLOUD_PROVIDER}")
     if config.get("cloud_enabled") is not True:
         return f"Nothing goes to {CLOUD_PROVIDER}"
     if not cloud.cloud_agreed(config):
@@ -944,8 +961,13 @@ class SettingsBox:
 
     def on_model_apply(self, row):
         model = row.get_text().strip() or DEFAULTS["cloud_model"]
+        if not cloud.valid_model(model):    # the daemon refuses it too: no agreement could name it
+            self.win.toast(cloud.NOT_A_MODEL)
+            self.set_row_text(row, self.saved_model)
+            return
         self.set_row_text(row, model)
-        if model != cloud.cloud_model(self.win.config) and cloud_on(self.win.config):
+        if (model != cloud.cloud_model(self.win.config) and cloud_on(self.win.config)
+                and not older_daemon(self.win.config)):
             # The agreement named the model. Another one is a new agreement, made with it.
             self.ask_cloud(model, cancelled=lambda: self.set_row_text(row, self.saved_model))
             return
@@ -991,6 +1013,10 @@ class SettingsBox:
             return
         if not row.get_active():
             self.set_cloud(False)
+        elif older_daemon(self.win.config):     # it would refuse the agreement, and not ask
+            self.win.toast(RESTART_TO_AGREE)
+            # Not from inside the switch's own change: the row would push it back on, and save.
+            GLib.idle_add(lambda: self.show_cloud() or GLib.SOURCE_REMOVE)
         elif cloud.cloud_agreed(self.win.config):     # agreed already, to all of this
             self.set_cloud(True)
         else:

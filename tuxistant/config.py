@@ -84,6 +84,7 @@ CLOUD_PRIVACY_URL = "https://www.anthropic.com/legal/privacy"
 CLOUD_CONSENT_VERSION = 1
 MAX_MODEL_CHARS = 100
 NOT_THE_CONSENT = "That is not what Tuxistant asks you to agree to now"
+NOT_A_MODEL = "That is not a model name"
 
 
 SERVER = re.compile(r"(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+)(?::(\d{1,5}))?")
@@ -118,6 +119,12 @@ def _value(values, key):
         return DEFAULTS[key]
 
 
+def valid_model(model) -> bool:
+    """A model name as an agreement can name it. Empty is not one: it stands for the default."""
+    return (isinstance(model, str) and bool(model) and model == model.strip()
+            and len(model) <= MAX_MODEL_CHARS and model.isprintable())
+
+
 def cloud_model(values) -> str:
     return _value(values, "cloud_model") or DEFAULTS["cloud_model"]
 
@@ -145,12 +152,12 @@ def agree_to_cloud(values: dict, asked: dict) -> dict:
     if not asked:
         values["cloud_enabled"] = False
         return {}
-    model = asked.get("model")
     if (set(asked) != {"version", "provider", "model"} or type(asked["version"]) is not int
-            or asked["version"] != CLOUD_CONSENT_VERSION or asked["provider"] != CLOUD_PROVIDER
-            or not isinstance(model, str) or model != model.strip() or not model
-            or len(model) > MAX_MODEL_CHARS or not model.isprintable()):
+            or asked["version"] != CLOUD_CONSENT_VERSION or asked["provider"] != CLOUD_PROVIDER):
         raise ValueError(NOT_THE_CONSENT)
+    model = asked["model"]
+    if not valid_model(model):
+        raise ValueError(NOT_A_MODEL)
     values["cloud_model"] = model
     values["cloud_enabled"] = True
     return {"version": CLOUD_CONSENT_VERSION, "provider": CLOUD_PROVIDER, "model": model,
@@ -201,6 +208,8 @@ class Config:
             raise ValueError("That is not a calendar")
         if key == "news_source" and value not in SOURCES:
             raise ValueError("That is not one of the news sources")
+        if key == "cloud_model" and value and not valid_model(value):
+            raise ValueError(NOT_A_MODEL)   # one an agreement could never name
         if key == "cloud_consent":
             value = agree_to_cloud(self.values, value)
         if key == "server":

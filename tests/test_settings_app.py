@@ -403,7 +403,8 @@ class Logic(unittest.TestCase):
 
     def test_cloud_note_says_where_requests_really_go(self):
         note = sa.cloud_note
-        self.assertEqual(note({}), "Nothing goes to Anthropic", "an older daemon")
+        self.assertEqual(note({}), f"Nothing goes to Anthropic. {sa.RESTART_TO_AGREE}",
+                         "a daemon from before Cloud")
         for config in ({**CLOUD_ON, "cloud_enabled": False}, {**CLOUD_ON, "cloud_enabled": "true"}):
             self.assertEqual(note(config), "Nothing goes to Anthropic")
         self.assertEqual(note(CLOUD_ON), "Requests with several steps go to Anthropic")
@@ -424,9 +425,26 @@ class Logic(unittest.TestCase):
                        {"cloud_model": "claude-other-1"}):
             with self.subTest(change):
                 self.assertFalse(sa.cloud_on({**CLOUD_ON, **change}))
-        self.assertFalse(sa.cloud_on({"cloud_enabled": True}), "an older daemon")
+        self.assertFalse(sa.cloud_on({}), "a daemon from before Cloud")
         self.assertTrue(sa.cloud_on({**CLOUD_ON, "cloud_key_set": False}),
                         "the note says the key is missing; the switch says what was chosen")
+
+    def test_an_older_daemon_is_shown_as_it_really_is(self):
+        """One that hasn't restarted since the update: no cloud_consent, and the cloud with the
+        switch and a key alone. Saying nothing goes, or showing it off, would not be true."""
+        old = {"cloud_enabled": True, "cloud_key_set": True, "cloud_model": "claude-opus-5-5"}
+        self.assertTrue(sa.older_daemon(old))
+        self.assertFalse(sa.older_daemon(CLOUD_ON))
+        self.assertFalse(sa.older_daemon({**CLOUD_ON, "cloud_consent": {}}))
+        self.assertTrue(sa.cloud_on(old), "on, so it can be switched off")
+        self.assertEqual(sa.cloud_note(old), "Tuxistant must be restarted before it can ask you "
+                         "to agree. Until then, requests with several steps go to Anthropic")
+        self.assertEqual(sa.cloud_note({**old, "cloud_key_set": False}),
+                         f"No API key yet, so nothing goes to Anthropic. {sa.RESTART_TO_AGREE}")
+        self.assertFalse(sa.cloud_on({**old, "cloud_enabled": False}))
+        self.assertEqual(sa.cloud_note({**old, "cloud_enabled": False}),
+                         f"Nothing goes to Anthropic. {sa.RESTART_TO_AGREE}")
+        self.assertIsNone(sa.consent_words(old))
 
     def test_the_agreement_is_shown_with_its_date(self):
         title, words = sa.consent_words(CLOUD_ON)
@@ -1768,6 +1786,63 @@ class Inner(unittest.TestCase):
         self.assertFalse(page.cloud_consent.get_visible())
         settle()
         self.assertEqual(len(saved()), 1, "the rollback is not a save")
+
+    def as_from_an_older_daemon(self, **values):
+        """What GetConfig gives before the daemon restarts after an update: no cloud_consent."""
+        config = {key: value for key, value in self.win.config.items() if key != "cloud_consent"}
+        self.addCleanup(self.win.load_config)
+        self.win.apply_config({**config, **values})
+
+    def test_25_cloud_an_older_daemon_using_it_can_be_switched_off(self):
+        """Its planner uses the cloud with the switch and a key alone, so say so, and let the
+        user turn it off. Shown off, it could only be turned on, which it would refuse."""
+        page = self.skill_page("org.tuxistant.task")
+        self.as_from_an_older_daemon(cloud_enabled=True, cloud_key_set=True)
+        self.assertTrue(page.cloud.get_active())
+        self.assertEqual(page.cloud.get_subtitle(), sa.cloud_note(
+            {"cloud_enabled": True, "cloud_key_set": True}))
+        self.assertIn("go to Anthropic", page.cloud.get_subtitle())
+        self.assertFalse(page.cloud_consent.get_visible())
+        settle()
+        self.assertEqual(saved(), [], "loading must not write anything back")
+        page.cloud.set_active(False)
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog)
+        wait(lambda: saved() == [["cloud_enabled", "false"]], "the switch to save")
+
+    def test_25_cloud_an_older_daemon_is_not_asked_to_agree(self):
+        """It would refuse cloud_consent, so the dialog would end in a refusal."""
+        page = self.skill_page("org.tuxistant.task")
+        self.as_from_an_older_daemon(cloud_enabled=False)
+        self.assertEqual(page.cloud.get_subtitle(),
+                         f"Nothing goes to Anthropic. {sa.RESTART_TO_AGREE}")
+        with mock.patch.object(self.win, "toast") as toast:
+            page.cloud.set_active(True)
+            settle(30)
+        toast.assert_called_once_with(sa.RESTART_TO_AGREE)
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog, "no agreement")
+        wait(lambda: not page.cloud.get_active(), "the switch to go back")
+        settle()
+        self.assertEqual(saved(), [])
+
+    def test_25_cloud_a_model_no_agreement_could_name_is_refused_at_once(self):
+        page = self.skill_page("org.tuxistant.task")
+        row, apply = page.cloud_model, apply_button(page.cloud_model)
+        for cloud_on in (False, True):
+            if cloud_on:
+                control("Change", "cloud_consent", json.dumps(AGREED), signature="ss")
+                wait(page.cloud.get_active, "the switch to follow")
+            with self.subTest(cloud_on=cloud_on), \
+                    mock.patch.object(self.win, "toast") as toast:
+                row.set_text("m" * 101)
+                apply.emit("clicked")
+                settle(30)
+                toast.assert_called_once_with("That is not a model name")
+                self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog,
+                              "no agreement for it")
+                self.assertEqual(row.get_text(), "claude-opus-5-5")
+        settle()
+        self.assertEqual(saved(), [])
+        withdraw(self.win, page)
 
     def test_25_cloud_key_is_write_only(self):
         page = self.skill_page("org.tuxistant.task")

@@ -776,17 +776,48 @@ class Consent(CloudCase):
         before = dict(self.config.values)
         for asked in ({**AGREED, "version": CLOUD_CONSENT_VERSION + 1},
                       {**AGREED, "version": True}, {**AGREED, "provider": "Elsewhere"},
-                      {**AGREED, "date": "2020-01-01"}, {"version": CLOUD_CONSENT_VERSION},
-                      {**AGREED, "model": ""}, {**AGREED, "model": " padded "},
-                      {**AGREED, "model": "a\nb"}, {**AGREED, "model": "m" * 101},
-                      {**AGREED, "model": 5}):
+                      {**AGREED, "date": "2020-01-01"}, {"version": CLOUD_CONSENT_VERSION}):
             with self.subTest(asked=asked):
                 with self.assertRaises(ValueError) as caught:
                     self.config.set("cloud_consent", asked)
                 self.assertEqual(str(caught.exception), config_module.NOT_THE_CONSENT)
                 self.assertEqual(self.config.values, before)
+        for model in ("", " padded ", "a\nb", "m" * 101, 5):
+            with self.subTest(model=model):
+                with self.assertRaises(ValueError) as caught:
+                    self.config.set("cloud_consent", {**AGREED, "model": model})
+                self.assertEqual(str(caught.exception), config_module.NOT_A_MODEL,
+                                 "the model is what is wrong, so say so")
+                self.assertEqual(self.config.values, before)
         with self.assertRaises(TypeError):
             self.config.set("cloud_consent", [AGREED])
+
+    async def test_a_model_no_agreement_could_name_is_not_saved(self):
+        """Saved, it could only be asked about, and agreeing to it would be refused."""
+        before = dict(self.config.values)
+        for model in (" padded", "padded ", "a\nb", "tab\there", "m" * 101, "   "):
+            with self.subTest(model=model):
+                with self.assertRaises(ValueError) as caught:
+                    self.config.set("cloud_model", model)
+                self.assertEqual(str(caught.exception), config_module.NOT_A_MODEL)
+                self.assertEqual(self.config.values, before)
+        for model in ("m" * 100, "claude-other-1", ""):     # "" is the default
+            with self.subTest(model=model):
+                self.config.set("cloud_model", model)
+                self.config.set("cloud_consent", {**AGREED, "model": config_module.cloud_model(
+                    self.config)})
+                self.assertEqual(await self.where(), "cloud")
+
+    async def test_a_kept_agreement_lets_the_switch_alone_turn_it_on_again(self):
+        """Off is not withdrawn. With the agreement kept, the switch turns Cloud on again, from
+        Settings or from anything on the bus; only Withdraw forgets it."""
+        self.config.set("cloud_enabled", False)
+        self.assertEqual(await self.where(), "home")
+        self.config.set("cloud_enabled", True)
+        self.assertEqual(await self.where(), "cloud")
+        self.config.set("cloud_consent", {})
+        self.config.set("cloud_enabled", True)
+        self.assertEqual(await self.where(), "home")
 
     async def test_withdrawing_during_a_task_stops_before_the_next_call(self):
         self.use({"plan.look": lambda *_: self.config.set("cloud_consent", {}) or {"seen": "x"}})

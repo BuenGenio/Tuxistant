@@ -132,10 +132,12 @@ Cloud sends multi-step requests to Anthropic, so it is the one place where what 
 
 Now the daemon uses the cloud only with an agreement that covers what would be sent: a record in the config, made when you tick "I understand and agree" and press Turn On, that names the version of what is sent, the provider and the model, with the date. `planner.py` checks it before a task and before every call to the cloud, together with the switch and the key, through `config.cloud_in_use`. So:
 
-- The switch alone, turned on over D-Bus or in the file, does nothing. An install that had Cloud on before this keeps its switch but sends nothing until you agree, and the page says so.
+- Without a kept agreement, the switch alone, turned on over D-Bus or in the file, does nothing. Switching Cloud off keeps the agreement, though, so while one is kept the switch alone turns Cloud on again, from Settings or over D-Bus. Only Withdraw forgets it. An install that had Cloud on before this keeps its switch but sends nothing until you agree, and the page says so.
 - A model the agreement didn't name, set from Settings or anywhere else, stops the cloud until you agree for that model. With Cloud on, Settings asks before it saves one; with it off, turning it on asks.
 - A release that changes what is sent bumps `CLOUD_CONSENT_VERSION`, and every agreement made before it stops counting.
 - Withdraw on the Multi-step tasks page, switching it off, or a new model stops a task that is already running before its next call.
+
+Until the daemon restarts after an update, the old daemon still sends with the switch and a key alone, and can't record an agreement. Settings tells an older daemon by the missing `cloud_consent` in `GetConfig`, shows the switch as that daemon holds it so it can be turned off, and says it must be restarted before it can ask.
 
 What this doesn't do: a program running as you can still record an agreement over D-Bus, as Settings does, or write one into the file, just as it could read your files. The agreement is there so that you know what you are turning on and when you did, not to keep out code that already runs as you. The words of the agreement are in `tuxistant/settings_app.py` (`CLOUD_BODY`, `CLOUD_DETAILS`), and the tests check each claim against what the planner sends and asks for.
 
