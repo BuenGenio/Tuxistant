@@ -946,12 +946,12 @@ async def _desktop_call(plan: Plan, found: dict, config, session):
         return _echo(session, config, said)
 
     def act() -> dict:
-        # Whatever this call does, an answer kept for the same entry with any other value, or
-        # from any other action or recipe, may no longer be true: on, off, on is three calls.
-        _forget(key[:2])
-        done, said = desktop.run(entry, settings, plan.skill)
-        if done:
-            _remember(key, said)
+        began = _begin(key[:2])
+        done, said = False, ""
+        try:
+            done, said = desktop.run(entry, settings, plan.skill)
+        finally:
+            _end(key, said if done else None, began)
         return _say(session, config, said)
     card = entry.card(settings, plan.skill)
     if card is None:
@@ -1091,16 +1091,41 @@ def _again(key: tuple, within: float = AGAIN_S) -> str | None:
         return said if time.monotonic() - at < within else None
 
 
-def _forget(start: tuple) -> None:
-    """Every answer kept under a key that starts with these, such as one desktop entry's."""
-    with _recent_lock:
-        for old in [k for k in _recent if k[:len(start)] == start]:
-            del _recent[old]
-
-
 def _remember(key: tuple, said: str) -> None:
     with _recent_lock:
-        now = time.monotonic()
-        for old in [k for k, (at, _) in _recent.items() if now - at >= AGAIN_S]:
+        _keep(key, said)
+
+
+def _keep(key: tuple, said: str) -> None:
+    now = time.monotonic()
+    for old in [k for k, (at, _) in _recent.items() if now - at >= AGAIN_S]:
+        del _recent[old]
+    _recent[key] = (now, said)
+
+
+# Per desktop entry: how many calls have started and how many are still running. A cancelled
+# turn doesn't stop its thread, so two calls to one entry can overlap, and either write may land
+# last. Only a call that no other call to the entry overlapped keeps its answer.
+_calls: dict[tuple, tuple[int, int]] = {}
+
+
+def _begin(entry: tuple) -> tuple[int, bool]:
+    """Before a desktop call: an answer kept for the entry, with any value or from any action or
+    recipe, may no longer be true, so on, off, on is three calls. Returns this call's number and
+    whether it started alone."""
+    with _recent_lock:
+        for old in [k for k in _recent if k[:len(entry)] == entry]:
             del _recent[old]
-        _recent[key] = (now, said)
+        started, running = _calls.get(entry, (0, 0))
+        _calls[entry] = (started + 1, running + 1)
+        return started + 1, running == 0
+
+
+def _end(key: tuple, said: str | None, began: tuple[int, bool]) -> None:
+    """After a desktop call: its answer is kept if it was done, started alone and no other call
+    to the entry started before it finished."""
+    with _recent_lock:
+        started, running = _calls[key[:2]]
+        _calls[key[:2]] = (started, running - 1)
+        if said is not None and began == (started, True):
+            _keep(key, said)

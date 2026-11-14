@@ -3,6 +3,7 @@ or bus: names come from tests/fakeweb.py's table and every connection goes to it
 server, this computer's addresses are made up, the app list is made up and nothing is launched,
 desktop actions meet stand-ins for gsettings and the session bus, and every skill folder is a
 temporary one."""
+import asyncio
 import inspect
 import ipaddress
 import json
@@ -10,6 +11,7 @@ import socket
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -1301,6 +1303,53 @@ class DesktopRuns(Case):
                                 "Do Not Disturb is on."])
         self.assertEqual([value for _, _, value in self.changed], ["false", "true", "false"])
         self.assertEqual([a.title for a in self.asked], ["Turn on Do Not Disturb?"] * 2)
+
+    async def cancelled_off_beside_on(self, writes_first: bool):
+        """An off whose turn is cancelled while gsettings is slow, so its thread runs on, then an
+        on that is done in full, then the off's thread finishes. Its write lands before the on's
+        when writes_first, after it otherwise."""
+        self.example("evening.yaml")
+        inside, release = threading.Event(), threading.Event()
+
+        def gsettings(schema, key, value):
+            held = value == "false" and not release.is_set()
+            if held and writes_first:
+                self.changed.append((schema, key, value))
+            inside.set()
+            if held:
+                release.wait(5)
+            if not (held and writes_first):
+                self.changed.append((schema, key, value))
+        cancelled = self.session()
+        with mock.patch.object(desktop, "_gsettings", gsettings):
+            turn = asyncio.create_task(self.call("evening_nightlight", {"turn": "off"}, cancelled))
+            self.assertTrue(await asyncio.to_thread(inside.wait, 5))
+            turn.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await turn
+            _, said = await self.call("evening_nightlight", {"turn": "on"})
+            self.assertEqual(said, ["Night Light is on."])
+            release.set()
+            deadline = time.monotonic() + 5
+            while not cancelled.after and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            self.assertEqual([s.text for s in cancelled.after], ["Night Light is off."])
+
+    async def test_a_cancelled_call_finishing_late_keeps_no_answer(self):
+        """The on was the last write, so Night Light is on: off again must be done, not
+        answered "Night Light is off." from the cancelled call."""
+        await self.cancelled_off_beside_on(writes_first=True)
+        _, said = await self.call("evening_nightlight", {"turn": "off"})
+        self.assertEqual(said, ["Night Light is off."])
+        self.assertEqual([value for _, _, value in self.changed], ["false", "true", "false"])
+
+    async def test_a_call_overlapped_by_another_keeps_no_answer(self):
+        """The cancelled off wrote last, so Night Light is off: on again must be done, not
+        answered "Night Light is on." from the call it overlapped."""
+        await self.cancelled_off_beside_on(writes_first=False)
+        _, said = await self.call("evening_nightlight", {"turn": "on"})
+        self.assertEqual(said, ["Night Light is on."])
+        self.assertEqual([value for _, _, value in self.changed], ["true", "false", "true"])
 
     async def test_a_bad_choice_changes_nothing(self):
         self.example("evening.yaml")
