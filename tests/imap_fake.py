@@ -80,11 +80,12 @@ def _internal(when: datetime) -> str:
     return f"{when.day:02d}-{MONTHS[when.month - 1]}-{when.year} {when:%H:%M:%S} +0000"
 
 
-def _text_of(raw: bytes) -> str:
-    """What a real server searches: the header lines and the decoded text of each part."""
+def _text_of(raw: bytes, head: bool = True) -> str:
+    """What a real server searches: the header lines, unless it is asked for the BODY only, and
+    the decoded text of each part."""
     parsed = email.message_from_bytes(raw)
-    head = raw.split(b"\r\n\r\n", 1)[0].split(b"\n\n", 1)[0].decode("utf-8", "replace")
-    words = [head]
+    words = [raw.split(b"\r\n\r\n", 1)[0].split(b"\n\n", 1)[0].decode("utf-8", "replace")
+             if head else ""]
     for part in parsed.walk():
         if not part.is_multipart():
             data = part.get_payload(decode=True) or b""
@@ -258,34 +259,37 @@ class Session:
                 self.send(b"*")
                 time.sleep(0.1)
             found = [uid for uid, raw, when in self.box.mails
-                     if self._matches(_tokens(rest), raw, when)]
+                     if self._matches(_tokens(rest), raw, when, uid)]
             self.line("* SEARCH" + "".join(f" {uid}" for uid in found))
             return self.line(f"{tag} OK done")
         if verb.upper() == "FETCH":
             return self._fetch(tag, rest)
         self.line(f"{tag} BAD not here")
 
-    def _matches(self, tokens: list[str], raw: bytes, when: datetime) -> bool:
+    def _matches(self, tokens: list[str], raw: bytes, when: datetime, uid: int) -> bool:
         tokens = list(tokens)
         if tokens[:1] == ["CHARSET"]:
             tokens = tokens[2:]
         results = []
         while tokens:
-            results.append(self._one(tokens, raw, when))
+            results.append(self._one(tokens, raw, when, uid))
         return all(results)
 
-    def _one(self, tokens, raw, when) -> bool:
+    def _one(self, tokens, raw, when, uid) -> bool:
         key = tokens.pop(0).upper()
         if key == "OR":
-            return self._one(tokens, raw, when) | self._one(tokens, raw, when)
+            return self._one(tokens, raw, when, uid) | self._one(tokens, raw, when, uid)
         if key == "ALL":
             return True
         value = tokens.pop(0)
         if key == "BEFORE":
             day, month, year = value.split("-")
             return when.date() < datetime(int(year), MONTHS.index(month) + 1, int(day)).date()
-        haystack = _text_of(raw) if key == "TEXT" else _header(raw, key.title())
-        if key == "TEXT" and self.server.whole_words:
+        if key == "UID":
+            return str(uid) in value.split(",")
+        haystack = _text_of(raw, key == "TEXT") if key in ("TEXT", "BODY") else _header(
+            raw, key.title())
+        if key in ("TEXT", "BODY") and self.server.whole_words:
             return bool(re.search(rf"(?<!\w){re.escape(value)}(?!\w)", haystack, re.I))
         return value.lower() in haystack.lower()
 

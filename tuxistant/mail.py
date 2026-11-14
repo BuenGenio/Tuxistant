@@ -39,7 +39,7 @@ from .gate import Speak
 from .knowledge import FILLER
 from .realtime import RealtimeError
 from .research import _brain, _say, _short
-from .webfetch import clean
+from .webfetch import TAG, clean
 
 # Where a Thunderbird from a package, a snap and a flatpak each keep their profiles.
 ROOTS = ("~/.thunderbird", "~/snap/thunderbird/common/.thunderbird",
@@ -61,6 +61,8 @@ CLEANED_CHARS = 2 * SCAN_CHARS  # and how much it is cut from, whole, with secre
 SUBJECT_CHARS = 200
 SECRET_REACH = 160      # how far after the word for a secret the secret itself is looked for
 SECRET_BEFORE = 60      # and how far before it: "482913 is your code"
+TALK_REACH = 20         # how far before a cut its rest is read from, for words the cut split
+REST_CHARS = 200_000    # and how much of that rest: past it, a mail is taken to talk of signing in
 TRIED = 3               # mails shown to the model, best first
 CHECKED = 6             # the best few have their senders looked up, which can cost a scan each
 MAX_CHECKED = 30        # and more of the best, so that six strangers can't fill every place
@@ -223,10 +225,14 @@ SHAPED = re.compile(
     r"|(?<![\w.,/-])(?:[A-Za-z0-9] ){3,13}[A-Za-z0-9](?![\w/-])")   # K Q 7 X 9 B
 NOT_A_SECRET = re.compile(r"\d+(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)|(?:19|20)\d\d", re.I)
 JUST_GIVEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)      # "code is 2048" is no year
-# A mail that talks of signing in: there, any number of the right length may be the code.
-SIGN_IN_TALK = re.compile(
-    r"\b(?:sign(?:ing)?[- ]?in|log(?:ging)?[- ]?in|login|verif\w+|authenti\w+|one[- ]?time"
-    r"|single[- ]use|expires?|valid for|2fa|two[- ](?:factor|step))\b", re.I)
+# A mail that talks of signing in: there, any number of the right length may be the code. A space
+# is a space, a hyphen or neither, and a * any letters after. A mail server is asked for the same
+# words, about the rest of a mail it cut short (see goamail._talking).
+SIGN_IN_WORDS = ("sign in", "signing in", "log in", "logging in", "verif*", "authenti*", "one time",
+                 "single use", "expire", "expires", "valid for", "2fa", "two factor", "two step")
+SIGN_IN_TALK = re.compile(r"\b(?:" + "|".join(
+    re.escape(word).replace(r"\ ", "[- ]?").replace(r"\*", r"\w*") for word in SIGN_IN_WORDS)
+    + r")\b", re.I)
 MONEY = r"\s*(?:pounds|euros|dollars|gbp|eur|usd|%)"
 NUMBER = re.compile(r"(?<![\w.,/£$€-])\d{3}[ -]\d{3}(?![\w/-])"
                     rf"|(?<![\w.,/£$€-])\d{{4,8}}(?![\w/-]|[.,]\d|{MONEY})"
@@ -516,7 +522,14 @@ def _uncut(text: str) -> str:
     return text[:len(text) - CUT_TAIL.match(text[::-1]).end()]
 
 
-def _hide(text: str, cut: bool = False) -> str:
+def _talks(rest: str | None) -> bool:
+    """Whether the rest of a mail, past where it is read, talks of signing in. It is made plain
+    enough for SIGN_IN_TALK to see what a reader would: wide letters, odd spaces and tags."""
+    return bool(SIGN_IN_TALK.search(SPACE.sub(" ", TAG.sub(" ", unicodedata.normalize(
+        "NFKC", rest or "")))))
+
+
+def _hide(text: str, cut: bool = False, talk: bool | None = None) -> str:
     """A mail's text with whatever may be a sign-in code or a password taken out. Odd spaces
     are made plain first, as the model would read "482\u00a0913" as the code it is, and a code
     spelt out one character to a line is put on a line of its own, as the model would read it.
@@ -526,14 +539,15 @@ def _hide(text: str, cut: bool = False) -> str:
     as the text is made what the model is shown (see _seen).
 
     A text that was cut short is taken to talk of signing in, as the words that did may have been
-    past the cut, and it ends where _uncut would end it, as part of a code may be too short to
-    hide. Secrets are looked for in all of it, so a word for a code in what goes still hides the
-    code before it, and one that runs past that end is hidden whole."""
+    past the cut, unless the caller looked there and says whether they were (talk). It ends where
+    _uncut would end it, as part of a code may be too short to hide. Secrets are looked for in
+    all of it, so a word for a code in what goes still hides the code before it, and one that
+    runs past that end is hidden whole."""
     text = _seen(text)
     text = SPELT.sub(lambda run: "".join(run[0].split()), SPACE.sub(" ", text))
     stop = len(_uncut(text)) if cut else len(text)
     out, at = [], 0
-    for start, end in _spans(text, cut):
+    for start, end in _spans(text, cut if talk is None else talk):
         if start >= stop:
             break
         if end > at:
@@ -558,15 +572,20 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
         values += likes * len(fields)
     query = (
         "SELECT m.id, m.date, m.folderID, t.c3author, t.c1subject, "
-        f"substr(t.c0body, 1, {SCAN_CHARS}), length(t.c0body) > {SCAN_CHARS} "
+        f"substr(t.c0body, 1, {SCAN_CHARS}), length(t.c0body), "
+        f"CASE WHEN length(t.c0body) > {SCAN_CHARS} THEN "
+        f"talks(substr(t.c0body, {SCAN_CHARS - TALK_REACH + 1}, {REST_CHARS})) ELSE 0 END "
         "FROM messages m JOIN messagesText_content t ON t.docid = m.id "
         f"WHERE +m.deleted = 0 {_outside(skipped)} "
         f"AND ({(' AND ' if every else ' OR ').join(clauses)}) ORDER BY m.date DESC")
+    db.create_function("talks", 1, _talks, deterministic=True)
     rows = []
     try:
         for row in db.execute(query, values):
+            length = row[6] or 0
             kept = _kept(stems, _text(row[3]), _text(row[4]), _text(row[5]), every,
-                         body_cut=bool(row[6]))
+                         body_cut=length > SCAN_CHARS,
+                         talk_past=bool(row[7]) or length > SCAN_CHARS + REST_CHARS)
             if kept:
                 rows.append((*row[:3], *kept))
             if len(rows) == limit or time.monotonic() > deadline[0]:
@@ -578,13 +597,15 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
 
 
 def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
-          subject_cut: bool = False, body_cut: bool = False) -> tuple | None:
+          subject_cut: bool = False, body_cut: bool = False,
+          talk_past: bool = False) -> tuple | None:
     """(author, subject, body) with secrets hidden, if the mail is about the question with them
     hidden too: a mail found only by its code is not found. The caller says which of the subject
-    and the body was cut short where it was read (see _hide)."""
+    and the body was cut short where it was read, and whether the body talks of signing in past
+    that cut (see _hide). A subject is cut only by a hostile header, so it is taken to."""
     if not _about(stems, _searched(author), subject, body, every):
         return None
-    subject, body = _hide(subject, subject_cut), _hide(body, body_cut)
+    subject, body = _hide(subject, subject_cut), _hide(body, body_cut, talk_past)
     return (author, subject, body) if _about(stems, _searched(author), subject, body, every) else None
 
 

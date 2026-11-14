@@ -68,6 +68,13 @@ MAX_TOKEN_CHARS = 4096
 MAX_USER_CHARS = 320
 FROM_CHECKED = 10       # a sender's older mails whose sender line is read, to find their own
 FIELDS = "FROM SUBJECT MIME-VERSION CONTENT-TYPE CONTENT-TRANSFER-ENCODING"
+# mail.SIGN_IN_WORDS as a server is asked for them: each way of writing a space, and a * left
+# off, so "verif" finds "verification" on a server that finds any part of a word. Gmail's finds
+# whole words only, so the words a * stands for most are asked for too.
+TALK_TERMS = tuple(dict.fromkeys(
+    [word.rstrip("*").replace(" ", gap) for word in mail.SIGN_IN_WORDS for gap in ("", " ", "-")]
+    + ["verify", "verified", "verifying", "verification", "authenticate", "authenticated",
+       "authentication", "authenticator"]))
 CA_FILE = None          # the system's certificates. Only a test points this anywhere else
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 
@@ -519,7 +526,8 @@ def _unhtml(text: str) -> str:
 def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
     """(its plain text, or its HTML as text; whether that was cut short). Attachments are never
     read. Where the fetch stopped short, only the part it stopped in, the last, was cut: a whole
-    plain part before an attachment or a long HTML part is read as it is."""
+    plain part before an attachment or a long HTML part is read as it is. HTML cut inside a tag
+    loses that tag, or its name would be read as a word."""
     leaves = [part for part in message.walk() if not part.is_multipart()]
     plain = marked = None
     for part in leaves:
@@ -532,8 +540,27 @@ def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
         elif kind == "text/html" and marked is None:
             marked = (_decoded(part), fetched_cut and part is leaves[-1])
     text, cut = plain if plain and plain[0].strip() else (
-        (_unhtml(marked[0]), marked[1]) if marked else ("", False))
+        (_unhtml(_closed(*marked)), marked[1]) if marked else ("", False))
     return text[:mail.SCAN_CHARS], cut or len(text) > mail.SCAN_CHARS
+
+
+def _closed(html: str, cut: bool) -> str:
+    """HTML without a tag the cut left open."""
+    start = html.rfind("<")
+    return html[:start] if cut and start > html.rfind(">") else html
+
+
+def _talking(imap, uids: list[int], until: float) -> set[int]:
+    """Of these mails, cut short where they were fetched to, the ones that talk of signing in
+    anywhere in their text, past the cut too: one search for all of them, as the server reads
+    each whole. Any it can't be asked about are taken to."""
+    if not uids:
+        return set()
+    if time.monotonic() > until:
+        return set(uids)
+    asked = "OR " * (len(TALK_TERMS) - 1) + " ".join(f'BODY "{term}"' for term in TALK_TERMS)
+    reply = _ask(imap, "SEARCH", "UID", ",".join(map(str, uids)), asked)
+    return _uids(reply) & set(uids) if reply[0] == "OK" else set(uids)
 
 
 def _subject_cut(message, header: bytes) -> bool:
@@ -563,16 +590,20 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
              f"BODY.PEEK[TEXT]<0.{TEXT_BYTES}>)")
     typ, data = _ask(imap, "FETCH", ",".join(str(uid) for uid, _ in picked), asked)
     fetched = _fetched(data) if typ == "OK" else {}
-    rows = []
+    read = []
     for uid, every in picked:
         found = fetched.get(uid)
         message = found and _parsed(found.get(b"HEADER", b""), found.get(b"TEXT", b""))
         if message:
-            body, body_cut = _body(message, len(found.get(b"TEXT", b"")) >= TEXT_BYTES)
-            kept = mail._kept(stems, _author(message), _subject(message), body, every,
-                              _subject_cut(message, found.get(b"HEADER", b"")), body_cut)
-            if kept:
-                rows.append(((folder, uid), _stamp(found.get(b"INTERNALDATE")), folder, *kept))
+            read.append((uid, every, found, message,
+                         *_body(message, len(found.get(b"TEXT", b"")) >= TEXT_BYTES)))
+    talking = _talking(imap, [uid for uid, *_, cut in read if cut], until)
+    rows = []
+    for uid, every, found, message, body, cut in read:
+        kept = mail._kept(stems, _author(message), _subject(message), body, every,
+                          _subject_cut(message, found.get(b"HEADER", b"")), cut, uid in talking)
+        if kept:
+            rows.append(((folder, uid), _stamp(found.get(b"INTERNALDATE")), folder, *kept))
     return rows
 
 

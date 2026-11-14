@@ -24,8 +24,8 @@ from tests import imap_fake  # noqa: E402
 from tests.imap_fake import TOKEN, USER, Box, PrivateBus, Server, message  # noqa: E402
 from tests.mail_index import build  # noqa: E402
 from tests.test_mail import (CONFIG, GROWN, IN_PARTS, INTO_WORD_AFTER, LONE_DIGIT,  # noqa: E402
-                             LONG, TALK_PAST, WIDE_CODE, WIDE_SPELT, WIDE_TOKENS, WORD_AFTER,
-                             Base, escaped, straddling)
+                             LONG, ORDER, ORDER_NUMBERS, TALK_PAST, WIDE_CODE, WIDE_SPELT,
+                             WIDE_TOKENS, WORD_AFTER, Base, escaped, straddling)
 from tuxistant import goamail, mail, research  # noqa: E402
 
 OFFICE = "Citizen Services <no-reply@notify.citizen.example>"
@@ -709,6 +709,52 @@ class CutShort(Goa):
         await self.ask("Which seat did I get on the Lisbon flight?")
         self.assertEqual(len(self.model), 1)
         self.assertIn("your seat is 14C.", self.read(0))
+
+    async def test_a_long_ordinary_mail_keeps_its_numbers(self):
+        """An HTML order longer than what is fetched is cut short, but the server finds no
+        sign-in talk anywhere in it, so its numbers are read. The tag the fetch stopped inside
+        is not read as a word either."""
+        cell = ('<tr><td style="padding:8px 12px;font-family:Arial,Helvetica,sans-serif;'
+                'font-size:14px;color:#333333;border-bottom:1px solid #eeeeee">{}</td></tr>')
+        html = ("<table>" + cell.format(ORDER) + cell.format("&nbsp;") * 120
+                + cell.format("Acme Kitchen Ltd, registered in England.") + "</table>")
+        raw = message("Your Acme order", "Acme <orders@acme.example>", None, html=html)
+        self.assertGreater(len(text_of(raw)), goamail.TEXT_BYTES)
+        for whole_words in (False, True):
+            self.model.clear()
+            await self.mailbox(gmail(inbox=[(raw, 1)]), whole_words=whole_words)
+            await self.ask("What was my Acme Kitchen order number?")
+            shown = self.read(0).split("=====")[2]
+            for number in ORDER_NUMBERS:
+                self.assertIn(number, shown, whole_words)
+            self.assertNotRegex(shown, r"\btd\b")
+
+    async def test_sign_in_talk_past_the_cut_counts_on_a_whole_word_server(self):
+        html = ("<p>Hello, about your Acme account.</p><p>" + TALK_PAST + "</p>"
+                + '<div class="x"></div>' * 900 + "<p>Please sign in within 10 minutes.</p>")
+        raw = message("About your Acme account", "Acme <account@acme.example>", None, html=html)
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]), whole_words=True)
+        await self.ask("Did Acme email me about my account?")
+        self.assertNotIn("482913", self.read(0))
+
+    def test_mails_the_server_cant_be_asked_about_are_taken_to_talk_of_signing_in(self):
+        class Refusing:
+            literal = None
+
+            def uid(self, *_):
+                raise imaplib.IMAP4.error("no")
+        self.assertEqual(goamail._talking(Refusing(), [3, 5], time.monotonic() + 9), {3, 5})
+        self.assertEqual(goamail._talking(Refusing(), [3, 5], time.monotonic() - 1), {3, 5})
+        self.assertEqual(goamail._talking(Refusing(), [], time.monotonic() + 9), set())
+
+    def test_what_the_server_is_asked_for_is_sign_in_talk(self):
+        for term in goamail.TALK_TERMS:
+            self.assertRegex(term, mail.SIGN_IN_TALK)
+            self.assertRegex(term, r"^[a-z0-9 -]+$")    # needs no quoting
+        self.assertEqual(goamail._closed('<p>Hi.</p><td style="pad', True), "<p>Hi.</p>")
+        self.assertEqual(goamail._closed('<p>Hi.</p><td style="pad', False),
+                         '<p>Hi.</p><td style="pad')
+        self.assertEqual(goamail._closed("<p>Hi. 3 < 4", True), "<p>Hi. 3 ")
 
     def test_only_the_last_part_is_taken_to_be_cut(self):
         long_html = "<p>" + "Hello. " * 3000 + "</p>"
