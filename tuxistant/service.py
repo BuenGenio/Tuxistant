@@ -145,7 +145,7 @@ class Daemon(ServiceInterface):
 
     @method()
     async def DictateStart(self):
-        await self.controller.dictate_start()
+        await self.controller.dictate_start("shortcut")
 
     @method()
     async def DictateEnd(self):
@@ -153,7 +153,7 @@ class Daemon(ServiceInterface):
 
     @method()
     async def DictateToggle(self):
-        await self.controller.dictate_toggle()
+        await self.controller.dictate_toggle("shortcut")
 
     @method()
     def GetState(self) -> "s":
@@ -320,6 +320,10 @@ class Daemon(ServiceInterface):
         return id
 
     @signal()
+    def DictationMode(self, id, mode) -> "ss":
+        return [id, mode]
+
+    @signal()
     def TypeText(self, id, text, only_copy) -> "ssb":
         return [id, text, only_copy]
 
@@ -408,6 +412,15 @@ async def run(mic_factory=Mic, speaker_factory=Speaker) -> int:
         await host.stop()
 
 
+def fn_client(config, controller, path=None) -> FnClient:
+    """Fn reaches the controller here, inside this process, and not over the bus."""
+    return FnClient(
+        config, controller.hold_start, controller.hold_end, path=path,
+        on_dictate_start=controller.dictate_start, on_dictate_end=controller.dictate_end,
+        on_dictate_cancel=controller.cancel, on_dictate_mode=controller.dictate_mode,
+        dictating=lambda: controller.dictating)
+
+
 async def _serve_until_stopped(daemon) -> int:
     bus = await MessageBus().connect()
     if not await serve(bus, daemon):
@@ -422,10 +435,7 @@ async def _serve_until_stopped(daemon) -> int:
         say=controller.say_when_free, sound=controller.sound,
         notify=lambda item: timers.notify(bus, item),
         locked=lambda: controller.locked, chimes=lambda: daemon.config["timer_chime"])
-    fn = asyncio.create_task(FnClient(
-        daemon.config, controller.hold_start, controller.hold_end,
-        on_dictate_start=controller.dictate_start, on_dictate_end=controller.dictate_end,
-        on_dictate_cancel=controller.cancel).run())
+    fn = asyncio.create_task(fn_client(daemon.config, controller).run())
     lock = asyncio.create_task(watch_lock(bus, controller))
     ticking = asyncio.create_task(tick(store, crier, lock))
     ticking.add_done_callback(_timers_stopped)

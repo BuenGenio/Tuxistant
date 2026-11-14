@@ -20,10 +20,32 @@ const UNREACHABLE = 'The Tuxistant daemon is unreachable';
 const THEMES_TIMEOUT_MS = 30000;  // a theme not seen before gets test-compiled first
 const ABILITIES = 2;  // what the daemon hears in Hello: approval cards, and typing dictated text
 const RAN_OUT = 'That went on for five minutes, so I stopped and copied it. Press Ctrl+V to paste it.';
+// How to stop each kind of go, from DictationMode. Until it comes, the caption says "Dictating…".
+const DICTATING = 'Dictating…';
+const STOP = {
+    hold: 'let go of Fn to stop',
+    tap: 'tap Fn to stop',
+};
 const NOTES = {
     copied: 'The window changed, so I copied that instead. Press Ctrl+V to paste it.',
     refused: "That's a password box, so I didn't type it.",
 };
+
+// '<Control><Super>d' as people read it: 'Ctrl+Super+D'. Nothing for an unset shortcut.
+function shortcutLabel(accelerator) {
+    const names = {
+        control: 'Ctrl', primary: 'Ctrl', ctrl: 'Ctrl', super: 'Super', alt: 'Alt', shift: 'Shift',
+    };
+    const parts = [];
+    const key = (accelerator ?? '').replace(/<([^>]+)>/g, (_all, name) => {
+        parts.push(names[name.toLowerCase()] ?? name);
+        return '';
+    });
+    if (!key)
+        return '';
+    parts.push(key.length === 1 ? key.toUpperCase() : key);
+    return parts.join('+');
+}
 
 export default class TuxistantExtension extends Extension {
     enable() {
@@ -33,6 +55,8 @@ export default class TuxistantExtension extends Extension {
         this._state = 'idle';
         this._stateSignals = 0;
         this._presence = false;
+        this._dictation = null;  // the id of the latest go, so a late mode for an old one is ignored
+        this._dictating = null;  // what the caption says for that go while it listens
 
         this._blob = new Blob({
             onContextMenu: () => this._openBlobMenu(),
@@ -203,6 +227,10 @@ export default class TuxistantExtension extends Extension {
     _setState(state) {
         const starting = this._state === 'idle' && state !== 'idle';
         this._state = state;
+        if (state !== 'listening') {
+            this._dictating = null;
+            this._caption?.restand();
+        }
         this._indicator.setState(state);
         this._blob.setState(state);
         this._blob.setWanted(this._presence && state !== 'idle');
@@ -233,6 +261,30 @@ export default class TuxistantExtension extends Extension {
         this._lingerIfIdle();
     }
 
+    _dictatingIn(mode) {
+        const shortcut = mode === 'shortcut' && this._settings.get_strv(DICTATE_KEYBINDING)[0];
+        const keys = shortcut ? shortcutLabel(shortcut) : '';
+        const stop = keys ? `press ${keys} again to stop` : STOP[mode];
+        return stop ? `${DICTATING} ${stop}` : DICTATING;
+    }
+
+    // How to stop the go that listens now, while it does. Words or a note from an earlier go,
+    // whose words were still at the server, must not take it off the screen.
+    _dictatingLine() {
+        return this._state === 'listening' ? this._dictating : null;
+    }
+
+    _showDictating(text) {
+        if (this._caption.showingError)
+            this._caption.restand();
+        else
+            this._caption.showHeard(text);
+    }
+
+    _showNote(note) {
+        this._caption.showError(note, () => this._dictatingLine());
+    }
+
     async _onSelectionWanted(id) {
         const text = await selectedText();
         if (this._daemon)
@@ -245,8 +297,11 @@ export default class TuxistantExtension extends Extension {
             return;
         this._send('Typed', new GLib.Variant('(ss)', [id, how]));
         const note = ranOut ? RAN_OUT : NOTES[how];
+        const line = this._dictatingLine();
         if (note)
-            this._toCaption(() => this._caption.showError(note));
+            this._toCaption(() => this._showNote(note));
+        else if (line)
+            this._toCaption(() => this._showDictating(line));
         else
             this._caption.hide();
     }
@@ -301,7 +356,7 @@ export default class TuxistantExtension extends Extension {
             this._lingerIfIdle();
             break;
         case 'Error':
-            this._toCaption(() => this._caption.showError(args[0]));
+            this._toCaption(() => this._showNote(args[0]));
             break;
         case 'ConfigChanged':
             this._onConfigChanged(args[0]);
@@ -323,8 +378,17 @@ export default class TuxistantExtension extends Extension {
             this._onSelectionWanted(args[0]);
             break;
         case 'DictationStarted':
+            this._dictation = args[0];
             this._typist.expect(args[0]);
-            this._toCaption(() => this._caption.showHeard('Dictating…'));
+            this._dictating = DICTATING;
+            this._toCaption(() => this._showDictating(DICTATING));
+            break;
+        case 'DictationMode':
+            if (args[0] === this._dictation && this._state !== 'idle') {
+                const text = this._dictatingIn(args[1]);
+                this._dictating = text;
+                this._toCaption(() => this._showDictating(text));
+            }
             break;
         case 'TypeText':
             this._onTypeText(...args);

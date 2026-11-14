@@ -2,6 +2,7 @@
 import unittest
 
 from tests.test_approval_card import ShellRun, needs_shell, read_report, start
+from tuxistant.dictation import NOTHING_HEARD, TOO_SHORT
 
 
 @needs_shell
@@ -138,6 +139,24 @@ class Typing(ShellRun):
         self.assertEqual(self.report["button_text"], "")
         self.assertEqual(self.report["button_clipboard"], "keep-me")
 
+    def test_a_mode_for_an_old_go_changes_nothing_on_screen(self):
+        self.assertEqual(self.report["old_mode_caption"], "Dictating…")
+        self.assertEqual(self.report["new_mode_caption"], "Dictating… tap Fn to stop")
+        self.assertEqual(self.report["unknown_mode_caption"], "Dictating…")
+
+    def test_an_earlier_gos_words_leave_the_stop_hint_up(self):
+        self.assertEqual(self.report["carry_typed_how"], "typed")
+        self.assertEqual(self.report["carry_after_words"][:2], [True, "Dictating… tap Fn to stop"])
+
+    def test_an_earlier_gos_note_shows_under_the_stop_hint_and_then_gives_way_to_it(self):
+        self.assertEqual(self.report["carry_with_note"],
+                         [True, "Dictating… tap Fn to stop", NOTHING_HEARD])
+        self.assertEqual(self.report["carry_after_note"], [True, "Dictating… tap Fn to stop", ""])
+
+    def test_a_gos_own_note_does_not_say_how_to_stop_it(self):
+        self.assertEqual(self.report["carry_own_short"], [True, "", TOO_SHORT])
+        self.assertFalse(self.report["carry_own_short_after"][0])
+
     def test_with_no_window_at_all_they_are_copied(self):
         self.assertEqual(self.report["no_window_how"], "copied")
         self.assertEqual(self.report["no_window_clipboard"], "no window at all ")
@@ -174,6 +193,26 @@ class ThroughTheRealDaemon(ShellRun):
     def test_turning_the_extension_off_turns_off_the_mic(self):
         self.assertTrue(self.report["disabled_stopped"])
         self.assertFalse(self.report["disabled_typist"])
+
+    def test_tap_tap_on_fn_dictates_hands_free_and_the_next_tap_types(self):
+        """The owner's bug: tap, tap and let go said "Dictating…" and typed nothing."""
+        self.assertTrue(self.report["free_listening"])
+        self.assertEqual(self.report["free_caption"], "Dictating… tap Fn to stop")
+        self.assertTrue(self.report["free_text"].endswith("Hands free. "), self.report["free_text"])
+
+    def test_tap_then_hold_on_fn_is_still_push_to_talk_and_says_so(self):
+        self.assertEqual(self.report["hold_caption"], "Dictating… let go of Fn to stop")
+        self.assertTrue(self.report["hold_text"].endswith("Hands free. Held down. "),
+                        self.report["hold_text"])
+
+    def test_a_go_too_short_to_type_says_so_on_screen(self):
+        self.assertEqual(self.report["short_error"], 1)
+        self.assertEqual(self.report["short_note"], "That was too short, so nothing was typed.")
+        self.assertEqual(self.report["short_text"], self.report["hold_text"])
+
+    def test_the_shortcut_says_how_to_stop_it(self):
+        self.assertEqual(self.report["shortcut_caption"],
+                         "Dictating… press Ctrl+Super+D again to stop")
 
     def test_the_shortcut_starts_it_and_stops_it(self):
         self.assertTrue(self.report["shortcut_started"])

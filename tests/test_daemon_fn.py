@@ -2,6 +2,7 @@
 import asyncio
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -148,21 +149,28 @@ class Timing(Case):
 
 
 class Dictating(Case):
-    """Tap Fn, then press and hold it. Real times, as the tap rules are the point."""
+    """Tap Fn, then press it again: a tap is hands-free, a hold is push-to-talk. Real times, as the
+    tap rules are the point."""
 
     async def asyncSetUp(self):
         self.config = Config(self.folder / "config.json")
         self.config.values.update(fn_hold_ms=HOLD_MS, fn_hold_enabled=True)
         self.calls = []
+        self.going = False      # what the daemon would say about dictating
 
         def note(word):
-            async def call():
-                self.calls.append(word)
+            async def call(*args):
+                self.calls.append(" ".join((word, *args)))
+                if word == "dictate":
+                    self.going = True
+                elif word in ("typed", "dropped"):
+                    self.going = False
             return call
 
         self.client = FnClient(self.config, note("hold"), note("hold end"), path="unused",
                                on_dictate_start=note("dictate"), on_dictate_end=note("typed"),
-                               on_dictate_cancel=note("dropped"))
+                               on_dictate_cancel=note("dropped"), on_dictate_mode=note("mode"),
+                               dictating=lambda: self.going)
         self.addCleanup(self.client._disarm)
 
     async def send(self, *words, gap=0.01):
@@ -170,16 +178,60 @@ class Dictating(Case):
             await self.client.handle(word)
             await asyncio.sleep(gap)
 
-    async def test_a_tap_then_a_press_dictates_at_once_and_up_ends_it(self):
+    async def hands_free(self):
+        await self.send("down", "up", "down", "up")
+        self.assertEqual(self.calls, ["dictate", "mode tap"])
+
+    async def test_tap_tap_keeps_dictating_after_letting_go(self):
+        await self.hands_free()
+        await asyncio.sleep(fnclient.TAP_S + PAST_HOLD)
+        self.assertEqual(self.calls, ["dictate", "mode tap"], "letting go must not end it")
+
+    async def test_the_next_tap_ends_hands_free_and_types(self):
+        await self.hands_free()
+        await asyncio.sleep(0.05)
+        await self.send("down", "up")
+        self.assertEqual(self.calls, ["dictate", "mode tap", "typed"])
+
+    async def test_holding_fn_while_hands_free_is_no_talk_hold_and_letting_go_ends_it(self):
+        await self.hands_free()
+        await self.send("down")
+        await asyncio.sleep(PAST_HOLD)
+        self.assertEqual(self.calls, ["dictate", "mode tap"])
+        await self.send("up")
+        self.assertEqual(self.calls, ["dictate", "mode tap", "typed"])
+
+    async def test_a_fn_shortcut_while_hands_free_neither_stops_nor_drops_it(self):
+        await self.hands_free()
+        await self.send("down", "other", "up")
+        self.assertEqual(self.calls, ["dictate", "mode tap"])
+        await self.send("down", "up")
+        self.assertEqual(self.calls, ["dictate", "mode tap", "typed"])
+
+    async def test_the_tap_that_stops_it_does_not_start_the_next_go(self):
+        await self.hands_free()
+        await self.send("down", "up", "down", "up")
+        self.assertEqual(self.calls, ["dictate", "mode tap", "typed"])
+
+    async def test_ended_elsewhere_the_next_taps_start_a_new_go(self):
+        """The shortcut, Cancel, a lock or the time limit end it without Fn."""
+        await self.hands_free()
+        self.going = False
+        await self.send("down", "up", "down", "up")
+        self.assertEqual(self.calls, ["dictate", "mode tap", "dictate", "mode tap"])
+
+    async def test_a_tap_then_a_hold_is_push_to_talk_and_says_so(self):
         await self.send("down", "up", "down")
         self.assertEqual(self.calls, ["dictate"])
+        await asyncio.sleep(fnclient.TAP_S + 0.05)
+        self.assertEqual(self.calls, ["dictate", "mode hold"])
         await self.send("up")
-        self.assertEqual(self.calls, ["dictate", "typed"])
+        self.assertEqual(self.calls, ["dictate", "mode hold", "typed"])
 
     async def test_holding_on_after_starting_never_becomes_a_talk_hold(self):
         await self.send("down", "up", "down")
-        await asyncio.sleep(PAST_HOLD)
-        self.assertEqual(self.calls, ["dictate"])
+        await asyncio.sleep(fnclient.TAP_S + PAST_HOLD)
+        self.assertEqual(self.calls, ["dictate", "mode hold"])
 
     async def test_one_press_is_still_a_talk_hold(self):
         await self.send("down")
@@ -206,20 +258,19 @@ class Dictating(Case):
     async def test_a_fn_shortcut_on_the_second_press_drops_the_dictation(self):
         await self.send("down", "up", "down", "other", "up")
         self.assertEqual(self.calls, ["dictate", "dropped"])
-
-    async def test_a_tap_only_counts_once(self):
-        await self.send("down", "up", "down", "up", "down")
-        self.assertEqual(self.calls, ["dictate", "typed"])
+        await asyncio.sleep(fnclient.TAP_S)
+        self.assertEqual(self.calls, ["dictate", "dropped"])
 
     async def test_it_can_be_turned_off(self):
         self.config.values["dictation_enabled"] = False
-        await self.send("down", "up", "down")
-        self.assertNotIn("dictate", self.calls)
+        await self.send("down", "up", "down", "up")
+        self.assertEqual(self.calls, [])
 
     async def test_it_works_with_talk_holds_turned_off(self):
         self.config.values["fn_hold_enabled"] = False
-        await self.send("down", "up", "down", "up")
-        self.assertEqual(self.calls, ["dictate", "typed"])
+        await self.hands_free()
+        await self.send("down", "up")
+        self.assertEqual(self.calls, ["dictate", "mode tap", "typed"])
 
     async def test_without_the_callbacks_a_double_press_is_nothing(self):
         client = FnClient(self.config, mock.AsyncMock(), mock.AsyncMock(), path="unused")
@@ -227,10 +278,114 @@ class Dictating(Case):
         for word in ("down", "up", "down", "up"):
             await client.handle(word)
 
-    async def test_losing_the_helper_ends_it(self):
+    async def test_without_a_mode_callback_hands_free_still_works(self):
+        calls = []
+
+        async def start():
+            calls.append("dictate")
+
+        async def end():
+            calls.append("typed")
+
+        client = FnClient(self.config, mock.AsyncMock(), mock.AsyncMock(), path="unused",
+                          on_dictate_start=start, on_dictate_end=end)
+        self.addCleanup(client._disarm)
+        for word in ("down", "up", "down", "up", "down", "up"):
+            await client.handle(word)
+            await asyncio.sleep(0.01)
+        self.assertEqual(calls, ["dictate", "typed"])
+
+    async def test_losing_the_helper_ends_a_held_go(self):
         await self.send("down", "up", "down")
-        await self.client.handle("up")      # what run() does when the socket goes
+        await self.client.lost()
         self.assertEqual(self.calls, ["dictate", "typed"])
+
+    async def test_losing_the_helper_ends_a_hands_free_go(self):
+        """With no Fn, nothing could tap to stop it."""
+        await self.hands_free()
+        await self.client.lost()
+        self.assertEqual(self.calls, ["dictate", "mode tap", "typed"])
+
+    async def test_losing_the_helper_ends_a_talk_hold(self):
+        await self.send("down")
+        await asyncio.sleep(PAST_HOLD)
+        await self.client.lost()
+        self.assertEqual(self.calls, ["hold", "hold end"])
+
+
+class SlowToStart(Case):
+    """Starting a go waits for what it replaces to stop, and closing a reply can take 2 s. The keys
+    pressed meanwhile keep their own times, through a real socket as the helper sends them."""
+
+    TAP, GAP, START = 0.08, 0.1, fnclient.TAP_S + 0.05
+
+    async def asyncSetUp(self):
+        self.config = Config(self.folder / "config.json")
+        self.config.values.update(fn_hold_ms=400, fn_hold_enabled=True)     # well past a tap
+        self.calls = []
+        self.going = False
+        path = str(self.folder / "events.sock")
+        self.helper = FakeHelper(path)
+        await self.helper.start()
+        self.addAsyncCleanup(self.helper.stop)
+
+        def note(word):
+            async def call(*args):
+                if word == "dictate":
+                    await asyncio.sleep(self.START)
+                    self.going = True
+                self.calls.append(" ".join((word, *args)))
+            return call
+
+        self.client = FnClient(self.config, note("hold"), note("hold end"), path=path,
+                               on_dictate_start=note("dictate"), on_dictate_end=note("typed"),
+                               on_dictate_cancel=note("dropped"), on_dictate_mode=note("mode"),
+                               dictating=lambda: self.going)
+        task = asyncio.create_task(self.client.run())
+        self.addCleanup(task.cancel)
+        self.addCleanup(self.client._disarm)
+        await asyncio.wait_for(self.helper.connected.wait(), 2)
+
+    async def keys(self, *steps):
+        for word, then in steps:
+            await self.helper.send(word)
+            await asyncio.sleep(then)
+
+    async def test_tap_tap_is_hands_free_however_long_the_start_takes(self):
+        """The owner's bug again, while Tux was speaking: the second tap read as a hold."""
+        await self.keys(("down", self.TAP), ("up", self.GAP), ("down", self.TAP), ("up", 0))
+        await asyncio.sleep(self.START + fnclient.TAP_S + PAST_HOLD)
+        self.assertEqual(self.calls, ["dictate", "mode tap"])
+
+    async def test_tap_then_hold_is_still_push_to_talk_when_the_start_is_slow(self):
+        await self.keys(("down", self.TAP), ("up", self.GAP), ("down", self.START + 0.1),
+                        ("up", 0.05))
+        self.assertEqual(self.calls, ["dictate", "mode hold", "typed"])
+
+    async def test_a_hold_after_a_slow_start_is_known_from_when_the_key_went_down(self):
+        """Still down at 0.3 s from the press: a hold, at once, not 0.3 s after the start."""
+        await self.keys(("down", self.TAP), ("up", self.GAP), ("down", 0))
+        await asyncio.sleep(self.START + 0.05)
+        self.assertEqual(self.calls, ["dictate", "mode hold"])
+
+    async def test_the_talk_timer_counts_from_the_press(self):
+        await self.client.handle("down", time.monotonic() - 1)
+        await asyncio.sleep(0.02)
+        self.assertEqual(self.calls, ["hold"])
+
+
+class Wiring(Case):
+    """The daemon's own wiring, to the real controller."""
+
+    async def test_the_service_gives_fn_the_mode_and_asks_whether_it_still_dictates(self):
+        from tuxistant import service
+        ctl = mock.Mock(dictating=True)
+        client = service.fn_client(Config(self.folder / "config.json"), ctl, path="unused")
+        self.assertIs(client.on_dictate_mode, ctl.dictate_mode)
+        self.assertIs(client.on_dictate_start, ctl.dictate_start)
+        self.assertTrue(client.still_dictating())
+        ctl.dictating = False
+        self.assertFalse(client.still_dictating())
 
 
 class Connection(Case):

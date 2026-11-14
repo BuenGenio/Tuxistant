@@ -12,7 +12,7 @@ import time
 
 from . import knowledge
 from .audio import MIN_HOLD_BYTES, MIN_VOICED_BYTES, VOICE_LEVEL, Mic, Speaker, level
-from .dictation import Dictation, clean
+from .dictation import NOTHING_HEARD, Dictation, clean
 from .gate import APPROVAL_WAIT_S, MAX_DETAIL_CHARS, MAX_TITLE_CHARS, Ask, printable
 from .realtime import SETUP_TIMEOUT_S, Realtime, RealtimeError, sentences, speech, transcribe
 
@@ -467,9 +467,14 @@ class Controller:
             if not self.typing[1].done():
                 self.typing[1].set_result(how)
 
-    async def dictate_start(self):
+    @property
+    def dictating(self) -> bool:
+        return self.active and self.dictation is not None
+
+    async def dictate_start(self, mode: str | None = None):
+        """mode: how it will be stopped, if known now. See Dictation.set_mode."""
         async with self.lock:
-            if not self.config["dictation_enabled"] or (self.active and self.dictation):
+            if not self.config["dictation_enabled"] or self.dictating:
                 return
             await self._stop()
             if self.locked:
@@ -477,19 +482,24 @@ class Controller:
             if not self.typist:
                 self.emit("Error", NO_TYPING)
                 return
-            self.dictation = Dictation(self)
+            self.dictation = Dictation(self, mode)
             self.job = asyncio.create_task(self._run(self.dictation.run))
 
     async def dictate_end(self):
         async with self.lock:
-            if self.active and self.dictation:
+            if self.dictating:
                 self.dictation.finish()
 
-    async def dictate_toggle(self):
-        if self.active and self.dictation:
+    async def dictate_toggle(self, mode: str | None = None):
+        if self.dictating:
             await self.dictate_end()
         else:
-            await self.dictate_start()
+            await self.dictate_start(mode)
+
+    async def dictate_mode(self, mode: str):
+        """Fn knows only after the press that started it whether it was a tap or a hold."""
+        if self.dictating:
+            self.dictation.set_mode(mode)
 
     def deliver(self, go: Dictation):
         """Apart from the job, so that the next go or a talk hold can start while these words are
@@ -507,6 +517,8 @@ class Controller:
                 await asyncio.wait({before})
             if words:
                 await go.type(words + " ")
+            else:
+                self.emit("Error", NOTHING_HEARD)
         except Exception as e:
             self.emit("Error", describe(e))
 
@@ -522,14 +534,18 @@ class Controller:
                 await self._stop()
 
     async def toggle(self):
+        """While dictating, the talk shortcut ends the go as its own key would, and starts no turn."""
         async with self.lock:
-            if self.active:
+            if self.dictating:
+                await self._end_dictation()
+            elif self.active:
                 await self._stop()
             elif not self.locked:
                 self._start_turn(hold=False)
 
     async def hold_start(self):
         async with self.lock:
+            await self._end_dictation()
             await self._stop()
             if not self.locked:
                 self._start_turn(hold=True)
@@ -554,6 +570,7 @@ class Controller:
     async def say(self, text: str, voice: str | None = None) -> asyncio.Task | None:
         """Speaks text, replacing whatever was going on. The job's result is what went wrong."""
         async with self.lock:
+            await self._end_dictation()
             await self._stop()
             if self.locked:
                 return None
@@ -579,6 +596,13 @@ class Controller:
         async with self.lock:
             if not self.active:
                 self.job = asyncio.create_task(self._run(lambda: self._sound(pcm)))
+
+    async def _end_dictation(self):
+        """A go can run for minutes. Ended by anything but Cancel, a lock or losing the shell, it
+        keeps its words, or says why there were none, as if its own key had stopped it."""
+        if self.dictating:
+            self.dictation.finish()
+            await asyncio.wait({self.job})
 
     def _start_turn(self, hold: bool):
         self.turn = Turn(self, hold)

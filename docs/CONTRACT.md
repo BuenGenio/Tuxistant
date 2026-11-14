@@ -24,8 +24,8 @@ Methods:
 
 | Method | Signature | Meaning |
 |---|---|---|
-| `Toggle` | `() -> ()` | idle: start a VAD turn. Active: cancel |
-| `HoldStart` | `() -> ()` | Start a push-to-talk turn |
+| `Toggle` | `() -> ()` | idle: start a VAD turn. Dictating: end the go as `DictateEnd` does, with no turn. Otherwise active: cancel |
+| `HoldStart` | `() -> ()` | Start a push-to-talk turn. A go that is dictating ends first, as `DictateEnd` ends it |
 | `HoldEnd` | `() -> ()` | Stop the mic, get the words, then answer a fact or ask the voice model. See "Facts" |
 | `Cancel` | `() -> ()` | Stop everything, back to idle |
 | `DictateStart` | `() -> ()` | Start dictating, from the shell only. See "Dictation" |
@@ -73,6 +73,7 @@ Signals:
 | `ApprovalClosed` | `s id` | Take the card down: answered, timed out or cancelled |
 | `SelectionWanted` | `s id` | Send the selected text, or else the clipboard text, to `SelectionText` |
 | `DictationStarted` | `s id` | Note the focused window: the words are for that one |
+| `DictationMode` | `s id, s mode` | How this go stops: `hold` (let go of Fn), `tap` (tap Fn) or `shortcut` (the dictate shortcut again). Sent once known, never before `DictationStarted` for that id, and again only if it changes. Holds no words |
 | `TypeText` | `s id, s text, b only_copy` | Put the words where the cursor is, then reply with `Typed`. Sent to the shell alone, not broadcast. `only_copy` is true after the time limit |
 
 ## Locked screen
@@ -168,21 +169,27 @@ The search has 4 seconds, the sender lookups 2 more and the whole action 20, and
 
 ## Dictation
 
-`tuxistant/dictation.py` and `extension/tuxistant@buengenio/typist.js`. Tap Fn, then press it again within 0.4 s and hold it. `dictate-shortcut`, `<Control><Super>d` by default, starts and stops it instead, for long passages and keyboards without Fn.
+`tuxistant/dictation.py`, `tuxistant/fnclient.py` and `extension/tuxistant@buengenio/typist.js`. Tap Fn, then press it again within 0.4 s. It starts listening on that second press, and the second press decides how it stops (the timing is under "Fn helper"):
+
+- Let go of it within 0.3 s, a tap: hands-free. It listens until the next tap of Fn, `dictate-shortcut`, the talk shortcut, a talk hold, `Cancel`, a lock, a suspend or the 300 s limit.
+- Hold it longer: push-to-talk. Letting go stops it.
+
+`dictate-shortcut`, `<Control><Super>d` by default, starts and stops it too, for keyboards without Fn.
 
 No model is involved and no tool can start it, so what is said can't become an instruction and nothing here needs a card. The words are not kept: no `Transcript`, no history row, no log.
 
-1. `DictationStarted`. The extension notes the focused window.
-2. The microphone fills a buffer, up to 300 s. Release, `DictateEnd` or `DictateToggle` keeps 0.2 s more, so the last word isn't cut off. Another key pressed with Fn, `Cancel`, a lock, or losing the shell or the extension drops the lot. A hold too short or quiet to be speech ends quietly. If the microphone dies, what it heard still goes on.
-3. The audio goes to `/v1/audio/transcriptions` as a WAV, with `transcribe_model`. From here the words travel apart from the job, so a new go or a talk hold can start at once. They reach the window in the order they were said, and only `Cancel`, a lock or losing the shell stops them.
-4. `clean()` turns line breaks and control characters into spaces, so the text can't press Enter in a terminal or a chat box. The extension does the same again, as it can't know who sent it. A trailing space keeps the next go from running on.
-5. `TypeText`. The extension decides in this order:
+1. `DictationStarted`. The extension notes the focused window and shows "Dictating…".
+2. `DictationMode`, once the daemon knows how this go stops: `shortcut` straight after `DictationStarted` for `DictateStart` and `DictateToggle`, and for Fn `tap` when the second press is let go within 0.3 s, `hold` when it is still down at 0.3 s. The extension then shows "Dictating… tap Fn to stop", "Dictating… let go of Fn to stop" or "Dictating… press Ctrl+Super+D again to stop", with the shortcut as it is set, or "Dictating…" alone when none is. A mode for any go but the latest is ignored, and so is one it doesn't know. While that go listens, its line stays up: words for an earlier go leave it there, and a note, an earlier go's or any other `Error`, shows under it and gives way to it after its 6 s. When the go stops listening the line goes, so a go's own "too short" says nothing about stopping it.
+3. The microphone fills a buffer, up to 300 s. Letting go of a held second press, the tap that ends a hands-free go, `DictateEnd` or `DictateToggle` keeps 0.2 s more, so the last word isn't cut off. Losing the Fn helper ends it the same way, as nothing could tap to stop it, and so do `Toggle` (the talk shortcut, or Talk in the menu), `HoldStart` (a talk hold, which then starts its turn) and `Say` or `PreviewVoice`: a hands-free go can hold five minutes of words, and none of these may throw them away. Another key pressed with Fn on the second press, `Cancel`, a lock, or losing the shell or the extension drops the lot. Waking from a suspend drops a go that no key holds, `tap` or `shortcut` or one whose mode isn't known yet, with the `Error` "The computer went to sleep, so I stopped dictating and nothing was typed.": nothing else would end it, as the helper sends nothing for a key that isn't down and the 300 s limit runs on the monotonic clock, which stops during a suspend. The daemon sees it as `CLOCK_BOOTTIME` running ahead of `CLOCK_MONOTONIC` by more than 1 s, checked every second, and checked again when the microphone dies. A held go is left to the helper, which lets go of a held Fn on waking, so it ends and types as before. A go that types nothing says so with an `Error` rather than vanishing: under 0.4 s "That was too short, so nothing was typed.", and under 0.12 s of sound loud enough to be a voice, or no words from Whisper, "I didn't hear any words, so nothing was typed." A go too short or too quiet is never sent to the server. A go ended by `Cancel`, a lock or losing the shell says nothing. If the microphone dies, what it heard still goes on.
+4. The audio goes to `/v1/audio/transcriptions` as a WAV, with `transcribe_model`. From here the words travel apart from the job, so a new go or a talk hold can start at once. They reach the window in the order they were said, and only `Cancel`, a lock or losing the shell stops them.
+5. `clean()` turns line breaks and control characters into spaces, so the text can't press Enter in a terminal or a chat box. The extension does the same again, as it can't know who sent it. A trailing space keeps the next go from running on.
+6. `TypeText`. The extension decides in this order:
    - An id it wasn't told about: nothing.
    - A field that says it's a password, at the start or now: nothing is typed or kept, and it says so. `refused`
    - The time limit ran out, no window at the start, the focus has moved, or a shell dialog is up: copied to the clipboard, and it says so. `copied`
    - A text field with an input method, and words that fit in one Wayland message: `Main.inputMethod.commit`. Any language, no key presses, the clipboard untouched. `typed`
    - Anything else, which is XWayland, most Electron apps and long passages: clipboard and primary selection, Shift+Insert, then both put back after 2 s. `pasted`
-6. `Typed`. With no reply in 3 s the daemon reports an error.
+7. `Typed`. With no reply in 3 s the daemon reports an error.
 
 Why a paste and not keystrokes: where no field has focus, keystrokes would fire single-letter shortcuts, and a paste does nothing. Why Shift+Insert and not Ctrl+V: a layout with no `v`, such as Cyrillic, can't send Ctrl+V. Terminals paste the primary selection with that key, which is why both are set.
 
@@ -212,7 +219,17 @@ It serves `/run/tuxistant-fn/events.sock` (Unix stream, broadcast to all clients
 - `up`: Fn released
 - `other`: another key was pressed while Fn is held. Never says which key, and is never sent when Fn is not held
 
-Nothing else may ever leave this helper. The daemon owns timing: `down` starts a `fn_hold_ms` timer; `other` or `up` cancels it; if it fires, `HoldStart`; `up` after that means `HoldEnd`. A `down` within 0.4 s of a tap, meaning a press under 0.3 s with no other key, is `DictateStart` straight away, `up` then means `DictateEnd`, and `other` cancels it, because that was a Fn shortcut. A missing socket must not stop the daemon: retry quietly every 5 s. `TUXISTANT_FN_SOCKET` overrides the path, for tests.
+Nothing else may ever leave this helper. The daemon owns timing, in `tuxistant/fnclient.py`. Each word is timed when it arrives, by a reader of its own, and handled after the one before it is done. Starting a go waits for what it replaces to stop, and closing a reply can take 2 s: timed when handled, a tap pressed meanwhile would read as a hold. The timers below count from the `down` that set them, not from when it was handled:
+
+- Talk: `down` starts a `fn_hold_ms` timer; `other` or `up` cancels it; if it fires, `HoldStart`; `up` after that means `HoldEnd`.
+- A tap is a press under 0.3 s (`TAP_S`) with no `other`.
+- A `down` within 0.4 s (`SECOND_PRESS_S`) of a tap's `up` starts dictation straight away, and no talk timer. `other` before its `up` cancels it, because that was a Fn shortcut.
+- Its `up` under 0.3 s after its `down` makes the go hands-free (`DictationMode` `tap`). If it is still down at 0.3 s, it is push-to-talk (`hold`), and its `up` ends the go.
+- Hands-free, any press of Fn that ends with no `other`, short or long, ends the go on its `up`, and starts no talk hold. A press with `other`, a Fn shortcut, neither ends nor drops it. The press that ends it is not a tap, so it can't start the next go.
+- Before each word, the daemon checks it is still dictating. The dictate shortcut, the talk shortcut, `Cancel`, a lock, a suspend or the time limit can end a hands-free go without Fn, and then the next taps start a new one.
+- Losing the helper ends a talk hold or a go, as if let go.
+
+A missing socket must not stop the daemon: retry quietly every 5 s. `TUXISTANT_FN_SOCKET` overrides the path, for tests.
 
 ## Themes
 
