@@ -902,10 +902,16 @@ async def _call(plan: Plan, args: dict, config, session):
     if said is not None:
         return _echo(session, config, said)
     session.busy(CARD_S)    # a name can take seconds to look up, and nothing has been said yet
+    # The install's own servers are looked up alongside the host, inside the same SEND_S: a slow
+    # one, such as homeassistant.local away from home, can't use up the host's time, and one
+    # that hasn't answered by then makes the host "not answer" rather than go unchecked.
     try:    # waited for from out here: nothing stops a name lookup from inside the thread
-        where = await asyncio.wait_for(asyncio.to_thread(_place, request, config), SEND_S)
+        where = await asyncio.wait_for(asyncio.to_thread(
+            webfetch.recipe_place, request.host, request.port, config, SEND_S), SEND_S)
     except TimeoutError:
         return _say(session, config, NO_ANSWER.format(host=request.host))
+    except webfetch.UncheckableSetting as e:
+        return _say(session, config, str(e))
     except webfetch.PageError as e:
         refused = NOT_THERE if str(e) == webfetch.NOT_ALLOWED else NO_ANSWER
         return _say(session, config, refused.format(host=request.host))
@@ -918,8 +924,9 @@ async def _call(plan: Plan, args: dict, config, session):
     detail = _card_detail(plan, request, where)
     if len(detail) > MAX_DETAIL_CHARS:      # a cut card would hide what it cut
         return _say(session, config, TOO_LONG)
+    shown = time.monotonic()
     return Ask(_card_title(request), detail,
-               lambda: _send_and_say(plan, request, where, found, config, session),
+               lambda: _send_and_say(plan, request, where, found, config, session, shown),
                timeout_s=CARD_S)
 
 
@@ -959,10 +966,6 @@ async def _desktop_call(plan: Plan, found: dict, config, session):
     return Ask(card[0], card[1], act, timeout_s=CARD_S)
 
 
-def _place(request: Request, config) -> webfetch.Place:
-    return webfetch.place(request.host, request.port, webfetch.own_servers(config))
-
-
 def _card_title(request: Request) -> str:
     host = shown(request.host, 253)
     return f"Send this to {host}?" if request.method == "POST" else f"Ask {host} for this?"
@@ -981,13 +984,23 @@ def _card_detail(plan: Plan, request: Request, where: webfetch.Place) -> str:
 
 
 def _send_and_say(plan: Plan, request: Request, where: webfetch.Place, found: dict, config,
-                  session) -> dict:
-    """In a thread, after any click: the request the card showed, to the addresses it showed."""
+                  session, shown: float | None = None) -> dict:
+    """In a thread, after any click: the request the card showed, to the addresses it showed.
+    They are judged again first, by the servers the settings name now and what those have
+    answered since, as both can change while a card waits. shown: when the card was."""
+    deadline = time.monotonic() + SEND_S
     try:
+        where = webfetch.place_now(where, request.host, request.port, config, SEND_S, shown)
         reply = webfetch.send(where, request.scheme, request.host, request.port, request.path,
-                              request.method, request.body, request.content_type, SEND_S)
-    except webfetch.PageError:
+                              request.method, request.body, request.content_type,
+                              max(deadline - time.monotonic(), 0))
+    except TimeoutError:
         return _say(session, config, NO_ANSWER.format(host=request.host))
+    except webfetch.UncheckableSetting as e:
+        return _say(session, config, str(e))
+    except webfetch.PageError as e:
+        refused = NOT_THERE if str(e) == webfetch.NOT_ALLOWED else NO_ANSWER
+        return _say(session, config, refused.format(host=request.host))
     if not 200 <= reply.status < 300:
         said = SAID_NO if reply.status >= 400 else NO_ANSWER
         return _say(session, config, said.format(host=request.host))

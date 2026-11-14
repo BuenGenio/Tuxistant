@@ -37,6 +37,7 @@ from .gate import printable, shown
 from .inotify import ignored
 from .mcp import START_TIMEOUT_S
 from .skills import BUILTIN, HANDLERS, Skills, risk_of
+from .webfetch import HOST
 
 log = logging.getLogger("tuxistant")
 
@@ -69,8 +70,6 @@ LOADED = "skills-loaded.json"   # yours that were loaded, by name, so a restart 
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
 ACTION = re.compile(r"[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+")
 PARAM = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}")
-LABEL = r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?"
-HOST = re.compile(rf"{LABEL}(\.{LABEL})*")
 FIELDS = {"id", "name", "description", "version", "run", "permissions", "config", "timeout_s",
           "actions"}
 ACTION_FIELDS = {"description", "params", "required"}

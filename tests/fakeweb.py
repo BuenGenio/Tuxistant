@@ -64,10 +64,11 @@ class Web:
         threading.Thread(target=self.http.serve_forever, args=(0.01,), daemon=True).start()
         test.addCleanup(self.close)
         self.guests = []    # the networks of this computer's containers, made up
+        self.house = []     # and the house's, made up: a more specific one wins
         webfetch.forget_own_servers()
         test.addCleanup(webfetch.forget_own_servers)
         for name, new in (("_dial", self.dial), ("_resolve", self.resolve),
-                          ("guest_networks", lambda: list(self.guests))):
+                          ("kernel_routes", self.kernel_routes)):
             patcher = mock.patch.object(webfetch, name, new)
             patcher.start()
             test.addCleanup(patcher.stop)
@@ -75,6 +76,10 @@ class Web:
     def close(self):
         self.http.shutdown()
         self.http.server_close()
+
+    def kernel_routes(self):
+        return ([webfetch.Route(net, True) for net in self.guests]
+                + [webfetch.Route(net, False) for net in self.house])
 
     def resolve(self, host, port):
         self.lookups.append(host)

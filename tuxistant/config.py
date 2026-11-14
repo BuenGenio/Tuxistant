@@ -7,6 +7,7 @@ from pathlib import Path
 
 from . import homeassistant
 from .livedata import DEFAULT_SOURCE, SOURCES
+from .servers import SERVER
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "tuxistant"   # empty is unset
 DATA_DIR = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "tuxistant"
@@ -87,7 +88,6 @@ NOT_THE_CONSENT = "That is not what Tuxistant asks you to agree to now"
 NOT_A_MODEL = "That is not a model name"
 
 
-SERVER = re.compile(r"(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+)(?::(\d{1,5}))?")
 API_KEY = re.compile(r"[\x21-\x7e]*")     # it goes into a header, where a newline is an injection
 
 

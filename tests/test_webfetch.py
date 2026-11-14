@@ -7,6 +7,7 @@ them without asking anyone.
 import ipaddress
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -18,7 +19,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tuxistant import webfetch  # noqa: E402
+from tuxistant import homeassistant, webfetch  # noqa: E402
+from tuxistant.config import clean_server  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.webfetch import PageError, clean, public  # noqa: E402
 from tests.fakeweb import PUBLIC, WORDS, Web, slow_server  # noqa: E402
@@ -145,10 +147,10 @@ class Refusals(unittest.TestCase):
     def test_a_server_name_that_will_not_resolve_is_still_refused_by_name(self):
         config = {**CONFIG, "search_server": "gone.example:8888"}
         self.web.names["gone.example"] = None
-        names, _ = webfetch.own_servers(config)
+        names, _ = webfetch.own_servers(config, 1)
         self.assertIn("gone.example", names)
         self.web.names["gone.example"] = [PUBLIC]
-        self.assertIn("gone.example", webfetch.own_servers(config)[0])
+        self.assertIn("gone.example", webfetch.own_servers(config, 1)[0])
 
 
     def test_a_mangled_server_setting_is_not_a_crash(self):
@@ -249,6 +251,20 @@ class Redirects(unittest.TestCase):
         with self.assertRaises(PageError):
             webfetch.fetch("http://example.com/start", config)
         self.assertEqual(self.web.paths(), ["/start"])
+
+    def test_a_server_named_in_settings_between_hops_is_refused_at_the_next(self):
+        """Settings change the config in place. A hop is checked against them as they are."""
+        config = {**CONFIG}
+        self.web.names |= {"other.example": ["8.8.4.4"], "newvoice.example": ["8.8.4.4"]}
+        self.jump("http://other.example/page")
+        real = webfetch._get
+
+        def get(target, deadline):
+            config["server"] = "newvoice.example:8080"
+            return real(target, deadline)
+        with mock.patch.object(webfetch, "_get", get), self.assertRaises(PageError):
+            webfetch.fetch("http://example.com/start", config)
+        self.assertEqual(self.web.dialled, [PUBLIC])
 
     def test_every_hop_is_checked_not_just_the_first(self):
         self.jump("/two")
@@ -426,6 +442,14 @@ class Limits(unittest.TestCase):
                 self.assertIn("real page", webfetch.fetch("http://example.com/", CONFIG).text)
 
 
+def only_example(host, _port):
+    """Names for a test with no pretend web: the page's, and no other, so no own server answers
+    at the page's address."""
+    if host == "example.com":
+        return [PUBLIC]
+    raise PageError("no such name")
+
+
 class Dripping(unittest.TestCase):
     """A server that keeps sending, slowly: each read succeeds, so only a clock can end it."""
 
@@ -449,8 +473,9 @@ class Dripping(unittest.TestCase):
         threading.Thread(target=answer, daemon=True).start()
         port = listener.getsockname()[1]
         self.addCleanup(mock.patch.stopall)
-        mock.patch.object(webfetch, "own_servers", return_value=(set(), set())).start()
-        mock.patch.object(webfetch, "_resolve", return_value=[PUBLIC]).start()
+        mock.patch.object(webfetch, "own_servers",
+                          lambda config, *_: (webfetch._own_names(config), set())).start()
+        mock.patch.object(webfetch, "_resolve", only_example).start()
         mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
             ("127.0.0.1", port), timeout=2)).start()
 
@@ -493,8 +518,9 @@ class CutShort(unittest.TestCase):
     def serve(self, *steps):
         port = slow_server(self, steps)
         self.addCleanup(mock.patch.stopall)
-        mock.patch.object(webfetch, "own_servers", return_value=(set(), set())).start()
-        mock.patch.object(webfetch, "_resolve", return_value=[PUBLIC]).start()
+        mock.patch.object(webfetch, "own_servers",
+                          lambda config, *_: (webfetch._own_names(config), set())).start()
+        mock.patch.object(webfetch, "_resolve", only_example).start()
         mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
             ("127.0.0.1", port), timeout=2)).start()
 
@@ -505,6 +531,22 @@ class CutShort(unittest.TestCase):
                                  "GET", seconds=CLOCK_S)
         finally:
             self.assertLess(time.monotonic() - started, CLOCK_S + 1)
+
+    def unreadable(self, read):
+        """Refused for what came back, not for where it was: the request went out."""
+        real, reached = webfetch._get, []
+
+        def get(target, deadline):
+            reached.append(target.host)
+            return real(target, deadline)
+        with mock.patch.object(webfetch, "_get", get), self.assertRaises(PageError) as caught:
+            read()
+        self.assertEqual(str(caught.exception), webfetch.UNREADABLE)
+        return reached
+
+    def fetch(self):
+        self.assertEqual(self.unreadable(
+            lambda: webfetch.fetch("http://example.com/", CONFIG, CLOCK_S)), ["example.com"])
 
     def test_a_length_that_drips_past_the_deadline(self):
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -517,14 +559,12 @@ class CutShort(unittest.TestCase):
     def test_an_answer_with_no_length_cut_by_the_deadline(self):
         self.serve((0, b"HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n12345"),
                    *[(0.3, b"6")] * 4)
-        with self.assertRaises(PageError):
-            self.send()
+        self.unreadable(self.send)
 
     def test_a_server_that_hangs_up_before_its_length(self):
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                        b"Content-Length: 7\r\n\r\n12345"))
-        with self.assertRaises(PageError):
-            self.send()
+        self.unreadable(self.send)
 
     def test_a_whole_answer_in_time_is_still_read(self):
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -536,20 +576,18 @@ class CutShort(unittest.TestCase):
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
                        b"Content-Length: 100000\r\n\r\n" + page),
                    *[(0.3, b"<p>more</p>")] * 4)
-        with self.assertRaises(PageError):
-            webfetch.fetch("http://example.com/", CONFIG, CLOCK_S)
+        self.fetch()
 
     def test_a_page_whose_server_hangs_up_before_its_length(self):
         page = (f"<p>{WORDS}</p>" * 3).encode()
         self.serve((0, b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
                        b"Content-Length: 100000\r\n\r\n" + page))
-        with self.assertRaises(PageError):
-            webfetch.fetch("http://example.com/", CONFIG, CLOCK_S)
+        self.fetch()
 
 
 class OwnServers(unittest.TestCase):
-    """Looked up before a page's clock starts, and kept for a minute, by the names in the
-    settings."""
+    """Looked up all at once, each in a thread of its own, and kept for a minute, by the names in
+    the settings. A name never looked up is waited for within the caller's time."""
 
     def setUp(self):
         self.web = Web(self)
@@ -557,38 +595,377 @@ class OwnServers(unittest.TestCase):
         real = self.web.resolve
 
         def slow(host, port):
-            if host == "homeassistant.local":   # mDNS away from home: seconds, then nothing
-                time.sleep(1.0)
+            if host == "homeassistant.local":   # mDNS: a while
+                time.sleep(0.2)
             return real(host, port)
         patcher = mock.patch.object(webfetch, "_resolve", slow)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_a_slow_home_assistant_costs_a_quick_page_nothing(self):
+    def hung(self, address=None):
+        """homeassistant.local answers, with address if given, once the returned event is set:
+        as long as it can take away from home."""
+        release, real = threading.Event(), self.web.resolve
+        self.addCleanup(release.set)
+        if address:
+            self.web.names["homeassistant.local"] = [address]
+
+        def hung(host, port):
+            if host == "homeassistant.local":
+                release.wait(5)
+            return real(host, port)
+        patcher = mock.patch.object(webfetch, "_resolve", hung)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return release
+
+    def lookups_reach(self, count: int):
+        for _ in range(100):
+            if self.web.lookups.count("homeassistant.local") >= count:
+                return
+            time.sleep(0.02)
+
+    def test_a_slow_home_assistant_is_waited_for_within_the_page_s_time(self):
         started = time.monotonic()
         page = webfetch.fetch("http://example.com/", self.config, CLOCK_S)
         self.assertIn("real page text", page.text)
-        self.assertGreaterEqual(time.monotonic() - started, 1.0, "it was looked up")
+        self.assertGreaterEqual(time.monotonic() - started, 0.2, "it was looked up")
+
+    def test_a_page_is_refused_while_an_own_server_is_still_being_looked_up(self):
+        """Home Assistant on the open internet, slow to look up, at the page's address: the page
+        isn't read from it on the strength of a lookup that hasn't ended."""
+        release = self.hung(PUBLIC)
+        # create: so this also runs on code that waited OWN_WAIT_S and went on without it
+        with mock.patch.object(webfetch, "OWN_WAIT_S", 0.2, create=True):
+            started = time.monotonic()
+            with self.assertRaises(PageError):
+                webfetch.fetch("http://example.com/", self.config, CLOCK_S)
+        self.assertLess(time.monotonic() - started, CLOCK_S + 0.4)
+        self.assertEqual(self.web.dialled, [])
+        release.set()
+        self.lookups_reach(1)
+        with self.assertRaises(PageError):
+            webfetch.fetch("http://example.com/", self.config, CLOCK_S)
+        self.assertEqual(self.web.dialled, [])
 
     def test_they_are_looked_up_once_a_minute(self):
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
         for _ in range(3):
             webfetch.fetch("http://example.com/", self.config, CLOCK_S)
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
         with mock.patch.object(webfetch, "OWN_S", 0):
             webfetch.forget_own_servers()
-            webfetch.own_servers(self.config)
-            webfetch.own_servers(self.config)
+            webfetch.own_servers(self.config, 1)
+            started = time.monotonic()
+            webfetch.own_servers(self.config, 1)
+            self.assertLess(time.monotonic() - started, 0.15, "the old addresses do meanwhile")
+            self.lookups_reach(3)
         self.assertEqual(self.web.lookups.count("homeassistant.local"), 3)
+
+    def settled(self):
+        for _ in range(100):
+            if not webfetch._own_pending:
+                return
+            time.sleep(0.02)
+
+    def test_a_lookup_that_failed_is_not_kept(self):
+        """However it failed, the next call looks the name up again and waits for it, so the
+        address it answers with once the network is up counts at once, not a minute on."""
+        real, how = self.web.resolve, []
+
+        def failing(host, port):
+            if host == "homeassistant.local" and how:
+                self.web.lookups.append(host)
+                if how[0] == "raises":
+                    raise RuntimeError("a resolver that breaks")
+                return []
+            return real(host, port)
+        for way in ("fails", "raises", "answers nothing"):
+            with self.subTest(way), mock.patch.object(webfetch, "_resolve", failing):
+                webfetch.forget_own_servers()
+                self.web.names.pop("homeassistant.local", None)
+                how[:] = [] if way == "fails" else [way]
+                self.assertNotIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+                how.clear()
+                self.web.names["homeassistant.local"] = ["192.168.1.30"]
+                self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+
+    def test_a_lookup_that_ran_out_of_time_and_then_failed_is_not_kept(self):
+        release = self.hung()
+        with self.assertRaises(TimeoutError):
+            webfetch.own_servers(self.config, 0.1)
+        release.set()
+        self.settled()
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
+        self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+
+    def test_two_calls_after_a_failure_both_wait_for_the_one_lookup(self):
+        webfetch.own_servers(self.config, 1)
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
+        found = []
+
+        def call():
+            found.append(webfetch.own_servers(self.config, 1)[1])
+        threads = [threading.Thread(target=call) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(found), 2)
+        self.assertTrue(all("192.168.1.30" in addresses for addresses in found))
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 2)
+
+    def page_looked_up_slowly(self, meanwhile):
+        """news.example, at a public address, takes a while to look up, and meanwhile runs once
+        it has started."""
+        self.web.names["news.example"] = [PUBLIC]
+        real = webfetch._resolve
+
+        def resolve(host, port):
+            if host == "news.example":
+                meanwhile()
+                time.sleep(0.2)
+            return real(host, port)
+        return mock.patch.object(webfetch, "_resolve", resolve)
+
+    def test_a_server_named_in_settings_while_the_page_is_looked_up(self):
+        """Settings name a new voice server at the page's address after the hop's own servers
+        were looked up, while the page's host is. Nothing waits between the check and the dial."""
+        config = {**self.config, "ha_server": ""}
+        self.web.names["newvoice.example"] = [PUBLIC]
+        webfetch.own_servers(config, 1)
+
+        def move():
+            config["server"] = "newvoice.example:8080"
+        with self.page_looked_up_slowly(move), self.assertRaises(PageError):
+            webfetch.fetch("http://news.example/", config, 2)
+        self.assertEqual(self.web.dialled, [])
+
+    def test_an_answer_an_own_server_gave_while_the_page_was_looked_up(self):
+        """Research's own servers came with Home Assistant's lookup failed. While the page's host
+        is looked up, another request finds Home Assistant at the page's address."""
+        own = webfetch.own_servers(self.config, 1)
+        self.assertNotIn(PUBLIC, own[1])
+
+        def home():
+            self.web.names["homeassistant.local"] = [PUBLIC]
+            webfetch.own_servers(self.config, 1)
+        with self.page_looked_up_slowly(home), self.assertRaises(PageError):
+            webfetch.fetch("http://news.example/", self.config, 2, own=own)
+        self.assertEqual(self.web.dialled, [])
+
+    def test_a_server_s_name_in_any_spelling(self):
+        """The resolver looks a name up as IDNA gives it, so a page naming the voice server in
+        another spelling reaches it. Its lookup failed earlier in this research run, and the name
+        answers now: only the name can refuse it."""
+        config = {**self.config, "server": "voice.example:8080"}
+        own = webfetch.own_servers(config, 1)
+        self.web.names["voice.example"] = ["8.8.4.4"]
+        fake = webfetch._resolve
+
+        def resolve(host, port):        # what socket.getaddrinfo does to a name first
+            try:
+                host = host.encode("idna").decode("ascii")
+            except UnicodeError:
+                raise PageError(webfetch.UNREADABLE) from None
+            return fake(host, port)
+        with mock.patch.object(webfetch, "_resolve", resolve):
+            for host in ("ｖｏｉｃｅ.example", "voi\u00adce.example", "ＶＯＩＣＥ.EXAMPLE",
+                         "VOICE.example."):
+                self.web.dialled.clear()
+                with self.subTest(host):
+                    with self.assertRaises(PageError) as caught:
+                        webfetch.fetch(f"http://{host}:8080/", config, 2, own=own)
+                    self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+                    self.assertEqual(self.web.dialled, [])
+
+    def glibc(self):
+        """The resolver as CPython and glibc make it: IDNA for a name that isn't ASCII, then the
+        escapes res_mkquery reads, \\118 as v and \\e as e."""
+        fake = webfetch._resolve
+
+        def resolve(host, port):
+            if not host.isascii():
+                host = host.encode("idna").decode("ascii")
+            host = re.sub(r"\\(\d{3})", lambda m: chr(int(m.group(1))), host)
+            return fake(re.sub(r"\\(.)", r"\1", host), port)
+        return mock.patch.object(webfetch, "_resolve", resolve)
+
+    def test_a_server_s_name_with_escapes_the_resolver_reads(self):
+        config = {**self.config, "server": "voice.example:8080"}
+        own = webfetch.own_servers(config, 1)
+        self.web.names["voice.example"] = ["8.8.4.4"]
+        with self.glibc():
+            for host in ("\\118oice.example", "voic\\e.example"):
+                self.web.dialled.clear()
+                with self.subTest(host):
+                    with self.assertRaises(PageError) as caught:
+                        webfetch.fetch(f"http://{host}:8080/", config, 2, own=own)
+                    self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+                    self.assertEqual(self.web.dialled, [])
+
+    def test_only_a_plain_name_or_an_address_is_looked_up(self):
+        for host in ("my_host.example", "voice%2eexample", "voi\u3000ce.example", "a\\.b"):
+            self.web.lookups.clear()
+            with self.subTest(host):
+                with self.assertRaises(PageError) as caught:
+                    webfetch.fetch(f"http://{host}/", self.config, 1)
+                self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+                self.assertEqual(self.web.lookups, [], "refused before anything is looked up")
+
+    def test_an_address_in_another_spelling_is_the_same_name(self):
+        self.assertEqual(webfetch._parse("http://[2606:4700:0:0::1111]/")[1], "2606:4700::1111")
+        config = {**self.config, "server": "[2606:4700:0::1111]:8080"}
+        self.assertIn("2606:4700::1111", webfetch.own_servers(config, 1)[0])
+
+    def test_a_server_in_the_settings_the_resolver_would_read_otherwise(self):
+        """Only an edited config.json can hold it. Every request fails closed until it is put
+        right, and says why."""
+        config = {**self.config, "server": "voic\\e.lan:8080"}
+        self.assertIsNone(clean_server("voic\\e.lan:8080"))
+        for request in (lambda: webfetch.own_servers(config, 1),
+                        lambda: webfetch.fetch("http://example.com/", config, 1),
+                        lambda: webfetch.recipe_place("example.com", 443, config, 1),
+                        lambda: webfetch.start_own_lookups(config)):
+            with self.assertRaises(PageError) as caught:
+                request()
+            self.assertEqual(str(caught.exception), webfetch.BAD_SETTING)
+        self.assertEqual(self.web.dialled, [])
+
+    def test_every_server_settings_can_save_is_checked_by(self):
+        """Settings keep an underscore, or a hyphen at either end of a label, and the resolver
+        looks those up as written. No page may name them, but they are servers to refuse."""
+        for key, value in (("server", "tux_server:8080"), ("ha_server", "home_assistant.lan:8123"),
+                           ("search_server", "-voice.lan:8888"),
+                           ("translate_server", "voice-.lan:5000")):
+            host = value.partition(":")[0]
+            self.web.names[host] = ["8.8.4.4"]
+            self.assertIsNotNone(clean_server(value))
+            self.assertIsNotNone(homeassistant.clean_server(value))
+            config = {**self.config, key: value}
+            with self.subTest(value):
+                names, addresses = webfetch.own_servers(config, 1)
+                self.assertIn(host, names)
+                self.assertIn("8.8.4.4", addresses)
+                self.assertIn("real page", webfetch.fetch("http://example.com/", config, 1).text)
+                with self.assertRaises(PageError) as caught:
+                    webfetch.fetch(f"http://{host}/", config, 1)
+                self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+
+    def test_port_0_is_not_port_80(self):
+        with self.assertRaises(PageError) as caught:
+            webfetch.fetch("http://example.com:0/", self.config, 1)
+        self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+        self.assertEqual(self.web.dialled, [])
+
+    def test_a_server_in_the_settings_in_another_spelling(self):
+        config = {**self.config, "server": "http://ＶＯＩ\u00adＣＥ.example:8080"}
+        self.assertIn("voice.example", webfetch.own_servers(config, 1)[0])
+        self.assertIn("ha.lan", webfetch.own_servers({**config, "ha_server": "http://ＨＡ.lan"},
+                                                     1)[0])
+        with self.assertRaises(PageError) as caught:
+            webfetch.place("voice.example", 80, webfetch.own_servers(config, 1), [PUBLIC])
+        self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+
+    def test_a_name_idna_can_not_encode_is_refused(self):
+        with self.assertRaises(PageError) as caught:
+            webfetch.fetch("http://" + "a" * 64 + ".example/", self.config, 1)
+        self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+        self.assertEqual(self.web.lookups, [])
+
+    def test_a_lookup_from_before_the_call_that_then_fails_is_followed_by_a_fresh_one(self):
+        """Sent before the network came up, by an earlier call, and joined by this one."""
+        up, real, sent = threading.Event(), self.web.resolve, []
+
+        def resolve(host, port):
+            if host == "homeassistant.local":
+                was_up = up.is_set()
+                sent.append(was_up)
+                time.sleep(0.2)
+                if not was_up:
+                    raise PageError("no network when it was sent")
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", resolve):
+            webfetch.start_own_lookups(self.config)
+            time.sleep(0.05)
+            up.set()
+            self.web.names["homeassistant.local"] = ["192.168.1.30"]
+            self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+        self.assertEqual(sent, [False, True])
+
+    def test_a_lookup_started_by_this_call_that_fails_is_not_tried_again(self):
+        webfetch.own_servers(self.config, 1)
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
+
+    def test_a_page_at_a_voice_server_whose_lookup_failed_is_refused(self):
+        """The voice server failed to look up, as before the network was up, and now answers
+        slowly at the page's address."""
+        config = {**self.config, "server": "tuxserver.example:8080"}
+        self.web.names["news.example"] = [PUBLIC]
+        self.assertIn("real page", webfetch.fetch("http://news.example/", config, 2).text)
+        self.web.dialled.clear()
+        self.web.names["tuxserver.example"] = [PUBLIC]
+        real = webfetch._resolve
+
+        def slow(host, port):
+            if host == "tuxserver.example":
+                time.sleep(0.3)
+            return real(host, port)
+        with mock.patch.object(webfetch, "_resolve", slow), self.assertRaises(PageError):
+            webfetch.fetch("http://news.example/", config, 2)
+        self.assertEqual(self.web.dialled, [])
 
     def test_the_names_are_refused_whatever_was_kept(self):
         self.web.names["tux.example"] = [PUBLIC]
-        webfetch.own_servers(self.config)
+        webfetch.own_servers(self.config, 1)
         moved = {**self.config, "search_server": "tux.example:8888"}
-        self.assertIn("tux.example", webfetch.own_servers(moved)[0])
+        self.assertIn("tux.example", webfetch.own_servers(moved, 1)[0])
         with self.assertRaises(PageError):
             webfetch.fetch("http://tux.example/", moved, CLOCK_S)
         with self.assertRaises(PageError):
             webfetch.fetch("http://homeassistant.local/", self.config, CLOCK_S)
+
+    def test_a_lookup_never_ended_fails_the_call_and_its_address_is_refused_when_it_ends(self):
+        """No answer from a name never looked up is no answer for the caller, and when it comes
+        it is kept, with no second lookup."""
+        release = self.hung("192.168.1.30")
+        self.web.names["ha-by-number.example"] = ["192.168.1.30"]
+        with mock.patch.object(webfetch, "this_computer", return_value=set()):
+            started = time.monotonic()
+            with self.assertRaises(TimeoutError):
+                webfetch.own_servers(self.config, 0.2)
+            with self.assertRaises(TimeoutError):
+                webfetch.recipe_place("ha-by-number.example", 80, self.config, 0.2)
+            self.assertLess(time.monotonic() - started, 0.9)
+            with self.assertRaises(PageError):
+                webfetch.recipe_place("homeassistant.local", 8123, self.config, 0.2)
+            release.set()
+            names, addresses = webfetch.own_servers(self.config, 1)
+            self.assertIn("homeassistant.local", names)
+            self.assertLessEqual({"192.168.1.20", "192.168.1.30"}, addresses)
+            with self.assertRaises(PageError):
+                webfetch.recipe_place("ha-by-number.example", 80, self.config, 1)
+        self.assertEqual(self.web.lookups.count("homeassistant.local"), 1)
+
+    def test_addresses_are_kept_while_the_next_lookup_runs_and_when_it_fails(self):
+        self.web.names["homeassistant.local"] = ["192.168.1.30"]
+        with mock.patch.object(webfetch, "OWN_S", 0):
+            self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+            release = self.hung()
+            self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 0.1)[1])
+            self.web.names["homeassistant.local"] = None    # away from home: it fails
+            release.set()
+            self.lookups_reach(2)
+            time.sleep(0.05)
+            self.assertIn("192.168.1.30", webfetch.own_servers(self.config, 1)[1])
+        self.web.names["homeassistant.local"] = ["192.168.1.31"]
+        with mock.patch.object(webfetch, "OWN_S", 0):
+            webfetch.own_servers(self.config, 1)
+            self.lookups_reach(4)
+            time.sleep(0.05)
+        self.assertEqual(webfetch.own_servers(self.config, 1)[1] & {"192.168.1.30",
+                                                                    "192.168.1.31"},
+                         {"192.168.1.31"}, "a lookup that answers replaces them")
 
 
 def _hex(address: str) -> str:
@@ -604,12 +981,15 @@ class Guests(unittest.TestCase):
         self.routes, self.six = [], []
 
     def card(self, name, index, kind="1", link=None, physical=False, tun=None, lower=None,
-             ports=None, route=None, six=None):
+             ports=None, route=None, six=None, devtype=None):
         path = self.net / name
         path.mkdir(parents=True)
         for file, value in (("type", kind), ("ifindex", str(index)),
                             ("iflink", str(index if link is None else link))):
             (path / file).write_text(value + "\n")
+        devtype = devtype or ("bridge" if ports is not None else None)
+        (path / "uevent").write_text((f"DEVTYPE={devtype}\n" if devtype else "")
+                                     + f"INTERFACE={name}\nIFINDEX={index}\n")
         if physical:
             (path / "device").mkdir()
         if tun is not None:
@@ -622,27 +1002,37 @@ class Guests(unittest.TestCase):
             for port in ports:
                 (path / "brif" / port).mkdir()
         if route:
-            net, mask = route.split("/")
-            netmask = str(ipaddress.IPv4Network(f"0.0.0.0/{mask}").netmask)
-            self.routes.append(f"{name}\t{_hex(net)}\t00000000\t0001\t0\t0\t0\t"
-                               f"{_hex(netmask)}\t0\t0\t0")
-        for address, length, scope in six or ():
-            packed = socket.inet_pton(socket.AF_INET6, address).hex()
-            self.six.append(f"{packed} {index:02x} {length:02x} {scope} 80 {name}")
+            self.route(name, route)
+        for net, length in six or ():
+            self.route6(name, net, length)
 
-    def found(self):
+    def route(self, name, net, gateway="0.0.0.0"):
+        address, length = net.split("/")
+        netmask = str(ipaddress.IPv4Network(f"0.0.0.0/{length}").netmask)
+        self.routes.append(f"{name}\t{_hex(address)}\t{_hex(gateway)}\t0001\t0\t0\t0\t"
+                           f"{_hex(netmask)}\t0\t0\t0")
+
+    def route6(self, name, net, length, gateway="::"):
+        packed = socket.inet_pton(socket.AF_INET6, net).hex()
+        hop = socket.inet_pton(socket.AF_INET6, gateway).hex()
+        self.six.append(f"{packed} {length:02x} {'0' * 32} 00 {hop} 00000100 00000001 "
+                        f"00000000 00000001 {name:>8}")
+
+    def kernel_routes(self):
         (self.root / "route").write_text(
             "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\t"
             "IRTT\n" + "\n".join(self.routes) + "\n")
-        (self.root / "if_inet6").write_text("\n".join(self.six) + "\n")
-        return {str(net) for net in webfetch.guest_networks(
-            str(self.net), str(self.root / "route"), str(self.root / "if_inet6"))}
+        (self.root / "ipv6_route").write_text("\n".join(self.six) + "\n")
+        return webfetch.kernel_routes(str(self.net), str(self.root / "route"),
+                                      str(self.root / "ipv6_route"))
+
+    def found(self):
+        return {str(route.net) for route in self.kernel_routes() if route.guest}
 
     def test_what_counts_as_a_guest(self):
         self.card("eth0", 2, physical=True, route="192.168.1.0/24",
-                  six=[("2a00:1450::5", 64, "00"), ("fe80::1", 64, "20")])
-        self.card("docker0", 4, ports=[], route="172.17.0.0/16",
-                  six=[("fd00:dead::1", 64, "00"), ("fe80::2", 64, "20")])
+                  six=[("2a00:1450::", 64), ("fe80::", 64)])
+        self.card("docker0", 4, ports=[], route="172.17.0.0/16", six=[("fd00:dead::", 64)])
         self.card("br-1234", 5, ports=["veth1"], route="172.18.0.0/16")
         self.card("veth1", 20, link=2)
         self.card("virbr0", 6, ports=["vnet0"], route="192.168.122.0/24")
@@ -652,20 +1042,59 @@ class Guests(unittest.TestCase):
         self.card("ve-box", 23, link=2, route="10.0.0.0/28")       # systemd-nspawn
         self.card("br0", 8, ports=["eth1", "eth0.10"], route="192.168.50.0/24")
         self.card("eth1", 9, physical=True)
-        self.card("eth0.10", 10, link=2, lower="eth0", route="192.168.10.0/24")
+        self.card("eth0.10", 10, link=2, lower="eth0", route="192.168.10.0/24", devtype="vlan")
         self.card("tailscale0", 11, kind="65534", tun="0x5001", route="100.64.0.0/10",
-                  six=[("fd7a:115c:a1e0::1", 128, "00")])
-        self.card("wg0", 12, kind="65534", route="10.6.0.0/24")
+                  six=[("fd7a:115c:a1e0::", 48)])
+        self.card("wg0", 12, kind="65534", route="10.6.0.0/24", devtype="wireguard")
         self.card("tun9", 13, kind="776", link=0, route="10.9.0.0/24")
-        self.routes.append(f"eth0\t00000000\t{_hex('192.168.1.1')}\t0003\t0\t0\t600\t"
-                           f"00000000\t0\t0\t0")
+        self.route("eth0", "0.0.0.0/0", gateway="192.168.1.1")
+        self.route("docker0", "10.99.0.0/16", gateway="172.17.0.5")   # through a container
         self.routes.append("docker0\tnot hex\t00000000\t0001\t0\t0\t0\tzz\t0\t0\t0")
+        self.six.append("not hex at all")
         self.assertEqual(self.found(), {"172.17.0.0/16", "fd00:dead::/64", "172.18.0.0/16",
                                         "192.168.122.0/24", "10.88.0.0/16", "10.0.0.0/28"})
 
+    def test_a_vpn_on_a_tap_or_a_vxlan_is_not_a_guest(self):
+        """ZeroTier and an OpenVPN tap reach other computers, as Tailscale does, and so does a
+        VXLAN or GENEVE tied to a card. QEMU's tap on its own carries virtio headers."""
+        self.card("zt5u4ry", 2, tun="0x1002", route="10.147.17.0/24",
+                  six=[("fd80:56c2:e21c::", 88)])
+        self.card("tap0", 3, tun="0x1002", route="10.8.0.0/24")             # OpenVPN
+        self.card("vxlan100", 4, link=9, route="10.20.0.0/24", devtype="vxlan")
+        self.card("flannel.1", 5, link=9, route="10.244.1.0/24", devtype="vxlan")
+        self.card("gnv0", 6, link=0, route="10.30.0.0/24", devtype="geneve")
+        self.card("tap-vm", 7, tun="0x5002", route="192.168.100.0/24")       # QEMU's own
+        self.card("tun0", 8, kind="65534", tun="0x1001", route="10.7.0.0/24")
+        self.assertEqual(self.found(), {"192.168.100.0/24"})
+
+    def test_a_vpn_tap_with_virtio_headers_is_taken_for_a_virtual_machine(self):
+        """Virtio headers are what tells QEMU's tap from a VPN's, and a VPN may turn them on for
+        offloads, as tailscaled does on its tun (0x5001 here). A tap-mode VPN that did would look
+        like QEMU's: what is reached through it is refused, which fails closed."""
+        self.card("zt-offload", 2, tun="0x5002", route="10.147.18.0/24")
+        self.card("tailscale0", 3, kind="65534", tun="0x5001", route="100.64.0.0/10")
+        self.assertEqual(self.found(), {"10.147.18.0/24"})
+
+    def test_the_most_specific_route_decides(self):
+        """A Docker network made on another network can hold the house's range: the kernel
+        sends to the house by its narrower route, and so does this."""
+        self.card("wlan0", 2, physical=True, devtype="wlan", route="192.168.1.0/24",
+                  six=[("fd00:dead:0:5::", 64)])
+        self.card("br-old", 3, ports=[], route="192.168.0.0/20", six=[("fd00:dead::", 48)])
+        self.card("br-same", 4, ports=[], route="10.1.0.0/24")
+        self.route("wlan0", "10.1.0.0/24")      # the same width: refused, as either could win
+        self.route("wlan0", "0.0.0.0/0", gateway="192.168.1.1")
+        routes = self.kernel_routes()
+        for address, guest in (("192.168.1.40", False), ("192.168.3.4", True),
+                               ("192.168.0.9", True), ("192.168.16.2", False),
+                               ("fd00:dead:0:5::9", False), ("fd00:dead:0:6::2", True),
+                               ("10.1.0.5", True), ("8.8.8.8", False), ("2a00::1", False)):
+            with self.subTest(address):
+                self.assertEqual(webfetch._not_a_device(address, routes), guest)
+
     def test_nothing_to_read_is_no_guests(self):
-        self.assertEqual(webfetch.guest_networks(str(self.root / "none"), str(self.root / "x"),
-                                                 str(self.root / "y")), [])
+        self.assertEqual(webfetch.kernel_routes(str(self.root / "none"), str(self.root / "x"),
+                                                str(self.root / "y")), [])
 
 
 class Places(unittest.TestCase):
@@ -712,6 +1141,14 @@ class Places(unittest.TestCase):
                 self.assertTrue(self.place(address).local)
         self.assertEqual(self.web.dialled, [])
 
+    def test_a_home_network_inside_an_old_docker_range_is_the_house(self):
+        self.web.guests = [ipaddress.ip_network("192.168.0.0/20")]
+        self.web.house = [ipaddress.ip_network("192.168.1.0/24")]
+        self.assertTrue(self.place("192.168.1.40").local)
+        with self.assertRaises(PageError):
+            self.place("192.168.3.4")
+        self.assertEqual(self.web.dialled, [])
+
     def test_own_servers_by_name_and_address(self):
         own = ({"device.example"}, set())
         with self.assertRaises(PageError):
@@ -722,7 +1159,7 @@ class Places(unittest.TestCase):
     def test_home_assistant_is_one_of_them(self):
         config = {**CONFIG, "ha_server": "http://ha.lan:8123"}
         self.web.names["ha.lan"] = ["192.168.1.30"]
-        names, addresses = webfetch.own_servers(config)
+        names, addresses = webfetch.own_servers(config, 1)
         self.assertIn("ha.lan", names)
         self.assertIn("192.168.1.30", addresses)
 

@@ -11,6 +11,7 @@ A recipe's request goes through place() and send() instead: to a host its file n
 be a device at home but never this computer or the servers this install talks to.
 """
 import codecs
+import concurrent.futures
 import html
 import http.client
 import ipaddress
@@ -26,6 +27,7 @@ from html.parser import HTMLParser
 from typing import NamedTuple
 
 from .realtime import _urls
+from .servers import SERVER_NAME_RE
 
 TOTAL_S = 8             # the whole fetch, however many redirects it takes
 CONNECT_S = 4
@@ -49,9 +51,13 @@ NOT_DEVICES = tuple(map(ipaddress.ip_network, ("100.100.100.100/32", "fd7a:115c:
                                                "fd00:ec2::254/128")))
 SYS_NET = "/sys/class/net"
 ROUTES = "/proc/net/route"
-ADDRESSES6 = "/proc/net/if_inet6"
+ROUTES6 = "/proc/net/ipv6_route"
 IFF_TAP = 0x0002
+# Virtio headers. QEMU, Firecracker and crosvm turn them on for a virtual machine's tap; ZeroTier
+# and OpenVPN don't on theirs today. A VPN may, for offloads, as tailscaled does on its tun.
+IFF_VNET_HDR = 0x4000
 OWN_S = 60              # how long the addresses of the install's own servers are kept
+OWN_TRIES = 3           # lookups when the settings keep changing under one request
 MAX_REPLY_BYTES = 64 * 1024
 RECIPE_AGENT = "Tuxistant"
 RECIPE_ACCEPT = "application/json, text/plain;q=0.9"
@@ -60,7 +66,15 @@ RECIPE_ACCEPT = "application/json, text/plain;q=0.9"
 CHARSETS = re.compile(r"utf[-_]8|ascii|iso8859-\d+|cp125\d|koi8[-_][ru]|shift_jis|euc_jp|euc_kr|"
                       r"gb2312|gbk|gb18030|big5")
 
+# A host name as recipes and code skills must write it, and the only kind a page may name besides an
+# address: glibc's resolver reads \118 and \x in a name as v and x, which no name check here sees.
+LABEL = r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?"
+HOST = re.compile(rf"{LABEL}(\.{LABEL})*")
+MAX_HOST_CHARS = 253
+
 NOT_ALLOWED = "That address isn't one I'll read."
+BAD_SETTING = ("A server address in Settings has characters I can't check, so I'm not sending "
+               "anything until it's fixed in Settings.")
 UNREADABLE = "That page couldn't be read."
 HIDDEN_CATEGORIES = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
 TAG = re.compile(r"<[^<>]*>")    # not [^>]: that goes quadratic on a page of a million "<"
@@ -77,6 +91,14 @@ class PageError(Exception):
     """This page won't be read. The message is a sentence, and it never repeats the address."""
 
 
+class UncheckableSetting(PageError):
+    """A server in Settings written so the resolver may look up a name no check here sees. Nothing
+    is judged, and so nothing sent, until it is put right, and the reason is said."""
+
+    def __init__(self):
+        super().__init__(BAD_SETTING)
+
+
 class Target(NamedTuple):
     scheme: str
     host: str
@@ -91,9 +113,17 @@ class Page(NamedTuple):
 
 
 class Place(NamedTuple):
-    """Where a recipe's request may go: the checked addresses, and whether they are at home."""
+    """Where a recipe's request may go: the checked addresses, whether they are at home, and the
+    names of the install's own servers they were checked against."""
     addresses: list[str]
     local: bool
+    own: frozenset = frozenset()
+
+
+class _Lookup(NamedTuple):
+    host: str
+    future: concurrent.futures.Future
+    started: float
 
 
 class Reply(NamedTuple):
@@ -142,7 +172,29 @@ def _resolve(host: str, port: int) -> list[str]:
 
 
 def _name(host: str) -> str:
-    return host.rstrip(".").lower()
+    """A host as the resolver looks it up: IDNA, as getaddrinfo encodes a name, lowercased and
+    without a trailing dot. So ｖｏｉｃｅ.example, or voice.example with a soft hyphen in it, is
+    voice.example. An address in its usual spelling, so [2606:4700:0:0::1111] is 2606:4700::1111.
+    UnicodeError if IDNA can't encode it, and then nothing can look it up."""
+    name = host.encode("idna").decode("ascii").rstrip(".").lower()
+    return _same(name) if _is_address(name) else name
+
+
+def _request_name(host: str) -> str:
+    """_name, for a host a page or a recipe names, refused unless it is an address or a plain
+    name: one IDNA can't encode, or with a backslash, an underscore, a space or a % in it."""
+    try:
+        name = _name(host)
+    except UnicodeError:
+        raise PageError(NOT_ALLOWED) from None
+    if not _plain_host(name):
+        raise PageError(NOT_ALLOWED)
+    return name
+
+
+def _plain_host(name: str) -> bool:
+    """An address, or a name the resolver looks up just as written."""
+    return _is_address(name) or (len(name) <= MAX_HOST_CHARS and bool(HOST.fullmatch(name)))
 
 
 def _same(address: str) -> str:
@@ -155,44 +207,143 @@ def _same(address: str) -> str:
 
 
 def _server_host(server: str) -> str | None:
+    """The host of a server in the settings, as _name gives it, so it compares with a page's or a
+    recipe's however either is spelled. None if there is none, or IDNA can't encode it: then no
+    one can look it up, this install included. Settings keep an underscore, or a hyphen at the
+    end of a label, and the resolver looks those up as written, so they are fine here though no
+    page may name them. Anything else, which only an edited config.json can hold, such as a
+    backslash the resolver reads as an escape: UncheckableSetting."""
     try:
-        return urllib.parse.urlsplit(_urls(server)[0]).hostname
-    except ValueError:      # config.json can hold anything
+        host = urllib.parse.urlsplit(_urls(server)[0]).hostname
+        name = _name(host) if host else None
+    except (ValueError, UnicodeError):      # config.json can hold anything
         return None
+    if name is not None and not (_is_address(name) or (len(name) <= MAX_HOST_CHARS
+                                                         and SERVER_NAME_RE.fullmatch(name))):
+        raise UncheckableSetting
+    return name
 
 
 OWN_KEYS = ("server", "translate_server", "search_server", "ha_server")
 _own_lock = threading.Lock()
-_own_addresses: dict[tuple, tuple[float, frozenset]] = {}
+# host: (until, addresses), only ever from a lookup that answered. A failure is never kept.
+_own_addresses: dict[str, tuple[float, frozenset]] = {}
+_own_pending: dict[str, _Lookup] = {}
 
 
-def own_servers(config) -> tuple[set[str], set[str]]:
+def own_servers(config, seconds: float, since: float | None = None) -> tuple[set[str], set[str]]:
     """Names and addresses of the servers this install talks to. A page has no business reaching
-    them, even if they are on the open internet. A name that won't resolve is still refused.
-    The names come from the settings every time. The addresses are kept for a minute, as Home
-    Assistant away from home, or at homeassistant.local, can take seconds to fail, and every page
-    and recipe call would wait for it."""
-    hosts = [host for key in OWN_KEYS if config[key] and (host := _server_host(config[key]))]
-    names = {_name(host) for host in hosts}
-    key = tuple(config[k] for k in OWN_KEYS)
+    them, even if they are on the open internet. The names come from the settings every time,
+    and are refused whatever their addresses. Each name is looked up in a thread of its own, all
+    at once. What a lookup answers is kept for a minute, and kept on while the next lookup runs
+    and when it fails, so a slow refresh never drops it. A failure isn't kept, as the name may
+    answer a moment later, when the network comes up or the computer gets home. So a name with
+    no answer kept is waited for, seconds at most, joining a lookup of it already running. If
+    that one fails and began before this call, it may have been sent before the network came up,
+    so a fresh one is started and waited for in the time left. since, if given, is when the
+    caller's request began, having started lookups itself. TimeoutError if one is still running
+    when the time is up, so the caller refuses rather than go on without its addresses. A name
+    whose lookup started during the request and failed has no address to reach now: it is
+    refused by name."""
+    now = time.monotonic()
+    hosts = _own_hosts(config)
+    return _own_wait(hosts, _start_own_lookups(hosts), now + seconds,
+                     now if since is None else since)
+
+
+def start_own_lookups(config):
+    """Starts what own_servers will need, without waiting for it. UncheckableSetting, at once, if
+    Settings hold a server no request can be judged by."""
+    _start_own_lookups(_own_hosts(config))
+
+
+def _own_hosts(config) -> list[str]:
+    return list(dict.fromkeys(host for key in OWN_KEYS
+                              if config[key] and (host := _server_host(config[key]))))
+
+
+def _own_names(config) -> set[str]:
+    return set(_own_hosts(config))     # already as _name gives them
+
+
+def _own_now(config, own, deadline: float, since: float | None = None) -> tuple[set[str], set[str]]:
+    """own, if it was judged against every server the settings name now, or else the servers
+    looked up again by deadline, since as for own_servers. Either way with every answer the
+    servers have given since, which costs no wait. Settings change the config in place, at any
+    moment, so this is asked just before each request is dialled. If they change again while it
+    waits, it looks again, and gives up after a few tries with TimeoutError."""
+    tries = 0
+    while own is None or not _own_names(config) <= own[0]:
+        if tries == OWN_TRIES:
+            raise TimeoutError
+        tries += 1
+        own = own_servers(config, max(deadline - time.monotonic(), 0), since)
+    return own[0], own[1] | _own_kept(config)
+
+
+def _own_kept(config) -> set[str]:
+    """What the servers the settings name have answered with, kept: no wait."""
     with _own_lock:
-        kept = _own_addresses.get(key)
-    if kept and time.monotonic() < kept[0]:
-        return names, set(kept[1])
-    addresses = set()
+        kept = [_own_addresses.get(host) for host in _own_hosts(config)]
+    return set().union(*(entry[1] for entry in kept if entry))
+
+
+def _start_own_lookups(hosts) -> list[_Lookup]:
+    """Starts a lookup of each name without a current answer, one per name at a time, and
+    returns those of names with no answer kept at all: they must be waited for."""
+    now, waits = time.monotonic(), []
     for host in hosts:
-        try:
-            addresses.update(map(_same, _resolve(host, 0)))
-        except PageError:
-            pass
+        with _own_lock:
+            kept = _own_addresses.get(host)
+            if kept and kept[1] and now < kept[0]:
+                continue
+            lookup = _own_pending.get(host)
+            started = lookup is None
+            if started:
+                lookup = _own_pending[host] = _Lookup(host, concurrent.futures.Future(),
+                                                      time.monotonic())
+        if started:     # a daemon thread: a lookup can't be stopped, and mustn't hold up exit
+            threading.Thread(target=_own_resolve, args=(lookup,), daemon=True).start()
+        if not (kept and kept[1]):
+            waits.append(lookup)
+    return waits
+
+
+def _own_wait(hosts, waits: list[_Lookup], deadline: float,
+              since: float) -> tuple[set[str], set[str]]:
+    """The names, and the addresses kept for them along with those of the lookups waited for.
+    A joined lookup that began before since and failed is followed by a fresh one."""
+    done, running = concurrent.futures.wait([w.future for w in waits],
+                                            timeout=max(deadline - time.monotonic(), 0))
+    if running:
+        raise TimeoutError
+    stale = [w.host for w in waits if w.started < since and not w.future.result()]
+    found = set().union(*(w.future.result() for w in waits))
+    if stale:
+        found |= _own_wait(stale, _start_own_lookups(stale), deadline, since)[1]
     with _own_lock:
-        _own_addresses[key] = (time.monotonic() + OWN_S, frozenset(addresses))
-    return names, addresses
+        kept = [_own_addresses.get(host) for host in hosts]
+    return set(hosts), found.union(*(entry[1] for entry in kept if entry))
+
+
+def _own_resolve(lookup: _Lookup):
+    try:
+        found = frozenset(map(_same, _resolve(lookup.host, 0)))
+    except Exception:   # anything: a lookup that never ended would make every call wait for it
+        found = frozenset()
+    with _own_lock:     # stored before the waiters wake, so they find it
+        if _own_pending.get(lookup.host) is lookup:
+            del _own_pending[lookup.host]
+            kept = _own_addresses.get(lookup.host)
+            if found or (kept and kept[1]):
+                _own_addresses[lookup.host] = (time.monotonic() + OWN_S, found or kept[1])
+    lookup.future.set_result(found)
 
 
 def forget_own_servers():
     with _own_lock:
         _own_addresses.clear()
+        _own_pending.clear()
 
 
 def _read_proc(path: str) -> str:
@@ -223,9 +374,23 @@ def _sys(path: str) -> str:
     return _read_proc(path).strip()
 
 
-def _guest_port(root: str, name: str) -> bool:
-    """A tap or a veth: its other end is a virtual machine or a container on this computer. A
-    physical card, or a VLAN or bond stacked on one, isn't."""
+def _devtype(path: str) -> str:
+    """What the kernel calls the device, if anything: bridge, vlan, vxlan, wlan, wireguard and
+    the like. A veth and a tap have none."""
+    for line in _read_proc(os.path.join(path, "uevent")).splitlines():
+        if line.startswith("DEVTYPE="):
+            return line[8:].strip()
+    return ""
+
+
+def _guest_port(root: str, name: str, bridged: bool) -> bool:
+    """A veth, whose other end is a container on this computer, or a virtual machine's tap. A
+    physical card, a VLAN or bond stacked on one, a VXLAN or other tunnel, and a VPN aren't.
+    A tap in a bridge is a virtual machine's. One on its own is taken for a VPN's, such as
+    ZeroTier's or an OpenVPN tap, unless it carries virtio headers, as QEMU's, Firecracker's and
+    crosvm's do. Those VPNs don't turn them on today, but one could, for offloads, as tailscaled
+    does on its tun: a tap-mode VPN that did would be taken for a virtual machine, and what is
+    reached through it refused, which fails closed."""
     path = os.path.join(root, name)
     if os.path.exists(os.path.join(path, "device")) or os.path.isdir(os.path.join(path, "bridge")):
         return False
@@ -237,10 +402,11 @@ def _guest_port(root: str, name: str) -> bool:
     tun = _sys(os.path.join(path, "tun_flags"))
     if tun:
         try:
-            return bool(int(tun, 16) & IFF_TAP)
+            flags = int(tun, 16)
         except ValueError:
             return False
-    if _sys(os.path.join(path, "type")) != "1":     # Ethernet: not an IP tunnel or a VPN
+        return bool(flags & IFF_TAP) and (bridged or bool(flags & IFF_VNET_HDR))
+    if _devtype(path) or _sys(os.path.join(path, "type")) != "1":   # 1: Ethernet, not IP-only
         return False
     link = _sys(os.path.join(path, "iflink"))      # a veth's peer, in the container's namespace
     return link not in ("", "0") and link != _sys(os.path.join(path, "ifindex"))
@@ -248,8 +414,8 @@ def _guest_port(root: str, name: str) -> bool:
 
 def _guest_interfaces(root: str = SYS_NET) -> set[str]:
     """Docker's and Podman's bridges, libvirt's virbr0, LXD's and the like: a bridge none of whose
-    ports is a physical card, and a tap or veth on its own. A bridge with the house's card in it
-    is the house."""
+    ports is a physical card, and a veth or QEMU's tap on its own. A bridge with the house's card
+    in it is the house."""
     try:
         names = os.listdir(root)
     except OSError:
@@ -261,9 +427,9 @@ def _guest_interfaces(root: str = SYS_NET) -> set[str]:
                 ports = os.listdir(os.path.join(root, name, "brif"))
             except OSError:
                 ports = []
-            if all(_guest_port(root, port) for port in ports):
+            if all(_guest_port(root, port, True) for port in ports):
                 found.add(name)
-        elif _guest_port(root, name):
+        elif _guest_port(root, name, False):
             found.add(name)
     return found
 
@@ -272,45 +438,61 @@ def _little_endian(hexed: str) -> ipaddress.IPv4Address:
     return ipaddress.IPv4Address(bytes.fromhex(hexed)[::-1])
 
 
-def guest_networks(root: str = SYS_NET, routes: str = ROUTES,
-                   addresses6: str = ADDRESSES6) -> list:
-    """The networks this computer's containers and virtual machines live on. Their addresses
-    look like the house's, but what answers there runs on this computer, and a container's port
-    is reachable there even when Docker publishes it only on 127.0.0.1."""
+class Route(NamedTuple):
+    net: ipaddress.IPv4Network | ipaddress.IPv6Network
+    guest: bool     # straight onto a network of this computer's containers or virtual machines
+
+
+def kernel_routes(root: str = SYS_NET, routes: str = ROUTES, routes6: str = ROUTES6) -> list:
+    """The kernel's routes, each marked by whether it leads straight onto a container's or
+    virtual machine's network. Their addresses look like the house's, but what answers there runs
+    on this computer, and a container's port is reachable there even when Docker publishes it
+    only on 127.0.0.1. IPv4 is the main table; IPv6 lists every table."""
     guests, found = _guest_interfaces(root), []
     for line in _read_proc(routes).splitlines()[1:]:
         fields = line.split()
-        if len(fields) < 8 or fields[0] not in guests or fields[2] != "00000000":
+        if len(fields) < 8:
             continue
         try:
             net = ipaddress.IPv4Network(
                 f"{_little_endian(fields[1])}/{_little_endian(fields[7])}", strict=False)
         except ValueError:
             continue
-        if net.prefixlen:
-            found.append(net)
-    for line in _read_proc(addresses6).splitlines():
+        found.append(Route(net, fields[0] in guests and fields[2] == "00000000"
+                           and net.prefixlen > 0))
+    for line in _read_proc(routes6).splitlines():
         fields = line.split()
-        if len(fields) < 6 or fields[5] not in guests or fields[3] != "00":   # 00: global scope
+        if len(fields) < 10:
             continue
         packed = fields[0]
         try:
             net = ipaddress.IPv6Network(
-                ":".join(packed[i:i + 4] for i in range(0, 32, 4)) + f"/{int(fields[2], 16)}",
+                ":".join(packed[i:i + 4] for i in range(0, 32, 4)) + f"/{int(fields[1], 16)}",
                 strict=False)
         except ValueError:
             continue
-        if net.prefixlen:
-            found.append(net)
+        found.append(Route(net, fields[9] in guests and set(fields[4]) == {"0"}
+                           and net.prefixlen > 0))
     return found
 
 
-def _not_a_device(address: str, guests: list) -> bool:
+def _guest(ip, routes: list) -> bool:
+    """Whether the kernel would send to ip onto a guest network: its most specific route says.
+    So a home network inside a wider range a Docker network was given elsewhere is the house.
+    When equally specific routes disagree, it's a guest."""
+    matching = [route for route in routes if route.net.version == ip.version and ip in route.net]
+    if not matching:
+        return False
+    longest = max(route.net.prefixlen for route in matching)
+    return any(route.guest for route in matching if route.net.prefixlen == longest)
+
+
+def _not_a_device(address: str, routes: list) -> bool:
     try:
         ip = ipaddress.ip_address(address.partition("%")[0])
     except ValueError:
         return True
-    return any(ip in net for net in (*NOT_DEVICES, *guests) if net.version == ip.version)
+    return any(ip in net for net in NOT_DEVICES if net.version == ip.version) or _guest(ip, routes)
 
 
 def _is_address(text: str) -> bool:
@@ -331,25 +513,57 @@ def _local(address: str) -> bool:
     return any(ip in net for net in LOCAL_NETS if net.version == ip.version)
 
 
-def place(host: str, port: int, own: tuple[set[str], set[str]]) -> Place:
+def place(host: str, port: int, own: tuple[set[str], set[str]], addresses=None) -> Place:
     """Where a recipe may send: all on the open internet, or all in the house. Never this computer,
     its containers and virtual machines, the servers this install talks to, or a name that answers
-    with a mix of the two."""
+    with a mix of the two. The host is looked up here unless its addresses are given."""
     names, own_addresses = own
-    if _name(host) in names:
+    if _request_name(host) in names:
         raise PageError(NOT_ALLOWED)
-    addresses = _resolve(host, port)
+    if addresses is None:
+        addresses = _resolve(host, port)
     same = set(map(_same, addresses))
     if not addresses or same & own_addresses or same & this_computer():
         raise PageError(NOT_ALLOWED)
-    guests = guest_networks()
-    if any(_not_a_device(address, guests) for address in same):
+    routes = kernel_routes()
+    if any(_not_a_device(address, routes) for address in same):
         raise PageError(NOT_ALLOWED)
     if all(map(public, addresses)):
-        return Place(addresses, False)
+        return Place(addresses, False, frozenset(names))
     if all(map(_local, addresses)):
-        return Place(addresses, True)
+        return Place(addresses, True, frozenset(names))
     raise PageError(NOT_ALLOWED)
+
+
+def recipe_place(host: str, port: int, config, seconds: float) -> Place:
+    """place(), with the install's own servers looked up alongside the host rather than before
+    it, so a slow one can't use up the host's time. The host is judged once both are known, by
+    the servers the settings name then. If an own server with no answer kept hasn't answered
+    within seconds, TimeoutError: the call is refused rather than judged without its
+    addresses."""
+    since = time.monotonic()
+    deadline = since + seconds
+    hosts = _own_hosts(config)
+    if _request_name(host) in hosts:
+        raise PageError(NOT_ALLOWED)
+    waits = _start_own_lookups(hosts)
+    addresses = _resolve(host, port)
+    own = _own_now(config, _own_wait(hosts, waits, deadline, since), deadline)
+    return place(host, port, own, addresses)
+
+
+def place_now(where: Place, host: str, port: int, config, seconds: float,
+              since: float | None = None) -> Place:
+    """where, judged again just before it is dialled, by the servers the settings name now and
+    every address they have answered with since, as both can change while a card waits: another
+    request may look up a server whose lookup had failed. After a card, since is when it was
+    shown, and a server with no answer kept is looked up afresh and waited for, as for
+    own_servers. TimeoutError if one hasn't answered within seconds."""
+    deadline = time.monotonic() + seconds
+    own = None if since is not None else (set(where.own), set())
+    if own is None:
+        own = own_servers(config, seconds, since)
+    return place(host, port, _own_now(config, own, deadline), where.addresses)
 
 
 def _path(parts) -> str:
@@ -358,8 +572,8 @@ def _path(parts) -> str:
     return f"{path}?{query}" if query else path
 
 
-def check(url: str, own: tuple[set[str], set[str]]) -> Target:
-    """Refuses anything but a plain address on the open internet, or returns where to connect."""
+def _parse(url: str) -> tuple[str, str, int, str]:
+    """(scheme, host, port, path), or PageError for anything but a plain http or https address."""
     # urlsplit quietly drops tabs and line breaks, which would change what was checked.
     if len(url) > MAX_URL_CHARS or any(c <= " " or c == "\x7f" for c in url):
         raise PageError(NOT_ALLOWED)
@@ -368,16 +582,27 @@ def check(url: str, own: tuple[set[str], set[str]]) -> Target:
         host, port, path = parts.hostname, parts.port, _path(parts)
     except ValueError:      # a bad port, or brackets that don't hold an address
         raise PageError(NOT_ALLOWED) from None
-    if parts.scheme not in SCHEMES or not host or parts.username is not None:
-        raise PageError(NOT_ALLOWED)     # any "@" at all gives a username, even an empty one
-    port = port or SCHEMES[parts.scheme]
-    addresses = _resolve(host, port)
+    # Any "@" at all gives a username, even an empty one. Port 0 isn't "no port", which is 80.
+    if parts.scheme not in SCHEMES or not host or parts.username is not None or port == 0:
+        raise PageError(NOT_ALLOWED)
+    # As it will be looked up, so it is judged by the name the resolver sees, in any spelling.
+    return parts.scheme, _request_name(host), SCHEMES[parts.scheme] if port is None else port, path
+
+
+def _judge(scheme: str, host: str, port: int, path: str, addresses: list[str],
+           own: tuple[set[str], set[str]]) -> Target:
     names, own_addresses = own
     # All of them must pass: a name with one public address and one private one is an attack.
-    if (_name(host) in names or not addresses or not all(map(public, addresses))
+    if (host in names or not addresses or not all(map(public, addresses))
             or own_addresses.intersection(map(_same, addresses))):
         raise PageError(NOT_ALLOWED)
-    return Target(parts.scheme, host, port, path, addresses)
+    return Target(scheme, host, port, path, addresses)
+
+
+def check(url: str, own: tuple[set[str], set[str]]) -> Target:
+    """Refuses anything but a plain address on the open internet, or returns where to connect."""
+    scheme, host, port, path = _parse(url)
+    return _judge(scheme, host, port, path, _resolve(host, port), own)
 
 
 def _dial(address: str, port: int, seconds: float) -> socket.socket:
@@ -569,14 +794,26 @@ def _words(text: str, kind: str) -> str:
     return clean(" ".join(line for line in lines if len(line) >= MIN_LINE_CHARS), MAX_TEXT_CHARS)
 
 
-def fetch(url: str, config, seconds: float = TOTAL_S) -> Page:
+def fetch(url: str, config, seconds: float = TOTAL_S, own=None) -> Page:
     """Reads a page, or raises PageError. The request carries no cookies and no key: nothing in
-    this module ever sees one. The clock starts after the install's own servers are looked up,
-    so a slow one costs this page nothing."""
-    own = own_servers(config)
+    this module ever sees one. own is what own_servers gave the caller for this request. Without
+    it, or when the settings have named a server since, the install's own servers are waited for
+    within the page's seconds, and the page is refused while one that no lookup has answered yet
+    is still being looked up."""
     deadline = time.monotonic() + seconds
     for _ in range(MAX_REDIRECTS + 1):
-        location, kind, text = _get(check(url, own), deadline)
+        scheme, host, port, path = _parse(url)
+        if host in _own_names(config):
+            raise PageError(NOT_ALLOWED)
+        since = time.monotonic()
+        if own is None:     # looked up alongside the page's host
+            start_own_lookups(config)
+        addresses = _resolve(host, port)
+        try:    # after the host's lookup, so nothing waits between this and the dial
+            own = _own_now(config, own, deadline, since)
+        except TimeoutError:
+            raise PageError(UNREADABLE) from None
+        location, kind, text = _get(_judge(scheme, host, port, path, addresses, own), deadline)
         if location is None:
             words = _words(text, kind)
             if len(words) < MIN_PAGE_CHARS:

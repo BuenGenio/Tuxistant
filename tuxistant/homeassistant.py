@@ -33,6 +33,7 @@ from dataclasses import dataclass, field, replace
 
 from . import colours
 from .gate import Ask, shown
+from .servers import SERVER
 
 PORT = 8123                     # Home Assistant's own, for a plain address that names none
 TIMEOUT_S = 6
@@ -86,7 +87,6 @@ WHAT_TO_CHANGE = "Say what to change, such as the kitchen light or the heating."
 WHAT_TO_CHECK = "Say what to check, such as the front door or the lights."
 WHAT_TO_DO = "Say what to do: on or off, open or close, lock or unlock, or a temperature."
 
-SERVER = re.compile(r"(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+)(?::(\d{1,5}))?")
 TOKEN = re.compile(r"[\x21-\x7e]+")     # it goes into a header, where a line break is an injection
 ENTITY_ID = re.compile(r"[a-z0-9_]+\.[a-z0-9_]+")       # it goes into a URL
 STATE_WORD = re.compile(r"[a-z0-9_]{1,32}")     # Home Assistant's own state words, and no prose
