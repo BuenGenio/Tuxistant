@@ -86,7 +86,7 @@ A skill you add is a stranger's text, so its name, description, actions, files a
 | Web search, Research | SearXNG server |
 | Lights | TP-Link email and password |
 | Home Assistant, Home Assistant status | Address and long-lived access token |
-| Multi-step tasks | Use Claude for complex requests, Anthropic API key, Model |
+| Multi-step tasks | Use Claude for complex requests, with the agreement it asks for and Withdraw; Anthropic API key; Model |
 
 A setting two skills use is on both their pages. Each page is built when it opens and only one is open at a time, so two rows can never disagree about it.
 
@@ -201,7 +201,11 @@ The whole thing stops at 45 seconds and answers with what it has. It always uses
 
 `task.run` handles requests that need several steps. It runs one step, reads the result and picks the next, with at most 8 steps, and every action goes through the same gates.
 
-It uses the model on your own server unless you turn on Cloud in Settings, which is off by default and needs your Anthropic API key. With it on, Claude sees the request plus file names and command output from that task. File contents go only if you click to allow each one.
+It uses the model on your own server unless you turn on Cloud in Settings, on the Multi-step tasks page. It is off by default and needs your Anthropic API key. With it on, Claude sees the request, the names and descriptions of the actions Tux can take, and what each step gives back, such as file names, command output and calendar events. What is inside a file, what Home Assistant answers and the list of timers and reminders go only if you click to allow each one, and so does the request itself once the conversation has read something private.
+
+Turning it on opens an agreement that says all this, names the provider and the model, and links Anthropic's privacy policy. Turn On can't be pressed until "I understand and agree" is ticked; Cancel is the default and Escape cancels. Settings records the agreement in the config with the date, the provider, the model and the version of what is sent, and the page then says "You agreed on" that date, with a Withdraw button that turns Cloud off and forgets the agreement. Switching it off and on again doesn't ask again while the agreement still covers what is sent.
+
+The daemon uses the cloud only when the switch is on, a key is set and that agreement covers this version of what is sent, this provider and this model, and it checks before every call. So the switch turned on over D-Bus or in a config file does nothing, a config from before there was an agreement stays at home until you agree, a new model asks again, and so does every install when a release changes what is sent. See "Cloud agreement" in [CONTRACT.md](CONTRACT.md#cloud-agreement).
 
 ## Computed risk
 

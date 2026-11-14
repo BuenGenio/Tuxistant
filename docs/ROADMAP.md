@@ -26,7 +26,7 @@ Steps 1 to 3 of the plan below are built, and most of step 4. Step 5, recipe ski
 | Dictation | Tested in an isolated real GNOME Shell with real windows, and against the real server. Not yet on the real desktop, with a real microphone, or in a real Electron app |
 | Facts, web search, research | Tested against the real server, Wikipedia and SearXNG. Not yet by voice on the real desktop |
 | Multi-step planner, local model | Two live runs worked |
-| Multi-step planner, cloud | Tested against a stub only. Never called the real Claude API |
+| Multi-step planner, cloud | Tested against a stub only. Never called the real Claude API. The agreement it now asks for has been tried only in a headless Settings and in tests |
 | Website | On GitHub Pages. See [website/README.md](../website/README.md) |
 | Demo video | A 64 second draft from `tools/demo_video.py`: the real extension in an isolated shell, with scripted requests and synthesised voices, and it says so on screen. The owner accepted it on 2026-11-10. Not published anywhere yet |
 | Server kit | In `server/`, copied from the owner's working server with its host name and user id made general. That general copy has not yet set up a second machine |
@@ -66,7 +66,7 @@ These were agreed with the owner, so don't reopen them without a reason.
 - **Everything is a skill**, including the built-ins.
 - **Approval is a click, never a voice "yes"**, because audio playing nearby could say it.
 - **After private data is read, nothing leaves your own server without a click**, whichever skill asks.
-- **Cloud is off by default, with a one-time opt-in.** Claude sees the request plus file names and command output from that task, and file contents only if you approve each one. It uses the owner's own API key.
+- **Cloud is off by default, and needs an agreement (2026-11-13).** Turning it on shows what leaves, to which provider and model, and when, and stays off until "I understand and agree" is ticked. The agreement is kept with its date, the version of what is sent, the provider and the model, and the daemon uses the cloud only while it covers all four. Withdraw forgets it. Claude sees the request plus file names and command output from that task, and file contents only if you approve each one. It uses the owner's own API key.
 - **Deleting goes to the Trash** wherever possible, and previews first.
 - **`sudo` always gets its own approval.**
 - **Themes are data**: a JSON file and a GLSL shader, and the website runs the same shaders.
@@ -88,7 +88,7 @@ Don't act on these until they answer.
 
 - With Cloud on, a conversation that has already read something private gets a "Send this request to Claude?" card before the task starts, because the voice model could paste file text into the goal. Every task sets that state, so a second task in one conversation always shows it. `tuxistant/planner.py`, about 3 lines to remove.
 - Cloud uses `claude-opus-5-5` at low effort, because someone is waiting in silence, with server-side refusal fallbacks on. `CLOUD_EFFORT` is one constant.
-- The consent dialog shows every time Cloud goes from off to on, not literally once. A single-time prompt needs a new config key.
+- Cloud: switching it off and on again doesn't ask again while the agreement still covers what is sent; only Withdraw forgets it. A model changed in Settings while Cloud is on asks before it is saved; while Cloud is off it is saved and asked about at the next turn-on. A config that had Cloud on before the agreement existed keeps `cloud_enabled` true but sends nothing, and the page says so. `CLOUD_CONSENT_VERSION` in `tuxistant/config.py` is 1; bump it with any change to what is sent.
 - `file.open` refuses HTML, SVG, archives and disk images as well as anything that runs code.
 - Translations of more than 2000 characters are refused, not cut.
 - Timers: the chime is off as installed (`timer_chime`), so that nothing sounds on a locked screen unless you ask for it. The same switch decides whether a chime comes before the words on an unlocked screen. Two switches would need a second key.
@@ -121,7 +121,7 @@ None of this can be proved from a test. After `./install.sh` and a logout:
 6. "Translate what I've selected into French" reads the selection. A translation spoken in its own voice in a whole voice turn passed on 2026-11-10.
 7. Locking the screen during a card cancels it. The logind lock path is untested.
 8. **Passed 2026-11-10:** weather and news by voice.
-9. Cloud, once the owner adds a key: run `./install.sh --cloud-sdk`, then try one multi-step request.
+9. Cloud, once the owner adds a key: run `./install.sh --cloud-sdk`. On the Multi-step tasks page, turn Cloud on: the agreement should name Anthropic and the model, Turn On should stay greyed until the box is ticked, Escape should cancel and Enter should never agree, and "Anthropic's privacy policy" should open in the browser. Agree, check the page says "You agreed on" today, then try one multi-step request. Withdraw, and the same request should go to your own server. None of the agreement has been seen on a real desktop.
 10. Hold Fn and ask a fact, such as "How many chemical elements are there?". It should answer in the usual voice within a few seconds, saying "Let me look into that." first if it takes more than 2, and History should show `knowledge.answer`. Then something made up, such as "What is aubrium?", which should say it doesn't know.
 11. Hold Fn and ask for something that isn't a fact, such as "What time is it?" and "Find my CV". Replies now come from words rather than audio, which has only run in tests and against the real server without a real microphone.
 12. "Research electric bikes" says "Let me look into that", then reads the answer with its sources. After reading a file in the same conversation, a search or a fact shows a card first.

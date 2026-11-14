@@ -17,7 +17,7 @@ from tests.fakeweb import PUBLIC, WORDS, Web  # noqa: E402
 from tests.test_websearch import Clicks, FakeSearx  # noqa: E402
 from tests.test_websearch import hit as search_hit  # noqa: E402
 from tuxistant import realtime, research, webfetch, websearch  # noqa: E402
-from tuxistant.config import DEFAULTS  # noqa: E402
+from tuxistant.config import CLOUD_CONSENT_VERSION, DEFAULTS, cloud_in_use  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 from tuxistant.realtime import RealtimeError  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
@@ -117,7 +117,11 @@ class Steps(Rig):
             self.assertEqual(body["model"], "tux-brain")
 
     async def test_the_cloud_is_never_used_even_when_it_is_on(self):
-        self.skills.config = {**self.config, "cloud_enabled": True, "cloud_api_key": "sk-cloud"}
+        consent = {"version": CLOUD_CONSENT_VERSION, "provider": "Anthropic",
+                   "model": "claude-opus-5-5", "date": "2026-11-13"}
+        self.skills.config = {**self.config, "cloud_enabled": True, "cloud_api_key": "sk-cloud",
+                              "cloud_model": "claude-opus-5-5", "cloud_consent": consent}
+        self.assertTrue(cloud_in_use(self.skills.config), "agreed to, so research is what holds")
         with mock.patch("tuxistant.planner._sdk", side_effect=AssertionError("cloud")):
             result = await self.ask()
         self.assertIn("site1.example", self.said(result))

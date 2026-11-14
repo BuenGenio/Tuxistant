@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest import mock
 
@@ -26,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 from tests.test_daemon_fakes import CHUNK, FakeServer, FakeSpeech, FakeSpeaker, FakeMic, tone  # noqa: E402
 from tests.test_daemon_fakes import CountingSkills  # noqa: E402
 from tuxistant import BUS_NAME, BUS_PATH, controller, service, themes, timers  # noqa: E402
-from tuxistant.config import Config  # noqa: E402
+from tuxistant.config import CLOUD_CONSENT_VERSION, NOT_THE_CONSENT, Config, cloud_in_use  # noqa: E402
 from tuxistant.gate import Ask  # noqa: E402
 from tuxistant.history import History  # noqa: E402
 from tuxistant.service import Daemon, serve  # noqa: E402
@@ -190,6 +191,27 @@ class Service(OnPrivateBus):
             with self.subTest(key=key, value=value), self.assertRaises(DBusError):
                 await self.iface.call_set_config(key, value)
         self.assertEqual(self.got("ConfigChanged"), [])
+
+    async def test_cloud_is_used_only_with_an_agreement_made_over_set_config(self):
+        await self.iface.call_set_config("cloud_api_key", '"sk-cloud"')
+        await self.iface.call_set_config("cloud_enabled", "true")
+        self.assertFalse(cloud_in_use(self.config), "the switch alone does nothing")
+        asked = {"version": CLOUD_CONSENT_VERSION, "provider": "Anthropic",
+                 "model": "claude-opus-5-5"}
+        for bad in ({**asked, "version": CLOUD_CONSENT_VERSION + 1}, {**asked, "date": "x"}):
+            with self.subTest(bad), self.assertRaises(DBusError) as refused:
+                await self.iface.call_set_config("cloud_consent", json.dumps(bad))
+            self.assertEqual(refused.exception.text, NOT_THE_CONSENT)
+        self.assertFalse(cloud_in_use(self.config))
+        await self.iface.call_set_config("cloud_consent", json.dumps(asked))
+        await self.signal("ConfigChanged", "cloud_consent")
+        self.assertTrue(cloud_in_use(self.config))
+        shown = json.loads(await self.iface.call_get_config())
+        self.assertEqual(shown["cloud_consent"], {**asked, "date": date.today().isoformat()})
+        self.assertNotIn("sk-cloud", json.dumps(shown))
+        await self.iface.call_set_config("cloud_consent", "{}")
+        self.assertFalse(cloud_in_use(self.config))
+        self.assertIs(json.loads(await self.iface.call_get_config())["cloud_enabled"], False)
 
     async def test_list_voices(self):
         voices = json.loads(await self.iface.call_list_voices())

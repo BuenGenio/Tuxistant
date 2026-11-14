@@ -2,6 +2,7 @@
 import json
 import os
 import re
+from datetime import date
 from pathlib import Path
 
 from . import homeassistant
@@ -40,9 +41,10 @@ DEFAULTS = {
     "mail_search": False,         # the one-time opt-in: answers may come from Thunderbird's mail
     "timer_chime": False,         # a short sound when a timer or reminder comes due, locked or not
     "say_tailscale_address": False,   # the IP address question also gets the Tailscale one
-    "cloud_enabled": False,       # the one-time opt-in: multi-step requests may use a cloud model
+    "cloud_enabled": False,       # multi-step requests may use a cloud model, once agreed to
     "cloud_api_key": "",
     "cloud_model": "claude-opus-5-5",
+    "cloud_consent": {},          # what was agreed to, and when: see agree_to_cloud
     "instructions": (
         "You are Tux, a concise desktop voice assistant. Replies are spoken aloud, so keep "
         "them short and plain, with no markdown or numbered lists. Use a tool whenever one fits. Your tools are "
@@ -67,12 +69,21 @@ EDITABLE = {
     "translate_server": str, "search_server": str, "fact_lookup": bool, "mail_search": bool,
     "tapo_email": str, "tapo_password": str, "timer_chime": bool, "say_tailscale_address": bool,
     "ha_server": str, "ha_token": str,
-    "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str,
+    "cloud_enabled": bool, "cloud_api_key": str, "cloud_model": str, "cloud_consent": dict,
 }
 KEYS = ("api_key", "cloud_api_key")      # these go into a header
 SECRETS = (*KEYS, "tapo_password", "ha_token")
 MAX_LOCATION_CHARS = 100
 MAX_LOGIN_CHARS = 254
+
+# The cloud is used only with an agreement to exactly this: this version of what is sent, to this
+# provider and model. Bump the version whenever what leaves the computer changes, and everyone who
+# agreed is asked again. Settings shows the words; these are what the daemon checks.
+CLOUD_PROVIDER = "Anthropic"
+CLOUD_PRIVACY_URL = "https://www.anthropic.com/legal/privacy"
+CLOUD_CONSENT_VERSION = 1
+MAX_MODEL_CHARS = 100
+NOT_THE_CONSENT = "That is not what Tuxistant asks you to agree to now"
 
 
 SERVER = re.compile(r"(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9._-]+)(?::(\d{1,5}))?")
@@ -97,6 +108,53 @@ def clean_server(text: str) -> str | None:
 
 def valid_key(key) -> bool:
     return isinstance(key, str) and API_KEY.fullmatch(key) is not None
+
+
+def _value(values, key):
+    """From a Config, a plain dict, or what an older daemon sent Settings, which may lack it."""
+    try:
+        return values[key]
+    except KeyError:
+        return DEFAULTS[key]
+
+
+def cloud_model(values) -> str:
+    return _value(values, "cloud_model") or DEFAULTS["cloud_model"]
+
+
+def cloud_agreed(values) -> bool:
+    """Whether the recorded agreement covers what would be sent now, and to whom. A config
+    written before there was one, or by hand, or for another model, has none that counts."""
+    consent = _value(values, "cloud_consent")
+    return (isinstance(consent, dict) and type(consent.get("version")) is int    # True == 1
+            and consent["version"] == CLOUD_CONSENT_VERSION
+            and consent.get("provider") == CLOUD_PROVIDER
+            and consent.get("model") == cloud_model(values))
+
+
+def cloud_in_use(values) -> bool:
+    """Multi-step requests go to the cloud only with the switch on, a key, and the agreement."""
+    return (_value(values, "cloud_enabled") is True and bool(_value(values, "cloud_api_key"))
+            and cloud_agreed(values))
+
+
+def agree_to_cloud(values: dict, asked: dict) -> dict:
+    """The record SetConfig keeps for cloud_consent. {} withdraws, and turns the cloud off.
+    Otherwise it names the version, provider and model the user was shown: the model becomes the
+    one in use, the cloud is turned on, and the daemon adds the date from its own clock."""
+    if not asked:
+        values["cloud_enabled"] = False
+        return {}
+    model = asked.get("model")
+    if (set(asked) != {"version", "provider", "model"} or type(asked["version"]) is not int
+            or asked["version"] != CLOUD_CONSENT_VERSION or asked["provider"] != CLOUD_PROVIDER
+            or not isinstance(model, str) or model != model.strip() or not model
+            or len(model) > MAX_MODEL_CHARS or not model.isprintable()):
+        raise ValueError(NOT_THE_CONSENT)
+    values["cloud_model"] = model
+    values["cloud_enabled"] = True
+    return {"version": CLOUD_CONSENT_VERSION, "provider": CLOUD_PROVIDER, "model": model,
+            "date": date.today().isoformat()}
 
 
 class Config:
@@ -143,6 +201,8 @@ class Config:
             raise ValueError("That is not a calendar")
         if key == "news_source" and value not in SOURCES:
             raise ValueError("That is not one of the news sources")
+        if key == "cloud_consent":
+            value = agree_to_cloud(self.values, value)
         if key == "server":
             value = clean_server(value)
             if value is None:

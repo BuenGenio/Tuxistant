@@ -33,7 +33,7 @@ Methods:
 | `DictateToggle` | `() -> ()` | `DictateStart`, or `DictateEnd` if already dictating |
 | `GetState` | `() -> s` | Current state |
 | `GetConfig` | `() -> s` | `Config.public()` as JSON; never contains the API key, the Cloud key, the TP-Link password or the Home Assistant token, only whether each is set |
-| `SetConfig` | `(s key, s json_value) -> ()` | Validated by `Config.set`; emits `ConfigChanged`. A new `server` clears `api_key`: a key only goes to the server it was given for. In the same way a new `ha_server` clears `ha_token` |
+| `SetConfig` | `(s key, s json_value) -> ()` | Validated by `Config.set`; emits `ConfigChanged`. A new `server` clears `api_key`: a key only goes to the server it was given for. In the same way a new `ha_server` clears `ha_token`. `cloud_consent` takes `{"version", "provider", "model"}` or `{}`: see "Cloud agreement" below |
 | `ListVoices` | `() -> s` | `voices.catalog()` |
 | `PreviewVoice` | `(s voice) -> ()` | Speak a short sample in that voice, without changing config. Replies once it has been spoken; a failure is a D-Bus error |
 | `Say` | `(s text) -> ()` | Speak text in the configured voice |
@@ -74,6 +74,16 @@ Signals:
 | `SelectionWanted` | `s id` | Send the selected text, or else the clipboard text, to `SelectionText` |
 | `DictationStarted` | `s id` | Note the focused window: the words are for that one |
 | `TypeText` | `s id, s text, b only_copy` | Put the words where the cursor is, then reply with `Typed`. Sent to the shell alone, not broadcast. `only_copy` is true after the time limit |
+
+### Cloud agreement
+
+Multi-step requests go to the cloud only when `config.cloud_in_use` holds: `cloud_enabled` is `true`, `cloud_api_key` is set, and `cloud_consent` covers what would be sent now, which means its `version` is `config.CLOUD_CONSENT_VERSION`, its `provider` is `config.CLOUD_PROVIDER` and its `model` is the `cloud_model` in use. `planner.run` checks it before a task and `planner.Cloud.step` before every call to the cloud, so turning it off, withdrawing or changing the model stops a task in the middle. `cloud_enabled` alone, from `SetConfig` or a config file written by hand or before there was an agreement, does nothing.
+
+- `SetConfig("cloud_consent", {"version": V, "provider": P, "model": M})` is how Settings records that the user ticked "I understand and agree" and pressed Turn On. `V` and `P` must be the current ones and `M` a model name of up to 100 printable characters, with no other keys, or it is refused with "That is not what Tuxistant asks you to agree to now". The daemon adds `"date"` from its own clock as `YYYY-MM-DD`, sets `cloud_model` to `M` and `cloud_enabled` to `true`, all in one call.
+- `SetConfig("cloud_consent", {})` withdraws: it clears the record and sets `cloud_enabled` to `false`.
+- `GetConfig` includes `cloud_consent` as stored, so Settings can say when the user agreed and to what.
+
+Bump `CLOUD_CONSENT_VERSION` whenever what leaves the computer changes, and change the words in Settings (`CLOUD_BODY`, `CLOUD_DETAILS`) to match: everyone who agreed before is asked again.
 
 ## Locked screen
 
