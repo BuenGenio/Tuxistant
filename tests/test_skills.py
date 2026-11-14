@@ -178,5 +178,57 @@ class Offered(unittest.TestCase):
         self.assertFalse(skills.offered("lights.set") or skills.offered("lights.status"))
 
 
+class Details(unittest.TestCase):
+    """What Settings shows of a built-in skill comes from the code that builds the tool list."""
+
+    def test_every_action_shown_is_the_tool_sent(self):
+        from tuxistant.realtime import Realtime
+        skills = Skills(config={**DEFAULTS, "mail_search": True, **HOME})
+        session = Realtime(skills.config, skills, lambda _event: None)._session()
+        sent = {tool["name"]: tool for tool in session["tools"]}     # what session.update sends
+        self.assertEqual(len(sent), len(skills.actions), "every action is offered here")
+        for skill in skills.listing():
+            found = json.loads(json.dumps(skills.details(skill["id"])))
+            with self.subTest(skill["id"]):
+                self.assertEqual([a["name"] for a in found["actions"]], list(
+                    skills.skills[skill["id"]]["actions"]))
+                for action in found["actions"]:
+                    self.assertEqual(action["tool"], sent[action["tool"]["name"]])
+                    self.assertTrue(action["module"].startswith("tuxistant."), action)
+                self.assertEqual(found["source"], "built-in")
+                self.assertTrue(found["file"].endswith(".yaml"))
+                self.assertEqual(found["manifest"], Path(found["file"]).read_text())
+
+    def test_the_module_named_is_where_the_code_is(self):
+        skills = Skills()
+        modules = {a["name"]: a["module"] for s in skills.listing()
+                   for a in skills.details(s["id"])["actions"]}
+        self.assertEqual(modules["weather.forecast"], "tuxistant.livedata",
+                         "not the wrapper in tuxistant.skills")
+        self.assertEqual(modules["news.headlines"], "tuxistant.livedata")
+        self.assertEqual(modules["mail.search"], "tuxistant.mail")
+        self.assertEqual(modules["shell.run"], "tuxistant.shellgate")
+        self.assertEqual(modules["time.now"], "tuxistant.skills")
+
+    def test_why_an_action_is_not_offered(self):
+        skills = Skills()
+        held = {a["name"]: a["held_back"] for s in skills.listing()
+                for a in skills.details(s["id"])["actions"] if not a["offered"]}
+        self.assertEqual(held, {"mail.search": "switched_off", "home.set": "not_set_up",
+                                "home.status": "not_set_up"})
+
+    def test_why_the_risk_is_what_it_is(self):
+        from tuxistant.skills import risk_because
+        for permissions, because in (
+                ({}, []), ({"shell": False}, []), ({"network": ["home"]}, ["network"]),
+                ({"network": True, "files_read": True}, ["network", "files_read"]),
+                ({"network": True, "shell": True, "files_write": ["~"]}, ["shell", "files_write"])):
+            with self.subTest(permissions):
+                self.assertEqual(risk_because(permissions), because)
+                self.assertEqual(bool(because), risk_of(permissions) != "low")
+        self.assertEqual(Skills().details("org.tuxistant.trash")["risk_because"], ["files_write"])
+
+
+
 if __name__ == "__main__":
     unittest.main()

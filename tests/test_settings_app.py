@@ -75,6 +75,84 @@ class Logic(unittest.TestCase):
             "A skill you added. "))
         self.assertTrue(sa.skill_subtitle({**recipe, "source": "built-in"}).startswith("Tides"))
 
+    def test_skill_settings_name_skills_that_come_with_tuxistant(self):
+        from tuxistant.skillhost import offline
+        with tempfile.TemporaryDirectory() as folder:
+            ids = set(offline(dict(sa.DEFAULTS), user=Path(folder) / "skills").current().skills)
+        self.assertLessEqual(set(sa.SKILL_SETTINGS), ids)
+        self.assertTrue(all(skill.startswith("org.tuxistant.") for skill in sa.SKILL_SETTINGS),
+                        "ids only what comes with Tuxistant may have")
+        for names in sa.SKILL_SETTINGS.values():
+            for name in names:
+                self.assertTrue(callable(getattr(sa.SettingsBox, f"{name}_rows", None)), name)
+
+    def test_settings_whose_skill_isnt_listed_are_named(self):
+        everything = [{"id": skill_id, "source": "built-in"} for skill_id in sa.SKILL_SETTINGS]
+        self.assertEqual(sa.unreachable_settings(everything), [])
+        self.assertEqual(set(sa.SETTINGS_TITLES), {name for names in sa.SKILL_SETTINGS.values()
+                                                  for name in names})
+        without = [s for s in everything if s["id"] != "org.tuxistant.lights"]
+        self.assertEqual(sa.unreachable_settings(without), ["lights"])
+        only_one = [s for s in everything if s["id"] != "org.tuxistant.home"]
+        self.assertEqual(sa.unreachable_settings(only_one), [], "Home Assistant status has them")
+        mine = [{**s, "source": "yours"} if s["id"] == "org.tuxistant.lights" else s
+                for s in everything]
+        self.assertEqual(sa.unreachable_settings(mine), ["lights"],
+                         "a skill of yours can't take an id, but if one did it gets no account")
+
+    def test_a_path_can_not_fake_a_line(self):
+        self.assertEqual(sa.path_shown("moon\nComes with Tuxistant\tx"),
+                         "moon\\nComes with Tuxistant\\tx")
+        self.assertEqual(sa.skill_problems({"/s/a\nb.yaml": "Bad."}),
+                         [("a\\nb.yaml", "Bad.", "/s/a\\nb.yaml")])
+
+    def test_every_setting_has_one_home(self):
+        """What General keeps and what skills' pages show, together, are all the settings."""
+        from tuxistant.config import EDITABLE
+        general = {"server", "api_key", "pipeline", "conversation_mode", "listen_timeout_s",
+                   "fn_hold_enabled", "fn_hold_ms", "hide_on_release", "dictation_enabled",
+                   "instructions", "voice", "theme"}
+        on_skills = set().union(*EXPECTED_SETTINGS.values())
+        self.assertEqual(general & on_skills, set())
+        self.assertEqual(general | on_skills, set(EDITABLE))
+
+    def test_permission_list(self):
+        self.assertEqual(sa.permission_list({}), [])
+        self.assertEqual(sa.permission_list({"network": True, "shell": False}),
+                         [("Use the network", "Anywhere")])
+        self.assertEqual(sa.permission_list({"network": ["home", "a.org"], "<b>x</b>": True}),
+                         [("Use the network", "your own server, a.org"), ("Use <b>x</b>", "")])
+
+    def test_risk_words(self):
+        self.assertEqual(sa.risk_words("high", ["shell", "files_write"], {}),
+                         "Because it can run shell commands and change files")
+        self.assertEqual(sa.risk_words("low", [], {}), "It asks for nothing that raises the risk")
+        self.assertEqual(sa.risk_words("medium", None, {"network": True}),
+                         "Can use the network", "an older daemon gives no reason")
+
+    def test_code_words_never_pretend_the_manifest_is_the_skill(self):
+        built_in = {"source": "built-in", "actions": [
+            {"module": "tuxistant.livedata"}, {"module": "tuxistant.skills"}, {}]}
+        self.assertIn("tuxistant/livedata.py, tuxistant/skills.py", sa.code_words(built_in))
+        self.assertIn("the code decides", sa.code_words(built_in))
+        self.assertIn("tuxistant/recipes.py",
+                      sa.code_words({"source": "yours", "recipe": True, "actions": []}))
+        self.assertIn("sandbox", sa.code_words({"source": "yours", "actions": []}))
+        self.assertIn("sandbox", sa.code_words({"source": "bundled", "actions": []}))
+
+    def test_held_back_and_param_words(self):
+        self.assertEqual(sa.held_back_words({"offered": True}), "The model is offered this")
+        self.assertIn("switched on", sa.held_back_words(
+            {"offered": False, "held_back": "switched_off"}))
+        self.assertIn("filled in", sa.held_back_words(
+            {"offered": False, "held_back": "not_set_up"}))
+        self.assertEqual(sa.param_words("day", {"type": "string", "enum": ["a", "b"],
+                                                "description": "Which day"}, ["day"]),
+                         ("day (required)", 'Which day\ntype: string\nenum: ["a", "b"]'))
+        self.assertEqual(sa.param_words("n", {"type": "integer"}, []), ("n", "type: integer"))
+        self.assertEqual(sa.manifest_size("x" * 100), "100 bytes")
+        self.assertEqual(sa.manifest_size("x" * 65536), "64.0 KB")
+
     def test_skill_problems_are_named_by_file(self):
         found = sa.skill_problems({"/x/skills/b.yaml": "Bad.", "/x/skills/a": "Worse."})
         self.assertEqual(found, [("a", "Worse.", "/x/skills/a"), ("b.yaml", "Bad.",
@@ -602,6 +680,28 @@ def dispose(window):
     window.destroy()
 
 
+def open_skill(window, skill_id):
+    """A skill's page, as a click on its row opens it, once its details have come."""
+    dialog = window.skills.dialog
+    if dialog and dialog.skill and dialog.skill["id"] == skill_id:   # not a settings-only page
+        return dialog
+    close_skill(window)
+    window.views.set_visible_child_name("skills")
+    wait(lambda: any(row.skill["id"] == skill_id for row in window.skills.rows), "its row")
+    row = next(row for row in window.skills.rows if row.skill["id"] == skill_id)
+    row.activate()
+    dialog = window.skills.dialog
+    assert dialog is window.get_visible_dialog(), "a click opens the skill's page"
+    wait(lambda: dialog.details is not None or dialog.problem, "the skill's details")
+    return dialog
+
+
+def close_skill(window):
+    if window.skills.dialog:
+        window.skills.dialog.force_close()
+        settle(30)
+
+
 def ready(window):
     return (window.state == "ready" and window.voices.groups and window.appearance.rows
             and window.skills.rows and window.history.rows)
@@ -632,8 +732,13 @@ class Inner(unittest.TestCase):
         wait(lambda: ready(cls.win), "the first load")
 
     def setUp(self):
+        close_skill(self.win)
         self.win.views.set_visible_child_name("general")
         forget()
+
+    def skill_page(self, skill_id, window=None):
+        """The settings on a skill's page, opening it unless it is open already."""
+        return open_skill(window or self.win, skill_id).settings
 
     def test_01_a_second_launch_presents_the_same_window(self):
         before = len(self.activated)
@@ -757,7 +862,7 @@ class Inner(unittest.TestCase):
         self.assertEqual(hold.get_value(), 2.5)
 
     def test_06_z_fact_lookup_switch(self):
-        row = self.win.general.switches["fact_lookup"]
+        row = self.skill_page("org.tuxistant.knowledge").switches["fact_lookup"]
         self.assertTrue(row.get_active())
         row.set_active(False)
         wait(lambda: saved() == [["fact_lookup", "false"]], "the switch to save")
@@ -767,7 +872,7 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["fact_lookup"] is True, "the switch to come back")
 
     def test_06_zz_mail_search_is_off_until_switched_on(self):
-        row = self.win.general.switches["mail_search"]
+        row = self.skill_page("org.tuxistant.mail").switches["mail_search"]
         self.assertFalse(row.get_active())
         row.set_active(True)
         wait(lambda: saved() == [["mail_search", "true"]], "the switch to save")
@@ -776,7 +881,7 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["mail_search"] is False, "the switch to come back")
 
     def test_06_zzz_the_timer_chime_is_off_until_switched_on(self):
-        row = self.win.general.switches["timer_chime"]
+        row = self.skill_page("org.tuxistant.timers").switches["timer_chime"]
         self.assertFalse(row.get_active(), "nothing sounds on a locked screen unless asked for")
         row.set_active(True)
         wait(lambda: saved() == [["timer_chime", "true"]], "the switch to save")
@@ -785,7 +890,7 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["timer_chime"] is False, "the switch to come back")
 
     def test_06_zzzz_the_tailscale_address_is_off_until_switched_on(self):
-        row = self.win.general.switches["say_tailscale_address"]
+        row = self.skill_page("org.tuxistant.system").switches["say_tailscale_address"]
         self.assertFalse(row.get_active(), "an address on your tailnet is said only when asked for")
         self.assertEqual(row.get_title(), "Say my Tailscale address")
         row.set_active(True)
@@ -808,7 +913,7 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["fn_hold_enabled"] is True, "the switch to come back")
 
     def test_07_z_home_town(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.weather")
         row = page.location
         apply = apply_button(row)
         settle(30)
@@ -1063,6 +1168,8 @@ class Inner(unittest.TestCase):
 
     def test_20_coming_back_to_the_window_rereads_themes(self):
         rows = list(self.win.appearance.rows)
+        self.skill_page("org.tuxistant.phone")      # the phones are read while its page is open
+        forget()
         with mock.patch.object(self.win, "is_active", return_value=True):
             self.win.on_active()
         wait(lambda: calls("ListThemes"), "the themes to reload")
@@ -1092,7 +1199,7 @@ class Inner(unittest.TestCase):
         self.assertIn("use camera", rows["Run commands"].get_subtitle())
         self.assertIn("(your own server)", rows["Translate"].get_subtitle())
         self.assertNotIn("(home)", rows["Translate"].get_subtitle())
-        self.assertFalse(rows["Run commands"].get_activatable(), "skills are read-only for now")
+        self.assertTrue(rows["Run commands"].get_activatable(), "each opens to be read")
         self.assertTrue(rows["Tides"].get_subtitle().startswith("A recipe you added. "))
         self.assertFalse(rows["Disk space"].get_subtitle().startswith("A "))
         wait(lambda: page.problem_rows, "the skills with problems")
@@ -1106,6 +1213,324 @@ class Inner(unittest.TestCase):
                 signature="s")
         wait(lambda: [r.get_title() for r in page.problem_rows] == ["coins.yml"],
              "the problems a reload found, with the window open")
+
+    def test_21_a_a_built_in_skill_shows_what_the_model_is_given(self):
+        from tuxistant.skills import Skills
+        dialog = open_skill(self.win, "org.tuxistant.weather")
+        self.assertEqual(dialog.get_title(), "Weather")
+        about = texts_of(dialog.about)
+        self.assertIn("Built into Tuxistant", about)
+        code = next(text for text in about if text.startswith("Built in: Python code"))
+        self.assertIn("tuxistant/livedata.py", code)
+        self.assertIn("Use the network", texts_of(dialog.permissions))
+        self.assertIn("geocoding-api.open-meteo.com, api.open-meteo.com",
+                      texts_of(dialog.permissions))
+        self.assertIn("Because it can use the network", texts_of(dialog.permissions))
+        tool = Skills().tool("weather.forecast")
+        [row] = [r for r in iter_children(dialog.actions) if isinstance(r, sa.SkillActionRow)]
+        self.assertEqual(row.get_title(), "weather_forecast")
+        self.assertIn("The model is offered this", row.get_subtitle())
+        row.set_expanded(True)
+        settle()
+        shown = texts_of(row)
+        self.assertIn(tool["description"], shown, "the description, word for word")
+        self.assertIn(json.dumps(tool, indent=2, ensure_ascii=False), shown,
+                      "and the whole tool as it is sent")
+        self.assertIn("place", shown)
+        self.assertIn(tool["parameters"]["properties"]["place"]["description"]
+                      + "\ntype: string", shown)
+        self.assertIn("tuxistant/livedata.py", shown)
+        row.grab_focus()
+        shot(self.win, "skill-action")
+        self.assertEqual(dialog.settings.location.get_title(), "Home town")
+        manifest = (Path(sa.__file__).parent / "skills_builtin/weather.yaml").read_text()
+        self.assertEqual(dialog.details["manifest"], manifest)
+        self.assertFalse([r for r in iter_children(dialog.manifest)
+                          if isinstance(r, Adw.ButtonRow)], "nothing to open: it is built in")
+        dialog.manifest_row.activate()
+        settle()
+        text = next(w for w in iter_children(dialog) if isinstance(w, Gtk.TextView))
+        buffer = text.get_buffer()
+        self.assertEqual(buffer.get_text(*buffer.get_bounds(), False), manifest)
+        self.assertFalse(text.get_editable())
+        self.assertTrue(text.get_monospace())
+        shot(self.win, "skill-manifest")
+        dialog.copy_manifest()
+        self.assertEqual(clipboard_text(dialog), manifest)
+
+    def test_21_b_a_recipe_you_added_shows_its_file_whole(self):
+        from tests.shell_harness_settings_fake import RECIPE
+        dialog = open_skill(self.win, "org.example.tides")
+        self.assertEqual(dialog.details["manifest"], RECIPE)
+        about = texts_of(dialog.about)
+        where = next(text for text in about if text.startswith("A recipe you added"))
+        self.assertTrue(where.endswith("/skills/tides.yaml"), where)
+        self.assertIn("tuxistant/recipes.py", "\n".join(about))
+        self.assertEqual(dialog.settings, None, "a skill you add has no settings here")
+        [row] = [r for r in iter_children(dialog.actions) if isinstance(r, sa.SkillActionRow)]
+        row.set_expanded(True)
+        settle()
+        self.assertIn("town (required)", texts_of(row))
+        self.assertIn("The town, like Brighton\ntype: string\nmaxLength: 40", texts_of(row))
+        self.assertTrue(dialog.manifest_row.get_subtitle().startswith("60.1 KB\n"))
+        dialog.manifest_row.activate()
+        settle()
+        text = next(w for w in iter_children(dialog) if isinstance(w, Gtk.TextView))
+        buffer = text.get_buffer()
+        self.assertEqual(buffer.get_text(*buffer.get_bounds(), False), RECIPE,
+                         "all of it, markup in its comments shown as written")
+        [open_file] = [r for r in iter_children(dialog.manifest) if isinstance(r, Adw.ButtonRow)]
+        self.assertEqual(open_file.get_title(), "Open file")
+        with mock.patch.object(sa.Gtk.FileLauncher, "new") as launcher:
+            open_file.emit("activated")
+        self.assertEqual(launcher.call_args.args[0].get_path(), dialog.details["file"])
+        launcher.return_value.launch.assert_called_once()
+
+    def test_21_c_a_code_skill_you_added_lists_its_files(self):
+        dialog = open_skill(self.win, "org.example.moon")
+        self.assertIn("A code skill you added", "\n".join(texts_of(dialog.about)))
+        self.assertTrue(dialog.files.get_visible())
+        self.assertLessEqual({"lib/phase.py", "main.py", "skill.yaml"},
+                             set(texts_of(dialog.files)))
+        [open_folder] = [r for r in iter_children(dialog.files) if isinstance(r, Adw.ButtonRow)]
+        self.assertEqual(open_folder.get_title(), "Open folder")
+        with mock.patch.object(sa.Gtk.FileLauncher, "new") as launcher:
+            open_folder.emit("activated")
+        self.assertEqual(launcher.call_args.args[0].get_path(), dialog.details["folder"])
+        self.assertTrue(dialog.details["folder"].endswith("/skills/moon"))
+        lights = open_skill(self.win, "org.tuxistant.lights")
+        self.assertIn("Comes with Tuxistant: a code skill", texts_of(lights.about))
+        self.assertTrue(lights.files.get_visible())
+        self.assertFalse([r for r in iter_children(lights.files) if isinstance(r, Adw.ButtonRow)],
+                         "what comes with Tuxistant isn't opened to be changed")
+
+    def test_21_d_what_a_skill_says_is_never_read_as_markup(self):
+        from tests.shell_harness_settings_fake import DETAILS, MARKUP_NAME, MARKUP_TEXT
+        page = self.win.skills
+        self.win.views.set_visible_child_name("skills")
+        row = next(r for r in page.rows if r.skill["id"] == "org.example.markup")
+        self.assertEqual(row.get_title(), MARKUP_NAME)
+        started = time.monotonic()
+        dialog = open_skill(self.win, "org.example.markup")
+        painted = []    # the first frame after the rows went in, so their layout is counted
+        clock = self.win.get_frame_clock()
+        handler = clock.connect("after-paint", lambda _clock: painted.append(time.monotonic()))
+        self.win.queue_draw()
+        wait(lambda: painted, "the page to be drawn", 30)
+        clock.disconnect(handler)
+        opening = painted[0] - started
+        self.assertLess(opening, 2, "2,000 files with long names must not hold the page")
+        for action in iter_children(dialog.actions):
+            if isinstance(action, sa.SkillActionRow):
+                action.set_expanded(True)
+        settle()
+        dialog.manifest_row.activate()
+        settle()
+        texts = [label.get_text() for label in labels_of(dialog)]
+        for wanted in (MARKUP_NAME, MARKUP_TEXT, "<i>1</i>", "<b>main</b>.py", "<i>q</i> (required)",
+                       '<span foreground="red">q</span>\ntype: string', "Use <b>odd</b>"):
+            self.assertIn(wanted, texts, "shown as written")
+        self.assertIn("README\\nskill.yaml", texts, "one file, not two")
+        self.assertFalse([text for text in texts if "\nComes with Tuxistant" in text],
+                         "a folder's name can't fake a line saying where a skill comes from")
+        self.assertIn(f"And {2000 - sa.MAX_FILES_SHOWN} more files", texts)
+        marked = [label.get_text() for label in labels_of(dialog) if label.get_use_markup()
+                  and ("<" in label.get_label() or "&" in label.get_label())]
+        self.assertEqual(marked, [], "no label holding a skill's text reads it as markup")
+        text = next(w for w in iter_children(dialog) if isinstance(w, Gtk.TextView))
+        buffer = text.get_buffer()
+        manifest = DETAILS["org.example.markup"]["manifest"]
+        self.assertGreater(len(manifest), 64000)
+        self.assertEqual(buffer.get_text(*buffer.get_bounds(), False), manifest)
+        shot(self.win, "skill-markup")
+
+    def test_21_e_a_daemon_older_than_this_app_shows_what_it_can(self):
+        control("FailNextAs", "SkillDetails", "org.freedesktop.DBus.Error.UnknownMethod",
+                "No such method", signature="sss")
+        with mock.patch.object(self.win, "toast") as toast:
+            dialog = open_skill(self.win, "org.tuxistant.weather")
+        toast.assert_not_called()
+        self.assertEqual(self.win.state, "ready")
+        self.assertIn("older than these Settings", dialog.problem)
+        self.assertEqual(dialog.actions.get_description(), dialog.problem, "no markup in it")
+        self.assertIn("weather.forecast", texts_of(dialog.actions), "ListSkills named it")
+        self.assertFalse(dialog.manifest.get_visible())
+        self.assertIn("Can use the network (geocoding-api.open-meteo.com, api.open-meteo.com)",
+                      texts_of(dialog.permissions), "its permissions came with ListSkills")
+        self.assertEqual(dialog.settings.location.get_title(), "Home town",
+                         "its settings don't need the new method")
+        close_skill(self.win)
+        control("FailNext", "SkillDetails", "disk <full>", signature="ss")
+        dialog = open_skill(self.win, "org.tuxistant.weather")
+        self.assertIn("disk <full>", dialog.problem)
+        self.assertIn("disk <full>", "\n".join(texts_of(dialog.page)), "shown as written")
+        close_skill(self.win)
+        dialog = open_skill(self.win, "org.example.shell")
+        self.assertIn("isn't loaded any more", dialog.problem)
+
+    def test_21_f_a_skills_settings_are_on_its_page_and_nowhere_else(self):
+        general = self.win.general
+        for name in sa.SettingsBox.ROWS:
+            self.assertIsNone(getattr(general, name), name)
+        self.assertEqual(set(general.switches), {"conversation_mode", "fn_hold_enabled",
+                                                 "hide_on_release", "dictation_enabled"})
+        self.assertEqual(set(general.keys), {"api_key"})
+        dialog = open_skill(self.win, "org.tuxistant.time")
+        self.assertIsNone(dialog.settings, "a skill with nothing to set has no Settings group")
+
+    def test_21_f_z_every_setting_has_one_home(self):
+        """Every row on every page is used as a person would, and what reaches the daemon says
+        where each setting really is: once each, and none missing."""
+        from tuxistant.config import EDITABLE, SECRETS
+        stored = {key: control("Stored", key, signature="s")[0] for key in SECRETS}
+        before = dict(self.win.config)
+        found = {}
+        for skill_id in sa.SKILL_SETTINGS:
+            dialog = open_skill(self.win, skill_id)
+            box = dialog.settings
+            if box.phone:
+                wait(lambda: box.devices is not None, "the phones")
+            if box.calendar:
+                wait(lambda: isinstance(box.calendars, list), "the calendars")
+            found[skill_id] = self.sent_by(dialog.page)
+        close_skill(self.win)
+        self.win.views.set_visible_child_name("general")
+        general = self.sent_by(self.win.general)
+        forget()
+        self.win.voices.choose(before["voice"])
+        self.win.appearance.choose(before["theme"])
+        wait(lambda: len(saved()) == 2, "the voice and theme to save")
+        elsewhere = {key for key, _value in saved()}
+        for key, value in stored.items():
+            control("Change", key, value, signature="ss")
+        self.assertEqual(found, EXPECTED_SETTINGS)
+        on_skills = set().union(*found.values())
+        self.assertEqual(general & on_skills, set(), "one home each")
+        self.assertEqual(general | on_skills | elsewhere, set(EDITABLE),
+                         "every setting has a home: General, a skill's page, Voice or Appearance")
+        wait(lambda: {k: self.win.config.get(k) for k in before} == before, "all put back")
+
+    def sent_by(self, root) -> set:
+        """The keys SetConfig was sent while each setting row under root was changed and put
+        back."""
+        forget()
+        for widget in list(iter_children(root)):
+            if isinstance(widget, Adw.SwitchRow):
+                was = widget.get_active()
+                widget.set_active(not was)
+                alert = self.win.get_visible_dialog()
+                if isinstance(alert, Adw.AlertDialog):      # Cloud asks first
+                    alert.emit("response", "enable")
+                    alert.force_close()
+                widget.set_active(was)
+            elif isinstance(widget, Adw.SpinRow):
+                was = widget.get_value()
+                widget.set_value(was + widget.get_adjustment().get_step_increment())
+                widget.set_value(was)
+            elif isinstance(widget, Adw.PasswordEntryRow):
+                widget.set_text("one-home-test")
+                widget.emit("apply")
+                remove = next(b for b in iter_children(widget) if isinstance(b, Gtk.Button)
+                              and b.get_icon_name() == "user-trash-symbolic")
+                remove.emit("clicked")
+            elif isinstance(widget, Adw.EntryRow):
+                widget.emit("apply")    # what it shows now, saved again
+            elif isinstance(widget, Adw.ComboRow):
+                was, count = widget.get_selected(), widget.get_model().get_n_items()
+                self.assertGreater(count, 1, widget.get_title())
+                widget.set_selected((was + 1) % count)
+                widget.set_selected(was)
+            elif isinstance(widget, Gtk.CheckButton) and not widget.get_active():
+                chosen = next(c for c in iter_children(root) if isinstance(c, Gtk.CheckButton)
+                              and c.get_active())
+                widget.set_active(True)
+                chosen.set_active(True)
+            elif isinstance(widget, Gtk.TextView) and widget.get_editable():
+                buffer = widget.get_buffer()
+                was = buffer.get_text(*buffer.get_bounds(), False)
+                save = next(b for b in iter_children(root) if isinstance(b, Gtk.Button)
+                            and b.get_label() == "Save")
+                for text in (was + " ", was):
+                    buffer.set_text(text)
+                    save.emit("clicked")
+        settle(sa.SAVE_DELAY_MS + 300)      # a spin saves once you stop
+        return {key for key, _value in saved()}
+
+    def test_21_g_a_setting_two_skills_use_agrees_on_both(self):
+        page = self.skill_page("org.tuxistant.phone")
+        wait(lambda: page.devices is not None, "the device list")
+        page.phone.set_selected(2)
+        wait(lambda: self.win.config["phone_device"] == "Galaxy Tab", "the choice to come back")
+        other = self.skill_page("org.tuxistant.phone_send")
+        wait(lambda: other.devices is not None, "the device list")
+        self.assertEqual(other.phone_labels[other.phone.get_selected()], "Galaxy Tab")
+        other.phone.set_selected(0)
+        wait(lambda: self.win.config["phone_device"] == "", "the reset")
+
+    def test_21_h_settings_whose_skill_isnt_loaded_still_have_a_place(self):
+        """Without bubblewrap Lights is only a problem, and a stored password must still go."""
+        page = self.win.skills
+        self.win.views.set_visible_child_name("skills")
+        self.assertFalse(page.orphans.get_visible())
+
+        def lights_listed():
+            return any(row.skill["id"] == "org.tuxistant.lights" for row in page.rows)
+
+        def back():
+            control("SetSandbox", True, signature="b")
+            wait(lights_listed, "Lights to come back")
+
+        self.addCleanup(back)
+        control("Change", "tapo_password", '"stored secret"', signature="ss")
+        wait(lambda: self.win.config.get("tapo_password_set") is True, "a stored password")
+        control("SetSandbox", False, signature="b")
+        wait(lambda: not lights_listed(), "Lights to go")
+        wait(lambda: any("bubblewrap" in row.get_subtitle() for row in page.problem_rows),
+             "the problem to say why")
+        self.assertTrue(page.orphans.get_visible())
+        self.assertEqual([row.get_title() for row in page.orphan_rows], ["Lights"])
+        page.orphan_rows[0].activate()
+        dialog = page.dialog
+        self.assertIs(self.win.get_visible_dialog(), dialog)
+        self.assertEqual(dialog.get_title(), "Lights")
+        box = dialog.settings
+        self.assertIn("isn't loaded now", box.group.get_description())
+        self.assertEqual(box.tapo_password_status.get_label(), "Password is set")
+        shot(self.win, "skill-not-loaded")
+        forget()
+        box.tapo_password_remove.emit("clicked")
+        wait(lambda: saved() == [["tapo_password", '""']], "the password to be removed")
+        wait(lambda: self.win.config.get("tapo_password_set") is False, "tapo_password_set")
+        self.assertEqual(json.loads(control("Stored", "tapo_password", signature="s")[0]), "")
+        box.tapo_email.set_text("tux@example.org")
+        apply_button(box.tapo_email).emit("clicked")
+        wait(lambda: self.win.config.get("tapo_email") == "tux@example.org", "the email to save")
+        control("Change", "tapo_email", '""', signature="ss")
+        wait(lambda: box.tapo_email.get_text() == "", "the outside change")
+
+    def test_21_i_a_skill_pages_messages_show_on_it(self):
+        """The window's own toasts would be hidden behind the page."""
+        page = self.skill_page("org.tuxistant.home")
+        dialog = self.win.skills.dialog
+        with mock.patch.object(dialog, "add_toast", wraps=dialog.add_toast) as on_page, \
+                mock.patch.object(self.win.toasts, "add_toast") as behind:
+            page.home.set_text("two words")
+            apply_button(page.home).emit("clicked")
+            self.assertEqual([call.args[0].get_title() for call in on_page.call_args_list],
+                             ["Enter an address like homeassistant.local:8123"])
+            control("FailNext", "SetConfig", "That is not a <valid> token", signature="ss")
+            page.home_token.set_text("bad token")
+            apply_button(page.home_token).emit("clicked")
+            wait(lambda: on_page.call_count == 2, "the daemon's refusal")
+            self.assertEqual(on_page.call_args.args[0].get_title(), "That is not a <valid> token")
+            self.assertFalse(on_page.call_args.args[0].get_use_markup())
+            shot(self.win, "skill-toast")
+            behind.assert_not_called()
+        wait(lambda: page.home_token_status.get_label() == "No token set", "the state to roll back")
+        close_skill(self.win)
+        with mock.patch.object(self.win.toasts, "add_toast") as window:
+            self.win.toast("No page open")
+        window.assert_called_once()
 
     def test_22_history_lists_and_refreshes_live(self):
         page = self.win.history
@@ -1243,7 +1668,7 @@ class Inner(unittest.TestCase):
         page.rows[2].set_expanded(False)
 
     def test_25_cloud_asks_before_turning_on(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.task")
         self.assertFalse(page.cloud.get_active())
         self.assertEqual(page.cloud.get_subtitle(), "Nothing goes to Anthropic")
         page.cloud.set_active(True)
@@ -1273,16 +1698,16 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["cloud_enabled"] is True, "the change to come back")
         self.assertTrue(page.cloud.get_active())
         self.assertIn("nothing goes to Anthropic", page.cloud.get_subtitle(), "there is no key yet")
-        self.assertIsNone(self.win.get_visible_dialog(), "a reload must not ask again")
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog, "a reload must not ask again")
 
         forget()
         page.cloud.set_active(False)
-        self.assertIsNone(self.win.get_visible_dialog(), "turning it off needs no dialog")
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog, "turning it off needs no dialog")
         wait(lambda: saved() == [["cloud_enabled", "false"]], "the switch to save")
         wait(lambda: self.win.config["cloud_enabled"] is False, "the change to come back")
 
     def test_25_cloud_a_reload_behind_the_dialog_does_not_lose_the_answer(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.task")
         page.cloud.set_active(True)
         dialog = self.win.get_visible_dialog()
         control("Change", "listen_timeout_s", "21", signature="ss")
@@ -1298,12 +1723,12 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["cloud_enabled"] is False, "the switch to go off")
 
     def test_25_cloud_real_keys_cannot_agree_by_accident(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.task")
         keyboard = Keyboard()
         self.addCleanup(keyboard.close)
 
         def closed():
-            return self.win.get_visible_dialog() is None
+            return self.win.get_visible_dialog() is self.win.skills.dialog
 
         keyboard.press(Gdk.KEY_Shift_L)     # a new virtual keyboard loses its first key
         for key in (Gdk.KEY_Escape, Gdk.KEY_Return):
@@ -1317,17 +1742,17 @@ class Inner(unittest.TestCase):
         self.assertEqual(saved(), [])
 
     def test_25_cloud_from_elsewhere_asks_nothing_and_is_not_echoed(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.task")
         control("Change", "cloud_enabled", "true", signature="ss")
         wait(page.cloud.get_active, "the switch to follow")
-        self.assertIsNone(self.win.get_visible_dialog())
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog)
         control("Change", "cloud_enabled", "false", signature="ss")
         wait(lambda: not page.cloud.get_active(), "the switch to follow")
         settle()
         self.assertEqual(saved(), [])
 
     def test_25_cloud_a_refused_save_is_undone(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.task")
         control("FailNext", "SetConfig", "disk <full>", signature="ss")
         with mock.patch.object(self.win, "toast", wraps=self.win.toast) as toast:
             page.cloud.set_active(True)
@@ -1342,7 +1767,7 @@ class Inner(unittest.TestCase):
         self.assertEqual(len(saved()), 1, "the rollback is not a save")
 
     def test_25_cloud_key_is_write_only(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.task")
         apply = apply_button(page.cloud_key)
         control("Change", "cloud_enabled", "true", signature="ss")
         wait(page.cloud.get_active, "the switch to follow")
@@ -1377,7 +1802,7 @@ class Inner(unittest.TestCase):
         wait(lambda: not page.cloud.get_active(), "the switch to follow")
 
     def test_25_cloud_key_refused_says_so_without_repeating_it(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.task")
         with mock.patch.object(self.win, "toast", wraps=self.win.toast) as toast:
             page.cloud_key.set_text("has a space inside")
             apply_button(page.cloud_key).emit("clicked")
@@ -1387,7 +1812,7 @@ class Inner(unittest.TestCase):
         self.assertFalse(page.cloud_key_remove.get_visible())
 
     def test_25_cloud_model(self):
-        row = self.win.general.cloud_model
+        row = self.skill_page("org.tuxistant.task").cloud_model
         apply = apply_button(row)
         self.assertEqual(row.get_text(), "claude-opus-5-5")
         settle(30)
@@ -1411,7 +1836,7 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["cloud_model"] == "claude-opus-5-5", "the reset")
 
     def test_25_phone_lists_devices_and_saves_the_choice(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.phone")
         wait(lambda: page.devices is not None, "the device list")
         self.assertEqual(page.phone_labels, ["Automatic", "Pixel <8> & co", "Galaxy Tab"])
         self.assertEqual(page.phone.get_selected(), 0)
@@ -1430,7 +1855,7 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["phone_device"] == "", "the change to come back")
 
     def test_25_calendar_lists_what_can_be_changed_and_saves_the_choice(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.calendar_add")
         self.real_calendars()
         self.assertEqual(page.calendar_labels,
                          ["Automatic", "Family (me@example.org)", "Personal (On This Computer)"])
@@ -1453,13 +1878,13 @@ class Inner(unittest.TestCase):
         wait(lambda: page.calendar.get_selected() == 0, "the reset")
 
     def test_25_calendar_without_accounts_points_to_online_accounts(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.calendar_add")
         self.list_calendars_as([], sa.NO_CALENDARS)
         self.assertIn("Online Accounts", page.calendar.get_subtitle())
         self.assertEqual(page.calendar_labels, ["Automatic"])
 
     def test_25_calendar_without_evolution_data_server_names_the_packages(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.calendar_add")
         self.list_calendars_as({"problem": calendars.NO_EDS}, calendars.NO_EDS)
         self.assertIn("gir1.2-ecal-2.0", page.calendar.get_subtitle())
         self.assertNotIn("Online Accounts", page.calendar.get_subtitle())
@@ -1470,7 +1895,7 @@ class Inner(unittest.TestCase):
 
     def test_25_calendar_a_failed_listing_gives_no_account_advice(self):
         # A timeout or a daemon older than this app: the user may well have accounts already.
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.calendar_add")
         self.addCleanup(self.load_calendars, self.real_calendars(), sa.CALENDAR_NOTE)
         self.fail_calendar_listing()
         self.assertNotIn("Online Accounts", page.calendar.get_subtitle())
@@ -1480,7 +1905,7 @@ class Inner(unittest.TestCase):
 
     def test_25_calendar_a_failed_listing_does_not_call_the_saved_one_gone(self):
         """We only know the list didn't come, not that the saved calendar left."""
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.calendar_add")
         self.addCleanup(self.load_calendars, self.real_calendars(), sa.CALENDAR_NOTE)
         self.addCleanup(control, "Change", "calendar_add_to", '""', signature="ss")
         control("Change", "calendar_add_to", '"cal-family"', signature="ss")
@@ -1494,7 +1919,7 @@ class Inner(unittest.TestCase):
         self.assertEqual(saved(), [], "the saved calendar is kept as it is")
 
     def fail_calendar_listing(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.calendar_add")
         control("FailNext", "ListCalendars", "timed out", signature="ss")
         forget()
         page.load()
@@ -1503,7 +1928,7 @@ class Inner(unittest.TestCase):
 
     def real_calendars(self) -> list:
         """The list the fake sends, taken before a test replaces it: a problem leaves None."""
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.calendar_add")
         wait(lambda: isinstance(page.calendars, list) and not page.calendar_problem,
              "the calendar list")
         return list(page.calendars)
@@ -1515,7 +1940,7 @@ class Inner(unittest.TestCase):
         self.load_calendars(reply, subtitle)
 
     def load_calendars(self, reply, subtitle):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.calendar_add")
         control("SetCalendars", json.dumps(reply), signature="s")
         forget()
         page.load()
@@ -1523,7 +1948,7 @@ class Inner(unittest.TestCase):
         wait(lambda: page.calendar.get_subtitle() == subtitle, "the calendar note")
 
     def test_25_news_lists_the_sources_and_saves_the_choice(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.news")
         sources = list(sa.SOURCES)
         model = page.news.get_model()
         self.assertEqual([model.get_string(i) for i in range(model.get_n_items())],
@@ -1544,7 +1969,7 @@ class Inner(unittest.TestCase):
         wait(lambda: page.news.get_selected() == sources.index("bbc"), "the reset")
 
     def test_25_phone_a_saved_device_survives_not_being_listed(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.phone")
         control("Change", "phone_device", '"Old <phone>"', signature="ss")
         wait(lambda: self.win.config["phone_device"] == "Old <phone>", "the config to reload")
         self.assertEqual(page.phone_labels[-1], "Not available: Old <phone>")
@@ -1564,7 +1989,7 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config["phone_device"] == "", "the reset")
 
     def test_25_phone_without_gsconnect(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.phone_send")
         control("Change", "phone_device", '"Pixel <8> & co"', signature="ss")
         wait(lambda: self.win.config["phone_device"] == "Pixel <8> & co", "the config to reload")
         listed = json.dumps(page.devices)
@@ -1585,7 +2010,7 @@ class Inner(unittest.TestCase):
         self.assertEqual(self.win.state, "ready")
 
     def test_25_phone_a_failed_or_slow_list_is_not_an_outage(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.phone")
         control("FailNext", "ListPhones", "boom", signature="ss")
         with mock.patch.object(self.win, "toast") as toast:
             page.load()
@@ -1599,10 +2024,11 @@ class Inner(unittest.TestCase):
 
     def test_25_phone_before_the_list_arrives_nothing_is_called_missing(self):
         control("Change", "phone_device", '"Pixel <8> & co"', signature="ss")
-        control("DelayNext", "ListPhones", 300, signature="si")
+        wait(lambda: self.win.config["phone_device"] == "Pixel <8> & co", "the config to reload")
+        control("DelayNext", "ListPhones", 1000, signature="si")
         window = open_window(self.app)
-        wait(lambda: window.state == "ready", "the window")
-        page = window.general
+        wait(lambda: ready(window), "the window")
+        page = self.skill_page("org.tuxistant.phone", window)
         self.assertIsNone(page.devices)
         self.assertEqual(page.phone_labels, ["Automatic", "Pixel <8> & co"])
         self.assertEqual(page.phone.get_selected(), 1)
@@ -1611,31 +2037,41 @@ class Inner(unittest.TestCase):
         self.assertEqual(page.phone.get_selected(), 1)
         settle()
         self.assertEqual(saved(), [])
+        close_skill(window)
         dispose(window)
         control("Change", "phone_device", '""', signature="ss")
         wait(lambda: self.win.config["phone_device"] == "", "the reset")
 
     def test_25_a_daemon_older_than_this_app_is_no_crash(self):
         """Settings updates on disk at once. The daemon keeps its old code until it restarts."""
-        page = self.win.general
         new = ("phone_device", "translate_server", "search_server", "fact_lookup", "cloud_enabled",
                "cloud_model", "cloud_key_set", "tapo_email", "tapo_password_set", "mail_search",
                "timer_chime", "ha_server", "ha_token_set", "say_tailscale_address")
         current = dict(self.win.config)
+        self.addCleanup(self.win.apply_config, current)
         self.win.apply_config({key: value for key, value in current.items() if key not in new})
-        self.assertFalse(page.cloud.get_active())
-        self.assertEqual(page.cloud_model.get_text(), "claude-opus-5-5")
-        self.assertEqual(page.phone.get_selected(), 0)
-        self.assertEqual(page.tapo_password_status.get_label(), "No password set")
-        self.assertEqual((page.home.get_text(), page.home_token_status.get_label()),
-                         ("", "No token set"))
+        for skill, check in (
+                ("org.tuxistant.task", lambda page: (
+                    self.assertFalse(page.cloud.get_active()),
+                    self.assertEqual(page.cloud_model.get_text(), "claude-opus-5-5"))),
+                ("org.tuxistant.phone", lambda page: self.assertEqual(
+                    page.phone.get_selected(), 0)),
+                ("org.tuxistant.lights", lambda page: self.assertEqual(
+                    page.tapo_password_status.get_label(), "No password set")),
+                ("org.tuxistant.home", lambda page: self.assertEqual(
+                    (page.home.get_text(), page.home_token_status.get_label()),
+                    ("", "No token set"))),
+                ("org.tuxistant.knowledge", lambda page: self.assertEqual(
+                    page.search.get_text(), ""))):
+            with self.subTest(skill):
+                check(self.skill_page(skill))
         settle()
         self.assertEqual(saved(), [])
-        self.win.apply_config(current)
 
     def test_25_a_key_the_daemon_lacks_leaves_its_row_alone(self):
         """Falling back to empty or off would show what isn't so, and a save would write it."""
         page = self.win.general
+        weather = self.skill_page("org.tuxistant.weather")
         current = dict(self.win.config)
         held = {"server": "kept:1234", "location": "Oslo", "pipeline": "tux-realtime-eou",
                 "instructions": "Be brief.", "dictation_enabled": False,
@@ -1643,7 +2079,7 @@ class Inner(unittest.TestCase):
         self.win.apply_config({**current, **held})
         self.win.apply_config({key: value for key, value in current.items() if key not in held})
         self.assertEqual(page.server.get_text(), "kept:1234")
-        self.assertEqual(page.location.get_text(), "Oslo")
+        self.assertEqual(weather.location.get_text(), "Oslo")
         self.assertTrue(page.pipelines["tux-realtime-eou"].get_active())
         self.assertFalse(page.switches["dictation_enabled"].get_active())
         self.assertTrue(page.switches["conversation_mode"].get_active())
@@ -1656,7 +2092,7 @@ class Inner(unittest.TestCase):
         self.win.apply_config(current)
 
     def test_25_search_server(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.websearch")
         row = page.search
         self.assertEqual(row.get_text(), "", "empty means the same host, port 8888")
         apply = apply_button(row)
@@ -1705,7 +2141,7 @@ class Inner(unittest.TestCase):
         wait(lambda: row.get_text() == "", "the reset")
 
     def test_25_translation_server(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.translate")
         row = page.translate
         self.assertEqual(row.get_text(), "", "empty means the same host, port 5000")
         apply = apply_button(row)
@@ -1754,7 +2190,7 @@ class Inner(unittest.TestCase):
         wait(lambda: row.get_text() == "", "the reset")
 
     def test_25_lights_account(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.lights")
         apply = apply_button(page.tapo_email)
         self.assertEqual(page.tapo_password_status.get_label(), "No password set")
         page.tapo_email.set_text("  tux@example.org ")
@@ -1787,7 +2223,7 @@ class Inner(unittest.TestCase):
         wait(lambda: page.tapo_email.get_text() == "", "the outside change")
 
     def test_25_z_home_assistant_address_and_token(self):
-        page = self.win.general
+        page = self.skill_page("org.tuxistant.home")
         apply, token = apply_button(page.home), "eyJ.long-lived.token"
         self.assertEqual(page.home_token_status.get_label(), "No token set")
         self.assertFalse(page.home_token_remove.get_visible())
@@ -1882,6 +2318,25 @@ class Inner(unittest.TestCase):
         self.assertEqual(window.content.get_title(), "History")
         dispose(window)
 
+    def test_29_b_a_skills_page_fits_a_narrow_window(self):
+        window = open_window(self.app, 360, 720)
+        wait(lambda: ready(window) and window.split.get_collapsed(), "a collapsed window")
+        window.split.set_show_content(True)
+        for skill_id in ("org.example.markup", "org.tuxistant.home", "org.tuxistant.weather"):
+            dialog = open_skill(window, skill_id)
+            for row in iter_children(dialog.actions):
+                if isinstance(row, sa.SkillActionRow):
+                    row.set_expanded(True)
+            settle(300)
+            self.assertEqual(window.get_width(), 360, "long text must not widen the window")
+            self.assertLessEqual(dialog.get_width(), 360)
+            self.assertLessEqual(dialog.get_height(), 720)
+            shot(window, f"skill-narrow-{skill_id.rsplit('.', 1)[-1]}")
+        dialog.manifest_row.activate()
+        shot(window, "skill-narrow-manifest")
+        close_skill(window)
+        dispose(window)
+
     def test_28_closing_right_after_a_change_saves_at_once(self):
         window = open_window(self.app)
         wait(lambda: window.state == "ready", "the second window")
@@ -1926,13 +2381,19 @@ class Inner(unittest.TestCase):
                 window.split.set_show_content(True)
                 shot(window, f"{name}-{tag}")
             window.views.set_visible_child_name("general")
-            window.general.cloud_key.grab_focus()
-            shot(window, f"general-cloud-{tag}")
+            window.general.api_key.grab_focus()
+            shot(window, f"general-key-{tag}")
             window.views.set_visible_child_name("history")
             for row in window.history.rows:
                 if isinstance(row, sa.HistoryRow) and "seq" not in row.get_subtitle():
                     row.set_expanded(True)
             shot(window, f"history-open-{tag}")
+            for skill_id in ("org.tuxistant.weather", "org.tuxistant.home", "org.example.tides"):
+                dialog = open_skill(window, skill_id)
+                next(row for row in iter_children(dialog.actions)
+                     if isinstance(row, sa.SkillActionRow)).set_expanded(True)
+                shot(window, f"skill-{skill_id.rsplit('.', 1)[-1]}-{tag}")
+            close_skill(window)
             dispose(window)
         styles.set_color_scheme(Adw.ColorScheme.DEFAULT)
         control("Change", "api_key", '""', signature="ss")
@@ -2001,6 +2462,37 @@ def add_record(heard, reply, actions, status="ok"):
     first = page.rows[0] if page.rows else None
     control("AddRecord", heard, reply, json.dumps(actions), status, signature="ssss")
     wait(lambda: page.rows and page.rows[0] is not first, "the history to refresh")
+
+
+
+
+EXPECTED_SETTINGS = {
+    "org.tuxistant.weather": {"location", "fahrenheit"},
+    "org.tuxistant.news": {"news_source"},
+    "org.tuxistant.calendar_add": {"calendar_add_to"},
+    "org.tuxistant.mail": {"mail_search"},
+    "org.tuxistant.timers": {"timer_chime"},
+    "org.tuxistant.phone": {"phone_device"},
+    "org.tuxistant.phone_send": {"phone_device"},
+    "org.tuxistant.system": {"say_tailscale_address"},
+    "org.tuxistant.translate": {"translate_server"},
+    "org.tuxistant.translate_selection": {"translate_server"},
+    "org.tuxistant.knowledge": {"fact_lookup", "search_server"},
+    "org.tuxistant.websearch": {"search_server"},
+    "org.tuxistant.research": {"search_server"},
+    "org.tuxistant.lights": {"tapo_email", "tapo_password"},
+    "org.tuxistant.home": {"ha_server", "ha_token"},
+    "org.tuxistant.home_status": {"ha_server", "ha_token"},
+    "org.tuxistant.task": {"cloud_enabled", "cloud_api_key", "cloud_model"},
+}
+
+
+def clipboard_text(widget) -> str:
+    found = []
+    clipboard = widget.get_clipboard()
+    clipboard.read_text_async(None, lambda c, result: found.append(c.read_text_finish(result)))
+    wait(lambda: found, "the clipboard")
+    return found[0]
 
 
 def labels_of(widget):

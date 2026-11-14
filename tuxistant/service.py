@@ -204,6 +204,10 @@ class Daemon(ServiceInterface):
         return json.dumps(self.controller.skills.listing())
 
     @method()
+    def SkillDetails(self, id: "s") -> "s":
+        return json.dumps(self.controller.skills.details(id))
+
+    @method()
     def ReloadSkills(self) -> "s":
         return self.reload_skills()
 

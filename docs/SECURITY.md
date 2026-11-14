@@ -37,6 +37,8 @@ What holds a recipe, a skill that is one YAML file with no code ([SKILLS.md](SKI
 - **Nothing it reads reaches the model.** Tux says the answer itself.
 - **The same budget and names as code skills.** Six actions of yours in all, and none that starts like a built-in one.
 
+What Settings shows of any skill, its name, description, actions, files and whole manifest, is plain text, never Pango markup, so a manifest can't style itself, hide a line or fake one of Tuxistant's own words. A comment in a manifest isn't checked at all, so this can't rest on the loader. Rows have markup turned off before text goes in, and a line break or tab in a file or folder name shows as an escape, so a folder named "moon", a line break and "Comes with Tuxistant" can't add a line of its own, and "README", a line break and "skill.yaml" is one file, not two. A libadwaita group's description is always markup, so an error from the daemon is escaped there and nothing a skill wrote is put in one: a test with `<b>`, `&amp;`, `<span foreground="red">`, a 300-character word and a 64 KB manifest found a folder path going into one before this shipped.
+
 ## Recipe skills
 
 Only the address checks and the answers have been attacked so far, by one review of the network side, below. The rest is the threat model recipes were built to, not a record of attacks. It assumes three enemies: a recipe written to do harm, which you were talked into copying in; a model that can be made to emit any call to it, any number of times; and the server it reaches, or whatever answers in its place.

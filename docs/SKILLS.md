@@ -53,11 +53,42 @@ Code skills that come with Tuxistant, in `tuxistant/skills_code/`:
 |---|---|---|---|
 | Lights | `lights.set`, `lights.status` | `network` | medium |
 
-Lights controls Tapo bulbs such as the L530 on your own network. It is a code skill, so it runs in the sandbox below with the network and nothing else. It needs no card, the same as ringing your phone, unless the conversation has already read something private: then the rule under "What needs a click" applies, as it has the network. It finds the bulbs with a broadcast, then remembers them in `lights.json` in its own sandbox folder and asks them directly too, since a bulb saving power misses some broadcasts. It uses the TP-Link email and password from Settings, and until both are there the model isn't offered its two tools, through the same `SET_UP` as Home Assistant: without an account they could only fail, and they would take "the light" from Home Assistant. The password never leaves this computer: KLAP only sends proofs that it is known, and the bulb has to prove it knows it first. Only typed values reach a bulb (on or off, a number, a colour from a fixed list), so it can't carry anything private out. A bulb's name is whatever anyone typed into the Tapo app, so it is cut short and its control characters shown as escapes before the model sees it. Settings lists each skill with its permissions and risk:
+Lights controls Tapo bulbs such as the L530 on your own network. It is a code skill, so it runs in the sandbox below with the network and nothing else. It needs no card, the same as ringing your phone, unless the conversation has already read something private: then the rule under "What needs a click" applies, as it has the network. It finds the bulbs with a broadcast, then remembers them in `lights.json` in its own sandbox folder and asks them directly too, since a bulb saving power misses some broadcasts. It uses the TP-Link email and password from its page in Settings, and until both are there the model isn't offered its two tools, through the same `SET_UP` as Home Assistant: without an account they could only fail, and they would take "the light" from Home Assistant. The password never leaves this computer: KLAP only sends proofs that it is known, and the bulb has to prove it knows it first. Only typed values reach a bulb (on or off, a number, a colour from a fixed list), so it can't carry anything private out. A bulb's name is whatever anyone typed into the Tapo app, so it is cut short and its control characters shown as escapes before the model sees it. Settings lists each skill with its permissions and risk:
 
 <img src="images/settings-skills.png" width="640" alt="The Skills page in Settings: each skill with what it can do, what it is allowed to do and its risk.">
 
 A built-in skill is a YAML manifest whose actions have Python handlers in `HANDLERS` in `tuxistant/skills.py`. A code skill brings its own program and runs in a sandbox, like Lights. You can add your own code skills in `~/.local/share/tuxistant/skills/`, and they load while Tux is running. See "Code skills" below. A recipe is simpler: one YAML file in the same folder, with no code, that asks a host it names for something, opens an app or says a sentence. See "Recipe skills" below.
+
+## Reading a skill in Settings
+
+Every skill under Skills in Settings opens to a page of its own, built in or added, so you can read what it is before you trust it, and copy it to make your own. The page shows:
+
+- **What it does and where it comes from:** built into Tuxistant, a code skill that comes with Tuxistant, a code skill you added or a recipe you added, with the file's path for yours.
+- **What stands behind the manifest.** A built-in skill is Python inside the daemon, and its page names the module, such as `tuxistant/livedata.py`: the YAML only says what the model is offered, and the code decides what happens. A recipe has no code of its own, and `tuxistant/recipes.py` does what it says. A code skill lists the files of its program, and one you added has "Open folder".
+- **Its settings**, where it has any. They live on the skill's page, not on General, which keeps the server and its key, the pipeline, listening, the shortcuts and the instructions. When no skill that shows a setting is loaded, as when Lights can't run without bubblewrap, the Skills page lists it under "Settings of skills that aren't loaded", so a stored password can still be changed or removed.
+- **Its permissions** in words, and its risk with the permissions that set it, such as "Because it can use the network".
+- **What the model is given.** For each action, the tool name the model sees, its description and each parameter, then the whole tool as JSON. They come from `Skills.tool()`, the same code that builds the list the model is sent, so this is word for word what it reads. An action the model isn't offered now says why: mail search until it is switched on, Home Assistant and Lights until their settings are filled in.
+- **The manifest,** whole and read-only, in a fixed-width font, with a Copy button. It is the text that was loaded, so a skill still on its last version that worked shows that version, not the broken file beside it. A recipe has "Open file". A code skill lists its first 100 files and how many more there are.
+
+A skill you add is a stranger's text, so its name, description, actions, files and manifest are shown as plain text, never as markup: `<b>` shows as `<b>`. A line break or tab in a file or folder name shows as `\n` or `\t`, so a name can't fake a second file or another line about where a skill comes from. An older daemon that hasn't been restarted since Settings was updated doesn't have `SkillDetails`. The page then says so and shows the permissions and the actions by name, and the settings still work.
+
+| Skill | Settings on its page |
+|---|---|
+| Weather | Home town, Use Fahrenheit |
+| News | Source |
+| Add to calendar | Add events to |
+| Mail | Search my mail |
+| Timers and reminders | Chime for timers |
+| Phone, Send to phone | Default device |
+| This computer | Say my Tailscale address |
+| Translate, Translate selection | LibreTranslate server |
+| General knowledge | Look up facts on Wikipedia, SearXNG server |
+| Web search, Research | SearXNG server |
+| Lights | TP-Link email and password |
+| Home Assistant, Home Assistant status | Address and long-lived access token |
+| Multi-step tasks | Use Claude for complex requests, Anthropic API key, Model |
+
+A setting two skills use is on both their pages. Each page is built when it opens and only one is open at a time, so two rows can never disagree about it.
 
 ## Manifest format
 
