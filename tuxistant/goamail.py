@@ -78,6 +78,7 @@ SIGN_IN_AGAIN = "Your mail account needs you to sign in again, in Settings under
 NOT_SAFE = ("Your mail account is set up to connect without checking who the server is, so I "
             "didn't use it.")
 UNREACHABLE = "I couldn't reach your mail server just now."
+NO_ANSWER = "Online Accounts didn't answer in time, so I couldn't search your mail just now."
 BAD_CERTIFICATE = "Your mail server's certificate couldn't be checked, so I didn't sign in."
 REFUSED = "Your mail server didn't accept the sign-in from Online Accounts."
 
@@ -159,13 +160,14 @@ GOA_FAILED = (DBusError, TimeoutError, EOFError, OSError, IndexError, TypeError,
 async def _sign_ins(until: float) -> tuple[list[tuple[Account, str]], str]:
     """([(account, access token)], what to say if there are none to use), by until. Online
     Accounts is asked for tokens only, never for a password, and for all of them at once: a
-    token past its hour is fetched again from the provider, which can be slow."""
+    token past its hour is fetched again from the provider, which can be slow. What went wrong
+    with an account that could have been searched is said before what is wrong with the rest."""
     try:
         bus = await asyncio.wait_for(_connect(), _left(until))
     except (OSError, EOFError, LookupError, ValueError, TypeError, AuthError, DBusError,
             TimeoutError):
         return [], ""
-    usable, problems = [], []
+    usable, failed, problems = [], [], []
     try:
         objects = (await _call(bus, ROOT, OBJECT_MANAGER, "GetManagedObjects", until))[0]
         accounts = []
@@ -183,14 +185,16 @@ async def _sign_ins(until: float) -> tuple[list[tuple[Account, str]], str]:
             if isinstance(token, str):
                 usable.append((account, token))
             elif isinstance(token, Unusable):
-                problems.append(str(token))
-            elif not isinstance(token, GOA_FAILED):
+                failed.append(str(token))
+            elif isinstance(token, GOA_FAILED):
+                failed.append(NO_ANSWER)    # the account is there: it is no "no mail here"
+            else:
                 raise token
     except (Unusable, *GOA_FAILED):
         pass    # no Online Accounts on this desktop
     finally:
         bus.disconnect()
-    return usable, next(iter(problems), "")
+    return usable, next(iter([*failed, *problems]), "")
 
 
 async def _token_of(bus, account: Account, until: float) -> str:
@@ -265,17 +269,31 @@ class _Plain(_Bounded, imaplib.IMAP4):
         self._limit(until)
         super().__init__(host, port, timeout=CONNECT_S)
 
+    heard = None    # the lines read while STARTTLS is asked for
+
+    def _get_line(self):
+        line = super()._get_line()
+        if self.heard is not None:
+            self.heard.append(line)
+        return line
+
     def starttls(self, ssl_context=None):
         """imaplib's, except that anything but the server's yes is refused, whether it came
-        with the yes, before it or after it, and nothing said in the clear is kept: imaplib would
-        read it as if it came over TLS, so whoever sits on the network could write the server's
-        first answers, such as which folder holds the mail the user sent."""
+        before it or after it, and nothing said in the clear is kept: imaplib would read it as if
+        it came over TLS, so whoever sits on the network could write the server's first answers,
+        such as which folder holds the mail the user sent. The lines themselves are counted, as a
+        code in brackets on the yes, such as [ALERT], is kept by imaplib as if it came apart."""
         if "STARTTLS" not in self.capabilities:
             raise self.abort("no STARTTLS")
         self.untagged_responses.clear()
-        typ, _data = self._simple_command("STARTTLS")
-        if typ != "OK" or self.untagged_responses or any(getattr(self, "_readbuf", ())):
+        self.heard = []
+        try:
+            typ, _data = self._simple_command("STARTTLS")
+        finally:
+            heard, self.heard = self.heard, None
+        if typ != "OK" or len(heard) != 1 or any(getattr(self, "_readbuf", ())):
             raise self.abort("STARTTLS refused or tampered with")
+        self.untagged_responses.clear()
         self.sock = ssl_context.wrap_socket(self.sock, server_hostname=self.host)
         self._file = self.sock.makefile("rb")
         self._tls_established = True

@@ -76,6 +76,11 @@ class Goa(Base):
     async def accounts(self, *specs):
         bus, self.calls = await imap_fake.online_accounts(BUS.address, list(specs))
         self.addAsyncCleanup(self._gone, bus)
+        self.addAsyncCleanup(self._answered, self.calls)
+
+    async def _answered(self, calls):
+        calls.done.set()
+        await asyncio.sleep(0.05)   # so that a token still on its way is answered, not cut off
 
     async def _gone(self, bus):
         bus.disconnect()
@@ -240,6 +245,31 @@ class Secrets(Goa):
             self.assertIn(mail.HIDDEN, self.read(call))
             self.assertNotRegex(self.read(call), r"4\D{0,9}8\D{0,9}2\D{0,9}9\D{0,9}1\D{0,9}7")
 
+    async def test_a_code_one_character_to_a_block_is_hidden_wherever_its_word_is(self):
+        """With no word for a code near it, or with letters in it, it is hidden as it would be
+        as plain lines: a code with a line to itself."""
+        far = " We are always here to help you with anything you need." * 4
+        layouts = (
+            ("Enter this to finish signing in to your Acme account:", "482917", "<div>{}</div>"),
+            ("Here is the code to verify your Acme account:", "KQ7X9B", "<div>{}</div>"),
+            ("Your verification code for your Acme account." + far, "482917", "<div>{}</div>"),
+            ("Here is what you need for your Acme account:", "KQ7X9B", "<td>{}</td>"))
+        mails = [message(f"About your Acme account {n}", "Acme <account@acme.example>", None,
+                         html=f"<p>Hello. {said}</p><table><tr>"
+                              + "".join(layout.format(c) for c in code)
+                              + "</tr></table><p>Thanks, Acme</p>")
+                 for n, (said, code, layout) in enumerate(layouts)]
+        await self.mailbox(gmail(inbox=[(HELLO, 900), *((raw, 1) for raw in mails)]))
+        self.says = ["NOTHING"] * len(mails)
+        with mock.patch.object(mail, "TRIED", len(mails)):
+            await self.ask("Did Acme email me about my account?")
+        self.assertEqual(len(self.model), len(mails))
+        for call in range(len(mails)):
+            self.assertIn("Acme account", self.read(call))
+            self.assertIn(mail.HIDDEN, self.read(call))
+            for code in ("482917", "KQ7X9B"):
+                self.assertNotRegex(self.read(call), r"\W{0,9}".join(code))
+
     async def test_asking_for_one_is_refused_before_any_account_is_asked(self):
         server = await self.mailbox(gmail(inbox=[(PASSPORT, 13)]))
         said, told = await self.ask("What is my sign in code for the passport application?")
@@ -386,6 +416,15 @@ class Accounts(Goa):
         self.assertEqual(server.in_clear, [])
         self.assertEqual(len(server.signed_in_with), 1)
 
+    async def test_a_yes_to_starttls_with_a_code_in_brackets_is_still_a_yes(self):
+        server = await self.mailbox(gmail(inbox=[(HELLO, 900), (PASSPORT, 13)]), "starttls",
+                                    account={"ssl": False, "tls": True})
+        server.yes = "OK [ALERT] begin TLS"
+        self.says = ["Then."]
+        self.assertTrue((await self.ask())[0].startswith("Then."))
+        self.assertEqual(server.in_clear, [])
+        self.assertEqual(len(server.signed_in_with), 1)
+
     async def test_a_server_that_doesnt_offer_tls_never_gets_the_token(self):
         server = await self.mailbox(gmail(inbox=[(PASSPORT, 13)]), "plain",
                                     account={"ssl": False, "tls": True})
@@ -437,6 +476,25 @@ class Accounts(Goa):
         self.assertTrue(said.startswith("Then. That's from an email from notify.citizen"), said)
         self.assertEqual(self.calls.made, ["GetAccessToken"] * 3)
         self.assertLess(time.monotonic() - started, 6)
+
+    async def test_tokens_that_dont_come_in_time_are_never_called_no_mail(self):
+        """The accounts are there, Online Accounts was only slow to refresh their tokens."""
+        await self.slow_tokens(*({"slow": 3} for _ in range(3)))
+
+    async def test_and_that_is_said_before_an_account_that_was_left_alone(self):
+        await self.slow_tokens({"host": "imap.unused.example", "oauth2": False, "password": True},
+                               {"slow": 3})
+
+    async def slow_tokens(self, *specs):
+        server = Server(CERT, KEY, gmail(inbox=[(PASSPORT, 13)]))
+        self.addCleanup(server.close)
+        await self.accounts(*({"host": server.host, **spec} for spec in specs))
+        started = time.monotonic()
+        with mock.patch.object(goamail, "SIGN_IN_S", 0.5), \
+                self.assertRaisesRegex(RuntimeError, goamail.NO_ANSWER):
+            await self.ask()
+        self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(server.commands, [])
 
     async def test_an_account_set_up_to_skip_checks_is_left_alone(self):
         for unsafe in ({"accept_errors": True}, {"ssl": False, "tls": False}):

@@ -183,7 +183,9 @@ SENT_MAIL = 60          # and the folders of mail the user sent
 # these out can get into the rest. What stands where one would is hidden, in three ways: after
 # the word for a secret, anything shaped like one; in a mail that talks of signing in, every
 # number long enough to be a code; and a code that has a line to itself. Too much is hidden
-# rather than too little: a promo code and a booking's reference go too.
+# rather than too little: a promo code and a booking's reference go too. A code can come one
+# character to a line, as one to an HTML block does, or one to a table cell, with a space between:
+# either way it is read as the code it is.
 SPACE = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
 UNSEEN = re.compile(r"[\u200b-\u200f\u2060\ufeff\u00ad]")
 SECRET_WORD = re.compile(
@@ -202,7 +204,8 @@ GIVEN = re.compile(r"[^.!?\n]{0,60}?(?:\b(?i:is|are|was|will be|(?:changed|set|r
 SHAPED = re.compile(
     r"(?<![A-Za-z0-9.,/-])\d(?:[ -]?\d){3,11}(?![\w/-]|[.,]\d)"    # 482913, 482 913, 4 8 2 9 1 3
     r"|(?<![\w@./-])(?=[\w!#$%^&*+=-]*\d)(?=[\w!#$%^&*+=-]*[A-Za-z])[\w!#$%^&*+=-]{4,24}(?![\w@])"
-    r"|\b[A-Z]{2,6}(?:-[A-Z0-9]{2,6}){1,3}\b|\b[A-Z]{5,10}\b")   # KQW-XBT, KQWXB
+    r"|\b[A-Z]{2,6}(?:-[A-Z0-9]{2,6}){1,3}\b|\b[A-Z]{5,10}\b"     # KQW-XBT, KQWXB
+    r"|(?<![\w.,/-])(?:[A-Za-z0-9] ){3,13}[A-Za-z0-9](?![\w/-])")   # K Q 7 X 9 B
 NOT_A_SECRET = re.compile(r"\d+(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)|(?:19|20)\d\d", re.I)
 JUST_GIVEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)      # "code is 2048" is no year
 # A mail that talks of signing in: there, any number of the right length may be the code.
@@ -211,10 +214,15 @@ SIGN_IN_TALK = re.compile(
     r"|single[- ]use|expires?|valid for|2fa|two[- ](?:factor|step))\b", re.I)
 MONEY = r"\s*(?:pounds|euros|dollars|gbp|eur|usd|%)"
 NUMBER = re.compile(r"(?<![\w.,/£$€-])\d{3}[ -]\d{3}(?![\w/-])"
-                    rf"|(?<![\w.,/£$€-])\d{{4,8}}(?![\w/-]|[.,]\d|{MONEY})", re.I)
+                    rf"|(?<![\w.,/£$€-])\d{{4,8}}(?![\w/-]|[.,]\d|{MONEY})"
+                    rf"|(?<![\w.,/£$€-])\d(?: \d){{3,7}}(?![\w/-]|[.,]\d|{MONEY})", re.I)
 ALONE = re.compile(      # a line that is nothing but a code
     r"^[ \t]*((?:\d[ -]?){4,12}"
-    r"|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,14})[ \t]*$", re.M)
+    r"|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,14}"
+    r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9])[ \t]*$",
+    re.M)
+SPELT = re.compile(     # a run of lines of one character each, as one to an HTML block makes
+    r"^[ \t]*[A-Za-z0-9][ \t]*(?:\n\s*[A-Za-z0-9][ \t]*){3,}$", re.M)
 YEAR = re.compile(r"(?:19|20)\d\d")
 # Asking for one outright is refused, which is kinder than an answer with a gap in it.
 ASKS_FOR_ONE = re.compile(
@@ -441,8 +449,9 @@ def _spans(text: str) -> list[tuple[int, int]]:
 
 def _hide(text: str) -> str:
     """A mail's text with whatever may be a sign-in code or a password taken out. Odd spaces
-    are made plain first, as the model would read "482\u00a0913" as the code it is."""
-    text = UNSEEN.sub("", SPACE.sub(" ", text))
+    are made plain first, as the model would read "482\u00a0913" as the code it is, and a code
+    spelt out one character to a line is put on a line of its own, as the model would read it."""
+    text = SPELT.sub(lambda run: "".join(run[0].split()), UNSEEN.sub("", SPACE.sub(" ", text)))
     out, at = [], 0
     for start, end in _spans(text):
         if end > at:

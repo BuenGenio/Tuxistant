@@ -108,6 +108,7 @@ class Server:
         self.drip = False           # answer a SEARCH a byte at a time, never ending the line
         self.inject = b""           # sent in the clear straight after STARTTLS's OK
         self.inject_before = b""    # and straight before it
+        self.yes = "OK begin TLS"   # STARTTLS's yes, after its tag
         self.listener = socket.create_server(("127.0.0.1", 0))
         self.port = self.listener.getsockname()[1]
         self.threads = []
@@ -131,17 +132,21 @@ class Server:
             self.threads.append(thread)
 
     def _serve(self, conn) -> None:
+        session = None
         try:
             if self.mode == "ssl":
                 conn = self.context.wrap_socket(conn, server_side=True)
-            Session(self, conn).run()
+            session = Session(self, conn)
+            session.run()
         except (OSError, ssl.SSLError, ValueError):
             pass
         finally:
-            try:
-                conn.close()
-            except OSError:
-                pass
+            for opened in (conn, session and session.conn):    # STARTTLS wraps a new one
+                try:
+                    if opened:
+                        opened.close()
+                except OSError:
+                    pass
 
 
 class Session:
@@ -195,7 +200,7 @@ class Session:
     def do_STARTTLS(self, tag, _args):
         if self.server.mode != "starttls":
             return self.line(f"{tag} BAD no")
-        self.send(self.server.inject_before + f"{tag} OK begin TLS\r\n".encode()
+        self.send(self.server.inject_before + f"{tag} {self.server.yes}\r\n".encode()
                   + self.server.inject)
         self.conn = self.server.context.wrap_socket(self.conn, server_side=True)
         self.file, self.tls = self.conn.makefile("rb"), True
@@ -371,6 +376,7 @@ class PrivateBus:
 class Calls:
     def __init__(self):
         self.made = []
+        self.done = asyncio.Event()     # set when the test ends, so a slow token answers then
 
 
 class AccountIface(ServiceInterface):
@@ -437,7 +443,10 @@ class OAuth2Iface(ServiceInterface):
     @method()
     async def GetAccessToken(self) -> "si":
         self.calls.made.append("GetAccessToken")
-        await asyncio.sleep(self.spec.get("slow", 0))  # refreshing it from the provider
+        try:    # refreshing it from the provider
+            await asyncio.wait_for(self.calls.done.wait(), self.spec.get("slow", 0))
+        except TimeoutError:
+            pass
         return [self.spec.get("token", TOKEN), 3600]
 
 
