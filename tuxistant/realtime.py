@@ -24,6 +24,7 @@ from .gate import APP_SAYS, APPROVAL_WAIT_S, Ask, Session
 SETUP_TIMEOUT_S = 30        # a cold pipeline takes about 6 s to say session.created
 HTTP_TIMEOUT_S = 60
 CLOSE_TIMEOUT_S = 2         # commands wait for a turn to stop, so a dead link must not hold them
+PING_TIMEOUT_S = 2          # a kept connection that can't answer a ping in this long is dead
 MAX_TOOL_ROUNDS = 6         # a small model can keep calling tools forever
 MAX_PENDING_BYTES = 30 * BYTES_PER_S
 MAX_SPEECH_CHARS = 400      # long inputs can run the 8 GB GPU out of memory
@@ -112,6 +113,7 @@ class Realtime:
         self.record = None              # the action in progress
         self.parked = False             # kept open between holds: nothing it is sent may act
         self.opened_with = None         # SESSION_SETTINGS as they were at connect()
+        self.opened_tools = None        # and the tools the session was given
         self.session = Session(skills, self._confirm, lambda s: self.on_event(("busy", s)),
                                self._selection, self._act, lambda s: self.on_event(("notice", s)))
 
@@ -122,9 +124,31 @@ class Realtime:
 
     @property
     def outdated(self) -> bool:
-        """The settings changed since it connected, so it would send to the old server or answer
-        in the old voice."""
-        return self.opened_with != self._settings()
+        """The settings changed since it connected, so it would send to the old server, answer
+        in the old voice, or offer tools as they were, without a skill switched on since."""
+        return self.opened_with != self._settings() or self.opened_tools != self.skills.tools()
+
+    async def still_there(self) -> bool:
+        """Whether a kept connection still answers. One can die without a word between holds,
+        on a new network, in a suspend or at a router that forgets quiet links, and words sent
+        into it would wait a minute for a reply that never comes. One that doesn't answer is
+        let go at once, as closing it properly would wait on the same dead link. A server that
+        hangs up meanwhile is not news either: the caller connects again."""
+        on_event, self.on_event = self.on_event, lambda _event: None
+        try:
+            async with asyncio.timeout(PING_TIMEOUT_S):
+                await (await self.ws.ping())
+            return self.alive
+        except (TimeoutError, ConnectionClosed, OSError):
+            pass
+        finally:
+            self.on_event = on_event
+        self.ready = False
+        if self.reader:
+            self.reader.cancel()
+            await asyncio.gather(self.reader, return_exceptions=True)
+        self.ws.transport.abort()
+        return False
 
     def _settings(self) -> tuple:
         return tuple(self.config[key] for key in SESSION_SETTINGS)
@@ -156,6 +180,7 @@ class Realtime:
         self.called = self.to_report = self.owed = False
         self.rounds = 0
         self.opened_with = self._settings()
+        self.opened_tools = tools = self.skills.tools()
         server = self.config["server"]
         url = "{}/v1/realtime?model={}".format(
             _urls(server)[1], urllib.parse.quote(self.config["pipeline"], safe=""))
@@ -168,7 +193,7 @@ class Realtime:
                     max_size=None, compression=None, ping_interval=None, close_timeout=1,
                     open_timeout=None, proxy=None)
                 await self._until("session.created")
-                await self._send({"type": "session.update", "session": self._session()})
+                await self._send({"type": "session.update", "session": self._session(tools)})
                 await self._until("session.updated")
                 # send_audio keeps buffering until this has emptied, so nothing is out of order.
                 while self.pending:
@@ -188,12 +213,13 @@ class Realtime:
         self.ready = True
         self.reader = asyncio.create_task(self._read())
 
-    def _session(self) -> dict:
+    def _session(self, tools: list | None = None) -> dict:
+        tools = self.skills.tools() if tools is None else tools
         audio = {"output": {"voice": self.config["voice"]}}
         if self.hold:
             audio["input"] = {"turn_detection": None}
         return {"type": "realtime", "instructions": self.config["instructions"],
-                "tools": self.skills.tools(), "audio": audio}
+                "tools": tools, "audio": audio}
 
     async def _until(self, wanted: str):
         async for raw in self.ws:

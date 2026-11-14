@@ -99,11 +99,6 @@ class Daemon(ServiceInterface):
                                   path=BUS_PATH, interface=BUS_NAME, member=name,
                                   signature=signature, body=list(body)))
 
-    def fn_keys(self) -> FnClient:
-        """Fn, through the helper. Another key pressed with Fn while dictating is a Fn shortcut,
-        so it stops the dictation and leaves the conversation alone."""
-        return fn_client(self.config, self.controller)
-
     def keep(self, coroutine):
         task = asyncio.create_task(coroutine)
         self.children.add(task)
@@ -422,15 +417,15 @@ async def run(mic_factory=Mic, speaker_factory=Speaker) -> int:
 
 
 def fn_client(config, controller, path=None) -> FnClient:
-    """Fn reaches the controller here, inside this process, and not over the bus. Another key
-    pressed with Fn while dictating is a Fn shortcut, so it stops the dictation and leaves the
-    conversation alone."""
+    """Fn reaches the controller here, inside this process, and not over the bus. Fn ends, drops
+    or names the mode of only the go it started, by its id. Another key pressed with Fn on the
+    press that started a go is a Fn shortcut, so it drops that go and leaves the conversation
+    alone."""
     return FnClient(
         config, controller.hold_start, controller.hold_end, path=path,
         on_dictate_start=controller.dictate_start, on_dictate_end=controller.dictate_end,
-        on_dictate_cancel=lambda: controller.cancel(end_talk=False),
-        on_dictate_mode=controller.dictate_mode,
-        dictating=lambda: controller.dictating)
+        on_dictate_cancel=controller.drop_go, on_dictate_mode=controller.dictate_mode,
+        dictating=controller.going)
 
 
 async def _serve_until_stopped(daemon) -> int:

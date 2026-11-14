@@ -31,7 +31,8 @@ NOTICE_WAIT_S = 3       # past this a notice is no use, and the turn can't read 
 FOUND_MEMORY_S = 300    # "open the second one" can come in a new conversation too
 FOLLOW_ON_S = 120       # a hold this soon after the last carries on its conversation
 QUESTION_HINT_S = 10    # how long a question stays on screen once the turn is over
-ANSWER_GRACE_S = 2      # a hold begun as the hint fades still answers: Fn takes a moment to count
+ANSWER_GRACE_S = 2      # a press of Fn just as the hint fades still answers it
+WAKE_CHECK_S = 1.0      # how soon after waking a conversation past its time is ended
 ANSWER_HINT = "Hold Fn to answer"
 NO_CARD = ("I can't show an approval card on this desktop yet, so I didn't do that. Log out and "
            "back in once, then try again.")
@@ -53,6 +54,18 @@ def _ignore(_event):
     pass
 
 
+def clock() -> float:
+    """The boot clock, which counts the time the computer was suspended. The conversation's
+    windows are timed on it: the monotonic clock, and asyncio's with it, stops in a suspend, and a
+    conversation or a question must not carry on into the next morning."""
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
+def _asleep() -> float:
+    """How long the computer has been suspended since it booted."""
+    return clock() - time.monotonic()
+
+
 class Talk:
     """A conversation that outlives its hold turns: the client, with its connection if that is
     still open, and its Session, with what the conversation touched. See "Follow-ups" in
@@ -61,15 +74,20 @@ class Talk:
     def __init__(self, rt):
         self.rt = rt
         self.asked = False      # its last reply was a question
-        self.asked_at = 0.0     # when that question went on screen
+        self.asked_at = 0.0     # when that question went on screen, by clock()
         self.question = ""      # and what it was, to put it back
+        self.kept_at = 0.0      # when its last hold turn ended, by clock()
         self.timer = None       # the task that ends it after FOLLOW_ON_S
+
+    def over(self) -> bool:
+        return clock() - self.kept_at >= FOLLOW_ON_S
 
 
 class Turn:
     """One request at a time on one conversation: a hold turn, or a VAD turn and its follow-ups."""
 
-    def __init__(self, ctl, hold: bool, talk: Talk | None = None):
+    def __init__(self, ctl, hold: bool, talk: Talk | None = None, pressed: float | None = None):
+        """pressed: when Fn went down for this hold, by clock()."""
         self.ctl, self.hold = ctl, hold
         self.inbox = asyncio.Queue()    # everything the turn reacts to, in order of arrival
         self.skills = ctl.skills    # one Skills for the whole turn: what it offers, it can run
@@ -78,13 +96,15 @@ class Turn:
         self.rt = self.talk.rt
         self.rt.on_event, self.rt.parked = self.inbox.put_nowait, False
         self.rt.confirm, self.rt.selection = ctl.ask, ctl.selection
-        if talk is None and time.monotonic() - ctl.found_at < FOUND_MEMORY_S:
+        if talk is None and clock() - ctl.found_at < FOUND_MEMORY_S:
             self.rt.session.found = list(ctl.found)
-        # The words of this hold answer a task that asked the user something, but only while
-        # its question is on screen: later words may be about anything. A task whose server, key
+        # The words of this hold answer a task that asked the user something, but only if Fn
+        # went down while its question was on screen: later words may be about anything. That is
+        # the press, not HoldStart, which comes up to fn_hold_ms later. A task whose server, key
         # or Cloud setting has changed since is dropped, and the words go the usual way.
+        pressed = clock() if pressed is None else pressed
         on_screen = bool(talk and talk.asked
-                         and time.monotonic() - talk.asked_at < QUESTION_HINT_S + ANSWER_GRACE_S)
+                         and pressed - talk.asked_at < QUESTION_HINT_S + ANSWER_GRACE_S)
         self.for_task = on_screen and planner.resumable(self.rt.session.waiting,
                                                           self.skills.config)
         if talk and not self.for_task:
@@ -352,9 +372,12 @@ class Turn:
             if self.rt.skills is not self.skills:   # reloaded since: the new tools need a new session
                 await self.rt.close()
                 self.rt.use(self.skills)
+            if self.rt.alive and not self.rt.outdated:
+                await self.rt.still_there()     # a link that died quietly gets no words
             if not self.rt.alive or self.rt.outdated:
                 # Whatever is left of a connection the server dropped, or one made with a server,
-                # key or voice that has changed since: the words must go where the settings say.
+                # key, voice or tools that have changed since: the words must go where the
+                # settings say.
                 await self.rt.close()
                 await self.rt.connect()
             self.inbox.put_nowait(("ready",))
@@ -406,7 +429,7 @@ class Turn:
         """A turn that never got anywhere leaves no row; a failure always does."""
         if self.rt.session.found:
             self.ctl.found = list(self.rt.session.found)
-            self.ctl.found_at = time.monotonic()
+            self.ctl.found_at = clock()
         reply = " ".join(self.replies)
         if self.replies:
             self.last_reply = self.replies[-1]
@@ -550,25 +573,32 @@ class Controller:
     def dictating(self) -> bool:
         return self.active and self.dictation is not None
 
-    async def dictate_start(self, mode: str | None = None):
-        """mode: how it will be stopped, if known now. See Dictation.set_mode."""
+    def going(self, go: str | None) -> bool:
+        """Whether the go with this id is the one listening. None means whichever is."""
+        return self.dictating and go in (None, self.dictation.id)
+
+    async def dictate_start(self, mode: str | None = None) -> str | None:
+        """mode: how it will be stopped, if known now. See Dictation.set_mode. Returns the id of
+        the go it started, or None if it started none, as one was already listening."""
         async with self.lock:
             if not self.config["dictation_enabled"] or self.dictating:
-                return
+                return None
             await self._stop()
             if self.locked:
-                return
+                return None
             if not self.typist:
                 self.emit("Error", NO_TYPING)
-                return
+                return None
             if mode:
                 self._drop_question()
             self.dictation = Dictation(self, mode)
             self.job = asyncio.create_task(self._run(self.dictation.run))
+            return self.dictation.id
 
-    async def dictate_end(self):
+    async def dictate_end(self, go: str | None = None):
+        """go: only that go, for Fn, which may end only the go it started."""
         async with self.lock:
-            if self.dictating:
+            if self.going(go):
                 self._drop_question()
                 self.dictation.finish()
 
@@ -578,9 +608,9 @@ class Controller:
         else:
             await self.dictate_start(mode)
 
-    async def dictate_mode(self, mode: str):
+    async def dictate_mode(self, mode: str, go: str | None = None):
         """Fn knows only after the press that started it whether it was a tap or a hold."""
-        if self.dictating:
+        if self.going(go):
             self.dictation.set_mode(mode)
             if self.dictation.mode:     # now it is dictation, not the start of a Fn shortcut
                 self._drop_question()
@@ -629,30 +659,40 @@ class Controller:
                 await self._end_talk()
                 self._start_turn(hold=False)
 
-    async def hold_start(self):
+    async def hold_start(self, held: float = 0.0):
+        """held: how long ago Fn went down, as the helper only says so after fn_hold_ms."""
+        pressed = clock() - held
         async with self.lock:
             await self._end_dictation()
             await self._stop()
+            if self.talk and self.talk.over():  # a suspend kept its timer from ending it
+                await self._end_talk()
             if not self.locked:
-                self._start_turn(hold=True)
+                self._start_turn(hold=True, pressed=pressed)
 
     async def hold_end(self):
         async with self.lock:
             if self.active and self.turn and self.turn.hold:
                 self.turn.inbox.put_nowait(("hold_end",))
 
-    async def cancel(self, end_talk=True):
-        """end_talk=False is for a Fn shortcut pressed while dictating, which is not a cancel of
-        the conversation. A go it ends before Fn said tap or hold was never dictation, so the
-        question it hid is put back."""
+    async def cancel(self):
         async with self.lock:
-            unsure = self.dictating and self.dictation.mode is None
             await self._stop()
             self._drop_words()
-            if end_talk:
-                await self._end_talk()
-                self._forget()
-            elif unsure:
+            await self._end_talk()
+            self._forget()
+
+    async def drop_go(self, go: str):
+        """A Fn shortcut on the press that started go: it was never dictation, so that go is
+        dropped, and only it. Another go, as one from the shortcut, the words of earlier gos
+        still at the server and the conversation are left alone. If Fn hadn't yet said tap or
+        hold, the question its listening hid is put back."""
+        async with self.lock:
+            if not self.going(go):
+                return
+            unsure = self.dictation.mode is None
+            await self._stop()
+            if unsure:
                 self._ask_again()
 
     async def set_locked(self, locked: bool):
@@ -702,11 +742,11 @@ class Controller:
             self.dictation.finish()
             await asyncio.wait({self.job})
 
-    def _start_turn(self, hold: bool):
+    def _start_turn(self, hold: bool, pressed: float | None = None):
         talk, self.talk = (self.talk, None) if hold else (None, self.talk)
         if talk and talk.timer:
             talk.timer.cancel()
-        self.turn = Turn(self, hold, talk)
+        self.turn = Turn(self, hold, talk, pressed)
         self.job = asyncio.create_task(self._converse(self.turn))
 
     async def _converse(self, turn: Turn):
@@ -720,17 +760,29 @@ class Controller:
         """After a hold turn however it ended: the conversation waits for the next hold. Sent
         after the turn's idle and Presence, so that nothing takes the question down."""
         talk = self.talk = turn.talk
+        talk.kept_at = clock()
         if turn.last_reply is not None:
             talk.asked = turn.question is not None and planner.asks(turn.question)
             if talk.asked and not self.locked:
-                talk.asked_at, talk.question = time.monotonic(), turn.question
+                talk.asked_at, talk.question = clock(), turn.question
                 self.emit("FollowUp", turn.question, ANSWER_HINT, QUESTION_HINT_S)
+        elif not turn.aborted:  # it heard nothing: the hold took the question down, so it's back
+            self._ask_again()
         if not talk.asked:  # a task's question nobody was left with is no question
             talk.rt.session.waiting = None
         talk.timer = asyncio.create_task(self._expire(talk))
 
     async def _expire(self, talk: Talk):
-        await asyncio.sleep(FOLLOW_ON_S)
+        """Ends the talk FOLLOW_ON_S after its last hold by clock(), looking every WAKE_CHECK_S,
+        as asyncio's own clock stops in a suspend. The shell's clock stops too, so on waking it
+        would show the question for the time it had left when the computer went to sleep: it
+        hears what is really left, or that the question has gone."""
+        slept = _asleep()
+        while (left := talk.kept_at + FOLLOW_ON_S - clock()) > 0:
+            await asyncio.sleep(min(left, WAKE_CHECK_S))
+            if _asleep() - slept > 1.0:
+                slept = _asleep()
+                self._woke(talk)
         async with self.lock:
             if self.talk is talk:
                 talk.timer = None   # this task: ending the talk must not cancel it half way
@@ -756,13 +808,22 @@ class Controller:
             self.emit("FollowUp", "", "", 0)
 
     def _ask_again(self):
-        """The shell took the question down when the go started listening. It comes back for
-        the time it had left, and a hold in that time still answers it."""
+        """The shell took the question down when a go or a hold started listening. It comes back
+        for the time it had left, and a hold in that time still answers it."""
         talk = self.talk
         if talk and talk.asked and not self.locked:
-            left = math.ceil(QUESTION_HINT_S - (time.monotonic() - talk.asked_at))
+            left = math.ceil(QUESTION_HINT_S - (clock() - talk.asked_at))
             if left > 0:
                 self.emit("FollowUp", talk.question, ANSWER_HINT, left)
+
+    def _woke(self, talk: Talk):
+        """While a go or words the app speaks are up, the shell shows no question anyway."""
+        if self.talk is not talk or not talk.asked or self.active:
+            return
+        if clock() - talk.asked_at < QUESTION_HINT_S:
+            self._ask_again()
+        else:
+            self._drop_question()
 
     def _forget(self):
         """Stop, a lock or a no: the next conversation can't open what this one found either."""
