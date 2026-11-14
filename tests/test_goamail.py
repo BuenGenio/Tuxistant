@@ -23,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests import imap_fake  # noqa: E402
 from tests.imap_fake import TOKEN, USER, Box, PrivateBus, Server, message  # noqa: E402
 from tests.mail_index import build  # noqa: E402
-from tests.test_mail import (CONFIG, GROWN, LONG, WIDE_CODE, WIDE_SPELT, WIDE_TOKENS,  # noqa: E402
-                             Base, escaped)
+from tests.test_mail import (CONFIG, GROWN, IN_PARTS, LONE_DIGIT, LONG, WIDE_CODE,  # noqa: E402
+                             WIDE_SPELT, WIDE_TOKENS, Base, escaped, straddling)
 from tuxistant import goamail, mail, research  # noqa: E402
 
 OFFICE = "Citizen Services <no-reply@notify.citizen.example>"
@@ -721,6 +721,38 @@ class HostileMail(Goa):
         self.assertIn(mail.HIDDEN, subject)
         self.assertNotIn("1234", subject + body)
         self.assertIn("Acme account", body)
+
+    async def test_a_cut_to_what_the_model_reads_leaves_no_part_of_a_code(self):
+        """The model's text was cut to length before it was hidden again, so a code that only
+        the joining puts back together lost its end and was too short to hide."""
+        raw = message("About your Acme account", "Acme <account@acme.example>",
+                      straddling("Hello, about your Acme account."))
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]))
+        await self.ask("Did Acme email me about my account?")
+        shown = self.read(0).split("=====")[2]
+        self.assertNotRegex(shown, LONE_DIGIT)
+        self.assertIn("Acme account", shown)
+
+    async def test_a_mail_cut_where_it_is_fetched_to_leaves_no_part_of_a_code(self):
+        """Only the first TEXT_BYTES of a mail are fetched, and that cut can go through a code.
+        Its lines are joined, so the code is near the top of what the model would read."""
+        def text(raw):
+            return raw.partition(b"\r\n\r\n")[2]
+
+        def mail_with(lines):
+            return message("About your Acme account", "Acme <account@acme.example>",
+                           "Hello, about your Acme account. Please sign in, then type"
+                           + "\n" * lines + IN_PARTS + " thanks")
+        short = goamail.TEXT_BYTES - 5 - text(mail_with(0)).index(IN_PARTS.encode())
+        raw = mail_with(short // 2)      # each line end is two bytes
+        if short % 2:
+            raw = raw.replace(b"\r\n" + IN_PARTS.encode(), b"\r\n " + IN_PARTS.encode())
+        self.assertTrue(text(raw)[:goamail.TEXT_BYTES].endswith(b"4 8 2"))
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]))
+        await self.ask("Did Acme email me about my account?")
+        shown = self.read(0).split("=====")[2]
+        self.assertNotRegex(shown, LONE_DIGIT)
+        self.assertIn("Acme account", shown)
 
     def test_a_mails_own_text_cant_pass_for_the_replys_structure(self):
         data = [(b'1 (UID 5 INTERNALDATE "01-Jan-2026 10:00:00 +0000" '

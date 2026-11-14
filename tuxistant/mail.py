@@ -57,6 +57,7 @@ ALL_HITS = 40           # the newest mails holding every word
 ANY_HITS = 400          # and the newest holding enough of them to be about it
 SCAN_CHARS = 20_000     # how far into a mail its words are looked for
 BODY_CHARS = 4000       # how much of one mail the model reads
+CLEANED_CHARS = 2 * SCAN_CHARS  # and how much it is cut from, whole, with secrets hidden in all
 SUBJECT_CHARS = 200
 SECRET_REACH = 160      # how far after the word for a secret the secret itself is looked for
 SECRET_BEFORE = 60      # and how far before it: "482913 is your code"
@@ -237,6 +238,11 @@ ALONE = re.compile(      # a line that is nothing but a code
     re.M)
 SPELT = re.compile(     # a run of lines of one character each, as one to an HTML block makes
     r"^[ \t]*[A-Za-z0-9][ \t]*(?:\n\s*[A-Za-z0-9][ \t]*){3,}$", re.M)
+# The end of a text that was cut short, read backwards: its last word, which the cut may have gone
+# through, and each number or single character before it, which may be the start of a code in
+# parts, as "4 8 2" is of "4 8 2 9 1 3" and is too short to hide by itself. A code in parts has at
+# most 14 (see SHAPED and ALONE), so no more than 13 go before the last word.
+CUT_TAIL = re.compile(r"\S*+(?:[\s-]++(?:\d++|[^\W_])(?!\w)){0,13}+[\s-]*+")
 YEAR = re.compile(r"(?:19|20)\d\d")
 # Asking for one outright is refused, which is kinder than an answer with a gap in it.
 ASKS_FOR_ONE = re.compile(
@@ -500,16 +506,27 @@ def _seen(text: str) -> str:
     return text
 
 
-def _hide(text: str) -> str:
+def _uncut(text: str) -> str:
+    """A text that was cut short, without what the cut may have split. The cut may also have taken
+    the word for a code from after one ("482913 is your | code"), so SECRET_BEFORE characters go
+    first, and then whatever at the new end may be part of a code (see CUT_TAIL)."""
+    text = text[:max(0, len(text) - SECRET_BEFORE)]
+    return text[:len(text) - CUT_TAIL.match(text[::-1]).end()]
+
+
+def _hide(text: str, cut: bool = False) -> str:
     """A mail's text with whatever may be a sign-in code or a password taken out. Odd spaces
     are made plain first, as the model would read "482\u00a0913" as the code it is, and a code
     spelt out one character to a line is put on a line of its own, as the model would read it.
     A mail server ends each line with a carriage return before the line feed, and a mail may end
     one with a line or paragraph separator, NEL, a vertical tab or a form feed. Any of these would
     keep a code from being seen alone on its line, so every line end is made a line feed first,
-    as the text is made what the model is shown (see _seen)."""
+    as the text is made what the model is shown (see _seen). A text that was cut short loses
+    what the cut may have split (see _uncut), as part of a code may be too short to hide."""
     text = _seen(text)
     text = SPELT.sub(lambda run: "".join(run[0].split()), SPACE.sub(" ", text))
+    if cut:
+        text = _uncut(text)
     out, at = [], 0
     for start, end in _spans(text):
         if end > at:
@@ -552,12 +569,14 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
     return rows
 
 
-def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool) -> tuple | None:
+def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
+          cut: bool = False) -> tuple | None:
     """(author, subject, body) with secrets hidden, if the mail is about the question with them
-    hidden too: a mail found only by its code is not found."""
+    hidden too: a mail found only by its code is not found. A body SCAN_CHARS long, or one the
+    caller says was cut, is taken to have been cut short there."""
     if not _about(stems, _searched(author), subject, body, every):
         return None
-    subject, body = _hide(subject), _hide(body)
+    subject, body = _hide(subject), _hide(body, cut or len(body) >= SCAN_CHARS)
     return (author, subject, body) if _about(stems, _searched(author), subject, body, every) else None
 
 
@@ -753,14 +772,23 @@ def _source(mail: Mail) -> str:
 
 
 def _fit(text: str, limit: int) -> str:
-    """Text cut to the limit at the last space. Hiding comes after clean() has cut a mail to
-    length, and "[hidden]" is longer than the code it stands for, so "sign<b>in" that only clean()
-    makes "sign in" would let every number after it grow the mail past what the model reads. A
-    word cut through is left out, even with no space before it, as its first half may pass for a
-    code that the whole word was not."""
+    """Text cut to the limit at the last space. A word cut through is left out, even with no space
+    before it, as its first half may pass for a code that the whole word was not."""
     if len(text) <= limit:
         return text
     return text[:limit + 1].rsplit(" ", 1)[0] if " " in text[:limit + 1] else ""
+
+
+def _shown(text: str, limit: int) -> str:
+    """What the model reads of a mail's subject or body: links out, cleaned, its lines joined,
+    secrets hidden in all of it, and only then cut to the limit. Cut first, a code that only the
+    joining puts together, as "sign<b>in, then type 4 8 2 9 1 3" is once clean() reads "sign in",
+    could be cut to "4 8 2", too short to hide. And "[hidden]" is longer than most of what it
+    stands for, so cutting after hiding also keeps the text within the limit. Only a hostile mail
+    grows past CLEANED_CHARS, and it loses what that cut may have split."""
+    cut = len(text) > CLEANED_CHARS
+    text = clean(URL.sub(" ", text[:CLEANED_CHARS]), CLEANED_CHARS)   # clean() makes none longer
+    return _fit(_hide(text, cut), limit)
 
 
 async def _note(question: str, mail: Mail, config, seconds: float) -> str:
@@ -771,9 +799,7 @@ async def _note(question: str, mail: Mail, config, seconds: float) -> str:
     fence = f"===== {secrets.token_hex(8)} ====="
     whose = ("The user sent this email" if mail.by_user
              else f"Email from {mail.sender or 'unknown'}, sent")
-    subject = _fit(_hide(clean(URL.sub(" ", mail.subject), SUBJECT_CHARS)), SUBJECT_CHARS)
-    body = _fit(_hide(clean(URL.sub(" ", mail.body[:BODY_CHARS * 2]), BODY_CHARS)),
-                BODY_CHARS)
+    subject, body = _shown(mail.subject, SUBJECT_CHARS), _shown(mail.body, BODY_CHARS)
     user = (f"Question: {question}\n\n{whose} on {mail.sent_on:%A} {mail.sent_on.day} "
             f"{mail.sent_on:%B %Y}:\n{fence}\nSubject: {subject}\n\n{body}\n{fence}")
     note = clean(URL.sub(" ", await _brain(config, READ, user, ANSWER_TOKENS, seconds)),

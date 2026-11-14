@@ -560,7 +560,9 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
         found = fetched.get(uid)
         message = found and _parsed(found.get(b"HEADER", b""), found.get(b"TEXT", b""))
         if message:
-            kept = mail._kept(stems, _author(message), _subject(message), _body(message), every)
+            cut = len(found.get(b"TEXT", b"")) >= TEXT_BYTES     # it may end inside a code
+            kept = mail._kept(stems, _author(message), _subject(message), _body(message), every,
+                              cut)
             if kept:
                 rows.append(((folder, uid), _stamp(found.get(b"INTERNALDATE")), folder, *kept))
     return rows
