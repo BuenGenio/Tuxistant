@@ -7,19 +7,6 @@
   },
   "releases": [
     {
-      "version": "0.6.0",
-      "date": "2026-11-19",
-      "channel": "preview",
-      "planned": true,
-      "added": {
-        "en": "Skills shared through a reviewed community registry, and mail through GNOME Online Accounts",
-        "es": "Habilidades compartidas en un registro comunitario revisado, y correo a través de las Cuentas en línea de GNOME",
-        "pt": "Habilidades compartilhadas num registro comunitário revisado, e e-mail pelas Contas on-line do GNOME",
-        "zh": "通过经审核的社区目录共享技能，并通过 GNOME 在线帐户使用邮件",
-        "ar": "مشاركة المهارات عبر سجل مجتمعي مُراجَع، والبريد عبر حسابات GNOME على الإنترنت"
-      }
-    },
-    {
       "version": "0.5.0",
       "date": "2026-11-15",
       "channel": "preview",
@@ -203,10 +190,10 @@
     }
   },
   "banner": {
-    "en": "Local preview of the site once 0.5.0 and 0.6.0 ship. Not deployed, and the dates are plans.",
-    "es": "Vista previa local del sitio cuando salgan 0.5.0 y 0.6.0. No está publicada y las fechas son previstas.",
-    "pt": "Prévia local do site quando saírem a 0.5.0 e a 0.6.0. Não está publicada e as datas são planejadas.",
-    "zh": "本地预览：0.5.0 和 0.6.0 发布后的网站样子。未上线，日期均为计划。",
-    "ar": "معاينة محلية للموقع بعد صدور 0.5.0 و0.6.0. غير منشورة، والتواريخ مخطط لها."
+    "en": "Local preview of the site once 0.5.0 ships. Not deployed, and the date is a plan.",
+    "es": "Vista previa local del sitio cuando salga 0.5.0. No está publicada y la fecha es una previsión.",
+    "pt": "Prévia local do site quando sair a 0.5.0. Não está publicada e a data é planejada.",
+    "zh": "本地预览：0.5.0 发布后的网站样子。未上线，日期为计划。",
+    "ar": "معاينة محلية للموقع بعد صدور 0.5.0. غير منشورة، والتاريخ مخطط له."
   }
 }

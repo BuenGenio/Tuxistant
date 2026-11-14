@@ -189,7 +189,8 @@ class BuiltSite(unittest.TestCase):
             line = re.search(r'<p class="dl-preview">(.*?)</p>', page.read_text())[1]
             self.assertIn(f'<a href="{preview["url"]}">', line, page)
             self.assertIn(f'<a href="{preview["page"]}">', line, page)
-            self.assertIn(strings["previewUntried"], line, page)
+            self.assertIn(f'</a>{strings["previewSep"]}{strings["previewUntried"]} · ', line, page)
+            self.assertIn("Linux", strings["previewTry"], "the preview is a Linux tarball, and says so")
             self.assertIn(preview["version"], line, page)
 
     def test_the_releases_list_is_newest_first_and_links_each_release(self):

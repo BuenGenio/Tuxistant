@@ -192,7 +192,7 @@ def preview_html(strings, releases):
         return ""
     text = esc(fill(strings["previewTry"], version=preview["version"]))
     if preview["url"]:
-        line = (f'<a href="{esc(preview["url"])}">{text}</a>, {esc(strings["previewUntried"])} · '
+        line = (f'<a href="{esc(preview["url"])}">{text}</a>{esc(strings["previewSep"])}{esc(strings["previewUntried"])} · '
                 f'<a href="{esc(preview["page"])}">{esc(strings["releaseNotes"])}</a>')
     else:
         line = f'{text} · {planned_html(strings, release_in(releases, preview["version"]))}'

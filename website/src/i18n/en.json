@@ -36,8 +36,8 @@
   },
   "versionsTitle": "Versions", "colSystem": "System", "colVersion": "Version", "colStatus": "Status", "colNeeds": "Needs",
   "preview": "Preview", "stable": "Stable", "planned": "Planned", "linuxNeeds": "GNOME 50 and your own LocalAI server", "tbd": "To be announced",
-  "previewTry": "Try the {version} preview", "previewUntried": "not yet tried on a real desktop", "releaseNotes": "Release notes",
-  "previewTitle": "New in the preview", "previewLead": "Built, but not yet tried on a real desktop. Each becomes Now once it has.",
+  "previewTry": "Try the {version} preview for Linux", "previewSep": ", ", "previewUntried": "not yet tried on a real desktop", "releaseNotes": "Release notes",
+  "previewTitle": "New in the preview", "previewLead": "Built, but not yet proven on a real desktop. Each becomes Now once it has worked on one.",
   "previewCaps": [
     ["soon", "Plays, pauses and skips music"], ["soon", "Timers and reminders"], ["soon", "Controls your Home Assistant"], ["soon", "Searches and researches the web"],
     ["soon", "Answers facts from Wikipedia"], ["soon", "Answers from your mail"], ["soon", "Your own skills, in a sandbox"], ["soon", "Opens apps and Settings pages"]

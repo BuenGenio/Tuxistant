@@ -36,8 +36,8 @@
   },
   "versionsTitle": "版本", "colSystem": "系统", "colVersion": "版本号", "colStatus": "状态", "colNeeds": "运行要求",
   "preview": "预览版", "stable": "稳定版", "planned": "计划中", "linuxNeeds": "GNOME 50 和你自己的 LocalAI 服务器", "tbd": "待公布",
-  "previewTry": "试用 {version} 预览版", "previewUntried": "尚未在真实桌面上试用", "releaseNotes": "发布说明",
-  "previewTitle": "预览版新功能", "previewLead": "已经做好，但尚未在真实桌面上试用。每项在真实桌面上用过后会改为“现已支持”。",
+  "previewTry": "试用 Linux 版 {version} 预览版", "previewSep": "，", "previewUntried": "尚未在真实桌面上试用", "releaseNotes": "发布说明",
+  "previewTitle": "预览版新功能", "previewLead": "已经做好，但尚未在真实桌面上得到验证。每项在真实桌面上正常工作后会改为“现已支持”。",
   "previewCaps": [
     ["soon", "播放、暂停和切换音乐"], ["soon", "计时器和提醒"], ["soon", "控制你的 Home Assistant"], ["soon", "网页搜索与调研"],
     ["soon", "用维基百科回答事实问题"], ["soon", "从你的邮件中找答案"], ["soon", "你自己的技能，在沙盒中运行"], ["soon", "打开应用和设置页面"]
