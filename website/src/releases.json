@@ -1,5 +1,56 @@
 {
   "linux":   { "version": "0.2.0", "channel": "stable",  "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.2.0.tar.gz" },
   "macos":   { "version": null, "channel": "planned", "url": null },
-  "windows": { "version": null, "channel": "planned", "url": null }
+  "windows": { "version": null, "channel": "planned", "url": null },
+  "preview": {
+    "version": "0.4.0",
+    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.4.0.tar.gz",
+    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.4.0"
+  },
+  "history": [
+    {
+      "version": "0.4.0", "date": "2026-11-13", "channel": "preview",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.4.0",
+      "added": {
+        "en": "Opens apps and Settings pages, and keeps questions about your home out of fact lookups",
+        "es": "Abre apps y páginas de Configuración, y aparta de las búsquedas de datos las preguntas sobre tu casa",
+        "pt": "Abre apps e páginas de Configurações, e deixa as perguntas sobre sua casa fora das buscas de fatos",
+        "zh": "打开应用和设置页面，并让关于你家的问题不进入事实查询",
+        "ar": "يفتح التطبيقات وصفحات الإعدادات، ويُبقي الأسئلة عن منزلك خارج البحث عن المعلومات"
+      }
+    },
+    {
+      "version": "0.3.0", "date": "2026-11-13", "channel": "preview",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.3.0",
+      "added": {
+        "en": "Web search and research, facts from Wikipedia, mail search, your own skills, media, timers and Home Assistant",
+        "es": "Búsqueda e investigación en la web, datos de Wikipedia, búsqueda en el correo, tus propias habilidades, multimedia, temporizadores y Home Assistant",
+        "pt": "Pesquisa e investigação na web, fatos da Wikipédia, busca nos e-mails, suas próprias habilidades, mídia, timers e Home Assistant",
+        "zh": "网页搜索与调研、来自维基百科的事实、邮件搜索、你自己的技能、媒体控制、计时器和 Home Assistant",
+        "ar": "البحث في الويب والتقصّي، ومعلومات من ويكيبيديا، والبحث في البريد، ومهاراتك الخاصة، والوسائط، والمؤقتات، وHome Assistant"
+      }
+    },
+    {
+      "version": "0.2.0", "date": "2026-11-13", "channel": "stable",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.2.0",
+      "added": {
+        "en": "Your calendar, and news from a source you choose",
+        "es": "Tu calendario y noticias de la fuente que elijas",
+        "pt": "Sua agenda e notícias da fonte que você escolher",
+        "zh": "你的日历，以及来自你所选来源的新闻",
+        "ar": "تقويمك، والأخبار من المصدر الذي تختاره"
+      }
+    },
+    {
+      "version": "0.1.0", "date": "2026-11-10", "channel": "preview",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.1.0",
+      "added": {
+        "en": "The first release: talk and listen, dictation, skills with approval cards, themes and Settings",
+        "es": "La primera versión: hablar y escuchar, dictado, habilidades con tarjetas de aprobación, temas y Configuración",
+        "pt": "A primeira versão: falar e ouvir, ditado, habilidades com cartões de aprovação, temas e Configurações",
+        "zh": "首个版本：对话与聆听、听写、带确认卡片的技能、主题和设置",
+        "ar": "الإصدار الأول: التحدث والاستماع، والإملاء، ومهارات ببطاقات موافقة، والسمات، والإعدادات"
+      }
+    }
+  ]
 }
