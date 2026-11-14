@@ -70,6 +70,14 @@ class FollowUps(Case):
         rig = self.rig(server.port, mic_pcm=VOICE, mic={"block": True}, **options)
         return server, rig
 
+    @staticmethod
+    def waiting_task(rig) -> Model:
+        """A task that asked "Which one should I print?", as task.run leaves it: made with the
+        settings the turn's skills run with, so the next hold could answer it."""
+        task = Model(rig.ctl.skills.config, "print my report", [])
+        assert planner.resumable(task, rig.ctl.skills.config)
+        return task
+
     async def hold(self, rig, words="what time is it"):
         self.said.append(words)
         await rig.ctl.hold_start()
@@ -248,6 +256,21 @@ class FollowUps(Case):
         self.assertFalse(first.alive)
         self.assertIsNot(rig.ctl.turn.rt, first)
 
+    async def test_toggle_that_only_ends_a_go_keeps_it_and_what_it_read(self):
+        """The exception in "Follow-ups" items 5 and 8, and the Toggle row."""
+        server, rig = await self.rigged(lambda c: self.replies(c, "It is noon."))
+        await self.hold(rig)
+        talk = rig.ctl.talk
+        talk.rt.session.tainted = True
+        self.said.append("hello")
+        await rig.ctl.dictate_start("tap")
+        await rig.state("listening")
+        await rig.ctl.toggle()
+        self.assertFalse(rig.ctl.active, "Toggle started a turn")
+        self.assertIs(rig.ctl.talk, talk)
+        self.assertTrue(talk.rt.alive)
+        self.assertTrue(talk.rt.session.tainted)
+
     async def test_two_minutes_of_quiet_end_it(self):
         server, rig = await self.rigged(lambda c: self.replies(c, QUESTION))
         with mock.patch.object(controller, "FOLLOW_ON_S", 0.3):
@@ -287,7 +310,7 @@ class FollowUps(Case):
         server, rig = await self.rigged(lambda c: self.replies(c, QUESTION, "It is noon."))
         await self.hold(rig, "print my report")
         talk = rig.ctl.talk
-        talk.rt.session.waiting = Model(rig.config, "print my report", [])
+        talk.rt.session.waiting = self.waiting_task(rig)
         await rig.ctl.dictate_start("tap")
         await rig.state("listening")
         self.assertIs(rig.ctl.talk, talk)
@@ -299,6 +322,80 @@ class FollowUps(Case):
         self.assertEqual(len(server.connections), 1)
         self.assertEqual(self.asked(server), ["print my report", "what time is it"])
         self.assertEqual([m.heard for m in Model.made], [["print my report"]])
+
+    async def spoken_over(self, speak):
+        """A question with a task waiting, then words the app speaks, then a hold."""
+        server, rig = await self.rigged(lambda c: self.replies(c, QUESTION, "It is noon."))
+        await self.hold(rig, "print my report")
+        talk = rig.ctl.talk
+        talk.rt.session.waiting = self.waiting_task(rig)
+        Model.script = ["Printed report-b."]
+        job = await speak(rig.ctl)
+        self.assertIsNotNone(job)
+        await job
+        self.assertIs(rig.ctl.talk, talk)
+        self.assertFalse(talk.asked)
+        self.assertIsNone(talk.rt.session.waiting)
+        self.assertEqual(rig.of("FollowUp")[-1], ("", "", 0))
+        await self.hold(rig, "what's the weather")
+        self.assertEqual(len(server.connections), 1)
+        self.assertEqual(self.asked(server), ["print my report", "what's the weather"])
+        self.assertEqual([m.heard for m in Model.made], [["print my report"]])
+
+    async def test_a_timer_takes_the_question_down_and_keeps_the_conversation(self):
+        """Its Reply replaces the question on screen, so the next hold is no answer to it."""
+        await self.spoken_over(lambda ctl: ctl.say_when_free("Your tea is ready."))
+
+    async def test_say_takes_the_question_down_and_keeps_the_conversation(self):
+        """Say and PreviewVoice both come through say()."""
+        await self.spoken_over(lambda ctl: ctl.say("Hello there."))
+
+    async def fn_go_over_question(self):
+        server, rig = await self.rigged(lambda c: self.replies(c, QUESTION))
+        await self.hold(rig, "print my report")
+        talk = rig.ctl.talk
+        talk.rt.session.waiting = self.waiting_task(rig)
+        fn = service.fn_client(rig.config, rig.ctl)
+        await fn.handle("down")
+        await fn.handle("up")
+        await asyncio.sleep(0.1)
+        await fn.handle("down")     # the second press: a go, but not yet dictation
+        await rig.state("listening")
+        self.assertTrue(talk.asked)
+        self.assertEqual(rig.of("FollowUp"), [(QUESTION, "Hold Fn to answer", 10)])
+        return server, rig, talk, fn
+
+    async def test_a_fn_shortcut_on_the_second_press_puts_the_question_back(self):
+        """Fn, then Fn+F5 at once: a shortcut, not dictation, so the question and its task stay."""
+        server, rig, talk, fn = await self.fn_go_over_question()
+        await fn.handle("other")
+        self.assertFalse(rig.ctl.dictating)
+        self.assertIs(rig.ctl.talk, talk)
+        self.assertTrue(talk.asked)
+        self.assertIsNotNone(talk.rt.session.waiting)
+        question, hint, seconds = rig.of("FollowUp")[-1]
+        self.assertEqual((question, hint), (QUESTION, "Hold Fn to answer"))
+        self.assertIn(seconds, range(1, 11))
+        last = lambda *signal: max(i for i, s in enumerate(rig.signals) if s[:len(signal)] == signal)
+        self.assertGreater(last("FollowUp"), last("StateChanged", "idle"), "the shell hides it")
+        self.assertGreater(last("FollowUp"), last("Presence", False))
+        Model.script = ["Printed report-b."]
+        await self.hold(rig, "the second one")
+        self.assertEqual([m.heard for m in Model.made], [["print my report", "the second one"]])
+        self.assertEqual(self.asked(server), ["print my report"], "the voice model was asked")
+
+    async def test_the_question_goes_once_fn_says_it_is_dictation(self):
+        for mode in ("tap", "hold"):
+            with self.subTest(mode=mode):
+                Model.made = []
+                _, rig, talk, fn = await self.fn_go_over_question()
+                await rig.ctl.dictate_mode(mode)
+                self.assertFalse(talk.asked)
+                self.assertIsNone(talk.rt.session.waiting)
+                self.assertEqual(rig.of("FollowUp")[-1], ("", "", 0))
+                await rig.ctl.cancel(end_talk=False)
+                self.assertEqual(rig.of("FollowUp")[-1], ("", "", 0), "it came back")
+                self.assertFalse(talk.asked)
 
     async def test_a_dropped_connection_comes_back_with_what_the_conversation_read(self):
         server, rig = await self.rigged(lambda c: self.replies(c, "It is noon."))

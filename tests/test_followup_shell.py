@@ -28,7 +28,7 @@ class Question(ShellRun):
 
     def test_a_question_brings_back_the_blob_with_the_hint(self):
         for key in ("question_up", "question_still_up", "second_question_up", "third_question_up",
-                    "fourth_question_up"):
+                    "fourth_question_up", "question_back", "fifth_question_up"):
             with self.subTest(key):
                 look = self.report[key]
                 self.assertTrue(look["blob"], look)
@@ -54,6 +54,20 @@ class Question(ShellRun):
         self.assertEqual(look["heard"], "Dictating… tap Fn to stop")
         self.assertEqual(look["hint"], "")
         self.assertNotEqual(look["reply"], QUESTION)
+
+    def test_a_second_press_hides_the_question_while_it_listens(self):
+        look = self.report["second_press_over_question"]
+        self.assertEqual(look["state"], "listening")
+        self.assertEqual(look["hint"], "")
+
+    def test_a_timer_takes_the_question_down(self):
+        look = self.report["timer_over_question"]
+        self.assertEqual(look["state"], "idle")
+        self.assertEqual(look["reply"], "Your tea is ready.")
+        self.assertEqual(look["hint"], "")
+        self.assertFalse(self.report["timer_left_question"])
+        look = self.report["timer_gone"]
+        self.assertFalse(look["caption"], look)
 
     def test_a_plain_reply_leaves_no_hint(self):
         look = self.report["plain_reply"]

@@ -74,8 +74,10 @@ export class Caption {
         this._present();
     }
 
+    // Words over a question that is fading, such as a timer's, take its place whole: its hint
+    // would say to answer something no hold answers now, and it would keep them from lingering.
     showReply(text) {
-        if (this._isError)
+        if (this._isError || this._asking)
             this._clearLabels();
         this._set(this._reply, clip(text));
         this._present();

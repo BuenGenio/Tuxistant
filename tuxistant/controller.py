@@ -7,6 +7,7 @@ because stopping a job is not instant and they must apply in the order they arri
 import asyncio
 import json
 import logging
+import math
 import secrets
 import time
 
@@ -61,6 +62,7 @@ class Talk:
         self.rt = rt
         self.asked = False      # its last reply was a question
         self.asked_at = 0.0     # when that question went on screen
+        self.question = ""      # and what it was, to put it back
         self.timer = None       # the task that ends it after FOLLOW_ON_S
 
 
@@ -559,13 +561,15 @@ class Controller:
             if not self.typist:
                 self.emit("Error", NO_TYPING)
                 return
-            self._drop_question()
+            if mode:
+                self._drop_question()
             self.dictation = Dictation(self, mode)
             self.job = asyncio.create_task(self._run(self.dictation.run))
 
     async def dictate_end(self):
         async with self.lock:
             if self.dictating:
+                self._drop_question()
                 self.dictation.finish()
 
     async def dictate_toggle(self, mode: str | None = None):
@@ -578,6 +582,8 @@ class Controller:
         """Fn knows only after the press that started it whether it was a tap or a hold."""
         if self.dictating:
             self.dictation.set_mode(mode)
+            if self.dictation.mode:     # now it is dictation, not the start of a Fn shortcut
+                self._drop_question()
 
     def deliver(self, go: Dictation):
         """Apart from the job, so that the next go or a talk hold can start while these words are
@@ -637,13 +643,17 @@ class Controller:
 
     async def cancel(self, end_talk=True):
         """end_talk=False is for a Fn shortcut pressed while dictating, which is not a cancel of
-        the conversation."""
+        the conversation. A go it ends before Fn said tap or hold was never dictation, so the
+        question it hid is put back."""
         async with self.lock:
+            unsure = self.dictating and self.dictation.mode is None
             await self._stop()
             self._drop_words()
             if end_talk:
                 await self._end_talk()
                 self._forget()
+            elif unsure:
+                self._ask_again()
 
     async def set_locked(self, locked: bool):
         """The shell disables the extension at lock, so a turn would have no blob and no way to
@@ -659,6 +669,7 @@ class Controller:
             await self._stop()
             if self.locked:
                 return None
+            self._drop_question()   # its words replace the question on screen
             self.job = asyncio.create_task(
                 self._run(lambda: self._say(text, voice or self.config["voice"])))
             return self.job
@@ -671,6 +682,7 @@ class Controller:
         async with self.lock:
             if self.locked or self.active:
                 return None
+            self._drop_question()   # its words replace the question on screen
             self.job = asyncio.create_task(
                 self._run(lambda: self._say(text, self.config["voice"], lead, heard)))
             return self.job
@@ -686,6 +698,7 @@ class Controller:
         """A go can run for minutes. Ended by anything but Cancel, a lock or losing the shell, it
         keeps its words, or says why there were none, as if its own key had stopped it."""
         if self.dictating:
+            self._drop_question()
             self.dictation.finish()
             await asyncio.wait({self.job})
 
@@ -710,7 +723,7 @@ class Controller:
         if turn.last_reply is not None:
             talk.asked = turn.question is not None and planner.asks(turn.question)
             if talk.asked and not self.locked:
-                talk.asked_at = time.monotonic()
+                talk.asked_at, talk.question = time.monotonic(), turn.question
                 self.emit("FollowUp", turn.question, ANSWER_HINT, QUESTION_HINT_S)
         if not talk.asked:  # a task's question nobody was left with is no question
             talk.rt.session.waiting = None
@@ -734,13 +747,22 @@ class Controller:
             await talk.rt.close()
 
     def _drop_question(self):
-        """A go takes the question off the screen, so the next hold is no answer to it. The
-        conversation itself carries on."""
+        """A go, or words the app speaks, take the question off the screen, so the next hold is
+        no answer to it. The conversation itself carries on."""
         talk = self.talk
         if talk and talk.asked:
             talk.asked = False
             talk.rt.session.waiting = None
             self.emit("FollowUp", "", "", 0)
+
+    def _ask_again(self):
+        """The shell took the question down when the go started listening. It comes back for
+        the time it had left, and a hold in that time still answers it."""
+        talk = self.talk
+        if talk and talk.asked and not self.locked:
+            left = math.ceil(QUESTION_HINT_S - (time.monotonic() - talk.asked_at))
+            if left > 0:
+                self.emit("FollowUp", talk.question, ANSWER_HINT, left)
 
     def _forget(self):
         """Stop, a lock or a no: the next conversation can't open what this one found either."""

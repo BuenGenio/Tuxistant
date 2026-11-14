@@ -1361,7 +1361,7 @@ async def scenario_followup_real(daemon, test, args):
     question = "I found two reports. Which one should I print?"
     replies = [question, question, "It is noon.", question, question]
     heard = iter(["print my report", "print my other report", "what time is it",
-                  "print the last one", "print the very last one"])
+                  "print the last one", "print the very last one", "print my report again"])
 
     async def script(conn):
         for count, text in enumerate(replies, 1):
@@ -1373,6 +1373,9 @@ async def scenario_followup_real(daemon, test, args):
 
     async def never_a_fact(_heard, _config):
         return False
+
+    async def says(_config, _text, _voice):
+        return tone(0.2)
 
     async def look():
         return await test.command("eval", code=FOLLOW_UP_LOOK)
@@ -1392,6 +1395,7 @@ async def scenario_followup_real(daemon, test, args):
     daemon.config.values.update(server=f"127.0.0.1:{server.port}", api_key="good")
     real_controller.transcribe = hears
     real_controller.knowledge.is_fact = never_a_fact
+    real_controller.speech = says
     report = {}
     try:
         for _ in range(100):
@@ -1434,12 +1438,30 @@ async def scenario_followup_real(daemon, test, args):
         await hold()
         await asyncio.sleep(1.0)
         report["fourth_question_up"] = await look()
+        # Fn tapped, then Fn with another key: a Fn shortcut, never dictation, so the question
+        # the go's listening hid comes back.
+        await ctl.dictate_start()
+        await asyncio.sleep(0.2)
+        report["second_press_over_question"] = await look()
+        await ctl.cancel(end_talk=False)
+        await asyncio.sleep(0.6)
+        report["question_back"] = await look()
         await ctl.cancel()
         await asyncio.sleep(0.6)
         report["cancelled"] = await look()
         report["connections"] = len(server.connections)
         report["asked"] = [e["item"]["content"][0]["text"] for e in server.connections[0].log
                            if e["type"] == "conversation.item.create"]
+
+        # A timer's words take the place of a question, and the question is gone after them.
+        await hold()
+        await asyncio.sleep(1.0)
+        report["fifth_question_up"] = await look()
+        await (await ctl.say_when_free("Your tea is ready."))
+        report["timer_over_question"] = await look()
+        report["timer_left_question"] = ctl.talk.asked
+        await asyncio.sleep(4.0)    # its words linger about 3 s, as any reply's do
+        report["timer_gone"] = await look()
         report["state"] = ctl.state
     finally:
         await server.__aexit__()
