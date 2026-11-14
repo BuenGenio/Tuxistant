@@ -157,6 +157,10 @@ class Daemon(fake_daemon.Daemon):
     def TypeText(self, id, text, only_copy) -> "ssb":
         return [id, text, only_copy]
 
+    @dbus_signal()
+    def FollowUp(self, question, hint, seconds) -> "ssi":
+        return [question, hint, seconds]
+
 
 class Run:
     """What the scenarios do over and over."""
@@ -1025,6 +1029,65 @@ async def dictate_hint_outlives_an_earlier_go(d, report):
     await d.close_all()
 
 
+FOLLOW_UP_QUESTION = "I found two reports. Which one should I print?"
+CAPTION_LOOK = r"""
+const caption = Main.extensionManager.lookup('tuxistant@buengenio').stateObj._caption;
+const shown = label => label?.visible ? label.text : '';
+return [caption.actor.visible && caption.actor.opacity > 0, shown(caption._heard),
+        shown(caption._reply), shown(caption._hint), shown(caption._note)];
+"""
+
+
+async def dictate_stop_line_goes_with_the_go(d, report):
+    """Once a hands-free go stops listening, nothing may still say to tap Fn to stop it: a tap
+    then does nothing, and two start a new go."""
+    async def look():
+        return await d.test.command("eval", code=CAPTION_LOOK)
+
+    d.daemon.StateChanged("listening")
+    d.daemon.DictationStarted("s-a")
+    d.daemon.DictationMode("s-a", "tap")
+    await asyncio.sleep(0.3)
+    report["stop_line_listening"] = await look()
+    d.daemon.Presence(False)
+    d.daemon.StateChanged("idle")
+    await asyncio.sleep(0.4)
+    report["stop_line_stopped"] = await look()
+    await asyncio.sleep(2.0)
+    report["stop_line_later"] = await look()
+
+
+async def dictate_question_outlives_an_earlier_go(d, report):
+    """A hold ended on a question while a go's words were still at the server: what that go
+    brings, words or a note, must not take the question and its hint off the screen."""
+    async def look():
+        return await d.test.command("eval", code=CAPTION_LOOK)
+
+    d.open("text")
+    await d.focus_on("text")
+    d.daemon.StateChanged("listening")
+    d.daemon.DictationStarted("q-a")
+    await asyncio.sleep(0.1)
+    d.daemon.StateChanged("idle")
+    await asyncio.sleep(0.3)
+    d.daemon.FollowUp(FOLLOW_UP_QUESTION, "Hold Fn to answer", 10)
+    await asyncio.sleep(0.3)
+    report["late_question"] = await look()
+    d.daemon.TypeText("q-a", "late words ", False)
+    await asyncio.sleep(0.5)
+    report["late_typed_how"] = d.how("q-a")
+    report["late_after_words"] = await look()
+    d.daemon.Error(NOTHING_HEARD)
+    await asyncio.sleep(0.3)
+    report["late_with_note"] = await look()
+    d.daemon.FollowUp("", "", 0)    # the question goes: the note it carried stays its own time
+    await asyncio.sleep(0.4)
+    report["late_note_after_question"] = await look()
+    await asyncio.sleep(6.5)
+    report["late_note_gone"] = await look()
+    await d.close_all()
+
+
 async def scenario_dictation(daemon, test, args):
     report = {}
     d = Dictating(Run(daemon, test, args))
@@ -1032,7 +1095,8 @@ async def scenario_dictation(daemon, test, args):
         for step in (dictate_text_field, dictate_text_field_more, dictate_password, dictate_paste,
                      dictate_nothing_to_type_in, dictate_slow_apps,
                      dictate_focus_moves_during_the_save, dictate_modes_of_an_old_go,
-                     dictate_hint_outlives_an_earlier_go,
+                     dictate_hint_outlives_an_earlier_go, dictate_stop_line_goes_with_the_go,
+                     dictate_question_outlives_an_earlier_go,
                      dictate_disabled_during_the_save):
             await step(d, report)
     finally:
@@ -1430,20 +1494,20 @@ async def scenario_followup_real(daemon, test, args):
         await asyncio.sleep(1.0)
         report["third_question_up"] = await look()
         # A go over the question: its hint takes the question's place, and the talk carries on.
-        await ctl.dictate_start("tap")
+        go = await ctl.dictate_start("tap")
         await asyncio.sleep(0.6)
         report["dictating_over_question"] = await look()
-        await ctl.cancel(end_talk=False)    # as a Fn shortcut while dictating does
+        await ctl.drop_go(go)   # as a Fn shortcut on the press that started it does
         await asyncio.sleep(0.6)
         await hold()
         await asyncio.sleep(1.0)
         report["fourth_question_up"] = await look()
         # Fn tapped, then Fn with another key: a Fn shortcut, never dictation, so the question
         # the go's listening hid comes back.
-        await ctl.dictate_start()
+        go = await ctl.dictate_start()
         await asyncio.sleep(0.2)
         report["second_press_over_question"] = await look()
-        await ctl.cancel(end_talk=False)
+        await ctl.drop_go(go)
         await asyncio.sleep(0.6)
         report["question_back"] = await look()
         await ctl.cancel()

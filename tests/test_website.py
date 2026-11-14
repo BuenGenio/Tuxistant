@@ -273,6 +273,22 @@ class LocalPreview(unittest.TestCase):
             for _, claim in self.upcoming["claims"][code]:
                 self.assertIn(html_escape(claim), shown, page)
 
+    def test_a_claim_about_a_desktop_action_says_a_recipe_does_it(self):
+        """Only a recipe you add can do one: no built-in skill reaches tuxistant/desktop.py."""
+        importers = {file.name for file in (ROOT / "tuxistant").glob("*.py")
+                     if re.search(r"(?m)^\s*from \. import .*\bdesktop\b|^\s*from \.desktop ",
+                                  file.read_text())}
+        self.assertEqual(importers, {"recipes.py"})
+        entries = re.findall(r'(?m)^    "(\w+)": Entry\(', (ROOT / "tuxistant/desktop.py").read_text())
+        self.assertIn("night_light", entries)
+        recipe = {"en": "recipe", "es": "receta", "pt": "receita", "zh": "配方", "ar": "وصف"}
+        claims = self.upcoming["claims"]
+        for index, (_, claim) in enumerate(claims["en"]):
+            if any(entry.replace("_", " ") in claim.casefold() for entry in entries):
+                for code, word in recipe.items():
+                    with self.subTest(code=code, claim=claim):
+                        self.assertIn(word, claims[code][index][1].casefold())
+
     def test_its_inline_scripts_are_allowed_by_its_csp(self):
         for page in self.pages:
             text = page.read_text()

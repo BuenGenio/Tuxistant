@@ -232,6 +232,7 @@ export default class TuxistantExtension extends Extension {
         if (state !== 'listening') {
             this._dictating = null;
             this._caption?.restand();
+            this._caption?.endStanding();
         }
         this._indicator.setState(state);
         this._blob.setState(state);
@@ -305,7 +306,7 @@ export default class TuxistantExtension extends Extension {
         if (this._caption.showingError)
             this._caption.restand();
         else
-            this._caption.showHeard(text);
+            this._caption.showStanding(text);
     }
 
     _showNote(note) {
@@ -329,8 +330,8 @@ export default class TuxistantExtension extends Extension {
             this._toCaption(() => this._showNote(note));
         else if (line)
             this._toCaption(() => this._showDictating(line));
-        else
-            this._caption.hide();
+        else    // a question on screen stays: these words were for a go that has stopped
+            this._caption.endStanding();
     }
 
     async _onThemePreview(id) {

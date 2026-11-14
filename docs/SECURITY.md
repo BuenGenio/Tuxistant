@@ -172,12 +172,13 @@ What doesn't hold:
 
 Cloud sends multi-step requests to Anthropic, so it is the one place where what Tux reads can leave for a server that isn't yours. Until now one switch decided it. Turning that switch on in Settings showed a dialog, and nothing recorded what you had agreed to. Anything that could call `SetConfig` on the session bus, or write the config file, could turn it on without that dialog ever being seen.
 
-Now the daemon uses the cloud only with an agreement that covers what would be sent: a record in the config, made when you tick "I understand and agree" and press Turn On, that names the version of what is sent, the provider and the model, with the date. `planner.py` checks it before a task and before every call to the cloud, together with the switch and the key, through `config.cloud_in_use`. So:
+Now the daemon uses the cloud only with an agreement that covers what would be sent: a record in the config, made when you tick "I understand and agree" and press Turn On, that names the version of what is sent, the provider and the model, with the date. `planner.py` checks it before a task and as the last thing before every request it sends to the cloud, a retry included, together with the switch and the key, through `config.cloud_in_use`. So:
 
 - Without a kept agreement, the switch alone, turned on over D-Bus or in the file, does nothing. Switching Cloud off keeps the agreement, though, so while one is kept the switch alone turns Cloud on again, from Settings or over D-Bus. Only Withdraw forgets it. An install that had Cloud on before this keeps its switch but sends nothing until you agree, and the page says so.
 - A model the agreement didn't name, set from Settings or anywhere else, stops the cloud until you agree for that model. With Cloud on, Settings asks before it saves one; with it off, turning it on asks.
 - A release that changes what is sent bumps `CLOUD_CONSENT_VERSION`, and every agreement made before it stops counting.
-- Withdraw on the Multi-step tasks page, switching it off, or a new model stops a task that is already running before its next call.
+- Withdraw on the Multi-step tasks page, switching it off, or a new model stops a task that is already running before its next call, and a reply that comes back after it is neither read out nor acted on.
+- A review found that the Claude library retried a failed request on its own, so a request that went out under the agreement was sent again after Withdraw, and that a change made while the library loaded went out unchecked. Now the library retries nothing. The planner tries again once after a lost connection or a server error, and checks the agreement, the key and the model right before each attempt, with the key and model the task started with.
 
 Until the daemon restarts after an update, the old daemon still sends with the switch and a key alone, and can't record an agreement. Settings tells an older daemon by the missing `cloud_consent` in `GetConfig`, shows the switch as that daemon holds it so it can be turned off, and says it must be restarted before it can ask.
 

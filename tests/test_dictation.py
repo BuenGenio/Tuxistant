@@ -400,7 +400,8 @@ class Flow(Case):
         rig = self.rig_for(self.speech(transcript="Hello."))
         with mock.patch.object(rig.ctl, "_start_turn") as turn:
             self.assertEqual(await self.typed_after(rig, rig.ctl.hold_start), "Hello. ")
-        turn.assert_called_once_with(hold=True)
+        turn.assert_called_once()
+        self.assertIs(turn.call_args.kwargs["hold"], True)
 
     async def test_the_talk_shortcut_ends_dictation_and_types_what_it_heard(self):
         """A hands-free go can run five minutes: the talk shortcut must not throw it away."""
@@ -462,6 +463,61 @@ class Flow(Case):
         self.assertEqual(rig.of("DictationMode"), [(started, "tap")])
         self.assertEqual(rig.of("Error"), [])
         self.assertTrue(rig.ctl.dictating)
+
+    async def fn_keys(self, rig, *words):
+        """Fn as the helper reports it, through the daemon's own wiring of it."""
+        from tuxistant import service
+        fn = service.fn_client(rig.config, rig.ctl)
+        self.addCleanup(fn._disarm)
+        for word in words:
+            await fn.handle(word)
+            await asyncio.sleep(0.02)
+
+    async def test_a_fn_shortcut_does_not_drop_a_go_from_the_shortcut(self):
+        """Fn tapped by mistake, then Fn+F5 at once, while Ctrl+Super+D dictates: that go was
+        never Fn's, and minutes of words must not go with no word."""
+        rig = self.rig_for(self.speech(transcript="A whole passage."))
+        await rig.ctl.dictate_start("shortcut")
+        await self.heard_all_of(rig)
+        await self.fn_keys(rig, "down", "up", "down", "other", "up")
+        self.assertTrue(rig.ctl.dictating)
+        await rig.ctl.dictate_end()
+        await self.wait_for(rig, "TypeText")
+        self.assertEqual(rig.of("TypeText")[0][1], "A whole passage. ")
+        self.assertEqual(rig.of("Error"), [])
+
+    async def test_fn_taps_do_not_take_over_a_go_from_the_shortcut(self):
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        await rig.ctl.dictate_start("shortcut")
+        await self.fn_keys(rig, "down", "up", "down", "up")
+        await asyncio.sleep(0.05)
+        self.assertTrue(rig.ctl.dictating)
+        self.assertEqual([mode for _, mode in rig.of("DictationMode")], ["shortcut"])
+
+    async def test_a_go_is_ended_dropped_or_named_only_by_its_own_id(self):
+        """Fn names the go it started: another may have taken its place while it waited."""
+        rig = self.rig_for(self.speech(transcript="Hello."))
+        go = await rig.ctl.dictate_start("shortcut")
+        await rig.state("listening")
+        await rig.ctl.dictate_mode("tap", go="another")
+        await rig.ctl.dictate_end(go="another")
+        await rig.ctl.drop_go("another")
+        self.assertTrue(rig.ctl.going(go))
+        self.assertEqual([mode for _, mode in rig.of("DictationMode")], ["shortcut"])
+
+    async def test_a_fn_shortcut_keeps_the_words_of_an_earlier_go_at_the_server(self):
+        """Contract, Dictation item 4: only Cancel, a lock or losing the shell stops them."""
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        http = self.speech(transcript="Hello.", wait=gate)
+        rig = self.rig_for(http)
+        await self.spoke(rig)   # its words wait at the server
+        await self.fn_keys(rig, "down", "up", "down", "other", "up")
+        self.assertFalse(rig.ctl.dictating)
+        gate.set()
+        await self.wait_for(rig, "TypeText")
+        self.assertEqual(rig.of("TypeText")[0][1], "Hello. ")
+        self.assertEqual(len(http.uploads), 1, "the go Fn dropped was sent")
 
     def suspend(self):
         """The boot clock runs on through a suspend and the monotonic one doesn't."""

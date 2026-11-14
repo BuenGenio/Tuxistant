@@ -1222,7 +1222,8 @@ class Host(Case):
         self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "tides.yaml")   # 4
         self.add("zz-work.yaml", (EXAMPLES / "work.yaml").read_text())               # 3 more
         problems = self.host.reload()
-        self.assertEqual(problems[str(self.user / "zz-work.yaml")], skillhost.OVER_BUDGET)
+        self.assertEqual(problems[str(self.user / "zz-work.yaml")],
+                         skillhost.over_budget(4, 3))
         self.assertEqual(sum(s["source"] == "yours" for s in self.host.current().listing()), 4)
         (self.user / "tides.yaml").unlink()
         self.assertEqual(self.host.reload(), {}, "4 - 1 + 3 is six")
@@ -1248,7 +1249,7 @@ class Host(Case):
             "actions:\n  code.a:\n    description: A\n")
         (folder / "m.py").write_text("")
         problems = self.host.reload()
-        self.assertEqual(problems, {str(folder): skillhost.OVER_BUDGET},
+        self.assertEqual(problems, {str(folder): skillhost.over_budget(6, 1)},
                          "the new one, not one that was working")
 
     async def test_a_new_skill_never_takes_the_place_of_a_working_one(self):
@@ -1257,7 +1258,8 @@ class Host(Case):
         self.add("alarm.yaml", recipe(id="org.example.alarm", permissions={},
                                       actions={"alarm.ring": alarm}))
         problems = self.host.reload()
-        self.assertEqual(problems, {str(self.user / "alarm.yaml"): skillhost.OVER_BUDGET})
+        self.assertEqual(problems,
+                         {str(self.user / "alarm.yaml"): skillhost.over_budget(6, 1)})
         self.assertIn("work.chat", self.host.current().actions)
         self.assertEqual(self.host.reload(), problems, "and stays so")
         (self.user / "notes.yaml").unlink()
@@ -1339,20 +1341,20 @@ class Host(Case):
         room, so notes put back as it was was refused for being one too many."""
         self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")    # 6
         alarm = self.alarm()
-        self.assertEqual(self.host.reload(), {str(alarm): skillhost.OVER_BUDGET})
+        self.assertEqual(self.host.reload(), {str(alarm): skillhost.over_budget(6, 1)})
         before = (self.user / "notes.yaml").read_text()
         notes = self.grow("notes.yaml", "notes.hello")
         again = self.restart()
         self.assertEqual(again.reload(), {str(notes): skillhost.GREW,
-                                          str(alarm): skillhost.OVER_BUDGET})
+                                          str(alarm): skillhost.over_budget(6, 1)})
         self.assertNotIn("alarm.ring", again.current().actions)
         kept = {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1, "work.yaml": 3}
         self.assertEqual(self.saved(), kept, "notes keeps its place at the size it had")
         self.assertEqual(self.restart().reload(), {str(notes): skillhost.GREW,
-                                                   str(alarm): skillhost.OVER_BUDGET})
+                                                   str(alarm): skillhost.over_budget(6, 1)})
         notes.write_text(before)
         third = self.restart()
-        self.assertEqual(third.reload(), {str(alarm): skillhost.OVER_BUDGET})
+        self.assertEqual(third.reload(), {str(alarm): skillhost.over_budget(6, 1)})
         self.assertIn("notes.phone", third.current().actions)
         self.assertEqual(self.saved(), kept)
 
@@ -1363,7 +1365,7 @@ class Host(Case):
         self.assertEqual(again.reload(), {str(notes): skillhost.GREW})
         alarm = self.alarm()
         self.assertEqual(again.reload(), {str(notes): skillhost.GREW,
-                                          str(alarm): skillhost.OVER_BUDGET})
+                                          str(alarm): skillhost.over_budget(6, 1)})
         self.assertEqual(self.saved()["notes.yaml"], 1)
 
     async def test_two_skills_that_grew_keep_their_places_after_a_restart(self):
@@ -1442,7 +1444,7 @@ class Host(Case):
         alarm = {"description": "Say it is time to get up", "say": "Time to get up."}
         self.add("alarm.yaml", recipe(id="org.example.alarm", permissions={},
                                       actions={"alarm.ring": alarm}))
-        refused = {str(self.user / "alarm.yaml"): skillhost.OVER_BUDGET}
+        refused = {str(self.user / "alarm.yaml"): skillhost.over_budget(6, 1)}
         self.assertEqual(self.host.reload(), refused)
         again = self.restart()
         self.assertEqual(again.reload(), refused, "alarm sorts first, but work was working")
@@ -1452,7 +1454,8 @@ class Host(Case):
         self.assertEqual(again.reload(), {})
         (self.user / "notes.yaml").write_text((EXAMPLES / "notes.yaml").read_text())
         third = self.restart()
-        self.assertEqual(third.reload(), {str(self.user / "notes.yaml"): skillhost.OVER_BUDGET},
+        self.assertEqual(third.reload(),
+                         {str(self.user / "notes.yaml"): skillhost.over_budget(6, 1)},
                          "notes was put back after alarm took its place")
         self.assertIn("alarm.ring", third.current().actions)
         saved = json.loads((self.user.parent / skillhost.LOADED).read_text())
@@ -1466,7 +1469,7 @@ class Host(Case):
         self.add("alarm.yaml", recipe(id="org.example.alarm", permissions={}, actions={
             "alarm.ring": {"description": "Say it is time to get up", "say": "Get up."}}))
         self.assertEqual(self.restart().reload(),
-                         {str(self.user / "alarm.yaml"): skillhost.OVER_BUDGET})
+                         {str(self.user / "alarm.yaml"): skillhost.over_budget(6, 1)})
 
     async def test_a_code_skill_that_failed_to_start_keeps_its_place(self):
         failing = []
@@ -1496,7 +1499,8 @@ class Host(Case):
         failing.clear()
         self.add("alarm.yaml", recipe(id="org.example.alarm", permissions={}, actions={
             "alarm.ring": {"description": "Say it is time to get up", "say": "Get up."}}))
-        self.assertEqual(host.reload(), {str(self.user / "alarm.yaml"): skillhost.OVER_BUDGET})
+        self.assertEqual(host.reload(),
+                         {str(self.user / "alarm.yaml"): skillhost.over_budget(6, 1)})
 
     async def test_a_check_or_a_damaged_list_changes_nothing(self):
         self.example("coins.yaml")

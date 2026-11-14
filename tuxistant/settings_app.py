@@ -567,6 +567,45 @@ def plain_row(title, subtitle, **props):
     return row
 
 
+def focused_row(rows):
+    """The one of rows that holds its window's keyboard focus, itself or in a child, if any."""
+    root = rows[0].get_root() if rows else None
+    focus = root.get_focus() if root else None
+    if focus is None:
+        return None
+    return next((row for row in rows if focus == row or focus.is_ancestor(row)), None)
+
+
+def refocus(rows, key, wanted, index):
+    """Focus the row for the same item, or else the one now in its place."""
+    if rows:
+        same = next((row for row in rows if key(row) == wanted), None)
+        (same or rows[min(index, len(rows) - 1)]).grab_focus()
+
+
+def refill(group, old, new, key):
+    """Put new rows in a group in place of old ones, and give them back. Focus on an old row
+    moves to the new row for the same item, so a reload never sends a keyboard or screen reader
+    user back to the top."""
+    had = focused_row(old)
+    for row in new:
+        group.add(row)
+    if had is not None:
+        # Straight to the new row, before the old one goes and takes the focus somewhere else.
+        # The page mustn't scroll for it: the new row has no place yet, and the list looks the
+        # same before and after, as nothing is drawn in between.
+        viewport = group.get_ancestor(Gtk.Viewport)
+        follows = viewport is not None and viewport.get_scroll_to_focus()
+        if follows:
+            viewport.set_scroll_to_focus(False)
+        refocus(new, key, key(had), old.index(had))
+        if follows:
+            viewport.set_scroll_to_focus(True)
+    for row in old:
+        group.remove(row)
+    return new
+
+
 def detail_row(label, text):
     row = plain_row(label, text, subtitle_selectable=True)
     row.add_css_class("property")
@@ -1377,16 +1416,13 @@ class AppearancePage(Adw.PreferencesPage):
         if listing == self.listed:
             return
         self.listed = listing
-        for row in self.rows:
-            self.themes.remove(row)
-        for row in self.problem_rows:
-            self.problems.remove(row)
-        self.rows = [self.make_row(theme) for theme in listing["themes"]]
-        self.problem_rows = [self.make_problem(problem) for problem in listing["problems"]]
-        for row in self.rows:
-            self.themes.add(row)
-        for row in self.problem_rows:
-            self.problems.add(row)
+        self.rows = refill(self.themes, self.rows,
+                           [self.make_row(theme) for theme in listing["themes"]],
+                           lambda row: row.value)
+        self.problem_rows = refill(
+            self.problems, self.problem_rows,
+            [self.make_problem(problem) for problem in listing["problems"]],
+            lambda row: row.get_tooltip_text())
         self.problems.set_visible(bool(self.problem_rows))
         self.select(self.win.config.get("theme"))
 
@@ -1783,7 +1819,10 @@ class ManifestPage(Adw.NavigationPage):
             wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=12, bottom_margin=12, left_margin=12,
             right_margin=12)
         self.text.update_property([Gtk.AccessibleProperty.LABEL], ["Manifest"])
-        text = shown(details["manifest"])
+        # The loader reads CR LF as a line break, so it isn't a hidden character to show. A lone
+        # CR still shows: the loader reads it as a line break, but grep and wc don't.
+        manifest = details["manifest"].replace("\r\n", "\n")
+        text = shown(manifest)
         buffer = self.text.get_buffer()
         buffer.set_text(text)
         # A wrap never draws a hyphen the file doesn't have: "b-itcoin" could read as another host.
@@ -1800,7 +1839,7 @@ class ManifestPage(Adw.NavigationPage):
                 buffer.apply_tag(wrap_anywhere, start, end)
         self.tags = {kind: buffer.create_tag(kind) for kind in highlight.KINDS}
         self.tags[highlight.COMMENT].props.style = Pango.Style.ITALIC
-        colour_text(buffer, self.tags, highlight.shown_spans(details["manifest"]))
+        colour_text(buffer, self.tags, highlight.shown_spans(manifest))
         self.watching = []
         # On the page, not the view: a bound method of the page held by its own child is a
         # cycle PyGObject can't collect, and a page popped would never be freed.
@@ -1856,6 +1895,11 @@ class SettingsOnlyDialog(Adw.PreferencesDialog):
         self.settings.load()
 
 
+def row_item(row) -> str:
+    """What a row on the Skills page stands for: a skill, or settings whose skill isn't loaded."""
+    return row.skill["id"] if isinstance(row, SkillRow) else row.settings_name
+
+
 def unreachable_settings(skills) -> list[str]:
     """The rows of settings that no listed skill's page shows, in a fixed order."""
     shown_now = {name for skill in skills if skill.get("source") != "yours"
@@ -1869,7 +1913,9 @@ class SkillsPage(Adw.PreferencesPage):
         self.win = win
         self.rows = []
         self.problem_rows = []
+        self.listed = self.problems_listed = None   # what the rows show, to rebuild only on change
         self.dialog = None      # the skill page open now, if any
+        self.opened_from = None     # the row that opened it and its place, if it had the focus
         open_skills = Gtk.Button(label="Open skills folder", valign=Gtk.Align.CENTER)
         open_skills.connect("clicked", self.on_open_folder)
         self.group = Adw.PreferencesGroup(
@@ -1895,33 +1941,36 @@ class SkillsPage(Adw.PreferencesPage):
             self.dialog.load()
 
     def fill(self, skills):
-        for row in self.rows:
-            self.group.remove(row)
-        self.rows = [self.make_row(skill) for skill in skills]
-        for row in self.rows:
-            self.group.add(row)
-        for row in self.orphan_rows:
-            self.orphans.remove(row)
-        self.orphan_rows = []
-        for name in unreachable_settings(skills):
-            row = plain_row(SETTINGS_TITLES[name], "Its skill isn't loaded", activatable=True)
-            row.settings_name = name
-            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-            row.connect("activated", lambda row: self.open_settings(row.settings_name))
-            self.orphan_rows.append(row)
-            self.orphans.add(row)
+        # Read again each time the window becomes active, and mostly unchanged.
+        if skills == self.listed:
+            return
+        self.listed = skills
+        self.rows = refill(self.group, self.rows, [self.make_row(skill) for skill in skills],
+                           row_item)
+        self.orphan_rows = refill(
+            self.orphans, self.orphan_rows,
+            [self.make_orphan(name) for name in unreachable_settings(skills)], row_item)
         self.orphans.set_visible(bool(self.orphan_rows))
 
     def fill_problems(self, problems):
-        for row in self.problem_rows:
-            self.problems.remove(row)
-        self.problem_rows = []
+        if problems == self.problems_listed:
+            return
+        self.problems_listed = problems
+        rows = []
         for title, problem, path in skill_problems(problems):
             row = plain_row(title, problem, tooltip_text=path)
             row.add_prefix(Gtk.Image(icon_name="dialog-warning-symbolic", css_classes=["warning"]))
-            self.problem_rows.append(row)
-            self.problems.add(row)
+            rows.append(row)
+        self.problem_rows = refill(self.problems, self.problem_rows, rows,
+                                   lambda row: row.get_tooltip_text())
         self.problems.set_visible(bool(self.problem_rows))
+
+    def make_orphan(self, name):
+        row = plain_row(SETTINGS_TITLES[name], "Its skill isn't loaded", activatable=True)
+        row.settings_name = name
+        row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        row.connect("activated", lambda row: self.open_settings(row.settings_name))
+        return row
 
     def on_open_folder(self, _button):
         open_folder(self.win, SKILLS_FOLDER, "skills", self.on_folder_opened)
@@ -1935,20 +1984,29 @@ class SkillsPage(Adw.PreferencesPage):
         return row
 
     def open(self, skill):
-        self.dialog = SkillDialog(self.win, skill)
-        self.dialog.connect("closed", self.on_closed)
-        self.dialog.present(self.win)
-        return self.dialog
+        return self.present(SkillDialog(self.win, skill))
 
     def open_settings(self, name):
-        self.dialog = SettingsOnlyDialog(self.win, name)
-        self.dialog.connect("closed", self.on_closed)
-        self.dialog.present(self.win)
-        return self.dialog
+        return self.present(SettingsOnlyDialog(self.win, name))
+
+    def present(self, dialog):
+        rows = self.rows + self.orphan_rows
+        row = focused_row(rows)
+        self.opened_from = (row, rows.index(row)) if row is not None else None
+        self.dialog = dialog
+        dialog.connect("closed", self.on_closed)
+        dialog.present(self.win)
+        return dialog
 
     def on_closed(self, dialog):
-        if self.dialog is dialog:
-            self.dialog = None
+        if self.dialog is not dialog:
+            return
+        self.dialog = None
+        # A dialog gives the focus back to the row that opened it, unless a reload replaced it.
+        rows, came = self.rows + self.orphan_rows, self.opened_from
+        self.opened_from = None
+        if came is not None and came[0] not in rows:
+            refocus(rows, row_item, row_item(came[0]), came[1])
 
     def sync(self, config):
         if self.dialog:
@@ -1979,11 +2037,9 @@ class HistoryPage(Adw.Bin):
         # A new request must not close what you are reading.
         opened = {row.entry["id"] for row in self.rows
                   if isinstance(row, HistoryRow) and row.get_expanded()}
+        self.rows = refill(self.group, self.rows, [self.make_row(entry) for entry in entries],
+                           lambda row: row.entry["id"])
         for row in self.rows:
-            self.group.remove(row)
-        self.rows = [self.make_row(entry) for entry in entries]
-        for row in self.rows:
-            self.group.add(row)
             if isinstance(row, HistoryRow):
                 row.set_expanded(row.entry["id"] in opened)
         self.stack.set_visible_child_name("list" if entries else "empty")
@@ -1992,6 +2048,7 @@ class HistoryPage(Adw.Bin):
         title, details = entry.get("heard") or "Nothing heard", history_details(entry)
         ran = entry.get("actions")
         row = HistoryRow(title, details, entry) if ran else plain_row(title, details)
+        row.entry = entry
         row.add_suffix(Gtk.Label(label=format_time(entry["ts"]), valign=Gtk.Align.START,
                                  margin_top=12, css_classes=["dim-label", "caption"]))
         return row

@@ -29,13 +29,15 @@ class FnClient:
         self.config, self.on_hold_start, self.on_hold_end = config, on_hold_start, on_hold_end
         self.on_dictate_start, self.on_dictate_end = on_dictate_start, on_dictate_end
         self.on_dictate_cancel, self.on_dictate_mode = on_dictate_cancel, on_dictate_mode
-        # Whether the daemon is still dictating. The shortcut, Cancel, a lock or the time limit
-        # can end a hands-free go without Fn, and then the next tap is a tap again.
+        # Whether the go Fn started is still listening, given its id. The shortcut, Cancel, a
+        # lock or the time limit can end a hands-free go without Fn, and then the next tap is a
+        # tap again.
         self.still_dictating = dictating
         self.path = path or os.environ.get("TUXISTANT_FN_SOCKET", SOCKET)
         self.timer = None
         self.holding = False
         self.dictating = None       # None, "pressed" (second press still down), HOLD or TAP
+        self.go = None              # the id of the go Fn started, which is all Fn may end or drop
         self.stopping = False       # hands-free, and Fn is down with no other key yet
         self.pressed_at = self.tapped_at = NONE
 
@@ -78,8 +80,7 @@ class FnClient:
         self._disarm()
         self.pressed_at = NONE
         if self.dictating:
-            self._forget()
-            await self.on_dictate_end()
+            await self.on_dictate_end(go=self._forget())
         elif self.holding:
             self.holding = False
             await self.on_hold_end()
@@ -96,8 +97,7 @@ class FnClient:
             if self.dictating == TAP:   # a Fn shortcut while dictating hands-free: not a stop
                 self.stopping = False
             elif self.dictating:        # the second press was a Fn shortcut, not dictation
-                self._forget()
-                await self.on_dictate_cancel()
+                await self.on_dictate_cancel(go=self._forget())
         elif word == "up":
             await self._up(now)
 
@@ -107,28 +107,27 @@ class FnClient:
         if self.dictating == TAP:
             self.stopping = True
         elif self._second_press(now):
-            self.dictating = "pressed"
             self.tapped_at = NONE
-            await self.on_dictate_start()
-            if self.dictating == "pressed":
+            # A go that was already listening, as one from the shortcut, is not Fn's to take
+            # over: Fn+key would drop it. So only a go this press started is Fn's.
+            go = await self.on_dictate_start()
+            if go is not None:
+                self.dictating, self.go = "pressed", go
                 self.timer = asyncio.create_task(self._still_down(_left(now, TAP_S)))
         elif self.config["fn_hold_enabled"] and not self.holding and not self.dictating:
-            self.timer = asyncio.create_task(
-                self._fire(_left(now, self.config["fn_hold_ms"] / 1000)))
+            self.timer = asyncio.create_task(self._fire(now))
 
     async def _up(self, now: float):
         self._disarm()
         quick = now - self.pressed_at < TAP_S
         if self.dictating == TAP:     # the tap that ends it is no tap towards the next go
             if self.stopping:
-                self._forget()
-                await self.on_dictate_end()
+                await self.on_dictate_end(go=self._forget())
         elif self.dictating and quick:
             self.dictating = TAP
             await self._mode(TAP)
         elif self.dictating:
-            self._forget()
-            await self.on_dictate_end()
+            await self.on_dictate_end(go=self._forget())
         elif self.holding:
             self.holding = False
             await self.on_hold_end()
@@ -140,28 +139,33 @@ class FnClient:
                 and not self.holding and not self.dictating
                 and now - self.tapped_at < SECOND_PRESS_S)
 
-    def _forget(self):
+    def _forget(self) -> str | None:
+        """Lets go of Fn's go, and returns its id."""
+        go, self.go = self.go, None
         self.dictating = None
         self.stopping = False
+        return go
 
     def _forget_if_over(self):
-        if self.dictating and self.still_dictating and not self.still_dictating():
+        if self.dictating and self.still_dictating and not self.still_dictating(self.go):
             self._disarm()
             self._forget()
 
     async def _mode(self, mode: str):
         if self.on_dictate_mode:
-            await self.on_dictate_mode(mode)
+            await self.on_dictate_mode(mode, go=self.go)
 
     def _disarm(self):
         if self.timer and not self.holding:
             self.timer.cancel()
         self.timer = None
 
-    async def _fire(self, delay: float):
-        await asyncio.sleep(delay)
+    async def _fire(self, pressed: float):
+        """held tells the turn how long ago Fn went down: a question on screen is answered by a
+        press made while it was up, however long Fn takes to count as held."""
+        await asyncio.sleep(_left(pressed, self.config["fn_hold_ms"] / 1000))
         self.holding = True
-        await self.on_hold_start()
+        await self.on_hold_start(held=max(0.0, time.monotonic() - pressed))
 
     async def _still_down(self, delay: float):
         await asyncio.sleep(delay)

@@ -1245,6 +1245,21 @@ class Inner(unittest.TestCase):
         settle()
         self.assertEqual(self.win.appearance.rows, rows, "an unchanged list keeps its rows")
 
+    def test_20_b_a_changed_theme_list_keeps_focus_on_your_theme(self):
+        page = self.win.appearance
+        self.win.views.set_visible_child_name("appearance")
+        listing = page.listed
+        self.addCleanup(page.fill, listing)
+        page.rows[2].grab_focus()
+        settle()
+        first = {"id": "aardvark", "name": "Aardvark", "author": "Tux"}
+        page.fill({**listing, "themes": [first, *listing["themes"]]})
+        settle()
+        self.assertEqual(holder(self.win, page.rows).value, listing["themes"][2]["id"])
+        page.fill({**listing, "themes": listing["themes"][:1]})
+        settle()
+        self.assertIs(holder(self.win, page.rows), page.rows[0], "or the nearest one, if it went")
+
     def test_21_skills(self):
         page = self.win.skills
         self.win.views.set_visible_child_name("skills")
@@ -1436,6 +1451,23 @@ class Inner(unittest.TestCase):
             open_file.emit("activated")
         self.assertEqual(launcher.call_args.args[0].get_path(), dialog.details["file"])
         launcher.return_value.launch.assert_called_once()
+
+    def test_21_b_b_windows_line_endings_show_as_line_breaks(self):
+        """The loader reads CR LF as a line break, so it isn't a hidden character to show. A lone
+        CR still shows: the loader reads it as a line break, but grep and wc don't."""
+        text = "id: org.example.crlf\r\nname: Crlf  # a note\r\nversion: '1'\r\nlast: x\r"
+        page = sa.ManifestPage(mock.Mock(), {"manifest": text, "file": "/x/crlf.yaml"})
+        buffer = page.text.get_buffer()
+        shown_text = buffer.get_text(*buffer.get_bounds(), False)
+        self.assertEqual(shown_text,
+                         "id: org.example.crlf\nname: Crlf  # a note\nversion: '1'\nlast: x\\u000d")
+
+        def at(word):
+            return colours(buffer.get_iter_at_offset(shown_text.index(word)))
+
+        self.assertEqual(at("# a note"), [sa.highlight.COMMENT])
+        self.assertEqual(at("last"), [sa.highlight.KEY], "the colours stay in step with the text")
+        self.assertEqual(at("'1'"), [sa.highlight.STRING])
 
     def test_21_c_a_code_skill_you_added_lists_its_files(self):
         dialog = open_skill(self.win, "org.example.moon")
@@ -1688,6 +1720,96 @@ class Inner(unittest.TestCase):
             self.win.toast("No page open")
         window.assert_called_once()
 
+    def test_21_j_coming_back_to_the_window_keeps_your_place_in_the_skills(self):
+        """The skills are read again each time the window becomes active. An unchanged list must
+        not be rebuilt, or a keyboard or screen reader user is sent back to the first skill."""
+        page = self.win.skills
+        self.win.views.set_visible_child_name("skills")
+        wait(lambda: page.problem_rows, "the skills with problems")
+        settle()
+        rows, problems, orphans = list(page.rows), list(page.problem_rows), list(page.orphan_rows)
+        rows[-3].grab_focus()
+        scroll = scrolled(page).get_vadjustment()
+        before = still(scroll)
+        self.assertGreater(before, 0, "far enough down that the page has scrolled")
+        forget()
+        with mock.patch.object(self.win, "is_active", return_value=True):
+            self.win.on_active()
+        wait(lambda: calls("ListSkills") and calls("SkillProblems"), "the skills to reload")
+        settle()
+        self.assertEqual(page.rows, rows, "an unchanged list keeps its rows")
+        self.assertEqual(page.problem_rows, problems)
+        self.assertEqual(page.orphan_rows, orphans)
+        self.assertIs(holder(self.win, page.rows), rows[-3])
+        self.assertEqual(still(scroll), before)
+
+    def test_21_k_a_changed_skill_list_keeps_focus_on_your_skill(self):
+        page = self.win.skills
+        self.win.views.set_visible_child_name("skills")
+        settle()
+
+        def ids():
+            return [row.skill["id"] for row in page.rows]
+
+        def back():
+            control("SetSandbox", True, signature="b")
+            wait(lambda: "org.tuxistant.lights" in ids(), "Lights to come back")
+
+        self.addCleanup(back)
+        lights = ids().index("org.tuxistant.lights")
+        self.assertLess(lights, len(page.rows) - 3)
+        target = page.rows[-3]
+        target_id = target.skill["id"]
+        target.grab_focus()
+        scroll = scrolled(page).get_vadjustment()
+        before = still(scroll)
+        control("SetSandbox", False, signature="b")
+        wait(lambda: "org.tuxistant.lights" not in ids(), "Lights to go")
+        settle()
+        focus = holder(self.win, page.rows)
+        self.assertIsNotNone(focus, "the focus stays in the list")
+        self.assertEqual(focus.skill["id"], target_id)
+        self.assertLessEqual(abs(still(scroll) - before), focus.get_height(),
+                             "the page stays where it was, give or take the row that went")
+        back()
+        lights_row = page.rows[ids().index("org.tuxistant.lights")]
+        lights_row.grab_focus()
+        settle()
+        control("SetSandbox", False, signature="b")
+        wait(lambda: "org.tuxistant.lights" not in ids(), "Lights to go")
+        settle()
+        self.assertIs(holder(self.win, page.rows), page.rows[lights],
+                      "the skill that went leaves the focus on the one now in its place")
+
+    def test_21_l_a_skill_page_closed_after_the_list_changed_goes_back_to_its_row(self):
+        page = self.win.skills
+        self.win.views.set_visible_child_name("skills")
+        settle()
+
+        def lights_listed():
+            return any(row.skill["id"] == "org.tuxistant.lights" for row in page.rows)
+
+        def back():
+            control("SetSandbox", True, signature="b")
+            wait(lights_listed, "Lights to come back")
+
+        self.addCleanup(back)
+        row = next(row for row in page.rows if row.skill["id"] == "org.tuxistant.weather")
+        row.grab_focus()
+        settle()
+        row.activate()
+        dialog = page.dialog
+        wait(lambda: dialog.details is not None, "the skill's details")
+        control("SetSandbox", False, signature="b")
+        wait(lambda: not lights_listed(), "Lights to go")
+        self.assertIs(page.dialog, dialog, "a reload leaves the open page alone")
+        dialog.close()
+        wait(lambda: self.win.get_visible_dialog() is None, "the page to close")
+        settle()
+        focus = holder(self.win, page.rows)
+        self.assertIsNotNone(focus, "the focus goes back to the list")
+        self.assertEqual(focus.skill["id"], "org.tuxistant.weather")
+
     def test_22_history_lists_and_refreshes_live(self):
         page = self.win.history
         self.win.views.set_visible_child_name("history")
@@ -1822,6 +1944,22 @@ class Inner(unittest.TestCase):
         self.assertTrue(page.rows[2].get_expanded())
         self.assertTrue(page.rows[2].built)
         page.rows[2].set_expanded(False)
+
+    def test_24_g_a_new_request_keeps_focus_on_your_entry(self):
+        page = self.win.history
+        self.win.views.set_visible_child_name("history")
+        settle()
+        row = next(row for row in page.rows[1:] if isinstance(row, sa.HistoryRow))
+        at = page.rows.index(row)
+        row.grab_focus()
+        settle()
+        self.assertIs(holder(self.win, page.rows), row)
+        control("AddRequest", "One more thing", "Hello.", signature="ss")
+        wait(lambda: page.rows[0].get_title() == "One more thing", "the refresh")
+        settle()
+        self.assertIs(holder(self.win, page.rows), page.rows[at + 1],
+                      "the same request, a place further down")
+        self.assertEqual(page.rows[at + 1].entry["id"], row.entry["id"])
 
     def test_25_cloud_asks_before_turning_on(self):
         page = self.skill_page("org.tuxistant.task")
@@ -2886,6 +3024,26 @@ def labels_of(widget):
 
 def texts_of(widget):
     return [label.get_text() for label in labels_of(widget)]
+
+
+def holder(window, rows):
+    """The row that holds the window's keyboard focus, itself or in one of its children."""
+    focus = window.get_focus()
+    return next((row for row in rows if focus is not None
+                 and (focus == row or focus.is_ancestor(row))), None)
+
+
+def still(adjustment):
+    """Where a scroll ends up, once an animated one has stopped."""
+    value = None
+    while value != adjustment.get_value():
+        value = adjustment.get_value()
+        settle(150)
+    return value
+
+
+def scrolled(widget):
+    return next(child for child in iter_children(widget) if isinstance(child, Gtk.ScrolledWindow))
 
 
 def apply_button(row):

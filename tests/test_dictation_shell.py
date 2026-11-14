@@ -4,6 +4,9 @@ import unittest
 from tests.test_approval_card import ShellRun, needs_shell, read_report, start
 from tuxistant.dictation import NOTHING_HEARD, TOO_SHORT
 
+QUESTION = "I found two reports. Which one should I print?"
+HINT = "Hold Fn to answer"
+
 
 @needs_shell
 class Typing(ShellRun):
@@ -156,6 +159,25 @@ class Typing(ShellRun):
     def test_a_gos_own_note_does_not_say_how_to_stop_it(self):
         self.assertEqual(self.report["carry_own_short"], [True, "", TOO_SHORT])
         self.assertFalse(self.report["carry_own_short_after"][0])
+
+    def test_the_stop_line_goes_once_the_go_stops_listening(self):
+        """Contract, Dictation item 2: when the go stops listening the line goes."""
+        self.assertEqual(self.report["stop_line_listening"][:2],
+                         [True, "Dictating… tap Fn to stop"])
+        for key in ("stop_line_stopped", "stop_line_later"):
+            with self.subTest(key):
+                self.assertNotIn("Dictating", self.report[key][1])
+                self.assertFalse(self.report[key][0], self.report[key])
+
+    def test_an_earlier_gos_words_leave_a_question_on_screen(self):
+        self.assertEqual(self.report["late_question"], [True, "", QUESTION, HINT, ""])
+        self.assertEqual(self.report["late_typed_how"], "typed")
+        self.assertEqual(self.report["late_after_words"], [True, "", QUESTION, HINT, ""])
+
+    def test_an_earlier_gos_note_shows_under_a_question_and_outlives_it(self):
+        self.assertEqual(self.report["late_with_note"], [True, "", QUESTION, HINT, NOTHING_HEARD])
+        self.assertEqual(self.report["late_note_after_question"], [True, "", NOTHING_HEARD, "", ""])
+        self.assertFalse(self.report["late_note_gone"][0], self.report["late_note_gone"])
 
     def test_with_no_window_at_all_they_are_copied(self):
         self.assertEqual(self.report["no_window_how"], "copied")
