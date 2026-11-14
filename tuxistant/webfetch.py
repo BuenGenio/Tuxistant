@@ -65,6 +65,12 @@ RECIPE_ACCEPT = "application/json, text/plain;q=0.9"
 CHARSETS = re.compile(r"utf[-_]8|ascii|iso8859-\d+|cp125\d|koi8[-_][ru]|shift_jis|euc_jp|euc_kr|"
                       r"gb2312|gbk|gb18030|big5")
 
+# A host name as recipes and code skills must write it, and the only kind a page may name besides an
+# address: glibc's resolver reads \118 and \x in a name as v and x, which no name check here sees.
+LABEL = r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?"
+HOST = re.compile(rf"{LABEL}(\.{LABEL})*")
+MAX_HOST_CHARS = 253
+
 NOT_ALLOWED = "That address isn't one I'll read."
 UNREADABLE = "That page couldn't be read."
 HIDDEN_CATEGORIES = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
@@ -157,16 +163,27 @@ def _resolve(host: str, port: int) -> list[str]:
 def _name(host: str) -> str:
     """A host as the resolver looks it up: IDNA, as getaddrinfo encodes a name, lowercased and
     without a trailing dot. So ｖｏｉｃｅ.example, or voice.example with a soft hyphen in it, is
-    voice.example. UnicodeError if IDNA can't encode it, and then nothing can look it up."""
-    return host.encode("idna").decode("ascii").rstrip(".").lower()
+    voice.example. An address in its usual spelling, so [2606:4700:0:0::1111] is 2606:4700::1111.
+    UnicodeError if IDNA can't encode it, and then nothing can look it up."""
+    name = host.encode("idna").decode("ascii").rstrip(".").lower()
+    return _same(name) if _is_address(name) else name
 
 
 def _request_name(host: str) -> str:
-    """_name, for a host a page or a recipe names: one IDNA can't encode is refused."""
+    """_name, for a host a page or a recipe names, refused unless it is an address or a plain
+    name: one IDNA can't encode, or with a backslash, an underscore, a space or a % in it."""
     try:
-        return _name(host)
+        name = _name(host)
     except UnicodeError:
         raise PageError(NOT_ALLOWED) from None
+    if not _plain_host(name):
+        raise PageError(NOT_ALLOWED)
+    return name
+
+
+def _plain_host(name: str) -> bool:
+    """An address, or a name the resolver looks up just as written."""
+    return _is_address(name) or (len(name) <= MAX_HOST_CHARS and bool(HOST.fullmatch(name)))
 
 
 def _same(address: str) -> str:
@@ -181,12 +198,17 @@ def _same(address: str) -> str:
 def _server_host(server: str) -> str | None:
     """The host of a server in the settings, as _name gives it, so it compares with a page's or a
     recipe's however either is spelled. None if there is none, or IDNA can't encode it: then no
-    one can look it up, this install included."""
+    one can look it up, this install included. TimeoutError if it isn't an address or a plain
+    name, as the resolver may read it as a name no check here sees: every request is refused
+    until it is put right."""
     try:
         host = urllib.parse.urlsplit(_urls(server)[0]).hostname
-        return _name(host) if host else None
+        name = _name(host) if host else None
     except (ValueError, UnicodeError):      # config.json can hold anything
         return None
+    if name is not None and not _plain_host(name):
+        raise TimeoutError
+    return name
 
 
 OWN_KEYS = ("server", "translate_server", "search_server", "ha_server")
@@ -218,7 +240,10 @@ def own_servers(config, seconds: float, since: float | None = None) -> tuple[set
 
 def start_own_lookups(config):
     """Starts what own_servers will need, without waiting for it."""
-    _start_own_lookups(_own_hosts(config))
+    try:
+        _start_own_lookups(_own_hosts(config))
+    except TimeoutError:    # a server in the settings no request may be judged by: own_servers says
+        pass
 
 
 def _own_hosts(config) -> list[str]:
@@ -546,10 +571,11 @@ def _parse(url: str) -> tuple[str, str, int, str]:
         host, port, path = parts.hostname, parts.port, _path(parts)
     except ValueError:      # a bad port, or brackets that don't hold an address
         raise PageError(NOT_ALLOWED) from None
-    if parts.scheme not in SCHEMES or not host or parts.username is not None:
-        raise PageError(NOT_ALLOWED)     # any "@" at all gives a username, even an empty one
+    # Any "@" at all gives a username, even an empty one. Port 0 isn't "no port", which is 80.
+    if parts.scheme not in SCHEMES or not host or parts.username is not None or port == 0:
+        raise PageError(NOT_ALLOWED)
     # As it will be looked up, so it is judged by the name the resolver sees, in any spelling.
-    return parts.scheme, _request_name(host), port or SCHEMES[parts.scheme], path
+    return parts.scheme, _request_name(host), SCHEMES[parts.scheme] if port is None else port, path
 
 
 def _judge(scheme: str, host: str, port: int, path: str, addresses: list[str],
@@ -766,8 +792,11 @@ def fetch(url: str, config, seconds: float = TOTAL_S, own=None) -> Page:
     deadline = time.monotonic() + seconds
     for _ in range(MAX_REDIRECTS + 1):
         scheme, host, port, path = _parse(url)
-        if host in _own_names(config):
-            raise PageError(NOT_ALLOWED)
+        try:
+            if host in _own_names(config):
+                raise PageError(NOT_ALLOWED)
+        except TimeoutError:
+            raise PageError(UNREADABLE) from None
         since = time.monotonic()
         if own is None:     # looked up alongside the page's host
             start_own_lookups(config)

@@ -107,6 +107,11 @@ It also found two tests whose stand-ins for the network ended before a thread th
 
 - *An own server's name in another spelling.* The resolver encodes a name with IDNA before it looks it up, so `ｖｏｉｃｅ.example` in fullwidth letters, or `voice.example` with a soft hyphen in it, is looked up as `voice.example`. A page's host was compared with the servers' names as written, so such a spelling got past the name. That mattered where only the name could refuse it: when the server's lookup had failed earlier in a research run and the name answered now. Every host, a page's, a redirect's, a recipe's and those in Settings, is now compared as the resolver will look it up: IDNA, lowercase and without a trailing dot. A page's host IDNA can't encode is refused.
 
+**The seventh network review.** A check of 31418f1 found one more, there since 12a720e, and a nit. Each now has a test that failed before the fix:
+
+- *A backslash in a page's host.* glibc's resolver reads `\118` in a name as `v` and `\e` as `e`, so `\118oice.example` and `voic\e.example` were looked up as `voice.example` and got past its name. A page's host now has to be an address, which is compared in its usual spelling, or a name made only of letters, digits and hyphens once IDNA has encoded it, the rule recipes already follow. Anything else, such as a backslash, an underscore, a space or a `%`, is refused before it is looked up. A server in Settings whose host breaks that rule would reach the resolver in a form no check here sees, so while one is set every page and recipe request fails closed: it "didn't answer".
+- *Port 0 was port 80.* `http://example.com:0/` was read as having no port. It is refused now.
+
 ## A hostile model
 
 Unlike the attacks below, this one hasn't been tried: no backdoored model or hostile model file has been run against Tuxistant.

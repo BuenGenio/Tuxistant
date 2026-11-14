@@ -7,6 +7,7 @@ them without asking anyone.
 import ipaddress
 import json
 import os
+import re
 import socket
 import ssl
 import sys
@@ -776,6 +777,63 @@ class OwnServers(unittest.TestCase):
                         webfetch.fetch(f"http://{host}:8080/", config, 2, own=own)
                     self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
                     self.assertEqual(self.web.dialled, [])
+
+    def glibc(self):
+        """The resolver as CPython and glibc make it: IDNA for a name that isn't ASCII, then the
+        escapes res_mkquery reads, \\118 as v and \\e as e."""
+        fake = webfetch._resolve
+
+        def resolve(host, port):
+            if not host.isascii():
+                host = host.encode("idna").decode("ascii")
+            host = re.sub(r"\\(\d{3})", lambda m: chr(int(m.group(1))), host)
+            return fake(re.sub(r"\\(.)", r"\1", host), port)
+        return mock.patch.object(webfetch, "_resolve", resolve)
+
+    def test_a_server_s_name_with_escapes_the_resolver_reads(self):
+        config = {**self.config, "server": "voice.example:8080"}
+        own = webfetch.own_servers(config, 1)
+        self.web.names["voice.example"] = ["8.8.4.4"]
+        with self.glibc():
+            for host in ("\\118oice.example", "voic\\e.example"):
+                self.web.dialled.clear()
+                with self.subTest(host):
+                    with self.assertRaises(PageError) as caught:
+                        webfetch.fetch(f"http://{host}:8080/", config, 2, own=own)
+                    self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+                    self.assertEqual(self.web.dialled, [])
+
+    def test_only_a_plain_name_or_an_address_is_looked_up(self):
+        for host in ("my_host.example", "voice%2eexample", "voi\u3000ce.example", "a\\.b"):
+            self.web.lookups.clear()
+            with self.subTest(host):
+                with self.assertRaises(PageError) as caught:
+                    webfetch.fetch(f"http://{host}/", self.config, 1)
+                self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+                self.assertEqual(self.web.lookups, [], "refused before anything is looked up")
+
+    def test_an_address_in_another_spelling_is_the_same_name(self):
+        self.assertEqual(webfetch._parse("http://[2606:4700:0:0::1111]/")[1], "2606:4700::1111")
+        config = {**self.config, "server": "[2606:4700:0::1111]:8080"}
+        self.assertIn("2606:4700::1111", webfetch.own_servers(config, 1)[0])
+
+    def test_a_server_in_the_settings_the_resolver_would_read_otherwise(self):
+        """Every request fails closed until it is put right."""
+        config = {**self.config, "server": "voic\\e.example:8080"}
+        with self.assertRaises(TimeoutError):
+            webfetch.own_servers(config, 1)
+        with self.assertRaises(PageError) as caught:
+            webfetch.fetch("http://example.com/", config, 1)
+        self.assertEqual(str(caught.exception), webfetch.UNREADABLE)
+        with self.assertRaises(TimeoutError):
+            webfetch.recipe_place("example.com", 443, config, 1)
+        self.assertEqual(self.web.dialled, [])
+
+    def test_port_0_is_not_port_80(self):
+        with self.assertRaises(PageError) as caught:
+            webfetch.fetch("http://example.com:0/", self.config, 1)
+        self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+        self.assertEqual(self.web.dialled, [])
 
     def test_a_server_in_the_settings_in_another_spelling(self):
         config = {**self.config, "server": "http://ＶＯＩ\u00adＣＥ.example:8080"}
