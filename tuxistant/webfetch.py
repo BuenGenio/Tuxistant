@@ -206,6 +206,18 @@ def _same(address: str) -> str:
     return str(getattr(ip, "ipv4_mapped", None) or ip)
 
 
+def _leads_to(address: str) -> str:
+    """_same, and a NAT64 address as the IPv4 address a gateway delivers it to, so 64:ff9b::808:404
+    matches 8.8.4.4 when comparing where an address leads. Never what is dialled: an IPv6-only
+    network reaches 8.8.4.4 only through the NAT64 address."""
+    same = _same(address)
+    try:
+        ip = ipaddress.ip_address(same)
+    except ValueError:
+        return same
+    return str(ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)) if ip in NAT64 else same
+
+
 def _server_host(server: str) -> str | None:
     """The host of a server in the settings, as _name gives it, so it compares with a page's or a
     recipe's however either is spelled. None if there is none, or IDNA can't encode it: then no
@@ -328,7 +340,7 @@ def _own_wait(hosts, waits: list[_Lookup], deadline: float,
 
 def _own_resolve(lookup: _Lookup):
     try:
-        found = frozenset(map(_same, _resolve(lookup.host, 0)))
+        found = frozenset(map(_leads_to, _resolve(lookup.host, 0)))
     except Exception:   # anything: a lookup that never ended would make every call wait for it
         found = frozenset()
     with _own_lock:     # stored before the waiters wake, so they find it
@@ -367,7 +379,7 @@ def this_computer() -> set[str]:
         packed = (line.split() or [""])[0]
         if len(packed) == 32:
             found.add(":".join(packed[i:i + 4] for i in range(0, 32, 4)))
-    return {_same(address) for address in found if _is_address(address)}
+    return {_leads_to(address) for address in found if _is_address(address)}
 
 
 def _sys(path: str) -> str:
@@ -499,11 +511,16 @@ def _on_this_computer(addresses) -> bool:
     """Whether any address is this computer's own, public ones too, or on the network of one of
     its containers or virtual machines, whatever range that network was given. What answers
     there runs here, and a port Docker publishes answers on every one of them."""
-    same = set(map(_same, addresses))
-    if same & this_computer():
+    leads = set(map(_leads_to, addresses))
+    if leads & this_computer():
         return True
     routes = kernel_routes()
-    return any(_not_a_device(address, routes) for address in same)
+    return any(_not_a_device(address, routes) for address in leads | set(map(_same, addresses)))
+
+
+def _at_own(addresses, own_addresses) -> bool:
+    """Whether any address leads where one of the install's own servers answered."""
+    return not set(map(_leads_to, own_addresses)).isdisjoint(map(_leads_to, addresses))
 
 
 def _is_address(text: str) -> bool:
@@ -533,7 +550,7 @@ def place(host: str, port: int, own: tuple[set[str], set[str]], addresses=None) 
         raise PageError(NOT_ALLOWED)
     if addresses is None:
         addresses = _resolve(host, port)
-    if not addresses or own_addresses.intersection(map(_same, addresses)) or (
+    if not addresses or _at_own(addresses, own_addresses) or (
             _on_this_computer(addresses)):
         raise PageError(NOT_ALLOWED)
     if all(map(public, addresses)):
@@ -603,7 +620,7 @@ def _judge(scheme: str, host: str, port: int, path: str, addresses: list[str],
     # All of them must pass: a name with one public address and one private one is an attack.
     # This computer and its guests come last, as finding them reads /proc and /sys.
     if (host in names or not addresses or not all(map(public, addresses))
-            or own_addresses.intersection(map(_same, addresses))
+            or _at_own(addresses, own_addresses)
             or _on_this_computer(addresses)):
         raise PageError(NOT_ALLOWED)
     return Target(scheme, host, port, path, addresses)

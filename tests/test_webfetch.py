@@ -143,6 +143,29 @@ class Refusals(unittest.TestCase):
                 self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
         self.assertIn("real page", webfetch.fetch("http://example.com/", CONFIG).text)
 
+    def test_this_computer_and_its_servers_through_nat64(self):
+        """A NAT64 gateway delivers 64:ff9b::808:404 to 8.8.4.4, so it leads where 8.8.4.4 does,
+        here or to a server of this install, either way round."""
+        self.web.here = {"127.0.0.1", "::1", "8.8.4.4"}
+        self.web.guests = [ipaddress.ip_network("8.8.8.0/24")]
+        self.web.names |= {"nat64.example": ["64:ff9b::808:404"],
+                           "64:ff9b::808:404": ["64:ff9b::808:404"],
+                           "guest.example": ["64:ff9b::808:809"]}
+        for host in ("nat64.example", "[64:ff9b::808:404]", "guest.example"):
+            with self.subTest(host):
+                self.refused(f"http://{host}:2375/")
+                with self.assertRaises(PageError):
+                    webfetch.check(f"http://{host}:2375/", (set(), set()))
+        self.web.here, self.web.guests = {"127.0.0.1"}, []
+        own = (set(), {"8.8.4.4"})
+        with self.assertRaises(PageError):
+            webfetch.check("http://nat64.example/", own)
+        self.web.names |= {"tux.example": ["64:ff9b::101:101"], "one.example": ["1.1.1.1"]}
+        config = {**DEFAULTS, "server": "tux.example:8080"}
+        self.refused("http://one.example/", config)
+        self.assertEqual(webfetch.check("http://nat64.example/", (set(), set())).addresses,
+                         ["64:ff9b::808:404"], "dialled as looked up")
+
     def test_this_computers_containers_on_a_public_range(self):
         self.web.guests = [ipaddress.ip_network("2a01:4f8:c0c:2::/64"),
                            ipaddress.ip_network("8.8.4.0/24")]
@@ -1186,6 +1209,15 @@ class Places(unittest.TestCase):
             with self.subTest(addresses), self.assertRaises(PageError) as caught:
                 self.place(*addresses)
             self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+
+    def test_this_computers_public_address_through_nat64(self):
+        with mock.patch.object(webfetch, "this_computer", return_value={"8.8.4.4"}):
+            for addresses in (["64:ff9b::808:404"], ["8.8.4.4"], ["::ffff:8.8.4.4"]):
+                with self.subTest(addresses), self.assertRaises(PageError):
+                    self.place(*addresses)
+        with self.assertRaises(PageError):
+            self.place("64:ff9b::808:404", own=(set(), {"8.8.4.4"}))
+        self.assertFalse(self.place("64:ff9b::808:404").local)
 
     def test_this_computers_containers_and_virtual_machines(self):
         """They answer here, though they look like the house: a container's port answers on its

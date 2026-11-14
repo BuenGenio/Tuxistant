@@ -1327,6 +1327,63 @@ class Host(Case):
         self.assertIn("work.chat", again.current().actions)
         self.assertNotIn("coins.price", again.current().actions, "no older version to fall to")
 
+    def alarm(self) -> Path:
+        return self.add("alarm.yaml", recipe(id="org.example.alarm", permissions={}, actions={
+            "alarm.ring": {"description": "Say it is time to get up", "say": "Get up."}}))
+
+    def saved(self) -> dict:
+        return json.loads((self.user.parent / skillhost.LOADED).read_text())
+
+    async def test_a_skill_that_grew_while_tux_was_off_keeps_its_place_from_a_new_one(self):
+        """With no version to keep, notes was refused and alarm, refused before, took its
+        room, so notes put back as it was was refused for being one too many."""
+        self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")    # 6
+        alarm = self.alarm()
+        self.assertEqual(self.host.reload(), {str(alarm): skillhost.OVER_BUDGET})
+        before = (self.user / "notes.yaml").read_text()
+        notes = self.grow("notes.yaml", "notes.hello")
+        again = self.restart()
+        self.assertEqual(again.reload(), {str(notes): skillhost.GREW,
+                                          str(alarm): skillhost.OVER_BUDGET})
+        self.assertNotIn("alarm.ring", again.current().actions)
+        kept = {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1, "work.yaml": 3}
+        self.assertEqual(self.saved(), kept, "notes keeps its place at the size it had")
+        self.assertEqual(self.restart().reload(), {str(notes): skillhost.GREW,
+                                                   str(alarm): skillhost.OVER_BUDGET})
+        notes.write_text(before)
+        third = self.restart()
+        self.assertEqual(third.reload(), {str(alarm): skillhost.OVER_BUDGET})
+        self.assertIn("notes.phone", third.current().actions)
+        self.assertEqual(self.saved(), kept)
+
+    async def test_a_skill_that_grew_and_was_refused_keeps_its_place_while_tux_runs(self):
+        self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")    # 6
+        notes = self.grow("notes.yaml", "notes.hello")
+        again = self.restart()
+        self.assertEqual(again.reload(), {str(notes): skillhost.GREW})
+        alarm = self.alarm()
+        self.assertEqual(again.reload(), {str(notes): skillhost.GREW,
+                                          str(alarm): skillhost.OVER_BUDGET})
+        self.assertEqual(self.saved()["notes.yaml"], 1)
+
+    async def test_two_skills_that_grew_keep_their_places_after_a_restart(self):
+        """coins' growth took the room notes had, and notes put back was one too many."""
+        self.example("coins.yaml", "deskstrip.yaml", "notes.yaml", "work.yaml")    # 6
+        before = (self.user / "notes.yaml").read_text()
+        coins = self.grow("coins.yaml", "coins.hello")
+        notes = self.grow("notes.yaml", "notes.hello")
+        kept = f"{skillhost.GREW} {skillhost.KEPT}"
+        self.assertEqual(self.host.reload(), {str(coins): kept, str(notes): kept})
+        again = self.restart()
+        both = {str(coins): skillhost.GREW, str(notes): skillhost.GREW}
+        self.assertEqual(again.reload(), both, "neither one's growth is granted")
+        self.assertFalse({"coins.hello", "notes.hello"} & set(again.current().actions))
+        self.assertEqual(self.saved(), {"coins.yaml": 1, "deskstrip.yaml": 1, "notes.yaml": 1,
+                                        "work.yaml": 3})
+        notes.write_text(before)
+        self.assertEqual(again.reload(), {str(coins): skillhost.GREW})
+        self.assertIn("notes.phone", again.current().actions)
+
     async def test_a_code_skill_that_grows_keeps_its_last_version(self):
         class Process:
             async def stop(self, graceful=True):

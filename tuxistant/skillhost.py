@@ -642,7 +642,7 @@ class SkillHost:
         try:
             found = self._scan(problems)
             sandbox_problem = self._sandbox_problem()
-            chosen = self._resolve(found, problems, sandbox_problem)
+            chosen, places = self._resolve(found, problems, sandbox_problem)
             self._grant(chosen)
             skills, running, offered = self._build(chosen, problems, sandbox_problem)
         except Exception as e:
@@ -653,6 +653,7 @@ class SkillHost:
         self._swap(skills, running)
         self.problems, self.last_offered = problems, offered
         self.offered = {key: len(item.manifest["actions"]) for key, item in offered.items()}
+        self.offered.update(places)
         self._save_loaded()
         return dict(problems)
 
@@ -766,22 +767,23 @@ class SkillHost:
 
     # Deciding who gets what
 
-    def _resolve(self, found: list[_Found], problems: dict, sandbox_problem: str) -> list[_Found]:
-        """Yours that were loaded keep their place, ahead of new ones, so a file dropped in is
+    def _resolve(self, found: list[_Found], problems: dict, sandbox_problem: str):
+        """What loads, and the places kept for yours that grew and have no version to use.
+        Yours that were loaded keep their place, ahead of new ones, so a file dropped in is
         the one refused rather than one that was working. One that has more actions than it was
         offered with comes after those that don't, so what it added is refused, never another
-        skill, and the version offered stays in use while there is one. Room is held for that
-        version of each one still to come, so one's growth never takes another's place."""
+        skill, and the version offered stays in use while there is one. Room for the size it
+        was offered at is held for each one still to come, and kept for one refused with no
+        version to use, as after a restart, so neither a new skill nor another's growth takes
+        its place."""
         ids, actions, tools = set(), set(), set()
         builtin_ids = {item.manifest["id"] for item in found if item.kind == "builtin"}
         ours = {_namespace(name) for name in HANDLERS} | {
             _namespace(name) for item in found if item.manifest["source"] != "yours"
             for name in item.manifest["actions"]}
         yours = 0
-        chosen = []
-        held = {item.key: len(self.last_offered[item.key].manifest["actions"])
-                for item in found
-                if self._place(item) == GROWN and item.key in self.last_offered}
+        chosen, places = [], {}
+        held = {item.key: self.offered[item.key] for item in found if self._place(item) == GROWN}
 
         def refusal(item: _Found) -> str:
             mine = item.manifest["source"] == "yours"
@@ -801,6 +803,9 @@ class SkillHost:
                     # a broken edit's own reason, which says the same of the version kept
                     problems.setdefault(item.key, f"{GREW} {KEPT}")
                     item, problem = before, ""
+                elif before is None:
+                    places[item.key] = self.offered[item.key]
+                    yours += self.offered[item.key]
             if problem:
                 problems[item.key] = problem
                 continue
@@ -809,7 +814,7 @@ class SkillHost:
             actions.update(item.manifest["actions"])
             tools.update(name.replace(".", "_") for name in item.manifest["actions"])
             chosen.append(item)
-        return chosen
+        return chosen, places
 
     def _place(self, item: _Found) -> int:
         """Where it is counted: built-in and bundled ones, and yours as loaded or smaller, keep
