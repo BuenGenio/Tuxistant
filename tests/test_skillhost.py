@@ -278,8 +278,8 @@ class Refused(Case):
         b = self.many("b", "beta", 3)
         self.many("c", "gamma", 2)
         problems = self.host.reload()
-        self.assertEqual(problems, {str(b): skillhost.over_budget(4, 3)})
-        self.assertIn("already bring 4 actions, and its 3", problems[str(b)])
+        self.assertEqual(problems, {str(b): skillhost.over_budget(6, 3)}, "a and c, as it ends")
+        self.assertIn("already bring 6 actions, and its 3", problems[str(b)])
         self.assertIn("gamma.a1", self.host.current().actions, "a later one that fits loads")
 
     def test_the_budget_counts_one_action_as_one(self):

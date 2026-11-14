@@ -788,6 +788,17 @@ class Docs(unittest.TestCase):
         note = next(line for line in body.splitlines() if "loaded in 0.4.0" in line)
         self.assertIn(f"for one with {seven}", note, "taking another out can't bring it back")
 
+    def test_the_budget_contract_names_only_what_is_there(self):
+        """It named _held_by_another() after that was gone."""
+        from tuxistant import skillhost
+        rule = next(line for line in (ROOT / "docs/CONTRACT.md").read_text().splitlines()
+                    if line.startswith("- An action of yours may not start like"))
+        named = set(re.findall(r"`(\w+)\(\)`", rule))
+        self.assertGreater(len(named), 10)
+        homes = (skillhost, skillhost.SkillHost, skillhost._Grants)
+        self.assertEqual({name for name in named
+                          if not any(hasattr(home, name) for home in homes)}, set())
+
     def test_a_reach_list_counts_its_items(self):
         numbers = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5, "Six": 6}
         counted = 0

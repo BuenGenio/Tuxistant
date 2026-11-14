@@ -10,7 +10,8 @@ six-action budget:
       is still there, unless the edit to it that gave that name up has just loaded;
   I5  no action of yours is a built-in one, and no id of yours one of Tuxistant's;
   I6  refused edits that could all load together, as in a swap, don't all stay refused;
-  I7  right after a restart, tuxistant doctor refuses the same skills and loads the same tools.
+  I7  right after a restart, tuxistant doctor refuses the same skills and loads the same tools;
+  I8  a reload with nothing changed changes nothing, not even a reason.
 """
 import os
 import random
@@ -146,6 +147,11 @@ class Fuzz(tr.Case):
             stuck = self.stuck(host, problems)
             if stuck:
                 return [("I6", where, stuck)]
+            owners = {k: spec["skill"] for k, spec in actions.items()}
+            again = host.reload()
+            if again != problems or owners != {
+                    k: spec["skill"] for k, spec in host.current().actions.items()}:
+                return [("I8", where, {Path(k).name: why[:80] for k, why in again.items()})]
             if restarted:
                 doctor = skillhost.offline(CONFIG, builtin=self.builtin, bundled=self.bundled,
                                            user=self.user)
