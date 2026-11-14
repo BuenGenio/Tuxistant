@@ -58,7 +58,7 @@ class Timing(Case):
         await asyncio.wait_for(self.helper.connected.wait(), 2)
 
     def run_client(self):
-        async def start():
+        async def start(held=0.0):
             self.calls.append("start")
 
         async def end():
@@ -159,10 +159,11 @@ class Dictating(Case):
         self.going = False      # what the daemon would say about dictating
 
         def note(word):
-            async def call(*args):
+            async def call(*args, **_how):
                 self.calls.append(" ".join((word, *args)))
                 if word == "dictate":
                     self.going = True
+                    return "go"
                 elif word in ("typed", "dropped"):
                     self.going = False
             return call
@@ -170,7 +171,7 @@ class Dictating(Case):
         self.client = FnClient(self.config, note("hold"), note("hold end"), path="unused",
                                on_dictate_start=note("dictate"), on_dictate_end=note("typed"),
                                on_dictate_cancel=note("dropped"), on_dictate_mode=note("mode"),
-                               dictating=lambda: self.going)
+                               dictating=lambda _go: self.going)
         self.addCleanup(self.client._disarm)
 
     async def send(self, *words, gap=0.01):
@@ -261,6 +262,32 @@ class Dictating(Case):
         await asyncio.sleep(fnclient.TAP_S)
         self.assertEqual(self.calls, ["dictate", "dropped"])
 
+    async def test_a_go_fn_did_not_start_is_not_fns_to_drop_or_name(self):
+        """A go from the shortcut was already listening, so the second press started none: a
+        Fn shortcut on it must not drop that go, nor a tap make it hands-free."""
+        calls = []
+
+        async def start():
+            calls.append("dictate")     # and returns no go: one was already listening
+
+        def note(word):
+            async def call(*_args, **_how):
+                calls.append(word)
+            return call
+
+        client = FnClient(self.config, note("hold"), note("hold end"), path="unused",
+                          on_dictate_start=start, on_dictate_end=note("typed"),
+                          on_dictate_cancel=note("dropped"), on_dictate_mode=note("mode"),
+                          dictating=lambda *_go: True)
+        self.addCleanup(client._disarm)
+        for words in (("down", "up", "down", "other", "up"), ("down", "up", "down", "up")):
+            await asyncio.sleep(fnclient.SECOND_PRESS_S)
+            for word in words:
+                await client.handle(word)
+                await asyncio.sleep(0.01)
+        await asyncio.sleep(fnclient.TAP_S + 0.05)
+        self.assertEqual(calls, ["dictate", "dictate"])
+
     async def test_it_can_be_turned_off(self):
         self.config.values["dictation_enabled"] = False
         await self.send("down", "up", "down", "up")
@@ -283,8 +310,9 @@ class Dictating(Case):
 
         async def start():
             calls.append("dictate")
+            return "go"
 
-        async def end():
+        async def end(go):
             calls.append("typed")
 
         client = FnClient(self.config, mock.AsyncMock(), mock.AsyncMock(), path="unused",
@@ -330,17 +358,18 @@ class SlowToStart(Case):
         self.addAsyncCleanup(self.helper.stop)
 
         def note(word):
-            async def call(*args):
+            async def call(*args, **_how):
                 if word == "dictate":
                     await asyncio.sleep(self.START)
                     self.going = True
                 self.calls.append(" ".join((word, *args)))
+                return "go" if word == "dictate" else None
             return call
 
         self.client = FnClient(self.config, note("hold"), note("hold end"), path=path,
                                on_dictate_start=note("dictate"), on_dictate_end=note("typed"),
                                on_dictate_cancel=note("dropped"), on_dictate_mode=note("mode"),
-                               dictating=lambda: self.going)
+                               dictating=lambda _go: self.going)
         task = asyncio.create_task(self.client.run())
         self.addCleanup(task.cancel)
         self.addCleanup(self.client._disarm)
@@ -368,6 +397,21 @@ class SlowToStart(Case):
         await asyncio.sleep(self.START + 0.05)
         self.assertEqual(self.calls, ["dictate", "mode hold"])
 
+    async def test_the_hold_says_how_long_ago_fn_went_down(self):
+        """A question on screen is answered by a press made while it was up, so the turn needs
+        the press, not HoldStart, which comes fn_hold_ms later."""
+        held = []
+
+        async def start(**how):
+            held.append(how.get("held"))
+
+        client = FnClient(self.config, start, mock.AsyncMock(), path="unused")
+        self.addCleanup(client._disarm)
+        await client.handle("down", time.monotonic() - 1)
+        await asyncio.sleep(0.02)
+        self.assertEqual(len(held), 1)
+        self.assertGreaterEqual(held[0] or 0, 1.0)
+
     async def test_the_talk_timer_counts_from_the_press(self):
         await self.client.handle("down", time.monotonic() - 1)
         await asyncio.sleep(0.02)
@@ -377,15 +421,15 @@ class SlowToStart(Case):
 class Wiring(Case):
     """The daemon's own wiring, to the real controller."""
 
-    async def test_the_service_gives_fn_the_mode_and_asks_whether_it_still_dictates(self):
+    async def test_the_service_gives_fn_the_mode_and_asks_whether_its_go_still_listens(self):
         from tuxistant import service
-        ctl = mock.Mock(dictating=True)
+        ctl = mock.Mock()
         client = service.fn_client(Config(self.folder / "config.json"), ctl, path="unused")
         self.assertIs(client.on_dictate_mode, ctl.dictate_mode)
         self.assertIs(client.on_dictate_start, ctl.dictate_start)
-        self.assertTrue(client.still_dictating())
-        ctl.dictating = False
-        self.assertFalse(client.still_dictating())
+        self.assertIs(client.on_dictate_end, ctl.dictate_end)
+        self.assertIs(client.on_dictate_cancel, ctl.drop_go)
+        self.assertIs(client.still_dictating, ctl.going)
 
 
 class Connection(Case):

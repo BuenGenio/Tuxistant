@@ -32,14 +32,18 @@ export class Caption {
         this._heard = this._addLabel('tuxistant-caption-heard');
         this._reply = this._addLabel('tuxistant-caption-reply');
         this._hint = this._addLabel('tuxistant-caption-hint');
+        this._note = this._addLabel('tuxistant-caption-reply');
+        this._note.add_style_class_name('tuxistant-caption-error');
         Main.layoutManager.addTopChrome(this.actor);
         this._timeoutId = 0;
+        this._noteId = 0;
         this._rect = null;
         this._monitor = null;
         this._anchor = 'bottom-right';
         this._blobVisible = false;
         this._isError = false;
         this._standing = () => '';
+        this._standingShown = false;
         this._asking = false;
     }
 
@@ -70,8 +74,22 @@ export class Caption {
     showHeard(text) {
         if (this._isError || this._reply.visible)
             this._clearLabels();
+        this._standingShown = false;
         this._set(this._heard, text.slice(-MAX_CHARS));
         this._present();
+    }
+
+    // How to stop the go that listens. It is only true while it listens: see endStanding.
+    showStanding(text) {
+        this.showHeard(text);
+        this._standingShown = true;
+    }
+
+    // The go stopped listening, so the line that says how to stop it goes. A note under it
+    // keeps its own time, and restand() takes the line from above it.
+    endStanding() {
+        if (this._standingShown)
+            this.hide();
     }
 
     // Words over a question that is fading, such as a timer's, take its place whole: its hint
@@ -85,7 +103,12 @@ export class Caption {
 
     // standing() is a line that outlives the note, such as how to stop the go that is listening:
     // above the note while it shows, and in its place after. It is asked each time, as it can end.
+    // A question on screen keeps its place and its time, and the note shows under it.
     showError(text, standing = () => '') {
+        if (this._asking) {
+            this._noteUnder(text);
+            return;
+        }
         this._clearLabels();
         this._isError = true;
         this._standing = standing;
@@ -114,13 +137,44 @@ export class Caption {
         this._set(this._reply, clip(question));
         this._set(this._hint, hint);
         this._present();
-        this._hideIn(ms);
+        this._after(ms, () => this._endAsking());
     }
 
     // The question has been answered or dropped.
     endQuestion() {
         if (this._asking)
+            this._endAsking();
+    }
+
+    // A note that came while the question was up outlives it, as a note of its own.
+    _endAsking() {
+        const note = this._noteId ? this._note.text : '';
+        if (note) {
+            this._clearLabels();
+            this.showError(note);
+        } else {
             this.hide();
+        }
+    }
+
+    _noteUnder(text) {
+        this._cancelNote();
+        this._set(this._note, text);
+        this._place();
+        this._noteId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ERROR_MS, () => {
+            this._noteId = 0;
+            this._set(this._note, '');
+            if (this.actor.visible)
+                this._place();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _cancelNote() {
+        if (this._noteId) {
+            GLib.source_remove(this._noteId);
+            this._noteId = 0;
+        }
     }
 
     // The turn is over: keep the text up for a moment. An error and a question keep their own timer.
@@ -160,10 +214,13 @@ export class Caption {
     _clearLabels() {
         this._isError = false;
         this._asking = false;
+        this._standingShown = false;
+        this._cancelNote();
         this._reply.remove_style_class_name('tuxistant-caption-error');
         this._set(this._heard, '');
         this._set(this._reply, '');
         this._set(this._hint, '');
+        this._set(this._note, '');
     }
 
     // Text that comes with no blob on screen goes where the user is, not where the blob last was.
@@ -190,14 +247,20 @@ export class Caption {
     }
 
     _hideIn(ms, standing = () => '') {
+        this._after(ms, () => {
+            const line = standing();
+            if (line)
+                this.showStanding(line);
+            else
+                this.hide();
+        });
+    }
+
+    _after(ms, then) {
         this._cancelTimeout();
         this._timeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
             this._timeoutId = 0;
-            const line = standing();
-            if (line)
-                this.showHeard(line);
-            else
-                this.hide();
+            then();
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -247,6 +310,7 @@ export class Caption {
 
     destroy() {
         this._cancelTimeout();
+        this._cancelNote();
         this.actor.remove_all_transitions();
         this.actor.destroy();
         this.actor = null;

@@ -3,12 +3,13 @@ docs/CONTRACT.md. A scripted server and fake audio, as in test_daemon_controller
 import asyncio
 import json
 import sys
+import time
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_daemon_fakes import Case, CountingSkills, tone  # noqa: E402
-from tuxistant import controller, planner, service, skills  # noqa: E402
+from tuxistant import controller, planner, realtime, service, skills  # noqa: E402
 from tuxistant.controller import Talk, _Fixed  # noqa: E402
 from tuxistant.gate import Ask, Speak  # noqa: E402
 from tuxistant.planner import Reply  # noqa: E402
@@ -50,7 +51,10 @@ class FollowUps(Case):
         self.speech = mock.AsyncMock(return_value=tone(0.1))
 
         async def transcribe(_config, _pcm):
-            return self.said.pop(0)
+            words = self.said.pop(0)
+            if isinstance(words, Exception):
+                raise words
+            return words
 
         async def is_fact(heard, _config):
             self.sorted.append(heard)
@@ -294,14 +298,15 @@ class FollowUps(Case):
 
     async def test_a_fn_shortcut_while_dictating_leaves_it_alone(self):
         rig = self.rig(1)
-        daemon = service.Daemon(rig.config, rig.history, CountingSkills())
         rt = mock.Mock(close=mock.AsyncMock())
-        daemon.controller.talk = Talk(rt)
-        await daemon.fn_keys().on_dictate_cancel()
-        self.assertIsNotNone(daemon.controller.talk)
+        rig.ctl.talk = Talk(rt)
+        go = await rig.ctl.dictate_start()
+        await service.fn_client(rig.config, rig.ctl).on_dictate_cancel(go=go)
+        self.assertFalse(rig.ctl.dictating)
+        self.assertIsNotNone(rig.ctl.talk)
         rt.close.assert_not_awaited()
-        await daemon.controller.cancel()
-        self.assertIsNone(daemon.controller.talk)
+        await rig.ctl.cancel()
+        self.assertIsNone(rig.ctl.talk)
         rt.close.assert_awaited()
 
     async def test_a_go_takes_the_question_down_and_keeps_the_conversation(self):
@@ -311,13 +316,13 @@ class FollowUps(Case):
         await self.hold(rig, "print my report")
         talk = rig.ctl.talk
         talk.rt.session.waiting = self.waiting_task(rig)
-        await rig.ctl.dictate_start("tap")
+        go = await rig.ctl.dictate_start("tap")
         await rig.state("listening")
         self.assertIs(rig.ctl.talk, talk)
         self.assertFalse(talk.asked)
         self.assertIsNone(talk.rt.session.waiting)
         self.assertEqual(rig.of("FollowUp")[-1], ("", "", 0))
-        await rig.ctl.cancel(end_talk=False)
+        await rig.ctl.drop_go(go)
         await self.hold(rig, "what time is it")
         self.assertEqual(len(server.connections), 1)
         self.assertEqual(self.asked(server), ["print my report", "what time is it"])
@@ -393,7 +398,7 @@ class FollowUps(Case):
                 self.assertFalse(talk.asked)
                 self.assertIsNone(talk.rt.session.waiting)
                 self.assertEqual(rig.of("FollowUp")[-1], ("", "", 0))
-                await rig.ctl.cancel(end_talk=False)
+                await fn.handle("other")
                 self.assertEqual(rig.of("FollowUp")[-1], ("", "", 0), "it came back")
                 self.assertFalse(talk.asked)
 
@@ -706,6 +711,154 @@ class FollowUps(Case):
         found = list(rig.ctl.turn.rt.session.found)
         await rig.ctl.cancel()
         return found
+
+    def suspend(self, check_s=0.02):
+        """The boot clock runs on through a suspend, and asyncio's clock and the shell's don't.
+        Returns a function that sleeps the computer for that many seconds."""
+        slept = [0.0]
+        for name, value in (("clock", lambda: time.monotonic() + slept[0]),
+                            ("WAKE_CHECK_S", check_s)):
+            patch = mock.patch.object(controller, name, value, create=True)
+            patch.start()
+            self.addCleanup(patch.stop)
+        return lambda seconds: slept.__setitem__(0, slept[0] + seconds)
+
+    async def test_a_night_asleep_ends_the_conversation_on_waking(self):
+        sleep = self.suspend()
+        server, rig = await self.task_asks("unused")
+        sleep(8 * 3600)
+        async with asyncio.timeout(2):
+            while rig.ctl.talk is not None:
+                await asyncio.sleep(0.01)
+        self.assertEqual(rig.of("FollowUp")[-1], ("", "", 0), "the question shows again on waking")
+        await asyncio.wait_for(server.conn.ws.wait_closed(), 2)
+
+    async def test_a_hold_after_a_night_asleep_starts_a_new_conversation(self):
+        """Even before the conversation's own timer has looked at the clock."""
+        sleep = self.suspend(check_s=60)
+
+        async def script(c):
+            await self.replies(c, QUESTION if len(server.connections) == 1 else "It is noon.")
+
+        server, rig = await self.rigged(script)
+        await self.hold(rig, "print my report")
+        talk = rig.ctl.talk
+        talk.rt.session.tainted = True
+        talk.rt.session.waiting = self.waiting_task(rig)
+        sleep(8 * 3600)
+        await self.hold(rig, "the second one")
+        self.assertEqual(len(server.connections), 2)
+        self.assertFalse(rig.ctl.talk.rt.session.tainted)
+        self.assertEqual([m.heard for m in Model.made], [["print my report"]])
+        self.assertEqual(self.asked(server), ["the second one"])
+
+    async def test_a_short_sleep_with_the_question_up_ends_the_question(self):
+        """The conversation carries on, but the question's seconds went by while it slept."""
+        sleep = self.suspend()
+        server, rig = await self.task_asks("It is sunny.")
+        sleep(60)
+        await asyncio.sleep(0.1)
+        self.assertEqual(rig.of("FollowUp")[-1], ("", "", 0), "the shell would show it again")
+        self.assertIsNotNone(rig.ctl.talk)
+        await self.hold(rig, "what's the weather")
+        self.assertEqual([m.heard for m in Model.made], [["print my report"]])
+        self.assertEqual(self.asked(server), ["print my report", "what's the weather"])
+        self.assertEqual(len(server.connections), 1)
+
+    async def test_after_a_nap_the_shell_hears_what_is_left_of_the_question(self):
+        sleep = self.suspend()
+        _, rig = await self.task_asks("unused")
+        sleep(4)
+        await asyncio.sleep(0.1)
+        self.assertEqual(len(rig.of("FollowUp")), 2)
+        question, hint, seconds = rig.of("FollowUp")[-1]
+        self.assertEqual((question, hint), (QUESTION, "Hold Fn to answer"))
+        self.assertIn(seconds, (5, 6))
+
+    async def test_a_suspend_counts_against_the_five_minutes_found_files_are_kept(self):
+        sleep = self.suspend()
+
+        async def night(rig):
+            await rig.ctl._end_talk()
+            sleep(8 * 3600)
+        self.assertEqual(await self.found_then(night), [])
+
+    async def test_a_kept_connection_that_died_quietly_is_replaced_at_once(self):
+        """A new network, a suspend or a router that forgets quiet links: the socket still looks
+        open, and words sent into it would wait a minute for nothing."""
+        async def script(c):
+            await self.replies(c, "It is noon." if len(server.connections) == 1 else "Ten past.")
+
+        server, rig = await self.rigged(script)
+        await self.hold(rig)
+        session = rig.ctl.talk.rt.session
+        session.tainted = True
+        dead = server.conn.ws.transport
+        dead.pause_reading()    # it takes what is sent and never answers, not even a ping
+        self.addCleanup(dead.resume_reading)
+        with mock.patch.object(realtime, "PING_TIMEOUT_S", 0.2, create=True):
+            await self.hold(rig, "and now")
+        self.assertEqual(len(server.connections), 2)
+        self.assertEqual(rig.of("Reply"), ["It is noon.", "Ten past."])
+        self.assertEqual(rig.of("Error"), [])
+        self.assertIs(rig.ctl.talk.rt.session, session)
+        self.assertTrue(session.tainted)
+
+    async def test_a_skill_switched_on_between_holds_is_offered_over_a_new_connection(self):
+        def tools(session):
+            return [tool["name"] for tool in session["tools"]]
+
+        server, rig = await self.rigged(lambda c: self.replies(c, "It is noon."))
+        rig.ctl.skills.config = rig.config
+        await self.hold(rig)
+        self.assertNotIn("mail_search", tools(server.sessions[0]))
+        rig.config.set("mail_search", True)
+        await self.hold(rig, "when did I book the flights")
+        self.assertEqual(len(server.connections), 2)
+        self.assertIn("mail_search", tools(server.sessions[-1]))
+
+    async def test_a_long_fn_hold_answers_the_question_it_was_pressed_for(self):
+        """Settings lets Fn take up to 5 s to count as held: a press while the question is up
+        answers it, though HoldStart comes after the question has gone."""
+        with mock.patch.object(controller, "QUESTION_HINT_S", 0.4), \
+                mock.patch.object(controller, "ANSWER_GRACE_S", 0.1):
+            server, rig = await self.task_asks("unused")
+            rig.config.values.update(fn_hold_ms=700, fn_hold_enabled=True)
+            fn = service.fn_client(rig.config, rig.ctl)
+            self.addCleanup(fn._disarm)
+            self.said.append("the second one")
+            await asyncio.sleep(0.2)
+            await fn.handle("down")     # the question is still up
+            await rig.state("listening")
+            await asyncio.sleep(0.15)
+            await fn.handle("up")
+            await rig.finished()
+        self.assertEqual([m.heard for m in Model.made], [["print my report", "the second one"]])
+        self.assertEqual(self.asked(server), ["print my report"])
+
+    async def test_a_hold_with_nothing_said_puts_the_question_back(self):
+        """The hold took it off the screen as it began, and it still answers it: so it shows
+        again for the seconds it has left."""
+        with mock.patch.object(controller, "QUESTION_HINT_S", 5):
+            _, rig = await self.task_asks("unused")
+            await self.hold(rig, "")
+            self.assertEqual(len(rig.of("FollowUp")), 2)
+            question, hint, seconds = rig.of("FollowUp")[-1]
+            self.assertEqual((question, hint), (QUESTION, "Hold Fn to answer"))
+            self.assertIn(seconds, range(1, 6))
+            last = lambda *signal: max(i for i, s in enumerate(rig.signals)
+                                       if s[:len(signal)] == signal)
+            self.assertGreater(last("FollowUp"), last("StateChanged", "idle"))
+            await self.hold(rig, "the second one")
+        self.assertEqual([m.heard for m in Model.made], [["print my report", "the second one"]])
+
+    async def test_a_hold_that_fails_leaves_its_error_on_screen(self):
+        """Putting the question back would cover the error that says what went wrong."""
+        with mock.patch.object(controller, "QUESTION_HINT_S", 5):
+            _, rig = await self.task_asks("unused")
+            await self.hold(rig, controller.RealtimeError("Cannot reach the server"))
+        self.assertEqual(rig.of("Error"), ["Cannot reach the server"])
+        self.assertEqual(len(rig.of("FollowUp")), 1)
 
     async def test_a_lock_forgets_what_was_found(self):
         async def lock(rig):
