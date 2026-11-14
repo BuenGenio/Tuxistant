@@ -2,8 +2,8 @@
 
 A loop of model calls and actions. Every action goes through session.execute, so the planner can
 ask for anything and the gates still decide. The model is the LocalAI server, unless the user
-opted in to the cloud: then it is Claude, which sees the request, file names and command output,
-but no file contents without a click.
+turned the cloud on and agreed to what it sends (config.cloud_in_use): then it is Claude, which
+sees the request, file names and command output, but no file contents without a click.
 """
 import asyncio
 import importlib
@@ -13,7 +13,7 @@ import sys
 from typing import NamedTuple
 
 from . import realtime
-from .config import DATA_DIR, DEFAULTS, valid_key
+from .config import DATA_DIR, cloud_in_use, cloud_model, valid_key
 from .gate import APP_SAYS, Ask, printable
 from .realtime import RealtimeError
 
@@ -58,7 +58,7 @@ PART_DONE = "Part of it may already be done."
 UNREADABLE = "The model sent back something I could not read."
 NO_SDK = "The Claude library is not installed. Run the Tuxistant installer again to add it."
 # Where a task's requests go: its history goes along with each one. See resumable and _same.
-SENT_TO = ("server", "api_key", "cloud_enabled", "cloud_api_key")
+SENT_TO = ("server", "api_key", "cloud_enabled", "cloud_api_key", "cloud_model")
 CHANGED = "The settings changed, so I stopped that."
 BAD_KEY = "The cloud key in the settings is not valid."
 REJECTED = "The cloud key was rejected."
@@ -69,6 +69,7 @@ UNREACHABLE = "I can't reach Claude right now."
 CLOUD_TROUBLE = "Claude had a problem and could not finish that."
 REFUSED = "Claude declined to help with that."
 CUT_OFF = "Claude ran out of room before it finished."
+CLOUD_OFF = "Cloud was turned off, so I stopped."
 
 
 class Call(NamedTuple):
@@ -176,6 +177,7 @@ class Cloud:
             if last:
                 blocks.append({"type": "text", "text": LAST_STEP})
             self.messages.append({"role": "user", "content": blocks})
+        _same(self)     # turned off, withdrawn, another model or key: before the thread too
         response = await asyncio.to_thread(self._create)
         # Before anything is read: a refusal or a cut can leave a tool call half written.
         if response.stop_reason == "refusal":
@@ -202,7 +204,7 @@ class Cloud:
                 self.client = sdk.Anthropic(api_key=key, timeout=CLOUD_TIMEOUT_S,
                                             max_retries=CLOUD_RETRIES)
             return self.client.beta.messages.create(
-                model=self.config["cloud_model"] or DEFAULTS["cloud_model"],
+                model=cloud_model(self.config),
                 max_tokens=CLOUD_MAX_TOKENS, output_config={"effort": CLOUD_EFFORT},
                 betas=[FALLBACK_BETA], fallbacks="default",     # a false refusal is retried
                 system=SYSTEM, tools=self.tools, messages=self.messages)
@@ -299,7 +301,9 @@ async def _work(model, session) -> dict:
 
 
 def _provider(config):
-    return Cloud if config["cloud_enabled"] and config["cloud_api_key"] else Local
+    """The switch alone is not enough: SetConfig or a hand-edited file can turn it on, and only
+    Settings asks the user to agree, to this version of what is sent and to this model."""
+    return Cloud if cloud_in_use(config) else Local
 
 
 def _sent_to(config) -> tuple:
@@ -309,7 +313,11 @@ def _sent_to(config) -> tuple:
 def _same(model):
     """A task stops once the settings its requests go by changed since it started, whether it
     is thinking, running a tool or showing a card: the next request would carry everything it
-    has seen to a server or account it never used, or to Claude after Cloud was turned off."""
+    has seen to a server or account it never used, or to Claude after Cloud was turned off.
+    A Cloud task whose agreement no longer holds, as Cloud was turned off, withdrawn or pointed
+    at a model nobody agreed to, says that rather than that the settings changed."""
+    if model.leaves_home and not cloud_in_use(model.config):
+        raise RealtimeError(CLOUD_OFF)
     if _sent_to(model.config) != model.sent_to:
         raise RealtimeError(CHANGED)
 

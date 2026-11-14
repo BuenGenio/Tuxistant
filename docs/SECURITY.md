@@ -126,6 +126,21 @@ What doesn't hold:
 - A packaged app is judged only by where its desktop file is. So a program that can already write to your home folder can still run code with no card: through a D-Bus service file in your home folder with the id of a packaged app that starts over D-Bus, through a `gio`, `systemd-run` or app program placed earlier on your `PATH`, or through a desktop file linked into the Flatpak app folder in your home folder, which counts as a Flatpak.
 - Several reviews have read it. The first found a card that said "your home folder" for files in `/opt` and `/etc/xdg`, a card that left out D-Bus, Terminal and Path, and a command shown from a different read of the file than the one checked. All three are fixed. The second found that `%i`, `%c` and `%k` put text into the command that the card didn't show, so such an entry is now left alone. A later review found that the card cut a command after 300 characters while Allow still ran all of it, so the card now shows the whole command, and an entry whose card can't show all of it is left alone. No one has tried to break it on a real desktop.
 
+## Sending to the cloud
+
+Cloud sends multi-step requests to Anthropic, so it is the one place where what Tux reads can leave for a server that isn't yours. Until now one switch decided it. Turning that switch on in Settings showed a dialog, and nothing recorded what you had agreed to. Anything that could call `SetConfig` on the session bus, or write the config file, could turn it on without that dialog ever being seen.
+
+Now the daemon uses the cloud only with an agreement that covers what would be sent: a record in the config, made when you tick "I understand and agree" and press Turn On, that names the version of what is sent, the provider and the model, with the date. `planner.py` checks it before a task and before every call to the cloud, together with the switch and the key, through `config.cloud_in_use`. So:
+
+- Without a kept agreement, the switch alone, turned on over D-Bus or in the file, does nothing. Switching Cloud off keeps the agreement, though, so while one is kept the switch alone turns Cloud on again, from Settings or over D-Bus. Only Withdraw forgets it. An install that had Cloud on before this keeps its switch but sends nothing until you agree, and the page says so.
+- A model the agreement didn't name, set from Settings or anywhere else, stops the cloud until you agree for that model. With Cloud on, Settings asks before it saves one; with it off, turning it on asks.
+- A release that changes what is sent bumps `CLOUD_CONSENT_VERSION`, and every agreement made before it stops counting.
+- Withdraw on the Multi-step tasks page, switching it off, or a new model stops a task that is already running before its next call.
+
+Until the daemon restarts after an update, the old daemon still sends with the switch and a key alone, and can't record an agreement. Settings tells an older daemon by the missing `cloud_consent` in `GetConfig`, shows the switch as that daemon holds it so it can be turned off, and says it must be restarted before it can ask.
+
+What this doesn't do: a program running as you can still record an agreement over D-Bus, as Settings does, or write one into the file, just as it could read your files. The agreement is there so that you know what you are turning on and when you did, not to keep out code that already runs as you. The words of the agreement are in `tuxistant/settings_app.py` (`CLOUD_BODY`, `CLOUD_DETAILS`), and the tests check each claim against what the planner sends and asks for.
+
 ## Attacks
 
 ### The file name that forges the approval card

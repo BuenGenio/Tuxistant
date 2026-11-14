@@ -7,7 +7,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import gi
@@ -17,7 +17,8 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk  # noqa: E402
 
 from . import BUS_NAME, BUS_PATH, homeassistant, themes  # noqa: E402
-from .config import DATA_DIR, DEFAULTS, clean_server  # noqa: E402
+from . import config as cloud  # noqa: E402
+from .config import CLOUD_PRIVACY_URL, CLOUD_PROVIDER, DATA_DIR, DEFAULTS, clean_server  # noqa: E402
 from .gate import MAX_TITLE_CHARS, printable  # noqa: E402
 from .gate import shown as name_shown  # noqa: E402
 from .livedata import DEFAULT_SOURCE, SOURCES  # noqa: E402
@@ -75,13 +76,28 @@ NO_CALENDARS = "No calendar here can be changed. Add an account in GNOME Setting
 CALENDARS_FAILED = "Tuxistant couldn't list your calendars just now"
 GONE_CALENDAR = "Not available: a calendar that is no longer here"
 NO_PHONES = "GSConnect isn't running or has no devices"
-CLOUD_HEADING = "Send complex requests to Anthropic?"
-CLOUD_BODY = (
-    "When a request needs several steps, your spoken request and the file names and command "
-    "output from that task leave this computer and go to Anthropic.\n\n"
-    "File contents go only when you click to approve each one.\n\n"
-    "Ordinary single-step requests send nothing to Anthropic."
+CLOUD_HEADING = f"Send multi-step requests to {CLOUD_PROVIDER}?"
+# What the user agrees to, as config.CLOUD_CONSENT_VERSION. Bump that when what is sent changes.
+CLOUD_BODY = ("While this is on, a request that needs several steps goes to {provider}'s model "
+              "{model}, with your API key, instead of to your own server.")
+CLOUD_DETAILS = (
+    "What leaves this computer, for those requests:\n"
+    "• your request, as Tux puts it into words\n"
+    "• the names and descriptions of the actions Tux can take, including skills you added\n"
+    "• what each step gives back, such as file and folder names, command output, calendar "
+    "events and search results\n\n"
+    "What never leaves without your click on that one item:\n"
+    "• what is inside a file\n"
+    "• what Home Assistant answers, and your list of timers and reminders\n"
+    "• the request itself, once the conversation has read something private\n\n"
+    f"Your voice, dictation and single-step requests never go to {CLOUD_PROVIDER}. What it "
+    "receives is handled under its privacy policy."
 )
+CLOUD_AGREE = "I understand and agree"
+CLOUD_POLICY = f"{CLOUD_PROVIDER}'s privacy policy"
+RESTART_TO_AGREE = "Tuxistant must be restarted before it can ask you to agree"
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September",
+          "October", "November", "December")     # not the locale's: the rest is in English
 SENT_AS = "As the model gets it"
 RAW_FIELDS = ("Command", "Arguments", "Result", SENT_AS)    # shown as they are, so columns stay
 # Each skill's settings, shown on its page, by the SettingsBox rows that make them. A setting two
@@ -363,13 +379,69 @@ def calendar_choices(calendars: list[dict] | None, saved: str) -> dict[str, str]
     return choices
 
 
-def cloud_note(enabled: bool, key_set: bool) -> str:
-    """Says where requests really go, which takes both the switch and a key."""
-    if enabled and key_set:
-        return "Requests with several steps go to Anthropic"
-    if enabled:
-        return "No API key yet, so nothing goes to Anthropic"
-    return "Nothing goes to Anthropic"
+def cloud_body(model: str) -> str:
+    return CLOUD_BODY.format(provider=CLOUD_PROVIDER, model=shown(model))
+
+
+def older_daemon(config: dict) -> bool:
+    """A daemon that hasn't restarted since an update sends no cloud_consent. It can't record an
+    agreement, and uses the cloud with the switch and a key alone, as it always did."""
+    return "cloud_consent" not in config
+
+
+def cloud_on(config: dict) -> bool:
+    """What the switch shows: on only with an agreement that covers what is sent now. With an
+    older daemon, what it holds, so that Cloud can still be switched off."""
+    if older_daemon(config):
+        return config.get("cloud_enabled") is True
+    return config.get("cloud_enabled") is True and cloud.cloud_agreed(config)
+
+
+def cloud_note(config: dict) -> str:
+    """Says where requests really go, which takes the switch, the agreement and a key. The same
+    test as the daemon's, config.cloud_in_use, so the two can't disagree, or an older daemon's."""
+    nothing = f"nothing goes to {CLOUD_PROVIDER}"
+    if older_daemon(config):
+        if config.get("cloud_enabled") is not True:
+            return f"Nothing goes to {CLOUD_PROVIDER}. {RESTART_TO_AGREE}"
+        if not config.get("cloud_key_set"):
+            return f"No API key yet, so {nothing}. {RESTART_TO_AGREE}"
+        return (f"{RESTART_TO_AGREE}. Until then, requests with several steps go to "
+                f"{CLOUD_PROVIDER}")
+    if config.get("cloud_enabled") is not True:
+        return f"Nothing goes to {CLOUD_PROVIDER}"
+    if not cloud.cloud_agreed(config):
+        consent = config.get("cloud_consent")
+        if not consent or not isinstance(consent, dict):
+            return f"On, but not agreed to, so {nothing}. Turn it on to read what is sent and agree"
+        if cloud.cloud_agreed({**config, "cloud_model": consent.get("model")}):
+            return (f"You agreed for another model, so {nothing}. Turn it on to agree for "
+                    f"{shown(cloud.cloud_model(config))}")
+        return (f"What is sent has changed since you agreed, so {nothing}. Turn it on to read "
+                "it and agree again")
+    if not config.get("cloud_key_set"):
+        return f"No API key yet, so {nothing}"
+    return f"Requests with several steps go to {CLOUD_PROVIDER}"
+
+
+def day_words(text) -> str:
+    try:
+        day = date.fromisoformat(text)
+    except (TypeError, ValueError):
+        return "a date that can't be read"
+    return f"{day.day} {MONTHS[day.month - 1]} {day.year}"
+
+
+def consent_words(config: dict) -> tuple[str, str] | None:
+    """The recorded agreement as (title, subtitle), or None when there is none."""
+    consent = config.get("cloud_consent")
+    if not consent or not isinstance(consent, dict):
+        return None
+    what = (f"For {shown(str(consent.get('model')))} at {shown(str(consent.get('provider')))}, "
+            f"version {shown(str(consent.get('version')))} of what is sent")
+    if not cloud.cloud_agreed(config):
+        what += ". It doesn't cover what would be sent now, so nothing goes"
+    return f"You agreed on {day_words(consent.get('date'))}", what
 
 
 def extension_schema_dirs() -> list[Path]:
@@ -568,7 +640,8 @@ class SettingsBox:
     disagree about it. Only what was built is shown, synced and saved."""
 
     ROWS = ("location", "news", "calendar", "phone", "translate", "search", "tapo_email",
-            "tapo_password", "home", "home_token", "cloud", "cloud_key", "cloud_model")
+            "tapo_password", "home", "home_token", "cloud", "cloud_consent", "cloud_key",
+            "cloud_model")
 
     def __init__(self, win):
         self.win = win
@@ -579,6 +652,7 @@ class SettingsBox:
         self.saved_model = ""
         self.saved_tapo_email = ""
         self.saved_home = ""
+        self.consent_dialog = None  # the agreement, while it is open
         self.devices = None  # what ListPhones last said: None until it has answered
         self.calendars = None   # the same for ListCalendars
         self.calendar_problem = ""
@@ -679,9 +753,18 @@ class SettingsBox:
         return HOME_NOTE
 
     def cloud_rows(self, group):
-        self.cloud = Adw.SwitchRow(title="Use Claude for complex requests")
+        # Plain text: the subtitles name the model, which anyone on the bus can set.
+        self.cloud = Adw.SwitchRow(title="Use Claude for complex requests", use_markup=False)
         self.cloud.connect("notify::active", self.on_cloud)
         group.add(self.cloud)
+        self.cloud_consent = Adw.ActionRow(use_markup=False, visible=False,
+                                           css_classes=["property"])
+        self.withdraw = Gtk.Button(label="Withdraw", valign=Gtk.Align.CENTER,
+                                   css_classes=["destructive-action"],
+                                   tooltip_text="Turn it off and forget that you agreed")
+        self.withdraw.connect("clicked", self.on_withdraw)
+        self.cloud_consent.add_suffix(self.withdraw)
+        group.add(self.cloud_consent)
         self.cloud_key, self.cloud_key_status, self.cloud_key_remove = self._key_row(
             "Anthropic API key", "cloud_api_key")
         group.add(self.cloud_key)
@@ -829,14 +912,20 @@ class SettingsBox:
         self.calendar.set_subtitle(self.calendar_problem or empty)
 
     def show_cloud(self):
-        """The switch follows the config: after Cancel, or a reload behind an open dialog."""
+        """The switch follows the config: after Cancel, or a reload behind an open dialog. It
+        shows on only when the daemon would really use the cloud, agreement and all."""
         if not self.cloud:
             return
-        enabled = self.win.config.get("cloud_enabled", False)
+        config = self.win.config
         syncing, self.syncing = self.syncing, True
-        self.cloud.set_active(enabled)
+        self.cloud.set_active(cloud_on(config))
         self.syncing = syncing
-        self.cloud.set_subtitle(cloud_note(enabled, self.win.config.get("cloud_key_set", False)))
+        self.cloud.set_subtitle(cloud_note(config))
+        words = consent_words(config)
+        self.cloud_consent.set_visible(words is not None)
+        if words:
+            self.cloud_consent.set_title(words[0])
+            self.cloud_consent.set_subtitle(words[1])
 
     def on_location_apply(self, row):
         location = " ".join(row.get_text().split())
@@ -890,7 +979,16 @@ class SettingsBox:
 
     def on_model_apply(self, row):
         model = row.get_text().strip() or DEFAULTS["cloud_model"]
+        if not cloud.valid_model(model):    # the daemon refuses it too: no agreement could name it
+            self.win.toast(cloud.NOT_A_MODEL)
+            self.set_row_text(row, self.saved_model)
+            return
         self.set_row_text(row, model)
+        if (model != cloud.cloud_model(self.win.config) and cloud_on(self.win.config)
+                and not older_daemon(self.win.config)):
+            # The agreement named the model. Another one is a new agreement, made with it.
+            self.ask_cloud(model, cancelled=lambda: self.set_row_text(row, self.saved_model))
+            return
         self.saved_model = model
         self.win.save("cloud_model", model)
 
@@ -931,26 +1029,68 @@ class SettingsBox:
     def on_cloud(self, row, _param):
         if self.syncing:
             return
-        if row.get_active():
-            self.ask_cloud()
-        else:
+        if not row.get_active():
             self.set_cloud(False)
-
-    def ask_cloud(self):
-        """Nothing is saved until the answer. Escape and clicking away count as Cancel."""
-        dialog = Adw.AlertDialog(heading=CLOUD_HEADING, body=CLOUD_BODY)
-        dialog.add_response("cancel", "Cancel")
-        dialog.add_response("enable", "Turn On")
-        dialog.set_default_response("cancel")
-        dialog.set_close_response("cancel")
-        dialog.connect("response", self.on_cloud_response)
-        dialog.present(self.win)
-
-    def on_cloud_response(self, _dialog, response):
-        if response == "enable":
+        elif older_daemon(self.win.config):     # it would refuse the agreement, and not ask
+            self.win.toast(RESTART_TO_AGREE)
+            # Not from inside the switch's own change: the row would push it back on, and save.
+            GLib.idle_add(lambda: self.show_cloud() or GLib.SOURCE_REMOVE)
+        elif cloud.cloud_agreed(self.win.config):     # agreed already, to all of this
             self.set_cloud(True)
         else:
+            self.ask_cloud(cloud.cloud_model(self.win.config))
+
+    def ask_cloud(self, model, cancelled=None):
+        """Nothing is saved until the answer. Turn On waits for the tick, and Enter, Escape and
+        clicking away all count as Cancel."""
+        dialog = Adw.AlertDialog(heading=CLOUD_HEADING, body=cloud_body(model))
+        dialog.details = Gtk.Label(label=CLOUD_DETAILS, use_markup=False, wrap=True, xalign=0,
+                                   css_classes=["body"])
+        dialog.agree = Gtk.CheckButton(label=CLOUD_AGREE)
+        dialog.policy = Gtk.LinkButton(uri=CLOUD_PRIVACY_URL, label=CLOUD_POLICY,
+                                       halign=Gtk.Align.START)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.append(dialog.details)
+        box.append(dialog.policy)
+        box.append(dialog.agree)
+        dialog.set_extra_child(box)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("enable", "Turn On")
+        dialog.set_response_appearance("enable", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_response_enabled("enable", False)
+        dialog.agree.connect("toggled", lambda check: dialog.set_response_enabled(
+            "enable", check.get_active()))
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self.on_cloud_response, model, cancelled)
+        self.consent_dialog = dialog
+        dialog.present(self.win)
+
+    def on_cloud_response(self, dialog, response, model, cancelled):
+        self.consent_dialog = None
+        if response == "enable" and dialog.agree.get_active():
+            self.agree(model)
+        else:
+            if cancelled:
+                cancelled()
             self.show_cloud()
+
+    def agree(self, model):
+        """One save: the daemon records today's date, turns the cloud on and uses this model."""
+        asked = {"version": cloud.CLOUD_CONSENT_VERSION, "provider": CLOUD_PROVIDER,
+                 "model": model}
+        self.win.config.update(cloud_enabled=True, cloud_model=model, cloud_consent={
+            **asked, "date": date.today().isoformat()})
+        self.saved_model = model
+        if self.cloud_model:
+            self.set_row_text(self.cloud_model, model)
+        self.show_cloud()
+        self.win.save("cloud_consent", asked)
+
+    def on_withdraw(self, _button):
+        self.win.config.update(cloud_enabled=False, cloud_consent={})
+        self.show_cloud()
+        self.win.save("cloud_consent", {})
 
     def set_cloud(self, enabled):
         self.win.config["cloud_enabled"] = enabled

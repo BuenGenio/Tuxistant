@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace as Fake
 from unittest import mock
@@ -23,12 +24,15 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tuxistant import planner, realtime  # noqa: E402
 from tuxistant import skills as skills_module  # noqa: E402
-from tuxistant.config import Config  # noqa: E402
+from tuxistant import config as config_module  # noqa: E402
+from tuxistant.config import CLOUD_CONSENT_VERSION, Config  # noqa: E402
 from tuxistant.gate import APP_SAYS, MAX_DETAIL_CHARS, Ask, Session, Speak, printable  # noqa: E402
 from tuxistant.realtime import AuthError, Realtime, RealtimeError  # noqa: E402
 from tuxistant.skills import BUILTIN, Skills  # noqa: E402
 
 KEY = "sk-fake-test-key-0123456789"
+MODEL = "claude-opus-5-5"
+AGREED = {"version": CLOUD_CONSENT_VERSION, "provider": "Anthropic", "model": MODEL}
 MANIFEST = """
 id: org.test.plan
 name: Plan
@@ -558,7 +562,8 @@ class FakeSdk(Errors):
 class CloudCase(Case):
     def setUp(self):
         super().setUp()
-        self.config.values |= {"cloud_enabled": True, "cloud_api_key": KEY}
+        self.config.set("cloud_consent", AGREED)    # as Settings does, which turns it on
+        self.config.values |= {"cloud_api_key": KEY}
         for patcher in (mock.patch.object(sys, "path", list(sys.path)),
                         mock.patch.object(planner, "VENDOR", self.folder / "vendor")):
             patcher.start()
@@ -578,7 +583,7 @@ class Cloud(CloudCase):
                                     (False, "", False)):
             with self.subTest(enabled=enabled, key=key):
                 self.config.values |= {"cloud_enabled": enabled, "cloud_api_key": key}
-                sdk = self.sdk(reply(text("From the cloud.")))
+                sdk = self.sdk(reply(text("From the cloud.")))     # agreed to, in setUp
                 server = Server(said("From home."))
                 with mock.patch("tuxistant.realtime._request", server):
                     answer = (await self.task())["answer"]
@@ -612,6 +617,7 @@ class Cloud(CloudCase):
     async def test_the_chosen_model_is_used_and_an_empty_one_is_the_default(self):
         for chosen, used in (("claude-sonnet-5-5", "claude-sonnet-5-5"), ("", "claude-opus-5-5")):
             with self.subTest(chosen):
+                self.config.set("cloud_consent", {**AGREED, "model": used})
                 self.config.values["cloud_model"] = chosen
                 sdk = self.sdk(reply(text("ok")))
                 await self.task()
@@ -779,7 +785,9 @@ class Cloud(CloudCase):
                 session = self.session()
                 with mock.patch("tuxistant.realtime._request", server):
                     result = await self.task(session=session)
-                self.assertEqual(result["answer"], f"{planner.CHANGED} {planner.PART_DONE}")
+                # Cloud off is said as such: see Consent below
+                said_ = planner.CLOUD_OFF if "cloud_enabled" in settings else planner.CHANGED
+                self.assertEqual(result["answer"], f"{said_} {planner.PART_DONE}")
                 self.assertEqual(len(sdk.requests), 1)
                 self.assertEqual(len(sdk.clients), 1)
                 self.assertEqual(server.bodies, [])
@@ -801,7 +809,7 @@ class Cloud(CloudCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         result = await self.task()
-        self.assertEqual(result, {"answer": planner.CHANGED, "steps": 1})
+        self.assertEqual(result, {"answer": planner.CLOUD_OFF, "steps": 1})
         self.assertEqual(self.ran, [])
         self.assertEqual(self.clicks.asked, [], "no card offers to send to Claude")
         self.assertEqual(len(sdk.requests), 1)
@@ -812,8 +820,158 @@ class Cloud(CloudCase):
         self.config.values["cloud_enabled"] = False
         with self.assertRaises(RealtimeError) as caught:
             await model.step([], False)
-        self.assertEqual(str(caught.exception), planner.CHANGED)
+        self.assertEqual(str(caught.exception), planner.CLOUD_OFF)
         self.assertEqual(sdk.requests, [])
+
+
+class Consent(CloudCase):
+    """Cloud is used only with the switch on, a key, and an agreement to this version of what is
+    sent, to this provider and model. Anything else stays at home."""
+
+    async def where(self) -> str:
+        sdk = self.sdk(reply(text("From the cloud.")))
+        server = Server(said("From home."))
+        with mock.patch("tuxistant.realtime._request", server):
+            answer = (await self.task())["answer"]
+        self.assertEqual(len(sdk.requests) + len(server.bodies), 1)
+        return {"From the cloud.": "cloud", "From home.": "home"}[answer]
+
+    async def test_agreeing_turns_it_on(self):
+        self.assertEqual(await self.where(), "cloud")
+
+    async def test_the_agreement_is_recorded_with_the_date(self):
+        consent = Config(self.config.path)["cloud_consent"]    # as saved, after a restart
+        self.assertEqual(consent, {**AGREED, "date": date.today().isoformat()})
+        self.assertIs(self.config["cloud_enabled"], True)
+
+    async def test_an_existing_switch_without_an_agreement_stays_at_home(self):
+        """A config from before there was an agreement, or written by hand."""
+        self.config.path.write_text(json.dumps({"cloud_enabled": True, "cloud_api_key": KEY}))
+        self.config = Config(self.config.path)
+        self.skills.config = self.config
+        self.assertEqual(await self.where(), "home")
+
+    async def test_turning_the_switch_on_over_the_bus_does_nothing_alone(self):
+        self.config.set("cloud_consent", {})
+        self.config.set("cloud_enabled", True)
+        self.assertEqual(await self.where(), "home")
+
+    async def test_withdrawing_turns_it_off_and_forgets(self):
+        self.config.set("cloud_consent", {})
+        self.assertEqual((self.config["cloud_enabled"], self.config["cloud_consent"]), (False, {}))
+        self.assertEqual(Config(self.config.path)["cloud_consent"], {})
+        self.assertEqual(await self.where(), "home")
+
+    async def test_a_new_version_of_what_is_sent_asks_again(self):
+        with mock.patch.object(config_module, "CLOUD_CONSENT_VERSION", CLOUD_CONSENT_VERSION + 1):
+            self.assertEqual(await self.where(), "home")
+        self.assertEqual(await self.where(), "cloud")
+
+    async def test_another_model_asks_again(self):
+        self.config.set("cloud_model", "claude-other-1")
+        self.assertEqual(await self.where(), "home")
+        self.config.set("cloud_model", "")      # the default, which is the one agreed to
+        self.assertEqual(await self.where(), "cloud")
+
+    async def test_another_provider_asks_again(self):
+        with mock.patch.object(config_module, "CLOUD_PROVIDER", "Elsewhere"):
+            self.assertEqual(await self.where(), "home")
+
+    async def test_a_record_written_by_hand_must_be_exact(self):
+        for consent in ({**AGREED, "version": True}, {**AGREED, "version": float(AGREED["version"])},
+                        {**AGREED, "version": str(AGREED["version"])}, [AGREED], "yes", None,
+                        {"version": AGREED["version"]}):
+            with self.subTest(consent=consent):
+                self.config.values["cloud_consent"] = consent
+                self.assertEqual(await self.where(), "home")
+
+    async def test_the_switch_as_a_string_is_not_on(self):
+        self.config.values["cloud_enabled"] = "false"   # hand-written, and truthy
+        self.assertEqual(await self.where(), "home")
+
+    async def test_agreeing_names_the_model_and_switches_to_it(self):
+        self.config.set("cloud_consent", {**AGREED, "model": "claude-other-1"})
+        self.assertEqual(self.config["cloud_model"], "claude-other-1")
+        sdk = self.sdk(reply(text("ok")))
+        await self.task()
+        self.assertEqual(sdk.requests[0]["model"], "claude-other-1")
+
+    async def test_only_the_agreement_on_offer_can_be_recorded(self):
+        before = dict(self.config.values)
+        for asked in ({**AGREED, "version": CLOUD_CONSENT_VERSION + 1},
+                      {**AGREED, "version": True}, {**AGREED, "provider": "Elsewhere"},
+                      {**AGREED, "date": "2020-01-01"}, {"version": CLOUD_CONSENT_VERSION}):
+            with self.subTest(asked=asked):
+                with self.assertRaises(ValueError) as caught:
+                    self.config.set("cloud_consent", asked)
+                self.assertEqual(str(caught.exception), config_module.NOT_THE_CONSENT)
+                self.assertEqual(self.config.values, before)
+        for model in ("", " padded ", "a\nb", "m" * 101, 5):
+            with self.subTest(model=model):
+                with self.assertRaises(ValueError) as caught:
+                    self.config.set("cloud_consent", {**AGREED, "model": model})
+                self.assertEqual(str(caught.exception), config_module.NOT_A_MODEL,
+                                 "the model is what is wrong, so say so")
+                self.assertEqual(self.config.values, before)
+        with self.assertRaises(TypeError):
+            self.config.set("cloud_consent", [AGREED])
+
+    async def test_a_model_no_agreement_could_name_is_not_saved(self):
+        """Saved, it could only be asked about, and agreeing to it would be refused."""
+        before = dict(self.config.values)
+        for model in (" padded", "padded ", "a\nb", "tab\there", "m" * 101, "   "):
+            with self.subTest(model=model):
+                with self.assertRaises(ValueError) as caught:
+                    self.config.set("cloud_model", model)
+                self.assertEqual(str(caught.exception), config_module.NOT_A_MODEL)
+                self.assertEqual(self.config.values, before)
+        for model in ("m" * 100, "claude-other-1", ""):     # "" is the default
+            with self.subTest(model=model):
+                self.config.set("cloud_model", model)
+                self.config.set("cloud_consent", {**AGREED, "model": config_module.cloud_model(
+                    self.config)})
+                self.assertEqual(await self.where(), "cloud")
+
+    async def test_a_kept_agreement_lets_the_switch_alone_turn_it_on_again(self):
+        """Off is not withdrawn. With the agreement kept, the switch turns Cloud on again, from
+        Settings or from anything on the bus; only Withdraw forgets it."""
+        self.config.set("cloud_enabled", False)
+        self.assertEqual(await self.where(), "home")
+        self.config.set("cloud_enabled", True)
+        self.assertEqual(await self.where(), "cloud")
+        self.config.set("cloud_consent", {})
+        self.config.set("cloud_enabled", True)
+        self.assertEqual(await self.where(), "home")
+
+    async def test_withdrawing_during_a_task_stops_before_the_next_call(self):
+        self.use({"plan.look": lambda *_: self.config.set("cloud_consent", {}) or {"seen": "x"}})
+        sdk = self.sdk(calls(tool_use("t1", "plan_look")), reply(text("Never asked.")))
+        self.assertEqual(await self.task(), {
+            "answer": f"{planner.CLOUD_OFF} {planner.PART_DONE}", "steps": 2})
+        self.assertEqual(len(sdk.requests), 1)
+
+    async def test_switching_off_during_a_task_stops_before_the_next_call(self):
+        self.use({"plan.look": lambda *_: self.config.set("cloud_enabled", False) or {"seen": "x"}})
+        sdk = self.sdk(calls(tool_use("t1", "plan_look")), reply(text("Never asked.")))
+        self.assertEqual((await self.task())["answer"], f"{planner.CLOUD_OFF} {planner.PART_DONE}")
+        self.assertEqual(len(sdk.requests), 1)
+
+    async def test_a_task_waiting_for_an_answer_needs_the_agreement_still(self):
+        """A follow-up answer goes on to Claude only while Cloud is in use, agreement and all."""
+        model = planner.Cloud(self.config, "print my report", [])
+        self.assertTrue(planner.resumable(model, self.config))
+        self.config.set("cloud_consent", {})
+        self.assertFalse(planner.resumable(model, self.config))
+        self.config.set("cloud_enabled", True)  # the switch alone, with nothing agreed
+        self.assertFalse(planner.resumable(model, self.config))
+        self.config.set("cloud_consent", {**AGREED, "model": "claude-other-1"})
+        self.assertFalse(planner.resumable(model, self.config), "agreed, but for another model")
+
+    async def test_another_model_during_a_task_stops_before_the_next_call(self):
+        self.use({"plan.look": lambda *_: self.config.set("cloud_model", "x") or {"seen": "x"}})
+        sdk = self.sdk(calls(tool_use("t1", "plan_look")), reply(text("Never asked.")))
+        self.assertEqual((await self.task())["answer"], f"{planner.CLOUD_OFF} {planner.PART_DONE}")
+        self.assertEqual(len(sdk.requests), 1)
 
 
 class Privacy(CloudCase):

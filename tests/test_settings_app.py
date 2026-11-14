@@ -422,17 +422,79 @@ class Logic(unittest.TestCase):
         self.assertEqual(pick([pixel, twin], ""), {"": "Automatic", "Pixel": "Pixel"})
 
     def test_cloud_note_says_where_requests_really_go(self):
-        self.assertEqual(sa.cloud_note(False, False), "Nothing goes to Anthropic")
-        self.assertEqual(sa.cloud_note(False, True), "Nothing goes to Anthropic")
-        self.assertIn("nothing goes to Anthropic", sa.cloud_note(True, False))
-        self.assertIn("Anthropic", sa.cloud_note(True, True))
+        note = sa.cloud_note
+        self.assertEqual(note({}), f"Nothing goes to Anthropic. {sa.RESTART_TO_AGREE}",
+                         "a daemon from before Cloud")
+        for config in ({**CLOUD_ON, "cloud_enabled": False}, {**CLOUD_ON, "cloud_enabled": "true"}):
+            self.assertEqual(note(config), "Nothing goes to Anthropic")
+        self.assertEqual(note(CLOUD_ON), "Requests with several steps go to Anthropic")
+        self.assertEqual(note({**CLOUD_ON, "cloud_key_set": False}),
+                         "No API key yet, so nothing goes to Anthropic")
+        self.assertTrue(note({**CLOUD_ON, "cloud_consent": {}}).startswith(
+            "On, but not agreed to, so nothing goes to Anthropic"), "an install from before")
+        stale = {**CLOUD_ON["cloud_consent"], "version": CONSENT_VERSION - 1}
+        self.assertTrue(note({**CLOUD_ON, "cloud_consent": stale}).startswith(
+            "What is sent has changed since you agreed, so nothing goes"))
+        self.assertEqual(note({**CLOUD_ON, "cloud_model": "<b>m</b>"}),
+                         "You agreed for another model, so nothing goes to Anthropic. Turn it "
+                         "on to agree for <b>m</b>")
+
+    def test_the_switch_is_on_only_with_an_agreement(self):
+        self.assertTrue(sa.cloud_on(CLOUD_ON))
+        for change in ({"cloud_enabled": False}, {"cloud_consent": {}},
+                       {"cloud_model": "claude-other-1"}):
+            with self.subTest(change):
+                self.assertFalse(sa.cloud_on({**CLOUD_ON, **change}))
+        self.assertFalse(sa.cloud_on({}), "a daemon from before Cloud")
+        self.assertTrue(sa.cloud_on({**CLOUD_ON, "cloud_key_set": False}),
+                        "the note says the key is missing; the switch says what was chosen")
+
+    def test_an_older_daemon_is_shown_as_it_really_is(self):
+        """One that hasn't restarted since the update: no cloud_consent, and the cloud with the
+        switch and a key alone. Saying nothing goes, or showing it off, would not be true."""
+        old = {"cloud_enabled": True, "cloud_key_set": True, "cloud_model": "claude-opus-5-5"}
+        self.assertTrue(sa.older_daemon(old))
+        self.assertFalse(sa.older_daemon(CLOUD_ON))
+        self.assertFalse(sa.older_daemon({**CLOUD_ON, "cloud_consent": {}}))
+        self.assertTrue(sa.cloud_on(old), "on, so it can be switched off")
+        self.assertEqual(sa.cloud_note(old), "Tuxistant must be restarted before it can ask you "
+                         "to agree. Until then, requests with several steps go to Anthropic")
+        self.assertEqual(sa.cloud_note({**old, "cloud_key_set": False}),
+                         f"No API key yet, so nothing goes to Anthropic. {sa.RESTART_TO_AGREE}")
+        self.assertFalse(sa.cloud_on({**old, "cloud_enabled": False}))
+        self.assertEqual(sa.cloud_note({**old, "cloud_enabled": False}),
+                         f"Nothing goes to Anthropic. {sa.RESTART_TO_AGREE}")
+        self.assertIsNone(sa.consent_words(old))
+
+    def test_the_agreement_is_shown_with_its_date(self):
+        title, words = sa.consent_words(CLOUD_ON)
+        self.assertEqual(title, "You agreed on 13 November 2026")
+        self.assertEqual(words, f"For claude-opus-5-5 at Anthropic, version {CONSENT_VERSION} "
+                                "of what is sent")
+        title, words = sa.consent_words({**CLOUD_ON, "cloud_model": "other"})
+        self.assertIn("doesn't cover what would be sent now", words)
+        self.assertIsNone(sa.consent_words({**CLOUD_ON, "cloud_consent": {}}))
+        self.assertIsNone(sa.consent_words({}))
+        self.assertIsNone(sa.consent_words({"cloud_consent": "yes"}))
+        self.assertEqual(sa.day_words("not a date"), "a date that can't be read")
+        self.assertEqual(sa.day_words(None), "a date that can't be read")
+        self.assertEqual(sa.day_words("2027-01-02"), "2 January 2027")
 
     def test_the_cloud_dialog_says_exactly_what_leaves(self):
-        for words in ("your spoken request", "file names and command output from that task",
-                      "leave this computer", "Anthropic",
-                      "File contents go only when you click to approve each one",
-                      "single-step requests send nothing to Anthropic"):
-            self.assertIn(words, sa.CLOUD_BODY)
+        body = sa.cloud_body("claude-test-1") + sa.CLOUD_DETAILS
+        for words in ("Anthropic's model claude-test-1", "with your API key",
+                      "instead of to your own server", "While this is on",
+                      "a request that needs several steps", "What leaves this computer",
+                      "your request", "the names and descriptions of the actions",
+                      "skills you added", "file and folder names, command output, calendar events "
+                      "and search results", "never leaves without your click on that one item",
+                      "what is inside a file", "what Home Assistant answers",
+                      "your list of timers and reminders",
+                      "the request itself, once the conversation has read something private",
+                      "Your voice, dictation and single-step requests never go to Anthropic",
+                      "privacy policy"):
+            self.assertIn(words, body)
+        self.assertEqual(sa.CLOUD_PRIVACY_URL, "https://www.anthropic.com/legal/privacy")
 
     def test_error_text(self):
         self.assertEqual(
@@ -1419,10 +1481,15 @@ class Inner(unittest.TestCase):
                 was = widget.get_active()
                 widget.set_active(not was)
                 alert = self.win.get_visible_dialog()
-                if isinstance(alert, Adw.AlertDialog):      # Cloud asks first
+                agreed = isinstance(alert, Adw.AlertDialog)
+                if agreed:      # Cloud asks first, and Turn On waits for the tick
+                    alert.agree.set_active(True)
                     alert.emit("response", "enable")
                     alert.force_close()
                 widget.set_active(was)
+                if agreed:      # as it was before: never agreed to
+                    next(b for b in iter_children(root) if isinstance(b, Gtk.Button)
+                         and b.get_label() == "Withdraw").emit("clicked")
             elif isinstance(widget, Adw.SpinRow):
                 was = widget.get_value()
                 widget.set_value(was + widget.get_adjustment().get_step_increment())
@@ -1671,10 +1738,14 @@ class Inner(unittest.TestCase):
         page = self.skill_page("org.tuxistant.task")
         self.assertFalse(page.cloud.get_active())
         self.assertEqual(page.cloud.get_subtitle(), "Nothing goes to Anthropic")
+        self.assertFalse(page.cloud_consent.get_visible(), "nothing agreed to yet")
         page.cloud.set_active(True)
         dialog = self.win.get_visible_dialog()
         self.assertIsInstance(dialog, Adw.AlertDialog)
-        self.assertEqual(dialog.get_body(), sa.CLOUD_BODY)
+        self.assertEqual(dialog.get_body(), sa.cloud_body("claude-opus-5-5"))
+        self.assertFalse(dialog.get_body_use_markup())
+        self.assertEqual(dialog.details.get_label(), sa.CLOUD_DETAILS)
+        self.assertFalse(dialog.details.get_use_markup())
         self.assertEqual(dialog.get_close_response(), "cancel")
         self.assertEqual(dialog.get_default_response(), "cancel", "Enter must not agree")
         self.assertEqual(page.cloud.get_subtitle(), "Nothing goes to Anthropic",
@@ -1690,11 +1761,9 @@ class Inner(unittest.TestCase):
         self.assertIs(json.loads(control("Stored", "cloud_enabled", signature="s")[0]), False)
 
         page.cloud.set_active(True)
-        dialog = self.win.get_visible_dialog()
-        dialog.emit("response", "enable")
-        dialog.force_close()
+        agree(self.win)
         self.assertTrue(page.cloud.get_active())
-        wait(lambda: saved() == [["cloud_enabled", "true"]], "the switch to save")
+        wait(lambda: saved() == [["cloud_consent", json.dumps(AGREED)]], "the agreement to save")
         wait(lambda: self.win.config["cloud_enabled"] is True, "the change to come back")
         self.assertTrue(page.cloud.get_active())
         self.assertIn("nothing goes to Anthropic", page.cloud.get_subtitle(), "there is no key yet")
@@ -1705,22 +1774,72 @@ class Inner(unittest.TestCase):
         self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog, "turning it off needs no dialog")
         wait(lambda: saved() == [["cloud_enabled", "false"]], "the switch to save")
         wait(lambda: self.win.config["cloud_enabled"] is False, "the change to come back")
+        self.assertTrue(page.cloud_consent.get_visible(), "off is not withdrawn")
+        forget()
+        page.cloud.set_active(True)
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog,
+                      "an agreement that still covers it is not asked for again")
+        wait(lambda: saved() == [["cloud_enabled", "true"]], "the switch to save")
+        withdraw(self.win, page)
+
+    def test_25_cloud_turn_on_waits_for_the_tick(self):
+        page = self.skill_page("org.tuxistant.task")
+        page.cloud.set_active(True)
+        dialog = self.win.get_visible_dialog()
+        self.assertFalse(dialog.get_response_enabled("enable"))
+        self.assertFalse(dialog.agree.get_active())
+        self.assertEqual(dialog.agree.get_label(), "I understand and agree")
+        self.assertEqual(dialog.policy.get_uri(), "https://www.anthropic.com/legal/privacy")
+        self.assertIn("privacy policy", dialog.policy.get_label())
+        dialog.agree.set_active(True)
+        self.assertTrue(dialog.get_response_enabled("enable"))
+        dialog.agree.set_active(False)
+        self.assertFalse(dialog.get_response_enabled("enable"), "untick, and it can't be pressed")
+        dialog.emit("response", "enable")   # as if the button were pressed anyway
+        dialog.force_close()
+        settle()
+        self.assertEqual(saved(), [], "no tick, no agreement")
+        self.assertFalse(page.cloud.get_active())
+        self.assertEqual(json.loads(control("Stored", "cloud_consent", signature="s")[0]), {})
+
+    def test_25_cloud_the_agreement_is_recorded_shown_and_withdrawn(self):
+        page = self.skill_page("org.tuxistant.task")
+        page.cloud.set_active(True)
+        agree(self.win)
+        wait(lambda: stored_value("cloud_consent"), "the record to be kept")
+        stored = stored_value("cloud_consent")
+        today = datetime.now().date()
+        self.assertEqual(stored, {**AGREED, "date": today.isoformat()})
+        self.assertTrue(page.cloud_consent.get_visible())
+        self.assertEqual(page.cloud_consent.get_title(), f"You agreed on {sa.day_words(str(today))}")
+        self.assertIn("For claude-opus-5-5 at Anthropic", page.cloud_consent.get_subtitle())
+        self.assertTrue(page.withdraw.get_visible())
+        shot(self.win, "cloud-agreed")
+        withdraw(self.win, page)
+        self.assertFalse(page.cloud.get_active())
+        self.assertFalse(page.cloud_consent.get_visible())
+        self.assertEqual(json.loads(control("Stored", "cloud_consent", signature="s")[0]), {})
+        self.assertIs(json.loads(control("Stored", "cloud_enabled", signature="s")[0]), False)
+        page.cloud.set_active(True)
+        self.assertIsInstance(self.win.get_visible_dialog(), Adw.AlertDialog,
+                              "after withdrawing it asks again")
+        cancel(self.win)
 
     def test_25_cloud_a_reload_behind_the_dialog_does_not_lose_the_answer(self):
         page = self.skill_page("org.tuxistant.task")
         page.cloud.set_active(True)
         dialog = self.win.get_visible_dialog()
+        dialog.agree.set_active(True)
         control("Change", "listen_timeout_s", "21", signature="ss")
         wait(lambda: self.win.config["listen_timeout_s"] == 21, "the config to reload")
         self.assertIs(self.win.get_visible_dialog(), dialog, "a reload must not close or reopen it")
-        dialog.emit("response", "enable")
-        dialog.force_close()
+        self.assertTrue(dialog.agree.get_active())
+        agree(self.win)
         self.assertTrue(page.cloud.get_active())
-        wait(lambda: saved() == [["cloud_enabled", "true"]], "the answer to save")
+        wait(lambda: saved() == [["cloud_consent", json.dumps(AGREED)]], "the answer to save")
         wait(lambda: self.win.config["cloud_enabled"] is True, "the change to come back")
         self.assertTrue(page.cloud.get_active())
-        page.cloud.set_active(False)
-        wait(lambda: self.win.config["cloud_enabled"] is False, "the switch to go off")
+        withdraw(self.win, page)
 
     def test_25_cloud_real_keys_cannot_agree_by_accident(self):
         page = self.skill_page("org.tuxistant.task")
@@ -1731,9 +1850,11 @@ class Inner(unittest.TestCase):
             return self.win.get_visible_dialog() is self.win.skills.dialog
 
         keyboard.press(Gdk.KEY_Shift_L)     # a new virtual keyboard loses its first key
-        for key in (Gdk.KEY_Escape, Gdk.KEY_Return):
+        for key, ticked in ((Gdk.KEY_Escape, False), (Gdk.KEY_Return, False),
+                            (Gdk.KEY_Escape, True)):
             page.cloud.activate()
             wait(lambda: isinstance(self.win.get_visible_dialog(), Adw.AlertDialog), "the dialog")
+            self.win.get_visible_dialog().agree.set_active(ticked)
             settle(200)
             keyboard.press(key)
             wait(closed, "the key to close the dialog")
@@ -1741,35 +1862,166 @@ class Inner(unittest.TestCase):
         settle()
         self.assertEqual(saved(), [])
 
-    def test_25_cloud_from_elsewhere_asks_nothing_and_is_not_echoed(self):
+    def test_25_cloud_on_from_elsewhere_is_not_agreed_and_says_so(self):
+        """As SetConfig from anyone on the bus, or a config from before there was an agreement."""
         page = self.skill_page("org.tuxistant.task")
         control("Change", "cloud_enabled", "true", signature="ss")
-        wait(page.cloud.get_active, "the switch to follow")
+        wait(lambda: self.win.config["cloud_enabled"] is True, "the change to come back")
+        self.assertFalse(page.cloud.get_active(), "on without an agreement is not on")
+        self.assertTrue(page.cloud.get_subtitle().startswith(
+            "On, but not agreed to, so nothing goes to Anthropic"))
         self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog)
+        shot(self.win, "cloud-not-agreed")
+        page.cloud.set_active(True)
+        self.assertIsInstance(self.win.get_visible_dialog(), Adw.AlertDialog, "it asks")
+        cancel(self.win)
+        self.assertFalse(page.cloud.get_active())
         control("Change", "cloud_enabled", "false", signature="ss")
-        wait(lambda: not page.cloud.get_active(), "the switch to follow")
+        wait(lambda: self.win.config["cloud_enabled"] is False, "the change to come back")
         settle()
         self.assertEqual(saved(), [])
+
+    def test_25_cloud_an_agreement_from_elsewhere_asks_nothing_and_is_not_echoed(self):
+        page = self.skill_page("org.tuxistant.task")
+        control("Change", "cloud_consent", json.dumps(AGREED), signature="ss")
+        wait(page.cloud.get_active, "the switch to follow")
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog)
+        control("Change", "cloud_consent", "{}", signature="ss")
+        wait(lambda: not page.cloud.get_active(), "the switch to follow")
+        self.assertFalse(page.cloud_consent.get_visible())
+        settle()
+        self.assertEqual(saved(), [])
+
+    def test_25_cloud_a_new_version_of_what_is_sent_asks_again(self):
+        page = self.skill_page("org.tuxistant.task")
+        control("Change", "cloud_consent", json.dumps(AGREED), signature="ss")
+        wait(page.cloud.get_active, "the switch to follow")
+        with mock.patch.object(sa.cloud, "CLOUD_CONSENT_VERSION", CONSENT_VERSION + 1):
+            page.sync(self.win.config)
+            self.assertFalse(page.cloud.get_active())
+            self.assertTrue(page.cloud.get_subtitle().startswith(
+                "What is sent has changed since you agreed, so nothing goes to Anthropic"))
+            self.assertIn("doesn't cover what would be sent now", page.cloud_consent.get_subtitle())
+            page.cloud.set_active(True)
+            self.assertIsInstance(self.win.get_visible_dialog(), Adw.AlertDialog, "it asks")
+            cancel(self.win)
+        page.sync(self.win.config)
+        self.assertTrue(page.cloud.get_active())
+        settle()
+        self.assertEqual(saved(), [])
+        withdraw(self.win, page)
+
+    def test_25_cloud_another_model_asks_again(self):
+        page = self.skill_page("org.tuxistant.task")
+        control("Change", "cloud_consent", json.dumps(AGREED), signature="ss")
+        wait(page.cloud.get_active, "the switch to follow")
+        row, apply = page.cloud_model, apply_button(page.cloud_model)
+        row.set_text("claude-other-1")
+        apply.emit("clicked")
+        dialog = self.win.get_visible_dialog()
+        self.assertIsInstance(dialog, Adw.AlertDialog)
+        self.assertIn("model claude-other-1,", dialog.get_body())
+        self.assertTrue(page.cloud.get_active(), "still on, for the model agreed to")
+        cancel(self.win)
+        self.assertEqual(row.get_text(), "claude-opus-5-5", "Cancel puts the agreed model back")
+        settle()
+        self.assertEqual(saved(), [])
+
+        row.set_text("claude-other-1")
+        apply.emit("clicked")
+        agree(self.win)
+        other = {**AGREED, "model": "claude-other-1"}
+        wait(lambda: saved() == [["cloud_consent", json.dumps(other)]], "one save, with the model")
+        wait(lambda: stored_value("cloud_model") == "claude-other-1", "the model to be kept")
+        self.assertEqual(stored_value("cloud_consent")["model"], "claude-other-1")
+        self.assertTrue(page.cloud.get_active())
+        self.assertEqual(row.get_text(), "claude-other-1")
+
+        control("Change", "cloud_model", '"claude-<b>third</b>"', signature="ss")
+        wait(lambda: not page.cloud.get_active(), "another model from elsewhere turns it off")
+        self.assertEqual(page.cloud.get_subtitle(), "You agreed for another model, so nothing "
+                         "goes to Anthropic. Turn it on to agree for claude-<b>third</b>")
+        self.assertFalse(page.cloud.get_use_markup())
+        self.assertFalse(page.cloud_consent.get_use_markup())
+        withdraw(self.win, page)
+        control("Change", "cloud_model", '"claude-opus-5-5"', signature="ss")
+        wait(lambda: self.win.config["cloud_model"] == "claude-opus-5-5", "the reset")
 
     def test_25_cloud_a_refused_save_is_undone(self):
         page = self.skill_page("org.tuxistant.task")
         control("FailNext", "SetConfig", "disk <full>", signature="ss")
         with mock.patch.object(self.win, "toast", wraps=self.win.toast) as toast:
             page.cloud.set_active(True)
-            dialog = self.win.get_visible_dialog()
-            dialog.emit("response", "enable")
-            dialog.force_close()
+            agree(self.win)
             wait(lambda: toast.called, "the toast")
         toast.assert_called_once_with("disk <full>")
         wait(lambda: not page.cloud.get_active(), "the switch to roll back")
         self.assertEqual(page.cloud.get_subtitle(), "Nothing goes to Anthropic")
+        self.assertFalse(page.cloud_consent.get_visible())
         settle()
         self.assertEqual(len(saved()), 1, "the rollback is not a save")
+
+    def as_from_an_older_daemon(self, **values):
+        """What GetConfig gives before the daemon restarts after an update: no cloud_consent."""
+        config = {key: value for key, value in self.win.config.items() if key != "cloud_consent"}
+        self.addCleanup(self.win.load_config)
+        self.win.apply_config({**config, **values})
+
+    def test_25_cloud_an_older_daemon_using_it_can_be_switched_off(self):
+        """Its planner uses the cloud with the switch and a key alone, so say so, and let the
+        user turn it off. Shown off, it could only be turned on, which it would refuse."""
+        page = self.skill_page("org.tuxistant.task")
+        self.as_from_an_older_daemon(cloud_enabled=True, cloud_key_set=True)
+        self.assertTrue(page.cloud.get_active())
+        self.assertEqual(page.cloud.get_subtitle(), sa.cloud_note(
+            {"cloud_enabled": True, "cloud_key_set": True}))
+        self.assertIn("go to Anthropic", page.cloud.get_subtitle())
+        self.assertFalse(page.cloud_consent.get_visible())
+        settle()
+        self.assertEqual(saved(), [], "loading must not write anything back")
+        page.cloud.set_active(False)
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog)
+        wait(lambda: saved() == [["cloud_enabled", "false"]], "the switch to save")
+
+    def test_25_cloud_an_older_daemon_is_not_asked_to_agree(self):
+        """It would refuse cloud_consent, so the dialog would end in a refusal."""
+        page = self.skill_page("org.tuxistant.task")
+        self.as_from_an_older_daemon(cloud_enabled=False)
+        self.assertEqual(page.cloud.get_subtitle(),
+                         f"Nothing goes to Anthropic. {sa.RESTART_TO_AGREE}")
+        with mock.patch.object(self.win, "toast") as toast:
+            page.cloud.set_active(True)
+            settle(30)
+        toast.assert_called_once_with(sa.RESTART_TO_AGREE)
+        self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog, "no agreement")
+        wait(lambda: not page.cloud.get_active(), "the switch to go back")
+        settle()
+        self.assertEqual(saved(), [])
+
+    def test_25_cloud_a_model_no_agreement_could_name_is_refused_at_once(self):
+        page = self.skill_page("org.tuxistant.task")
+        row, apply = page.cloud_model, apply_button(page.cloud_model)
+        for cloud_on in (False, True):
+            if cloud_on:
+                control("Change", "cloud_consent", json.dumps(AGREED), signature="ss")
+                wait(page.cloud.get_active, "the switch to follow")
+            with self.subTest(cloud_on=cloud_on), \
+                    mock.patch.object(self.win, "toast") as toast:
+                row.set_text("m" * 101)
+                apply.emit("clicked")
+                settle(30)
+                toast.assert_called_once_with("That is not a model name")
+                self.assertIs(self.win.get_visible_dialog(), self.win.skills.dialog,
+                              "no agreement for it")
+                self.assertEqual(row.get_text(), "claude-opus-5-5")
+        settle()
+        self.assertEqual(saved(), [])
+        withdraw(self.win, page)
 
     def test_25_cloud_key_is_write_only(self):
         page = self.skill_page("org.tuxistant.task")
         apply = apply_button(page.cloud_key)
-        control("Change", "cloud_enabled", "true", signature="ss")
+        control("Change", "cloud_consent", json.dumps(AGREED), signature="ss")
         wait(page.cloud.get_active, "the switch to follow")
         self.assertIn("nothing goes to Anthropic", page.cloud.get_subtitle())
         self.assertEqual(page.cloud_key_status.get_label(), "No key set")
@@ -1798,7 +2050,7 @@ class Inner(unittest.TestCase):
         wait(lambda: self.win.config.get("cloud_key_set") is False, "cloud_key_set to clear")
         self.assertEqual(page.cloud_key_status.get_label(), "No key set")
         self.assertIn("nothing goes to Anthropic", page.cloud.get_subtitle())
-        control("Change", "cloud_enabled", "false", signature="ss")
+        control("Change", "cloud_consent", "{}", signature="ss")
         wait(lambda: not page.cloud.get_active(), "the switch to follow")
 
     def test_25_cloud_key_refused_says_so_without_repeating_it(self):
@@ -2045,7 +2297,7 @@ class Inner(unittest.TestCase):
     def test_25_a_daemon_older_than_this_app_is_no_crash(self):
         """Settings updates on disk at once. The daemon keeps its old code until it restarts."""
         new = ("phone_device", "translate_server", "search_server", "fact_lookup", "cloud_enabled",
-               "cloud_model", "cloud_key_set", "tapo_email", "tapo_password_set", "mail_search",
+               "cloud_model", "cloud_key_set", "cloud_consent", "tapo_email", "tapo_password_set", "mail_search",
                "timer_chime", "ha_server", "ha_token_set", "say_tailscale_address")
         current = dict(self.win.config)
         self.addCleanup(self.win.apply_config, current)
@@ -2455,6 +2707,36 @@ class Inner(unittest.TestCase):
             control("Quit")
 
 
+def stored_value(key):
+    return json.loads(control("Stored", key, signature="s")[0])
+
+
+def agree(window):
+    """Tick the box and press Turn On, on the agreement that is open."""
+    dialog = window.get_visible_dialog()
+    assert isinstance(dialog, Adw.AlertDialog), "the agreement is open"
+    dialog.agree.set_active(True)
+    dialog.emit("response", "enable")
+    dialog.force_close()
+    settle(30)
+
+
+def cancel(window):
+    dialog = window.get_visible_dialog()
+    assert isinstance(dialog, Adw.AlertDialog), "the agreement is open"
+    dialog.emit("response", "cancel")
+    dialog.force_close()
+    settle(30)
+
+
+def withdraw(window, page):
+    page.withdraw.emit("clicked")
+    wait(lambda: stored_value("cloud_consent") == {} and not stored_value("cloud_enabled"),
+         "the agreement to be withdrawn")
+    wait(lambda: window.config.get("cloud_consent") == {} and not window.config["cloud_enabled"],
+         "the change to come back")
+
+
 def add_record(heard, reply, actions, status="ok"):
     """Through the real History and the same JSON and D-Bus trip a record really takes. The new
     row is built by the time this returns."""
@@ -2464,6 +2746,10 @@ def add_record(heard, reply, actions, status="ok"):
     wait(lambda: page.rows and page.rows[0] is not first, "the history to refresh")
 
 
+CONSENT_VERSION = sa.cloud.CLOUD_CONSENT_VERSION
+AGREED = {"version": CONSENT_VERSION, "provider": "Anthropic", "model": "claude-opus-5-5"}
+CLOUD_ON = {"cloud_enabled": True, "cloud_key_set": True, "cloud_model": "claude-opus-5-5",
+            "cloud_consent": {**AGREED, "date": "2026-11-13"}}
 
 
 EXPECTED_SETTINGS = {
@@ -2483,7 +2769,7 @@ EXPECTED_SETTINGS = {
     "org.tuxistant.lights": {"tapo_email", "tapo_password"},
     "org.tuxistant.home": {"ha_server", "ha_token"},
     "org.tuxistant.home_status": {"ha_server", "ha_token"},
-    "org.tuxistant.task": {"cloud_enabled", "cloud_api_key", "cloud_model"},
+    "org.tuxistant.task": {"cloud_enabled", "cloud_consent", "cloud_api_key", "cloud_model"},
 }
 
 
