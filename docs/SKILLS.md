@@ -377,7 +377,7 @@ The card names the host, says whether it is on the internet or your local networ
 
 **Desktop actions.** A recipe reaches the desktop only through this table, in `tuxistant/desktop.py`. Each entry has its own code, which holds the D-Bus call or the setting it changes, its own sentence and its own card rule, all written there. A recipe names the entry and fills its fields, and never a bus, a path, an interface, a method, a schema or a key: a D-Bus method name doesn't say what a call will do, so no card could be honest about one.
 
-```yaml
+```yaml excerpt
 actions:
   evening.nightlight:
     description: Turn Night Light on or off
