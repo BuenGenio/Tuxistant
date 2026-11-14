@@ -14,6 +14,7 @@ MAX_TITLE_CHARS = 200
 MAX_DETAIL_CHARS = 4000
 MAX_NAME_CHARS = 300
 LEVELS = ("click", "admin")
+HIDDEN = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")     # unicodedata categories shown as escapes
 DECLINED = "OK, I've left that alone."     # the model tends to repeat this word for word
 # In a result, this means the app reads the answer out itself. The voice model is then not asked
 # to speak: holding the question and no answer, it made up a date in 2 of 8 tries at one question.
@@ -26,16 +27,16 @@ def printable(text: str, limit: int) -> str:
     """Text for an approval card, where what you see has to be what will happen. Control and
     bidirectional-override characters can hide or reorder part of a command, so they show up as
     visible escapes instead. A cut is always marked, and the caller keeps the whole text."""
-    out = []
-    for char in text:
-        if char in "\n\t":
-            out.append(char)
-        elif unicodedata.category(char) in ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"):
-            out.append(f"\\u{ord(char):04x}")
-        else:
-            out.append(char)
-    shown = "".join(out)
+    shown = "".join(map(escaped, text))
     return shown if len(shown) <= limit else f"{shown[:limit]}… ({len(shown) - limit} more characters)"
+
+
+def escaped(char: str) -> str:
+    """One character as printable() shows it. The manifest colours in Settings place themselves
+    with this too, so they can't drift from the text."""
+    if char in "\n\t" or unicodedata.category(char) not in HIDDEN:
+        return char
+    return f"\\u{ord(char):04x}"
 
 
 def shown(name, limit: int = MAX_NAME_CHARS) -> str:

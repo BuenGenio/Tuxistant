@@ -6,6 +6,7 @@ nothing reaches the user's session. Set TUX_SETTINGS_SHOTS=<folder> to save a PN
 """
 import io
 import ctypes
+import gc
 import json
 import os
 import shutil
@@ -34,7 +35,7 @@ with mock.patch.dict(os.environ):
         os.environ["WAYLAND_DISPLAY"] = "tuxistant-test-no-display"
     from tuxistant import calendars, settings_app as sa
     from tuxistant import voices
-    from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk
+    from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
 
 class Logic(unittest.TestCase):
@@ -1333,8 +1334,70 @@ class Inner(unittest.TestCase):
         shot(self.win, "skill-manifest-dark")
         style.set_color_scheme(scheme)
         settle()
+        page = text.get_ancestor(sa.ManifestPage)
+        page.colour(Contrast())
+        self.assertFalse(key.props.foreground_set, "high contrast keeps the theme's colour")
+        self.assertEqual(key.props.weight, Pango.Weight.BOLD, "and keys go bold instead")
+        page.colour(style)
+        self.assertTrue(key.props.foreground_set)
+        self.assertEqual(key.props.weight, Pango.Weight.NORMAL)
+        del page
         dialog.copy_manifest()
         self.assertEqual(clipboard_text(dialog), manifest)
+
+    def test_21_a_b_a_manifest_page_is_freed_once_popped(self):
+        style = Adw.StyleManager.get_default()
+        dialog = open_skill(self.win, "org.tuxistant.weather")
+        for _ in range(2):
+            dialog.manifest_row.activate()
+            settle()
+            page = next(w for w in iter_children(dialog) if isinstance(w, Gtk.TextView)
+                        ).get_ancestor(sa.ManifestPage)
+            handlers = list(page.watching)
+            self.assertEqual(len(handlers), 2, "it follows dark and high contrast while shown")
+            freed = []
+            page.weak_ref(lambda: freed.append(True))
+            del page
+            dialog.pop_subpage()
+            wait(lambda: gc.collect() is not None and freed, "the page to be freed")
+            self.assertFalse([handler for handler in handlers
+                              if GObject.signal_handler_is_connected(style, handler)])
+
+    def test_21_a_c_a_manifest_with_a_long_line_opens_at_once(self):
+        """A code skill's manifest may be 64 KB on one line of a list. Each tag on a line made
+        GTK slower at the next, and this took 96 s; wrapping it at words took 1.7 s more."""
+        head = ("id: org.example.big\nname: Big\ndescription: Says hi\nrun: [python3, main.py]\n"
+                "actions:\n  big.hi:\n    description: Say hi\npermissions:\n  network: [")
+        long_line = head + ",".join(["a"] * ((64 * 1024 - len(head)) // 2)) + "]\n"
+        many_lines = "".join(f"k{n}: [x, 'y', 3, null]  # {n}\n" for n in range(2400))
+        dialog = open_skill(self.win, "org.tuxistant.weather")
+        for name, manifest in (("long line", long_line), ("many lines", many_lines)):
+            with self.subTest(name):
+                began = time.monotonic()
+                page = sa.ManifestPage(dialog, {"manifest": manifest, "file": "skill.yaml"})
+                dialog.push_subpage(page)
+                settle(30)
+                took = time.monotonic() - began
+                self.assertLess(took, 1.0, f"{len(manifest)} characters took {took:.2f} s")
+                buffer = page.text.get_buffer()
+                self.assertEqual(buffer.get_text(*buffer.get_bounds(), False), manifest)
+                self.assertEqual([tag.props.name for tag in buffer.get_start_iter().get_tags()],
+                                 ["key"])
+                if name == "long line":
+                    self.assertEqual(page.text.get_wrap_mode(), Gtk.WrapMode.CHAR)
+                    _found, at = buffer.get_iter_at_line(8)
+                    toggles = 0
+                    while at.forward_to_tag_toggle(None) and at.get_line() == 8:
+                        toggles += 1
+                    self.assertLessEqual(toggles, 2 * sa.highlight.MAX_PER_LINE)
+                else:
+                    self.assertEqual(page.text.get_wrap_mode(), Gtk.WrapMode.WORD_CHAR)
+                    _found, last = buffer.get_iter_at_line(2399)
+                    last.forward_chars(len("k2399: [x, 'y', 3, null]  "))
+                    self.assertEqual([tag.props.name for tag in last.get_tags()], ["comment"])
+                dialog.pop_subpage()
+                settle(30)
+                del page
 
     def test_21_b_a_recipe_you_added_shows_its_file_whole(self):
         from tests.shell_harness_settings_fake import RECIPE
@@ -2787,6 +2850,16 @@ EXPECTED_SETTINGS = {
     "org.tuxistant.home_status": {"ha_server", "ha_token"},
     "org.tuxistant.task": {"cloud_enabled", "cloud_consent", "cloud_api_key", "cloud_model"},
 }
+
+
+class Contrast:
+    """Adw.StyleManager as it is under high contrast, which a test can't turn on."""
+
+    def get_high_contrast(self):
+        return True
+
+    def get_dark(self):
+        return False
 
 
 def clipboard_text(widget) -> str:
