@@ -1,165 +1,211 @@
 """Colours for a manifest shown in Settings: where each YAML key, string, number, comment and
 mark starts and ends.
 
-It is only for showing. Nothing here decides what a manifest means, so a manifest it reads wrongly
-is only coloured wrongly. It reads one line at a time and never looks back, so a long or hostile
-file costs time in step with its length.
+It reads the text with PyYAML's own SafeLoader, the scanner, parser and resolver every manifest
+loader uses (yaml.safe_load for the built-in skills, skillhost.Bounded and Unaliased for the rest),
+so a colour can't say something the loader doesn't read: a key is what the loader takes as a key,
+and a comment is only text the scanner skipped. Where the loader would stop, at an error or at a
+limit of its own, the colours stop too and the rest is left plain, so a broken manifest doesn't
+look whole. It is only for showing: nothing here decides what a manifest means.
 """
-
+import itertools
 import re
+
+import yaml
+
+from .gate import escaped
 
 KEY, STRING, NUMBER, COMMENT, MARK = "key", "string", "number", "comment", "mark"
 KINDS = (KEY, STRING, NUMBER, COMMENT, MARK)
-MAX_CHARS = 256 * 1024      # past this the rest is left plain; a manifest is a few KB
-
-NUMBERISH = re.compile(r"[-+]?(?:\d[\d_]*(?:\.\d*)?(?:[eE][-+]?\d+)?|\.\d+|0x[0-9a-fA-F]+|0o[0-7]+"
-                       r"|\.inf|\.Inf|\.INF|\.nan|\.NaN|\.NAN)")
-CONSTANTS = {"true", "false", "True", "False", "TRUE", "FALSE", "null", "Null", "NULL", "~",
-             "yes", "no", "Yes", "No", "on", "off", "On", "Off"}
-BLOCK = re.compile(r"[|>][-+0-9]*")
+MAX_CHARS = 256 * 1024      # past this the rest is left plain; a manifest may be 64 KB
+MAX_PER_LINE = 100      # GTK pays for each tag toggle on a line again at every one after it
+MAX_DEPTH = 16          # skillhost.MAX_YAML_DEPTH: Bounded refuses a node nested deeper
+NUMBERS = {f"tag:yaml.org,2002:{name}" for name in ("int", "float", "bool", "null")}
+BREAKS = "\r\n\x85\u2028\u2029"     # what PyYAML ends a line at
+BREAK = re.compile(f"[{BREAKS}]")
+LINES = re.compile(f"[^{BREAKS}]+")
+BLOCK_HEADER = re.compile(r"[|>][-+0-9]*")
+MARKS = (yaml.KeyToken, yaml.ValueToken, yaml.BlockEntryToken, yaml.FlowEntryToken,
+         yaml.FlowSequenceStartToken, yaml.FlowSequenceEndToken, yaml.FlowMappingStartToken,
+         yaml.FlowMappingEndToken, yaml.AnchorToken, yaml.AliasToken, yaml.TagToken,
+         yaml.DocumentStartToken, yaml.DocumentEndToken, yaml.DirectiveToken)
+NODES = (yaml.ScalarEvent, yaml.AliasEvent, yaml.CollectionStartEvent)
 
 
 def spans(text: str) -> list[tuple[int, int, str]]:
-    """(start, end, kind) for each coloured run, in order and never overlapping."""
+    """(start, end, kind) for each coloured run of text, in order, never overlapping and never
+    holding a line break."""
+    text = _capped(text)
+    tokens, kinds, scanned = _read(text)
     found = []
-    state = _State()
-    offset = 0
-    for line in text[:MAX_CHARS].split("\n"):
-        _line(line, offset, state, found)
-        offset += len(line) + 1
+    at = 0
+    for token in tokens:
+        start, end = token.start_mark.index, token.end_mark.index
+        if start >= end:
+            continue
+        _comments(text, at, start, found)
+        at = max(at, end)
+        if isinstance(token, yaml.ScalarToken):
+            kind = kinds.get(end, STRING)
+            if token.style in ("|", ">"):
+                _block(text, start, end, kind, found)
+            else:
+                _lines(text, start, end, kind, found)
+        elif isinstance(token, MARKS):
+            found.append((start, end, MARK))
+    _comments(text, at, scanned, found)
     return found
 
 
-class _State:
-    def __init__(self):
-        self.block = None       # the indent a block scalar's lines must go past
-        self.quote = None       # the quote a string still open from an earlier line ends with
-        self.flow = 0           # how deep in { } and [ ] the text is
+def shown_spans(text: str) -> list[tuple[int, int, str]]:
+    """spans(text) placed in printable(text), which Settings shows: the escapes it writes for
+    hidden characters are longer than the characters. At most MAX_PER_LINE on a line; the rest
+    of a longer line is left plain."""
+    found = spans(text)
+    place = _places(text)
+    placed = []
+    count, at = 0, 0
+    for start, end, kind in found:
+        if "\n" in text[at:start]:
+            count = 0
+        at = start
+        count += 1
+        if count <= MAX_PER_LINE:
+            placed.append((place(start), place(end), kind))
+    return placed
 
 
-def _indent(line: str) -> int:
-    return len(line) - len(line.lstrip(" "))
+class _Reader(yaml.SafeLoader):
+    """The loaders' SafeLoader, keeping each token as the parser takes it."""
+
+    def __init__(self, text):
+        super().__init__(text)
+        self.taken = []
+
+    def get_token(self):
+        token = super().get_token()
+        self.taken.append(token)
+        return token
 
 
-def _line(line, offset, state, found):
-    add = _adder(offset, found)
-    if state.block is not None:
-        if not line.strip() or _indent(line) > state.block:
-            add(_indent(line), len(line.rstrip()), STRING)
-            return
-        state.block = None
-    i = 0
-    if state.quote:
-        end = _quote_end(line, 0, state.quote)
-        if end is None:
-            add(0, len(line), STRING)
-            return
-        add(0, end, STRING)
-        state.quote, i = None, end
-    elif line.startswith(("---", "...")) and line[3:4] in ("", " "):
-        add(0, 3, MARK)
-        i = 3
-    key_place = True
-    while i < len(line):
-        c = line[i]
-        if c in " \t":
-            i += 1
-        elif c == "#" and (i == 0 or line[i - 1] in " \t"):
-            add(i, len(line), COMMENT)
-            return
-        elif c in "\"'":
-            end = _quote_end(line, i + 1, c)
-            if end is None:
-                add(i, len(line), STRING)
-                state.quote = c
-                return
-            colon = _colon_after(line, end, state.flow)
-            add(i, end, KEY if key_place and colon is not None else STRING)
-            i, key_place = end, False
-        elif c == "-" and state.flow == 0 and line[i + 1:i + 2] in ("", " "):
-            add(i, i + 1, MARK)
-            i, key_place = i + 1, True
-        elif c in "{[":
-            add(i, i + 1, MARK)
-            state.flow += 1
-            i, key_place = i + 1, c == "{"
-        elif c in "}]":
-            add(i, i + 1, MARK)
-            state.flow = max(0, state.flow - 1)
-            i += 1
-        elif c == "," and state.flow:
-            add(i, i + 1, MARK)
-            i, key_place = i + 1, True
-        elif c == ":" and line[i + 1:i + 2] in ("", " ") or c == ":" and state.flow:
-            add(i, i + 1, MARK)
-            i, key_place = i + 1, False
-        elif c in "|>" and not key_place and state.flow == 0:
-            block = BLOCK.match(line, i)
-            add(i, block.end(), MARK)
-            state.block = _indent(line)
-            i = block.end()
-        elif c in "&*!":
-            end = _plain_end(line, i, state.flow, word=True)
-            add(i, end, MARK)
-            i = end
-        else:
-            end = _plain_end(line, i, state.flow)
-            word = line[i:end]
-            colon = _colon_after(line, end, state.flow)
-            if key_place and colon is not None:
-                add(i, end, KEY)
-            elif word in CONSTANTS or NUMBERISH.fullmatch(word):
-                add(i, end, NUMBER)
-            else:
-                add(i, end, STRING)
-            i, key_place = max(end, i + 1), False
+def _read(text):
+    """(the tokens the loader read, the kind of each scalar by where it ends, how far the text
+    was read). Reading stops where loading would fail: an error, a second document, an alias to
+    nothing, an anchor used twice, or a node nested deeper than Bounded allows."""
+    try:
+        reader = _Reader(text)
+    except yaml.YAMLError:      # a character YAML refuses anywhere refuses the whole text
+        return [], {}, 0
+    kinds = {}
+    nesting = []    # for each open collection: None for a sequence, nodes so far in a mapping
+    anchors = set()
+    documents = 0
+    stop = None
+    try:
+        while (event := reader.get_event()) is not None:
+            if isinstance(event, yaml.StreamEndEvent):
+                stop = len(text)
+                break
+            if isinstance(event, yaml.DocumentStartEvent):
+                documents += 1
+                if documents > 1:
+                    stop = event.start_mark.index
+                    break
+            elif isinstance(event, NODES):
+                if (len(nesting) >= MAX_DEPTH
+                        or isinstance(event, yaml.AliasEvent) and event.anchor not in anchors
+                        or not isinstance(event, yaml.AliasEvent) and event.anchor in anchors):
+                    stop = event.start_mark.index
+                    break
+                if event.anchor is not None:
+                    anchors.add(event.anchor)
+                end = event.end_mark.index
+                if isinstance(event, yaml.ScalarEvent) and end > event.start_mark.index:
+                    kinds[end] = _kind(reader, event, nesting)
+                if isinstance(event, yaml.CollectionStartEvent):
+                    nesting.append(0 if isinstance(event, yaml.MappingStartEvent) else None)
+                else:
+                    _counted(nesting)
+            elif isinstance(event, yaml.CollectionEndEvent):
+                nesting.pop()
+                _counted(nesting)
+    except yaml.MarkedYAMLError as e:   # as far as the last token read, and not past the error
+        stop = e.problem_mark.index if e.problem_mark else None
+    except (yaml.YAMLError, RecursionError):
+        pass
+    finally:
+        reader.dispose()
+    tokens = reader.taken
+    read = max((token.end_mark.index for token in tokens), default=0)
+    stop = read if stop is None else min(stop, read)
+    return [token for token in tokens if token.start_mark.index < stop], kinds, stop
 
 
-def _adder(offset, found):
-    def add(start, end, kind):
-        if end > start:
-            found.append((offset + start, offset + end, kind))
-    return add
+def _kind(reader, event, nesting):
+    """A key of a mapping, a number as the loader resolves it, or a string. The same steps as
+    Composer.compose_scalar_node."""
+    if nesting and nesting[-1] is not None and nesting[-1] % 2 == 0:
+        return KEY
+    tag = event.tag
+    if tag is None or tag == "!":
+        tag = reader.resolve(yaml.ScalarNode, event.value, event.implicit)
+    return NUMBER if tag in NUMBERS else STRING
 
 
-def _quote_end(line, i, quote):
-    """Just past the quote that closes a string, or None when it runs on to the next line."""
-    while i < len(line):
-        c = line[i]
-        if quote == '"' and c == "\\":
-            i += 2
-        elif c == quote:
-            if quote == "'" and line[i + 1:i + 2] == "'":
-                i += 2
-            else:
-                return i + 1
-        else:
-            i += 1
-    return None
+def _counted(nesting):
+    if nesting and nesting[-1] is not None:
+        nesting[-1] += 1
 
 
-def _colon_after(line, i, flow):
-    """Where the colon that makes what ends at i a key is, if there is one."""
-    while i < len(line) and line[i] in " \t":
-        i += 1
-    if line[i:i + 1] == ":" and (line[i + 1:i + 2] in ("", " ") or flow):
-        return i
-    return None
+def _comments(text, start, end, found):
+    """Comments in text the scanner skipped: there, a # starts one, up to the line's end."""
+    at = text.find("#", start, end)
+    while at != -1:
+        stop = BREAK.search(text, at, end)
+        stop = stop.start() if stop else end
+        found.append((at, stop, COMMENT))
+        at = text.find("#", stop, end)
 
 
-def _plain_end(line, i, flow, word=False):
-    """Where an unquoted word or run of words starting at i ends, trailing spaces left out."""
-    stops = ",[]{}" if flow else ""
-    j = i
-    while j < len(line):
-        c = line[j]
-        if c in stops or word and c in " \t":
-            break
-        if c == ":" and (line[j + 1:j + 2] in ("", " ") or flow):
-            break
-        if c == "#" and line[j - 1] in " \t":
-            break
-        j += 1
-    while j > i and line[j - 1] in " \t":
-        j -= 1
-    return j
+def _lines(text, start, end, kind, found):
+    """A scalar, one run for each line it covers, with the indent of the next ones left out."""
+    for line in LINES.finditer(text, start, end):
+        first = line.start()
+        if first > start:
+            first = _indent_end(text, first, line.end())
+        if first < line.end():
+            found.append((first, line.end(), kind))
+
+
+def _block(text, start, end, kind, found):
+    """A | or > block scalar: its header, a comment on that line, then its lines."""
+    header = BLOCK_HEADER.match(text, start, end)
+    found.append((start, header.end(), MARK))
+    stop = BREAK.search(text, header.end(), end)
+    stop = stop.start() if stop else end
+    _comments(text, header.end(), stop, found)
+    _lines(text, stop, end, kind, found)
+
+
+def _indent_end(text, start, end):
+    at = start
+    while at < end and text[at] in " \t":
+        at += 1
+    return at
+
+
+def _capped(text):
+    """The text up to MAX_CHARS, cut at a line's end."""
+    if len(text) <= MAX_CHARS:
+        return text
+    cut = max(text.rfind(char, 0, MAX_CHARS) for char in BREAKS)
+    return text[:cut + 1]
+
+
+def _places(text):
+    """Where each offset in text lands in printable(text)."""
+    widths = [len(escaped(char)) for char in text]
+    if all(width == 1 for width in widths):
+        return lambda offset: offset
+    starts = [0, *itertools.accumulate(widths)]
+    return starts.__getitem__

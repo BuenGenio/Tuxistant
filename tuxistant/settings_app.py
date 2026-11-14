@@ -133,6 +133,9 @@ SYNTAX = {
     highlight.COMMENT: ("#6a696e", "#a3a2a7"),
     highlight.MARK: ("#6a696e", "#a3a2a7"),
 }
+# Wrapping at words, Pango pays more for each line of a paragraph with nowhere to break: 64 KB
+# of "a,a,a" took 1.7 s, against 0.1 s wrapped at any character.
+LONG_LINE = 1000
 MAX_FILES_SHOWN = 100       # a code skill may have 2,000, and a row each takes seconds to build
 CSS = """
 .risk-badge {
@@ -1754,6 +1757,18 @@ class SkillActionRow(Adw.ExpanderRow):
         self.add_row(detail_row(SENT_AS, json.dumps(tool, indent=2, ensure_ascii=False)))
 
 
+def colour_text(buffer, tags, spans):
+    """Tags each (start, end, kind) in order, walking one iterator forward. Looking each place up
+    from the start costs more for every tag already on its line."""
+    at, place = buffer.get_start_iter(), 0
+    for start, end, kind in spans:
+        at.forward_chars(start - place)
+        stop = at.copy()
+        stop.forward_chars(end - start)
+        buffer.apply_tag(tags[kind], at, stop)
+        at, place = stop, end
+
+
 class ManifestPage(Adw.NavigationPage):
     """The whole manifest, read-only, to read, select and copy."""
 
@@ -1771,20 +1786,32 @@ class ManifestPage(Adw.NavigationPage):
         text = shown(details["manifest"])
         buffer = self.text.get_buffer()
         buffer.set_text(text)
+        # A wrap never draws a hyphen the file doesn't have: "b-itcoin" could read as another host.
+        whole = buffer.create_tag("whole", insert_hyphens=False)
+        buffer.apply_tag(whole, *buffer.get_bounds())
+        # Only a line too long to wrap at words in good time wraps anywhere, so the rest of the
+        # manifest still breaks between words.
+        wrap_anywhere = buffer.create_tag("long", wrap_mode=Gtk.WrapMode.CHAR)
+        for number, line in enumerate(text.split("\n")):
+            if len(line) > LONG_LINE:
+                start = buffer.get_iter_at_line(number)[1]
+                end = start.copy()
+                end.forward_to_line_end()
+                buffer.apply_tag(wrap_anywhere, start, end)
         self.tags = {kind: buffer.create_tag(kind) for kind in highlight.KINDS}
         self.tags[highlight.COMMENT].props.style = Pango.Style.ITALIC
-        for start, end, kind in highlight.spans(text):
-            buffer.apply_tag(self.tags[kind], buffer.get_iter_at_offset(start),
-                             buffer.get_iter_at_offset(end))
+        colour_text(buffer, self.tags, highlight.shown_spans(details["manifest"]))
         self.watching = []
-        self.text.connect("realize", self.watch_style)
-        self.text.connect("unrealize", self.unwatch_style)
+        # On the page, not the view: a bound method of the page held by its own child is a
+        # cycle PyGObject can't collect, and a page popped would never be freed.
+        self.connect("realize", self.watch_style)
+        self.connect("unrealize", self.unwatch_style)
         view = Adw.ToolbarView(content=Gtk.ScrolledWindow(
             child=self.text, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True))
         view.add_top_bar(header)
         self.set_child(view)
 
-    def watch_style(self, _view):
+    def watch_style(self, _page):
         """Colours follow light and dark as they change. Under high contrast the text keeps the
         theme's own colour, and keys are bold instead."""
         style = Adw.StyleManager.get_default()
@@ -1792,7 +1819,7 @@ class ManifestPage(Adw.NavigationPage):
                          for name in ("dark", "high-contrast")]
         self.colour(style)
 
-    def unwatch_style(self, _view):
+    def unwatch_style(self, _page):
         style = Adw.StyleManager.get_default()
         for handler in self.watching:
             style.disconnect(handler)
