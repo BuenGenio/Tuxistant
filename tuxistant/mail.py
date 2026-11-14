@@ -24,6 +24,7 @@ is said with a warning. When a mail came is judged by the mails Thunderbird inde
 the date on a mail is whatever its sender wrote.
 """
 import asyncio
+import html
 import re
 import secrets
 import sqlite3
@@ -188,8 +189,19 @@ SENT_MAIL = 60          # and the folders of mail the user sent
 # either way it is read as the code it is.
 # Every line end str.splitlines knows, as HTML's lines are split on in goamail._unhtml.
 LINE_END = re.compile(r"\r\n|[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
-SPACE = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
-UNSEEN = re.compile(r"[\u200b-\u200f\u2060\ufeff\u00ad]")
+SPACE = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u2800\u3000]")
+# What a reader never sees: controls, format characters such as the bidi isolates a template puts
+# round each value, private use, and the rest of Unicode's default ignorables, which Python can't
+# look up, such as variation selectors and Hangul fillers. Any of these beside a code would keep
+# it from being alone on its line, while the model still reads the code. They are taken out, not
+# made spaces, so "482\u2066913" is one code, as the model reads it.
+UNSEEN_KINDS = frozenset(("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))
+IGNORABLE = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f"
+                       "\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
+                       "\U000e0000-\U000e0fff]")
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+MARKS = frozenset(("Mn", "Me"))    # a keycap or an accent on a letter or digit of a code
+UNESCAPES = 4
 SECRET_WORD = re.compile(
     r"(?<![A-Za-z])(?:pass(?:words?|phrases?|codes?|wd)?|pwd|pins?|otp|keys?|tokens?)(?![A-Za-z])"
     r"|(?<![A-Za-z])(?!post|bar|zip)[A-Za-zÀ-ÿ]*codes?(?![A-Za-z])|c[oó]dig\w*|codic\w*"
@@ -219,7 +231,7 @@ NUMBER = re.compile(r"(?<![\w.,/£$€-])\d{3}[ -]\d{3}(?![\w/-])"
                     rf"|(?<![\w.,/£$€-])\d{{4,8}}(?![\w/-]|[.,]\d|{MONEY})"
                     rf"|(?<![\w.,/£$€-])\d(?: \d){{3,7}}(?![\w/-]|[.,]\d|{MONEY})", re.I)
 ALONE = re.compile(      # a line that is nothing but a code
-    r"^[ \t]*((?:\d[ -]?){4,12}"
+    r"^[ \t]*+((?:\d[ -]?){4,12}"
     r"|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,14}"
     r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9])[ \t]*$",
     re.M)
@@ -449,15 +461,49 @@ def _spans(text: str) -> list[tuple[int, int]]:
     return sorted(spans)
 
 
+def _visible(text: str) -> str:
+    """One pass of _seen: the wide and styled forms of letters and digits made plain, character
+    references read, every line end made a line feed, and every character in UNSEEN_KINDS or
+    IGNORABLE taken out but a tab and a line feed, as is a mark on a letter or digit that has no
+    form of its own with the mark. "&#x2028;" is a line end once it is read."""
+    text = LINE_END.sub("\n", html.unescape(unicodedata.normalize("NFKC", text)))
+    if text.isascii():
+        return CONTROL.sub("", text)
+    out, after = [], False
+    for char in text:
+        kind = unicodedata.category(char)
+        if (kind in UNSEEN_KINDS and char not in "\t\n") or IGNORABLE.match(char) or (
+                after and kind in MARKS):
+            continue
+        out.append(char)
+        after = char.isdecimal() or (char.isascii() and char.isalnum())
+    return "".join(out)
+
+
+def _seen(text: str) -> str:
+    """A mail's text as the model reads it, with its lines kept. clean() reads character
+    references and turns hidden characters into spaces before it joins the lines, so "&#52;" or
+    U+2066 beside a code on a line of its own would reach the model with no line left to be
+    alone on. Both are done here first, until nothing more changes, so that clean() has nothing
+    left to read: what is still "&#38;#52;" after a few rounds loses its ampersands."""
+    for _ in range(UNESCAPES):
+        seen = _visible(text)
+        if seen == text:
+            return text
+        text = seen
+    return text.replace("&", " ")
+
+
 def _hide(text: str) -> str:
     """A mail's text with whatever may be a sign-in code or a password taken out. Odd spaces
     are made plain first, as the model would read "482\u00a0913" as the code it is, and a code
     spelt out one character to a line is put on a line of its own, as the model would read it.
     A mail server ends each line with a carriage return before the line feed, and a mail may end
     one with a line or paragraph separator, NEL, a vertical tab or a form feed. Any of these would
-    keep a code from being seen alone on its line, so every line end is made a line feed first."""
-    text = LINE_END.sub("\n", text)
-    text = SPELT.sub(lambda run: "".join(run[0].split()), UNSEEN.sub("", SPACE.sub(" ", text)))
+    keep a code from being seen alone on its line, so every line end is made a line feed first,
+    as the text is made what the model is shown (see _seen)."""
+    text = _seen(text)
+    text = SPELT.sub(lambda run: "".join(run[0].split()), SPACE.sub(" ", text))
     out, at = [], 0
     for start, end in _spans(text):
         if end > at:

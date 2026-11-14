@@ -312,6 +312,45 @@ class Secrets(Goa):
             for code in ("482917", "KQ7X9B"):
                 self.assertNotRegex(self.read(call), r"\W{0,9}".join(code))
 
+    PADDED = (("\u2068", "\u2069"), ("\u2066", "\u2069"), ("\u202a", "\u202c"), ("\x1f", "\x1f"),
+              ("\u061c", "\u180e"), ("\ue000", "\U000e0001"))
+    SAID = "Hello. Here is what you need for your Acme account:"
+
+    async def padded(self, mails: list[bytes]) -> None:
+        """Each mail is read by the model with its code hidden, however it was padded."""
+        await self.mailbox(gmail(inbox=[(HELLO, 900), *((raw, 1) for raw in mails)]))
+        self.says = ["NOTHING"] * len(mails)
+        with mock.patch.object(mail, "TRIED", len(mails)):
+            await self.ask("Did Acme email me about my account?")
+        self.assertEqual(len(self.model), len(mails))
+        for call in range(len(mails)):
+            self.assertIn("Acme account", self.read(call))
+            self.assertIn(mail.HIDDEN, self.read(call))
+            for code in ("482917", "KQ7X9B"):
+                self.assertNotRegex(self.read(call), r"\W{0,9}".join(code))
+
+    async def test_a_code_padded_with_what_no_one_sees_is_hidden_in_plain_text(self):
+        """A template puts bidi isolates round each value it fills in, and a mail may pad a line
+        with other characters a reader never sees. Each is a space to what the model reads, so
+        a code alone on its line, or spelt one character to a line, is hidden as it is with
+        nothing round it."""
+        texts = [*(f"{self.SAID}\n\n{before}{code}{after}\n\nThanks, Acme"
+                   for before, after in self.PADDED for code in ("482917", "KQ7X9B")),
+                 *(f"{self.SAID}\n" + "\n".join(f"{before}{c}{after}" for c in code)
+                   + "\nThanks" for before, after in self.PADDED[2:4]
+                   for code in ("482917", "KQ7X9B"))]
+        await self.padded([message(f"About your Acme account {n}", "Acme <account@acme.example>",
+                                    text) for n, text in enumerate(texts)])
+
+    async def test_a_code_padded_with_what_no_one_sees_is_hidden_in_html(self):
+        pages = [*(f"<p>{self.SAID}</p><p>{before}{code}{after}</p><p>Thanks, Acme</p>"
+                   for before, after in self.PADDED for code in ("482917", "KQ7X9B")),
+                 *(f"<p>{self.SAID}</p>" + "".join(f"<div>{before}{c}{after}</div>" for c in code)
+                   + "<p>Thanks, Acme</p>" for before, after in self.PADDED[2:4]
+                   for code in ("482917", "KQ7X9B"))]
+        await self.padded([message(f"About your Acme account {n}", "Acme <account@acme.example>",
+                                    None, html=page) for n, page in enumerate(pages)])
+
     async def test_asking_for_one_is_refused_before_any_account_is_asked(self):
         server = await self.mailbox(gmail(inbox=[(PASSPORT, 13)]))
         said, told = await self.ask("What is my sign in code for the passport application?")

@@ -10,6 +10,7 @@ import json
 import sqlite3
 import sys
 import tempfile
+import time
 import unicodedata
 import unittest
 from datetime import datetime
@@ -424,6 +425,31 @@ class Secrets(Base):
                  "4"),
                 ("Acme\nYour Acme code is 482\u200b913.", "913"),
                 ("Acme\nYour Acme code is 482\u00ad913.", "482"),
+                # Padded with what a reader never sees, which clean() makes spaces of.
+                ("Acme\nYour Acme account:\n\n\u2068482917\u2069\n\nThanks", "482917"),
+                ("Acme\nYour Acme account:\n\n\u2066KQ7X9B\u2069\n\nThanks", "KQ7X9B"),
+                ("Acme\nYour Acme account:\n\n\x1f482917\x1f\n\nThanks, Acme", "482917"),
+                ("Acme\nYour Acme account:\n\n\x00KQ7X9B\x07\n\nThanks, Acme", "KQ7X9B"),
+                ("Acme\nYour Acme account:\n" + "\n".join(f"\u202a{c}\u202c" for c in "KQ7X9B")
+                 + "\nThanks", "Q"),
+                ("Acme\nYour Acme account:\n" + "\n".join(f"\u202e{c}" for c in "482917")
+                 + "\nThanks", "8"),
+                ("Acme\nYour Acme account:\n\n\u061c482917\u180e\n\nThanks", "482917"),
+                ("Acme\nYour Acme account:\n\n\u2061KQ7X9B\U000e0001\n\nThanks", "KQ7X9B"),
+                ("Acme\nYour Acme account:\n\n\ue000482917\U000f0000\n\nThanks", "482917"),
+                ("Acme\nYour Acme account:\n" + "\n".join(f"\ue000{c}" for c in "KQ7X9B")
+                 + "\nThanks", "Q"),
+                ("Acme\nYour Acme account:\n\n482\u2066917\n\nThanks, Acme", "917"),
+                ("Acme\nYour Acme account:\n\n\u034f482917\ufe0f\n\nThanks", "482917"),
+                ("Acme\nYour Acme account:\n\n\u3164KQ7X9B\u2800\n\nThanks", "KQ7X9B"),
+                ("Acme\nYour Acme account:\n\n" + "".join(f"{c}\ufe0f\u20e3" for c in "482917")
+                 + "\n\nThanks", "8\ufe0f\u20e3"),
+                ("Acme\nYour Acme account:\n\n\uff2b\uff31\uff17\uff38\uff19\uff22\n\nThanks", "\uff31"),
+                ("Acme\nYour Acme account:\n\n&#52;&#56;&#50;&#57;&#49;&#55;\n\nThanks", "&#56;"),
+                ("Acme\nYour Acme account:\n\n&#x2068;KQ7X9B&#x2069;\n\nThanks", "KQ7X9B"),
+                ("Acme&#x2028;Your Acme account:&#13;&#10;&#13;&#10;482917&#x2029;Thanks", "482917"),
+                ("Acme\nYour Acme account:\n\n&amp;#52;&amp;#56;&amp;#50;&amp;#57;&amp;#49;"
+                 "&amp;#55;\n\nThanks", "#56"),
                 # Other languages.
                 ("Ihr Code\nIhr Bestätigungscode lautet 482913.", "482913"),
                 ("Konto\nIhr Passwort ist Blume42", "Blume42"),
@@ -461,6 +487,10 @@ class Secrets(Base):
                 ("Your tax code has changed." + " We wrote to your employer about it too." * 5
                  + " Your reference is PEX000000000.", "PEX000000000"),
                 ("Your password is safe with us: we never ask for it by phone on 0800.", "phone"),
+                ("Your table at \u2068Caf\u00e9 Rouge\u2069 is booked for \u20688\u2069 people.",
+                 "Caf\u00e9 Rouge is booked for 8 people"),
+                ("Thanks, Zoe\u0308. Questions & answers from AT&T and R&D.",
+                 "Thanks, Zo\u00eb. Questions & answers from AT&T and R&D."),
                 *((f"{sample['subject']}\n{sample['body']}", sample["body"][-25:])
                   for sample in SAMPLE if sample["subject"] != "One time code")):
             self.assertIn(kept, mail._hide(text), text[:50])
@@ -488,6 +518,33 @@ class Secrets(Base):
         await self.ask("What about my passport application?")
         self.assertIn(mail.HIDDEN, self.read())
         self.assertNotRegex(self.read(), r"4\D{0,9}8\D{0,9}2\D{0,9}9\D{0,9}1\D{0,9}3")
+
+    async def test_a_code_padded_with_what_no_one_sees_is_hidden(self):
+        """A template puts bidi isolates round each value it fills in, and a mail may pad a line
+        with other characters a reader never sees. clean() makes them spaces and joins the
+        lines, so a code alone on its line, or spelt one character to a line, has to be seen as
+        one before that, or it reaches the model with nothing near it that says "code"."""
+        said = "Here is what you need for your passport application:"
+        codes = ("\n\n\u2068482917\u2069\n\n", "\n\n\x1fKQ7X9B\x1f\n\n",
+                 "\n" + "\n".join(f"\u202a{c}\u202c" for c in "KQ7X9B") + "\n")
+        self.index(*({**PASSPORT, "id": f"code{n}@acme.example", "days_ago": 1 + n,
+                      "subject": f"Passport application, step {n + 1}",
+                      "body": f"{said}{code}Thanks."} for n, code in enumerate(codes)))
+        self.says = ["NOTHING"] * len(codes)
+        with mock.patch.object(mail, "TRIED", len(codes)):
+            await self.ask("What about my passport application?")
+        self.assertEqual(len(self.model), len(codes))
+        for call in range(len(codes)):
+            self.assertIn(mail.HIDDEN, self.read(call))
+            for code in ("482917", "KQ7X9B"):
+                self.assertNotRegex(self.read(call), r"\W{0,9}".join(code))
+
+    def test_a_long_run_of_spaces_is_quick(self):
+        """A line that is nothing but a code was looked for from each space of the run in turn."""
+        for blank in (" ", "\u00a0", "&nbsp;"):
+            started = time.monotonic()
+            mail._hide("Hello\n" + blank * 20_000 + "\nThanks")
+            self.assertLess(time.monotonic() - started, 0.5, repr(blank))
 
     async def test_a_code_far_down_a_mail_is_hidden_too(self):
         """What the model is shown is cut from twice as much text as it holds, with links out."""
