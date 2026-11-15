@@ -4,6 +4,7 @@ server, this computer's addresses are made up, the app list is made up and nothi
 desktop actions meet stand-ins for gsettings and the session bus, and every skill folder is a
 temporary one."""
 import asyncio
+import errno
 import inspect
 import ipaddress
 import json
@@ -2257,12 +2258,116 @@ class Host(Case):
         self.add("coins.yaml", (EXAMPLES / "coins.yaml").read_text())
         with self.touched_first(10):
             problems = self.host.reload()
-        self.assertEqual(problems, {str(self.user / "coins.yaml"):
-                                    skillhost.UNKEPT_GRANTS.format(file=self.grants())})
+        self.assertEqual(problems, {str(self.user / "coins.yaml"): skillhost.UNSAVED_GRANTS.format(
+            file=self.grants(), why=skillhost.CHANGED)})
         self.assertNotIn("coins.price", self.host.current().actions)
         self.assertIn("work.chat", self.host.current().actions)
         self.assertEqual(self.grants().read_text(), before)
         self.assertEqual(self.host.reload(), {}, "the next reload keeps it")
+
+    def full_disk(self):
+        write = skillhost._write_json
+
+        def full(file, data):
+            if file.name == skillhost.GRANTS:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return write(file, data)
+        return mock.patch.object(skillhost, "_write_json", full)
+
+    async def test_a_grant_that_can_t_be_saved_stops_only_what_is_new(self):
+        """A full disk refused coins too, though it was allowed and noted before, at every
+        reload until the disk was freed."""
+        self.example("work.yaml", "coins.yaml")
+        shutil.copy(EXAMPLES / "notes.yaml", self.user / "notes.yaml")
+        why = skillhost.UNSAVED_GRANTS.format(file=self.grants(), why="No space left on device")
+        with self.full_disk():
+            self.assertEqual(self.host.reload(), {str(self.user / "notes.yaml"): why})
+            self.assertLessEqual({"coins.price", "work.chat"}, set(self.host.current().actions))
+            self.assertEqual(self.host.reload(), {str(self.user / "notes.yaml"): why})
+        self.assertEqual(self.host.reload(), {}, "saved once the disk has room")
+        self.assertIn("org.example.notes", json.loads(self.grants().read_text()))
+
+    async def test_pruning_clears_nothing_while_the_grants_can_t_be_saved(self):
+        self.example("work.yaml")
+        self.removed(4, lambda i: 10 + i)
+        with mock.patch.object(skillhost, "MAX_REMOVED", 1), self.full_disk(), \
+                mock.patch.object(SkillHost, "_clear_state") as cleared:
+            self.restart().reload()
+        self.assertEqual(cleared.call_args_list, [])
+
+    async def test_one_error_in_a_reload_stops_no_skill(self):
+        """A reload that raised once was taken for a save that kept failing, so every skill
+        of yours with the network was refused, saying the file kept changing."""
+        self.example("coins.yaml")
+        sandbox, calls = SkillHost._sandbox_problem, []
+
+        def flaky(host):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("transient")
+            return sandbox(host)
+        with mock.patch.object(SkillHost, "_sandbox_problem", flaky):
+            problems = self.host.reload()
+        self.assertEqual(list(problems), ["skills"])
+        self.assertIn("coins.price", self.host.current().actions, "what was in use stays")
+        self.assertEqual(self.host.reload(), {})
+
+    async def test_a_renamed_skill_that_won_t_read_keeps_what_it_was_allowed(self):
+        """Renamed and broken at once, while Tux ran or while it was off, the record was marked
+        removed, so the fixed file got evil.example as new."""
+        for restart in (False, True):
+            with self.subTest(restart=restart):
+                for path in self.user.iterdir():
+                    path.unlink()
+                self.example("work.yaml", "coins.yaml")
+                os.rename(self.user / "coins.yaml", self.user / "coins2.yaml")
+                (self.user / "coins2.yaml").write_text("id: [broken")
+                host = self.restart() if restart else self.host
+                host.reload()
+                self.assertFalse(json.loads(self.grants().read_text())[
+                    "org.example.coins"].get("removed", False))
+                self.coins_evil("coins2.yaml")
+                self.assertIn("now asks to reach evil.example",
+                              host.reload()[str(self.user / "coins2.yaml")])
+
+    async def test_a_code_skill_new_to_the_grants_starts_with_nothing_saved(self):
+        """With skill-grants.json taken out, a code skill was allowed the network afresh but
+        kept what it had saved under less."""
+        class Process:
+            async def stop(self, graceful=True):
+                pass
+        self.host.launcher = lambda *_: Process()
+        folder = self.user / "code"
+        folder.mkdir()
+        (folder / "m.py").write_text("")
+        (folder / "skill.yaml").write_text(
+            "id: org.example.code\nname: C\ndescription: C\nrun: [python3, m.py]\n"
+            "permissions:\n  network: true\nactions:\n  code.a:\n    description: A\n")
+        self.host.reload()
+        self.grants().unlink()
+        with mock.patch.object(SkillHost, "_clear_state") as cleared:
+            self.assertEqual(self.host.reload(), {})
+        self.assertEqual([call.args[0] for call in cleared.call_args_list], ["org.example.code"])
+
+    async def test_a_change_by_hand_just_after_tux_saves_is_seen(self):
+        """It was taken for Tux's own write, so a host taken away just then stayed in use."""
+        self.coins_evil()
+        self.host.reload()
+        write = skillhost._write_json
+
+        def then_edited(file, data):
+            written = write(file, data)
+            if file.name == skillhost.GRANTS:
+                taken = json.loads(file.read_text())
+                taken["org.example.coins"]["permissions"]["network"] = ["api.coins.example"]
+                file.write_text(json.dumps(taken))
+            return written
+        shutil.copy(EXAMPLES / "notes.yaml", self.user / "notes.yaml")
+        with mock.patch.object(skillhost, "_write_json", then_edited):
+            self.host.reload()
+        self.assertIn("now asks to reach evil.example",
+                      self.host.reload()[str(self.user / "coins.yaml")])
+        self.assertNotIn("coins.leak", self.host.current().actions)
 
     async def test_a_check_names_the_same_skills_as_the_daemon(self):
         """tuxistant doctor reads the same folders with a host of its own, and named work."""

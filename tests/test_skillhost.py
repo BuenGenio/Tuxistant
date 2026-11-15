@@ -426,7 +426,7 @@ class Processes(Case):
         watchers = []
 
         class Watcher:
-            def __init__(self, roots, on_change, debounce_s=0.3, files=()):
+            def __init__(self, roots, on_change, debounce_s=0.3, files=(), unchanged=None):
                 self.roots, self.on_change, self.stopped = roots, on_change, False
                 self.files = files
                 watchers.append(self)

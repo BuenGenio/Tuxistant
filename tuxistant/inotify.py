@@ -129,10 +129,13 @@ class Watcher:
     poll_s = POLL_S
 
     def __init__(self, roots: list[Path], on_change: Callable[[], None],
-                 debounce_s: float = 0.3, files: list[Path] = ()):
+                 debounce_s: float = 0.3, files: list[Path] = (),
+                 unchanged: Callable[[], bool] | None = None):
         self.roots = [Path(os.path.abspath(r)) for r in roots]
         # single files, such as the grants, watched by their folder for changes to them alone
         self.files = [Path(os.path.abspath(f)) for f in files]
+        self.unchanged = unchanged      # true when those files are as their owner last left them
+        self._only_files = True         # since the last call, only those files changed
         self.on_change = on_change
         self.debounce_s = debounce_s
         self.polling = False
@@ -245,15 +248,16 @@ class Watcher:
             if not chunk:
                 break
             data += chunk
-        relevant, resync = False, False
+        relevant, resync, files = False, False, True
         for wd, mask, name in _parse(data):
             seen, structural = self._judge(wd, mask, name)
             relevant |= seen
+            files &= not seen or self._a_file(wd, name)
             resync |= structural
         if resync:
             self._sync()
         if relevant:
-            self._changed()
+            self._changed(only_files=files)
 
     def _judge(self, wd: int, mask: int, name: str) -> tuple[bool, bool]:
         """Whether an event means the skills changed, and whether the watch set needs a look."""
@@ -272,9 +276,15 @@ class Watcher:
             return False, "anchor" in kinds or structural
         return not mask & IN_IGNORED, structural
 
-    def _changed(self) -> None:
+    def _a_file(self, wd: int, name: str) -> bool:
+        """Whether an event was about one of the files alone, not a skills folder."""
+        kinds = {kind for _path, kind in self._watches.get(wd, [])}
+        return kinds <= {"anchor", "file"} and name in self._file_names()
+
+    def _changed(self, only_files: bool = False) -> None:
         if self._loop is None:
             return
+        self._only_files = self._only_files and only_files
         now = self._loop.time()
         if self._first_pending is None:
             self._first_pending = now
@@ -286,6 +296,9 @@ class Watcher:
     def _fire(self) -> None:
         self._timer = None
         self._first_pending = None
+        only_files, self._only_files = self._only_files, True
+        if only_files and self.unchanged is not None and self.unchanged():
+            return      # its owner's own write, as when Tux saves the grants
         try:
             result = self.on_change()
             if inspect.isawaitable(result):

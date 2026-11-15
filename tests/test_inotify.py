@@ -74,6 +74,24 @@ class Inotify(Base):
         grants.unlink()
         await self.changes(1)
 
+    async def test_a_watched_file_its_owner_wrote_doesnt_count(self):
+        """Tux's own save of the grants reloaded everything once more."""
+        grants = self.tmp / "skill-grants.json"
+        grants.write_text("{}")
+        own = [True]
+        watcher = Watcher([self.root], self.bump, debounce_s=DEBOUNCE, files=[grants],
+                          unchanged=lambda: own[0])
+        await watcher.start()
+        self.addCleanup(watcher.stop)
+        grants.write_text('{"org.example.coins": {}}')
+        await self.changes(0)
+        self.skill()                    # a skills folder changing as well always counts
+        grants.write_text("{}")
+        await self.changes(1)
+        own[0] = False
+        grants.write_text('{"org.example.coins": {}}')
+        await self.changes(1)
+
     async def test_it_really_uses_inotify(self):
         watcher = await self.watch()
         self.assertFalse(watcher.polling)
