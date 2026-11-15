@@ -5,6 +5,7 @@ records every call, because what matters is what it was offered, not what a 4B h
 flows are in tools/eval_flows.py.
 """
 import asyncio
+import ipaddress
 import json
 import sys
 import time
@@ -13,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tests.fakeweb import PUBLIC, WORDS, Web  # noqa: E402
+from tests.fakeweb import OffThisComputer, PUBLIC, WORDS, Web  # noqa: E402
 from tests.test_websearch import Clicks, FakeSearx  # noqa: E402
 from tests.test_websearch import hit as search_hit  # noqa: E402
 from tuxistant import realtime, research, webfetch, websearch  # noqa: E402
@@ -33,6 +34,17 @@ HOSTILE = (
 )
 TOOL_CALL = {"id": "call_1", "type": "function", "function": {
     "name": "shell_run", "arguments": '{"command": "rm -rf ~"}'}}
+
+
+OFF = OffThisComputer()
+
+
+def setUpModule():
+    OFF.start()
+
+
+def tearDownModule():
+    OFF.stop()
 
 
 def hit(number=1, **fields):
@@ -311,6 +323,27 @@ class Guarded(Rig):
         said = self.said(result)
         self.assertIn("That's from site4.example.", said)
         self.assertIn(research.THIN, said)
+        self.assertIn(research.SOME_FAILED, said)
+
+
+class OnThisComputer(Rig):
+    """A stranger's name pointed at this computer's own public address, or at a container's on a
+    public range, as a search result."""
+
+    def results(self):
+        return [hit(1, url="http://mine.example:8080/v1/models"),
+                hit(2, url="http://docker.example:2375/containers/json"), hit(4)]
+
+    async def test_a_search_result_can_not_point_at_this_computer(self):
+        self.web.here = {"2a01:4f8:c0c:1::10"}
+        self.web.guests = [ipaddress.ip_network("2a01:4f8:c0c:2::/64")]
+        self.web.names |= {"mine.example": ["2a01:4f8:c0c:1::10"],
+                           "docker.example": ["2a01:4f8:c0c:2::5"], "site4.example": [PUBLIC]}
+        result = await self.ask()
+        self.assertEqual(self.web.dialled, [PUBLIC])
+        self.assertEqual(self.web.paths(), ["/page"])
+        said = self.said(result)
+        self.assertIn("That's from site4.example.", said)
         self.assertIn(research.SOME_FAILED, said)
 
 

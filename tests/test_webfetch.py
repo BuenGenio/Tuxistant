@@ -23,12 +23,23 @@ from tuxistant import homeassistant, webfetch  # noqa: E402
 from tuxistant.config import clean_server  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.webfetch import PageError, clean, public  # noqa: E402
-from tests.fakeweb import PUBLIC, WORDS, Web, slow_server  # noqa: E402
+from tests.fakeweb import OffThisComputer, PUBLIC, WORDS, Web, slow_server  # noqa: E402
 
 PUBLIC6 = "2606:4700:4700::1111"
 CLOCK_S = 0.5
 CONFIG = {**DEFAULTS, "server": "tuxserver:8080", "api_key": "sk-never-send-me",
           "translate_server": "translator.lan:5000", "search_server": "searx.lan:8888"}
+
+
+OFF = OffThisComputer()
+
+
+def setUpModule():
+    OFF.start()
+
+
+def tearDownModule():
+    OFF.stop()
 
 
 def answers(*addresses):
@@ -114,6 +125,59 @@ class Refusals(unittest.TestCase):
                            "late.example": [PUBLIC, PUBLIC6, "fe80::1"]}
         self.refused("http://both.example/")
         self.refused("http://late.example/")
+
+    def test_this_computers_own_public_addresses(self):
+        """Most homes give a computer a global IPv6, and a port Docker publishes answers there
+        as on loopback. A name a stranger points at it is no page."""
+        self.web.here = {"127.0.0.1", "::1", "2a01:4f8:c0c:1::10", "8.8.4.4"}
+        self.web.names |= {"attacker.example": ["2a01:4f8:c0c:1::10"],
+                           "mapped.example": ["::ffff:8.8.4.4"],
+                           "half.example": [PUBLIC, "2a01:4f8:c0c:1::10"],
+                           "2a01:4f8:c0c:1::10": ["2a01:4f8:c0c:1::10"]}
+        for host in ("attacker.example", "mapped.example", "half.example",
+                     "[2a01:4f8:c0c:1::10]"):
+            with self.subTest(host):
+                self.refused(f"http://{host}:2375/containers/json")
+                with self.assertRaises(PageError) as caught:
+                    webfetch.check(f"http://{host}:2375/containers/json", (set(), set()))
+                self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+        self.assertIn("real page", webfetch.fetch("http://example.com/", CONFIG).text)
+
+    def test_this_computer_and_its_servers_through_nat64(self):
+        """A NAT64 gateway delivers 64:ff9b::808:404 to 8.8.4.4, so it leads where 8.8.4.4 does,
+        here or to a server of this install, either way round."""
+        self.web.here = {"127.0.0.1", "::1", "8.8.4.4"}
+        self.web.guests = [ipaddress.ip_network("8.8.8.0/24")]
+        self.web.names |= {"nat64.example": ["64:ff9b::808:404"],
+                           "64:ff9b::808:404": ["64:ff9b::808:404"],
+                           "guest.example": ["64:ff9b::808:809"]}
+        for host in ("nat64.example", "[64:ff9b::808:404]", "guest.example"):
+            with self.subTest(host):
+                self.refused(f"http://{host}:2375/")
+                with self.assertRaises(PageError):
+                    webfetch.check(f"http://{host}:2375/", (set(), set()))
+        self.web.here, self.web.guests = {"127.0.0.1"}, []
+        own = (set(), {"8.8.4.4"})
+        with self.assertRaises(PageError):
+            webfetch.check("http://nat64.example/", own)
+        self.web.names |= {"tux.example": ["64:ff9b::101:101"], "one.example": ["1.1.1.1"]}
+        config = {**DEFAULTS, "server": "tux.example:8080"}
+        self.refused("http://one.example/", config)
+        self.assertEqual(webfetch.check("http://nat64.example/", (set(), set())).addresses,
+                         ["64:ff9b::808:404"], "dialled as looked up")
+
+    def test_this_computers_containers_on_a_public_range(self):
+        self.web.guests = [ipaddress.ip_network("2a01:4f8:c0c:2::/64"),
+                           ipaddress.ip_network("8.8.4.0/24")]
+        self.web.names |= {"docker6.example": ["2a01:4f8:c0c:2::5"],
+                           "docker4.example": ["8.8.4.4"], "tail.example": ["100.100.100.100"]}
+        for host in ("docker6.example", "docker4.example", "tail.example"):
+            with self.subTest(host):
+                self.refused(f"http://{host}/")
+                with self.assertRaises(PageError) as caught:
+                    webfetch.check(f"http://{host}/", (set(), set()))
+                self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+        self.assertIn("real page", webfetch.fetch("http://example.com/", CONFIG).text)
 
     def test_a_name_with_no_address(self):
         self.web.names["empty.example"] = []
@@ -290,6 +354,22 @@ class Redirects(unittest.TestCase):
         self.web.routes["/start"] = (302, {}, "")
         with self.assertRaises(PageError):
             webfetch.fetch("http://example.com/start", CONFIG)
+
+    def test_a_redirect_to_this_computer_or_its_containers(self):
+        self.web.here = {"2a01:4f8:c0c:1::10"}
+        self.web.guests = [ipaddress.ip_network("2a01:4f8:c0c:2::/64")]
+        self.web.names |= {"mine.example": ["2a01:4f8:c0c:1::10"],
+                           "guest.example": ["2a01:4f8:c0c:2::5"],
+                           "2a01:4f8:c0c:2::5": ["2a01:4f8:c0c:2::5"]}
+        for to in ("http://mine.example:8080/v1/models", "http://[2a01:4f8:c0c:2::5]/",
+                   "http://guest.example/"):
+            with self.subTest(to):
+                self.web.requests.clear()
+                self.jump(to)
+                with self.assertRaises(PageError) as caught:
+                    webfetch.fetch("http://example.com/start", CONFIG)
+                self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+                self.assertEqual(self.web.paths(), ["/start"])
 
 
 class Rebinding(unittest.TestCase):
@@ -476,6 +556,8 @@ class Dripping(unittest.TestCase):
         mock.patch.object(webfetch, "own_servers",
                           lambda config, *_: (webfetch._own_names(config), set())).start()
         mock.patch.object(webfetch, "_resolve", only_example).start()
+        mock.patch.object(webfetch, "this_computer", set).start()      # made up: nothing
+        mock.patch.object(webfetch, "kernel_routes", list).start()
         mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
             ("127.0.0.1", port), timeout=2)).start()
 
@@ -521,6 +603,8 @@ class CutShort(unittest.TestCase):
         mock.patch.object(webfetch, "own_servers",
                           lambda config, *_: (webfetch._own_names(config), set())).start()
         mock.patch.object(webfetch, "_resolve", only_example).start()
+        mock.patch.object(webfetch, "this_computer", set).start()      # made up: nothing
+        mock.patch.object(webfetch, "kernel_routes", list).start()
         mock.patch.object(webfetch, "_dial", lambda *_: socket.create_connection(
             ("127.0.0.1", port), timeout=2)).start()
 
@@ -1125,6 +1209,15 @@ class Places(unittest.TestCase):
             with self.subTest(addresses), self.assertRaises(PageError) as caught:
                 self.place(*addresses)
             self.assertEqual(str(caught.exception), webfetch.NOT_ALLOWED)
+
+    def test_this_computers_public_address_through_nat64(self):
+        with mock.patch.object(webfetch, "this_computer", return_value={"8.8.4.4"}):
+            for addresses in (["64:ff9b::808:404"], ["8.8.4.4"], ["::ffff:8.8.4.4"]):
+                with self.subTest(addresses), self.assertRaises(PageError):
+                    self.place(*addresses)
+        with self.assertRaises(PageError):
+            self.place("64:ff9b::808:404", own=(set(), {"8.8.4.4"}))
+        self.assertFalse(self.place("64:ff9b::808:404").local)
 
     def test_this_computers_containers_and_virtual_machines(self):
         """They answer here, though they look like the house: a container's port answers on its

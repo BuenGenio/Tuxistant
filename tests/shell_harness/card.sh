@@ -170,8 +170,11 @@ outer=''
 [ -s "$work/daemon.log" ] && grep -v 'ready for the shell' "$work/daemon.log" >&2
 cp "$work/shell.log" "$out/" 2>/dev/null
 
+# Tuxistant's extension never touches the message tray; the harness's own shot extension blocks
+# its banners. On a busy machine one such line can come as the shell tears the tray down, which
+# says nothing about the card, so that exact line alone is let through.
 errors=$(grep -E 'Gjs-CRITICAL|Gjs-WARNING|JS ERROR|JS WARNING|SyntaxError|TypeError|ReferenceError|[Ee]xtension .*(error|Error)|[Tt]uxistant|St-CRITICAL|Clutter-CRITICAL|GLib-CRITICAL' \
-    "$work/shell.log" 2>/dev/null)
+    "$work/shell.log" 2>/dev/null | grep -Ev 'Gjs-CRITICAL \*\*: [0-9:.]+: Object Gjs_ui_messageTray_MessageTray \(0x[0-9a-f]+\), has been already disposed')
 if [ -n "$errors" ]; then
     echo "--- shell log problems ---" >&2
     echo "$errors" >&2

@@ -28,6 +28,7 @@ const box = actor => {
 
 export default class ShotExtension extends Extension {
     enable() {
+        this._enabled = true;
         this._subscription = Gio.DBus.session.signal_subscribe(
             null, IFACE, 'Command', BUS_PATH, null, Gio.DBusSignalFlags.NONE,
             (_c, sender, _p, _i, _n, params) => {
@@ -42,14 +43,18 @@ export default class ShotExtension extends Extension {
             this._poll = 0;
             Main.overview.hide();
             // Startup banners, such as the one about screen lock needing GDM, would cover shots.
-            Main.messageTray.bannerBlocked = true;
-            Main.messageTray.getSources().forEach(source => source.destroy());
+            // Once only, while the shell is up, so the tray is never touched as it goes down.
+            if (this._enabled && Main.messageTray) {
+                Main.messageTray.bannerBlocked = true;
+                Main.messageTray.getSources().forEach(source => source.destroy());
+            }
             this._reply('Ready', null);
             return GLib.SOURCE_REMOVE;
         });
     }
 
     disable() {
+        this._enabled = false;
         if (this._poll)
             GLib.source_remove(this._poll);
         Gio.DBus.session.signal_unsubscribe(this._subscription);

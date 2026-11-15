@@ -769,7 +769,8 @@ class Docs(unittest.TestCase):
             problems = skillhost.offline({}, user=user).problems
         self.assertEqual(set(problems), {str(user / "b"), str(user / "d")},
                          "b worked in 0.4.0, c still fits, d is too big alone")
-        self.assertNotIn("already", problems[str(user / "d")])
+        self.assertTrue(problems[str(user / "d")].startswith("It has 7 actions"))
+        self.assertIn("some of its own", problems[str(user / "d")], "taking others out won't do")
         seven = "seven or more"
         self.assertEqual(skillhost.USER_TOOLS + 1, 7)
         rule = next(line for line in (ROOT / "docs/SKILLS.md").read_text().splitlines()
@@ -786,6 +787,17 @@ class Docs(unittest.TestCase):
         self.assertIn(f"One skill with {seven} actions is refused", entry)
         note = next(line for line in body.splitlines() if "loaded in 0.4.0" in line)
         self.assertIn(f"for one with {seven}", note, "taking another out can't bring it back")
+
+    def test_the_budget_contract_names_only_what_is_there(self):
+        """It named _held_by_another() after that was gone."""
+        from tuxistant import skillhost
+        rule = next(line for line in (ROOT / "docs/CONTRACT.md").read_text().splitlines()
+                    if line.startswith("- An action of yours may not start like"))
+        named = set(re.findall(r"`(\w+)\(\)`", rule))
+        self.assertGreater(len(named), 10)
+        homes = (skillhost, skillhost.SkillHost, skillhost._Grants)
+        self.assertEqual({name for name in named
+                          if not any(hasattr(home, name) for home in homes)}, set())
 
     def test_a_reach_list_counts_its_items(self):
         numbers = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5, "Six": 6}

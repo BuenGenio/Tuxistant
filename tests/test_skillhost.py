@@ -278,8 +278,8 @@ class Refused(Case):
         b = self.many("b", "beta", 3)
         self.many("c", "gamma", 2)
         problems = self.host.reload()
-        self.assertEqual(problems, {str(b): skillhost.over_budget(4, 3)})
-        self.assertIn("already bring 4 actions, and its 3", problems[str(b)])
+        self.assertEqual(problems, {str(b): skillhost.over_budget(6, 3)}, "a and c, as it ends")
+        self.assertIn("already bring 6 actions, and its 3", problems[str(b)])
         self.assertIn("gamma.a1", self.host.current().actions, "a later one that fits loads")
 
     def test_the_budget_counts_one_action_as_one(self):
@@ -287,7 +287,7 @@ class Refused(Case):
             with self.subTest(first=first, second=second):
                 shutil.rmtree(self.user, ignore_errors=True)
                 (self.user.parent / skillhost.LOADED).unlink(missing_ok=True)
-                self.host.offered = set()
+                self.host.offered, self.host.last_offered = {}, {}
                 self.many("a", "alpha", first)
                 b = self.many("b", "beta", second)
                 problem = self.host.reload()[str(b)]
@@ -302,17 +302,21 @@ class Refused(Case):
         self.assertIn(skillhost.over_budget(0, skillhost.MAX_ACTIONS + 1), problem)
         self.assertNotIn(str(skillhost.MAX_ACTIONS), problem)
 
-    def test_a_loaded_skill_that_grows_is_counted_by_name_as_the_docs_say(self):
-        a = self.many("a", "alpha", 3)
+    def test_a_loaded_skill_that_grows_is_the_one_refused_as_the_docs_say(self):
+        """a sorts first, but its new action is what goes past six, so b, which was working,
+        stays."""
+        self.many("a", "alpha", 3)
         b = self.many("b", "beta", 3)
         self.assertEqual(self.host.reload(), {})
-        self.many("a", "alpha", 4)
+        a = self.many("a", "alpha", 4)
         problems = self.host.reload()
-        self.assertEqual(problems, {str(b): skillhost.over_budget(4, 3)})
-        self.assertNotIn(str(a), problems)
+        self.assertEqual(problems, {str(a): f"{skillhost.GREW} {skillhost.KEPT}"})
+        self.assertNotIn(str(b), problems)
+        self.assertLessEqual({"alpha.a2", "beta.a2"}, set(self.host.current().actions))
+        self.assertNotIn("alpha.a3", self.host.current().actions)
         rule = next(line for line in (ROOT / "docs/SKILLS.md").read_text().splitlines()
                     if line.startswith("**Six actions in all.**"))
-        self.assertIn("A skill that was loaded and then grows", rule)
+        self.assertIn("the actions you add to one, are what is refused", rule)
 
     def test_bad_ids_and_action_names(self):
         for manifest in ({"id": "../../etc"}, {"id": "Org.Example"}, {"id": "noprefix"},
@@ -422,8 +426,9 @@ class Processes(Case):
         watchers = []
 
         class Watcher:
-            def __init__(self, roots, on_change, debounce_s=0.3):
+            def __init__(self, roots, on_change, debounce_s=0.3, files=(), unchanged=None):
                 self.roots, self.on_change, self.stopped = roots, on_change, False
+                self.files = files
                 watchers.append(self)
 
             async def start(self):
@@ -437,6 +442,8 @@ class Processes(Case):
         with mock.patch.dict(sys.modules, {"tuxistant.inotify": fake}):
             await self.host.start()
         self.assertEqual(watchers[0].roots, [self.builtin, self.bundled, self.user])
+        self.assertEqual(watchers[0].files, [self.user.parent / skillhost.GRANTS],
+                         "a hand edit to what was allowed counts at once")
         self.assertIn("two.go", self.host.current().actions)
         (self.user / "two" / "main.py").write_text("changed\n")
         watchers[0].on_change()     # what the watcher does after a quiet moment
