@@ -47,6 +47,8 @@ ACTIONS = {
     "home.set": ("homeassistant._opener.open", "homeassistant._connect", "homeassistant._call"),
     "home.status": ("homeassistant._opener.open", "homeassistant._connect",
                     "homeassistant._call"),
+    # ssh is never started: a made-up server answers, so the owner's is never reached.
+    "server.running": ("serverstatus._run",),
     # Code skills: offered, but no process is ever started, so no bulb is reached.
     "lights.set": ("mcp.SkillProcess",), "lights.status": ("mcp.SkillProcess",),
 }
@@ -201,6 +203,18 @@ class NoHome:
         return []
 
 
+MADE_UP_SERVER = (b"@docker\nlocalai|localai/localai:latest|Up 3 days\n"
+                  b"searxng|searxng/searxng:latest|Up 3 days (healthy)\n@exit 0\n"
+                  b"@systemd\nnginx.service loaded active running nginx\n"
+                  b"systemd-journald.service loaded active running Journal\n@exit 0\n")
+
+
+def _made_up_ssh(_argv, _env):
+    """In place of ssh: the server in Settings is never reached from an evaluation."""
+    print("   (would ask the server what is running)")
+    return 0, MADE_UP_SERVER, b""
+
+
 def _made_up_server(_config):
     """The address and token in Settings are never read."""
     return homeassistant._Server("http://eval.invalid", "eval.invalid", "a made-up home", "eval")
@@ -237,6 +251,7 @@ def stand_ins(folder: Path) -> dict:
         "homeassistant._connect": _made_up_server,
         "homeassistant._call": NoHome().call,
         "mcp.SkillProcess": _no_process,
+        "serverstatus._run": _made_up_ssh,
     }
 
 

@@ -9,6 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import serverstatus
 from .files import _size, _tilde, resolve
 from .gate import Session, shown
 
@@ -19,6 +20,8 @@ TOP_FOLDERS = 5
 TOP_PROCESSES = 5
 POWER = Path("/sys/class/power_supply")
 SERVICE_NAME = re.compile(r"[a-z0-9][a-z0-9@._+-]{0,63}")
+YOUR_SERVER = ("That is your server, not this computer. Ask me what's running on your server, and "
+               "I'll check it there.")
 STOPPED_EARLY = ("Counting stopped after a few seconds, so the real numbers are higher and the "
                  "order may change.")
 
@@ -105,10 +108,25 @@ FACTS = {"uptime": _uptime, "ip": _ip, "memory": _memory, "cpu": _cpu, "battery"
          "wifi": _wifi, "busiest": _busiest, "os": _os}
 
 
-def running(args: dict, _config, _session=None) -> dict:
+def _is_the_server(name: str, config) -> bool:
+    """Asked about the server, this would look on this computer and say no with confidence."""
+    if " ".join(name.split()) in ("server", "my server", "the server", "your server"):
+        return True
+    try:
+        host = serverstatus.host_of(config["server"]) if config is not None else None
+    except (TypeError, KeyError):
+        return False
+    if not host or serverstatus.is_local(host):
+        return False
+    return name in (host.casefold(), host.casefold().partition(".")[0])
+
+
+def running(args: dict, config, _session=None) -> dict:
     """Whether a service or program is up. A name goes no further than these two read-only tools,
     and this needs the real system, which the shell sandbox hides."""
     name = str(args.get("name") or "").strip().casefold()
+    if _is_the_server(name, config):
+        raise ValueError(YOUR_SERVER)
     if not SERVICE_NAME.fullmatch(name):
         raise ValueError("Say which program or service to check.")
     active = any(_tool("systemctl", *scope, "is-active", "--", name).strip() == "active"

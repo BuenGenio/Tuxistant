@@ -16,7 +16,8 @@ from pathlib import Path
 import yaml
 
 from . import (apps, calendars, files, homeassistant, knowledge, livedata, mail, media, phone,
-               planner, research, shellgate, system, timers, translate, websearch)
+               planner, research, serverstatus, shellgate, system, timers, translate,
+               websearch)
 from .config import DEFAULTS
 from .gate import MAX_DETAIL_CHARS, Ask, Session, declined, shown
 
@@ -117,7 +118,8 @@ HANDLERS = {"time.now": _time_now, "disk.usage": _disk_usage,
             **apps.HANDLERS, **calendars.HANDLERS, **files.HANDLERS, **mail.HANDLERS,
             **media.HANDLERS, **timers.HANDLERS, **homeassistant.HANDLERS, **phone.HANDLERS,
             **shellgate.HANDLERS, **system.HANDLERS, **translate.HANDLERS, **websearch.HANDLERS,
-            **research.HANDLERS, **knowledge.HANDLERS, **planner.HANDLERS}
+            **research.HANDLERS, **knowledge.HANDLERS, **planner.HANDLERS,
+            **serverstatus.HANDLERS}
 
 
 def _as_sent(arguments: str) -> str:

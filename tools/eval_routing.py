@@ -35,11 +35,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tools.eval_config import eval_skills, evaluation_server
 from tuxistant.config import Config, DEFAULTS
+from tuxistant.serverstatus import host_of
 from tuxistant.skillhost import offline
 
 cfg = Config()
 evaluation_server(cfg)
 KEY = cfg["api_key"]
+# Said in the cases in place of {server}, and never printed: the results show the placeholder.
+SERVER_HOST = host_of(cfg["server"]) or "myserver.example"
 HOME = os.environ.get("TUX_EVAL_HOME") == "1"
 RECIPES = os.environ.get("TUX_EVAL_RECIPES") == "1"
 MAIL = os.environ.get("TUX_EVAL_MAIL", "1") == "1"
@@ -81,6 +84,13 @@ CASES = [
     ("What's my IP address?", {"system_info"}),
     ("Is docker running?", {"system_running"}),
     ("Is Firefox running?", {"system_running"}),
+    # Your own server. {server} is its host, filled in from the server this run uses, so the
+    # file never names one. system_running would look on this computer and say no.
+    ("Which services are running on {server}?", {"server_running"}),
+    ("What's running on my server?", {"server_running"}),
+    ("Is LocalAI running on {server}?", {"server_running"}),
+    # A command asked for word for word may go to the shell, which shows it on a card.
+    ("Run ssh {server} docker ps", {"server_running", "shell_run"}),
     ("Install VLC", {"shell_run"}),
     ("Update my system", {"shell_run"}),
     ("Make a folder called Invoices in my Documents", {"shell_run"}),
@@ -364,13 +374,13 @@ async def main():
         seen = collections.Counter()
         sample = ""
         for _ in range(REPS):
-            name, args = await first_tool(text)
+            name, args = await first_tool(text.replace("{server}", SERVER_HOST))
             seen[name] += 1
             ok = (name is None) if wanted is None else name in wanted
             right += ok
             total += 1
             if name and name != "ERROR" and not sample:
-                sample = args[:90]
+                sample = args.replace(SERVER_HOST, "{server}")[:90]
         mark = "ok " if ((wanted is None and set(seen) == {None}) or (wanted and set(seen) <= wanted)) else "BAD"
         print(mark, text[:52].ljust(52), dict(seen), sample)
     print(f"{right}/{total} right, {(time.monotonic() - started) / max(total, 1):.1f} s each")

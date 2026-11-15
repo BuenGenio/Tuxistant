@@ -13,7 +13,7 @@ actions:
         enum: [uptime, ip, memory, cpu, battery, wifi, busiest, os]
         description: "Which fact the user asked about"
   system.running:
-    description: Check whether a program or service is running, such as docker
+    description: Check whether a program or service is running on this computer, such as docker
     params:
       name: { type: string, description: "The program or service, in lower case" }
     required: [name]

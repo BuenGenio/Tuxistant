@@ -1,0 +1,11 @@
+id: org.tuxistant.server
+name: Your server
+description: Tells you which docker containers and services are running on your own server, the one set in Settings, over ssh
+version: 1.0.0
+permissions:
+  network: [home]     # one fixed read-only command, over ssh, to the server this install already uses
+actions:
+  server.running:
+    description: Containers and services running on the user's own server, another computer, such as LocalAI. Only when the user says server or names that computer
+    params:
+      name: { type: string, description: "The program or service, in lower case" }
