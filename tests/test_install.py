@@ -780,7 +780,7 @@ class Docs(unittest.TestCase):
         self.assertIn("first start after updating from 0.4.0", rule)
         self.assertIn("one that was working can be refused", rule)
         self.assertIn(f"One skill with {seven} actions is refused", rule)
-        body = changelog_sections()[0][1]
+        body = changelog_section("0.5.0")
         entry = next(line for line in body.splitlines()
                      if line.startswith("- Skills you add, code skills and recipes together"))
         self.assertIn("first start after 0.4.0", entry)
@@ -813,7 +813,7 @@ class Docs(unittest.TestCase):
 
     def test_the_reach_list_names_follow_ups_carrying_a_conversation_over(self):
         from tuxistant import controller
-        body = changelog_sections()[0][1]
+        body = changelog_section("0.5.0")
         reach = body.split("already did:\n\n", 1)[1].split("\n\n", 1)[0]
         self.assertEqual(controller.FOLLOW_ON_S, 120)
         item = next(line for line in reach.splitlines() if "Fn hold within 2 minutes" in line)
@@ -898,7 +898,13 @@ class Docs(unittest.TestCase):
 def changelog_sections():
     """(heading, body) for each "## " section of CHANGELOG.md, newest first."""
     parts = re.split(r"(?m)^## (.+)$", (ROOT / "CHANGELOG.md").read_text())
-    return list(zip(parts[1::2], parts[2::2]))
+    # "Not yet released" right after a release has nothing in it yet
+    return [(heading, body) for heading, body in zip(parts[1::2], parts[2::2]) if body.strip()]
+
+
+def changelog_section(version):
+    """The body of the release that starts with version, such as "0.5.0"."""
+    return next(body for heading, body in changelog_sections() if heading.startswith(version))
 
 
 def built_in_first_words():
