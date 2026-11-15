@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT))
 from tools.eval_config import eval_skills, evaluation_server
 from tuxistant.config import Config, DEFAULTS
 from tuxistant.serverstatus import host_of
+from tuxistant.system import about_server
 from tuxistant.skillhost import offline
 
 cfg = Config()
@@ -51,14 +52,13 @@ TAPO = os.environ.get("TUX_EVAL_TAPO", "1") == "1"
 SET_UP = {**({"tapo_email": "eval@example.test", "tapo_password": "eval"} if TAPO else {}),
           **({"ha_server": "eval.invalid:8123", "ha_token": "eval"} if HOME else {})}
 # The tools the daemon offers, code skills too, and mail search, which is off until turned on.
-# The server is the run's own, so server_running is offered as it would be with that server.
+# The server is the run's own, as system_running's arguments are judged against it.
 skills = offline({**DEFAULTS, "server": cfg["server"], "mail_search": MAIL, **SET_UP},
                  user=eval_skills()).current()
 OFFERED = {t["name"] for t in skills.tools()}
 # Tools a setup switch can turn off. A case for any other tool the daemon doesn't offer stays in
 # and fails, so a renamed tool or a typo in a case shows up as BAD rather than vanishing.
-SWITCHED = {"mail_search", "lights_set", "lights_status", "home_set", "home_status",
-            "server_running"}
+SWITCHED = {"mail_search", "lights_set", "lights_status", "home_set", "home_status"}
 # With Home Assistant and no Tapo account, every light belongs to Home Assistant.
 INSTEAD_OF_TAPO = {"lights_set": "home_set", "lights_status": "home_status"}
 REPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3
@@ -88,12 +88,13 @@ CASES = [
     ("Is docker running?", {"system_running"}),
     ("Is Firefox running?", {"system_running"}),
     # Your own server. {server} is its host, filled in from the server this run uses, so the
-    # file never names one. system_running would look on this computer and say no.
-    ("Which services are running on {server}?", {"server_running"}),
-    ("What's running on my server?", {"server_running"}),
-    ("Is LocalAI running on {server}?", {"server_running"}),
+    # file never names one. system_running@server is system_running asked about the server, by
+    # its "on" or by naming it, as the handler judges it: without that it looks on this computer.
+    ("Which services are running on {server}?", {"system_running@server"}),
+    ("What's running on my server?", {"system_running@server"}),
+    ("Is LocalAI running on {server}?", {"system_running@server"}),
     # A command asked for word for word may go to the shell, which shows it on a card.
-    ("Run ssh {server} docker ps", {"server_running", "shell_run"}),
+    ("Run ssh {server} docker ps", {"system_running@server", "shell_run"}),
     ("Install VLC", {"shell_run"}),
     ("Update my system", {"shell_run"}),
     ("Make a folder called Invoices in my Documents", {"shell_run"}),
@@ -330,6 +331,17 @@ HOME_FACTS = [
 ]
 
 
+def judged(name, arguments):
+    """system_running about the server is a different answer from one about this computer."""
+    try:
+        args = json.loads(arguments or "{}")
+    except ValueError:
+        return name
+    if name == "system_running" and isinstance(args, dict) and about_server(args, cfg):
+        return "system_running@server"
+    return name
+
+
 def reply_in(done):
     items = done.get("response", {}).get("output", [])
     return "".join(part.get("text") or part.get("transcript") or "" for item in items for part in item.get("content") or [])
@@ -378,6 +390,7 @@ async def main():
         sample = ""
         for _ in range(REPS):
             name, args = await first_tool(text.replace("{server}", SERVER_HOST))
+            name = judged(name, args) if name not in (None, "ERROR") else name
             seen[name] += 1
             ok = (name is None) if wanted is None else name in wanted
             right += ok

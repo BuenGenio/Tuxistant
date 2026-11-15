@@ -216,7 +216,7 @@ class Details(unittest.TestCase):
         held = {a["name"]: a["held_back"] for s in skills.listing()
                 for a in skills.details(s["id"])["actions"] if not a["offered"]}
         self.assertEqual(held, {"mail.search": "switched_off", "home.set": "not_set_up",
-                                "home.status": "not_set_up", "server.running": "not_set_up"})
+                                "home.status": "not_set_up"})
 
     def test_why_the_risk_is_what_it_is(self):
         from tuxistant.skills import risk_because

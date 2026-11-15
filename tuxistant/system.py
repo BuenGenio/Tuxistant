@@ -20,8 +20,6 @@ TOP_FOLDERS = 5
 TOP_PROCESSES = 5
 POWER = Path("/sys/class/power_supply")
 SERVICE_NAME = re.compile(r"[a-z0-9][a-z0-9@._+-]{0,63}")
-YOUR_SERVER = ("That is your server, not this computer. Ask me what's running on your server, and "
-               "I'll check it there.")
 STOPPED_EARLY = ("Counting stopped after a few seconds, so the real numbers are higher and the "
                  "order may change.")
 
@@ -108,34 +106,66 @@ FACTS = {"uptime": _uptime, "ip": _ip, "memory": _memory, "cpu": _cpu, "battery"
          "wifi": _wifi, "busiest": _busiest, "os": _os}
 
 
-def _is_the_server(name: str, config) -> bool:
-    """Asked about the server, this would look on this computer and say no with confidence.
-    Only asked once nothing here is called that, as a server called docker.lan or plex is
-    named like a program."""
-    if name in ("server", "my server", "the server", "your server"):
-        return True
+SERVER_WORDS = ("server", "my server", "the server", "your server")
+HERE_WORDS = ("", "this computer", "my computer", "the computer", "here", "this", "local",
+              "localhost", "this laptop", "my laptop", "this machine", "this pc")
+ONLY_TWO = "I can only check this computer and the server in Settings."
+
+
+def _server_host(config) -> str | None:
+    """The host of the server in Settings, when it is another computer."""
     try:
         host = serverstatus.host_of(config["server"]) if config is not None else None
     except (TypeError, KeyError):
-        return False
-    if not host or serverstatus.is_local(host):
-        return False
-    return name in (host.casefold(), host.casefold().partition(".")[0])
+        return None
+    return None if not host or serverstatus.is_local(host) else host.casefold()
 
 
-def running(args: dict, config, _session=None) -> dict:
-    """Whether a service or program is up. A name goes no further than these two read-only tools,
-    and this needs the real system, which the shell sandbox hides."""
-    name = " ".join(str(args.get("name") or "").split()).casefold()
+def _said(value) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _names_the_server(name: str, config) -> bool:
+    """The server's name, or its first label, as stormy for stormy.lan."""
+    host = _server_host(config)
+    return bool(host) and name in (host, host.partition(".")[0])
+
+
+def on_server(args: dict, config) -> bool:
+    """Asked about the server outright: by on, or by "server" as the name."""
+    on, name = _said(args.get("on")), _said(args.get("name"))
+    return on in SERVER_WORDS or name in SERVER_WORDS or _names_the_server(on, config)
+
+
+def about_server(args: dict, config) -> bool:
+    """Whether running() answers from the server, when nothing here has the name: as above, or
+    the server named, as the model names it in "name" as often as in "on". Named, it is looked
+    for here first, as a server called docker.lan or plex is named like a program."""
+    return on_server(args, config) or _names_the_server(_said(args.get("name")), config)
+
+
+def _on_the_server(args: dict, config, session) -> dict:
+    """serverstatus's one fixed command, said by the app. The name is matched here, never sent."""
+    return serverstatus.running(args, config, session if session is not None else Session())
+
+
+def running(args: dict, config, session=None) -> dict:
+    """Whether a service or program is up, here or on the server. Here, a name goes no further
+    than these two read-only tools, and this needs the real system, which the shell sandbox
+    hides."""
+    if on_server(args, config):
+        return _on_the_server(args, config, session)
+    name = _said(args.get("name"))
     if not SERVICE_NAME.fullmatch(name):
-        if _is_the_server(name, config):
-            raise ValueError(YOUR_SERVER)
         raise ValueError("Say which program or service to check.")
     active = any(_tool("systemctl", *scope, "is-active", "--", name).strip() == "active"
                  for scope in ([], ["--user"]))
     found = active or bool(_tool("pgrep", "-i", "-x", "--", name).strip())
-    if not found and _is_the_server(name, config):
-        raise ValueError(YOUR_SERVER)
+    if not found and _names_the_server(name, config):
+        return _on_the_server(args, config, session)
+    if not found and _said(args.get("on")) not in HERE_WORDS:
+        # another computer, which can't be asked: a plain no would be about the wrong one
+        raise ValueError(f"{ONLY_TWO} Nothing called {name} is running on this computer.")
     return {"name": name, "running": found}
 
 

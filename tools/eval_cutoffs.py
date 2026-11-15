@@ -20,8 +20,10 @@ from tuxistant.skillhost import Offline
 # the comment says why that is safe.
 ACTIONS = {
     # Read only, on this computer: the clock, disk and folder sizes, system facts, file search.
-    "time.now": (), "disk.usage": (), "disk.folders": (), "system.info": (),
-    "system.running": (), "file.find": (),
+    "time.now": (), "disk.usage": (), "disk.folders": (), "system.info": (), "file.find": (),
+    # On this computer it only reads. On your server a made-up one answers in place of ssh, so
+    # the owner's is never reached.
+    "system.running": ("serverstatus._run",),
     # The web and your own servers, by design: nothing private goes, and nothing at home moves.
     "weather.forecast": (), "news.headlines": (), "web.search": (), "research.run": (),
     "knowledge.answer": (), "translate.text": (),
@@ -47,8 +49,6 @@ ACTIONS = {
     "home.set": ("homeassistant._opener.open", "homeassistant._connect", "homeassistant._call"),
     "home.status": ("homeassistant._opener.open", "homeassistant._connect",
                     "homeassistant._call"),
-    # ssh is never started: a made-up server answers, so the owner's is never reached.
-    "server.running": ("serverstatus._run",),
     # Code skills: offered, but no process is ever started, so no bulb is reached.
     "lights.set": ("mcp.SkillProcess",), "lights.status": ("mcp.SkillProcess",),
 }

@@ -131,16 +131,6 @@ def target(config) -> str:
     return host
 
 
-def configured(config) -> bool:
-    """Whether there is a server to ask, so the model is offered the tool: without one it
-    could only fail, and every tool costs the small model some of its other answers."""
-    try:
-        target(config)
-    except (Unanswered, TypeError, KeyError):
-        return False
-    return True
-
-
 def command(host: str) -> list[str]:
     return ["ssh", *SSH_OPTIONS, "--", host, REMOTE]
 
@@ -403,6 +393,7 @@ def answer(args: dict, config, session=None) -> str:
 
 
 def running(args: dict, config, session) -> dict:
+    """system.running on the server: the answer, or why there is none, said by the app."""
     try:
         text = answer(args, config, session)
     except Unanswered as why:
@@ -410,5 +401,3 @@ def running(args: dict, config, session) -> dict:
     session.after.append(Speak(text, config["voice"]))
     return {APP_SAYS: True}
 
-
-HANDLERS = {"server.running": running}

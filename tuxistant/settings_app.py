@@ -1554,8 +1554,6 @@ def held_back_words(action: dict) -> str:
         return "The model is offered this"
     if action.get("held_back") == "switched_off":
         return "Not offered to the model until it is switched on in the settings above"
-    if action.get("name") == "server.running":     # its one setting is the server, under General
-        return "Not offered to the model until the server under General is another computer"
     return "Not offered to the model until its settings above are filled in"
 
 

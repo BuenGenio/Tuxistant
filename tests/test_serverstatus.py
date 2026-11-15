@@ -1,4 +1,4 @@
-"""server.running: one fixed command over ssh to the server in Settings. Only fakes stand in for
+"""system.running on your server: one fixed command over ssh to the server in Settings. Only fakes stand in for
 ssh here: nothing reaches a network or a real server."""
 import asyncio
 import json
@@ -90,13 +90,15 @@ class Host(unittest.TestCase):
             with self.subTest(host):
                 self.assertFalse(serverstatus.is_local(host))
 
-    def test_offered_only_with_a_server_to_ask(self):
-        self.assertTrue(Skills(config=CONFIG).offered("server.running"))
-        for server in ("", "localhost:8080", "127.0.0.1:8080", "-x:80"):
-            with self.subTest(server):
-                skills = Skills(config={**CONFIG, "server": server})
-                self.assertFalse(skills.offered("server.running"))
-                self.assertNotIn("server_running", {t["name"] for t in skills.tools()})
+    def test_no_tool_of_its_own_only_a_parameter(self):
+        skills = Skills(config=CONFIG)
+        names = {tool["name"] for tool in skills.tools()}
+        self.assertNotIn("server_running", names)
+        self.assertEqual(len(names), len(Skills().tools()), "the same tools as with no server")
+        parameters = skills.tool("system.running")["parameters"]
+        self.assertEqual(list(parameters["properties"]), ["name", "on"], "YAML reads on as true")
+        self.assertNotIn("enum", parameters["properties"]["on"], "a name said must get through")
+        self.assertEqual(parameters["required"], ["name"])
 
     def test_ssh_is_never_started_for_one(self):
         text, _, run = said(config={**CONFIG, "server": "-oProxyCommand=touch:8080"})
@@ -262,8 +264,9 @@ class UntrustedOutput(unittest.TestCase):
         skills = Skills(config=CONFIG)
         session = Session()
         with mock.patch.object(serverstatus, "_run", return_value=(0, FULL, b"")):
-            name, result = asyncio.run(skills.execute("server_running", "{}", session))
-        self.assertEqual((name, result), ("server.running", {APP_SAYS: True}))
+            name, result = asyncio.run(skills.execute(
+                "system_running", '{"name": "server", "on": "server"}', session))
+        self.assertEqual((name, result), ("system.running", {APP_SAYS: True}))
         self.assertNotIn("nginx", json.dumps(result))
         self.assertIn("nginx", session.after[0].text)
 
@@ -333,22 +336,33 @@ def _gone(pid: int) -> bool:
 
 class Permissions(unittest.TestCase):
     def test_it_reaches_home_only_and_needs_no_card(self):
-        action = Skills().actions["server.running"]
-        self.assertEqual(action["permissions"], {"network": ["home"]})
-        self.assertEqual(action["risk"], "medium")
+        action = Skills().actions["system.running"]
+        self.assertEqual(action["permissions"], {"files_read": True, "network": ["home"]})
+        self.assertEqual(action["risk"], "medium", "as before: files_read made it medium")
         self.assertFalse(leaves_home(action["permissions"]))
-        session = Session(confirm=mock.AsyncMock(return_value=False))
-        session.tainted = True      # even after something private was read
-        with mock.patch.object(serverstatus, "_run", return_value=(0, FULL, b"")):
-            _, result = asyncio.run(Skills(config=CONFIG).execute("server_running", "{}", session))
-        session.confirm.assert_not_called()
-        self.assertEqual(result, {APP_SAYS: True})
+        for arguments in ('{"name": "localai", "on": "server"}', f'{{"name": "{HOST}"}}'):
+            session = Session(confirm=mock.AsyncMock(return_value=False))
+            session.tainted = True      # even after something private was read
+            with mock.patch.object(serverstatus, "_run", return_value=(0, FULL, b"")), \
+                    mock.patch.object(system, "_tool", return_value=""):
+                _, result = asyncio.run(Skills(config=CONFIG).execute(
+                    "system_running", arguments, session))
+            session.confirm.assert_not_called()
+            self.assertEqual(result, {APP_SAYS: True}, arguments)
+
+    def test_it_marks_the_conversation_and_so_does_this_computer(self):
+        for arguments in ('{"name": "x", "on": "server"}', '{"name": "firefox"}'):
+            session = Session()
+            with mock.patch.object(serverstatus, "_run", return_value=(0, FULL, b"")), \
+                    mock.patch.object(system, "_tool", return_value=""):
+                asyncio.run(Skills(config=CONFIG).execute("system_running", arguments, session))
+            self.assertTrue(session.tainted, arguments)
 
     def test_a_web_search_after_it_needs_a_click(self):
         session = Session()
         skills = Skills(config=CONFIG)
         with mock.patch.object(serverstatus, "_run", return_value=(0, FULL, b"")):
-            asyncio.run(skills.execute("server_running", "{}", session))
+            asyncio.run(skills.execute("system_running", '{"name": "x", "on": "server"}', session))
         called = mock.Mock(return_value={"found": 0})
         with mock.patch.dict("tuxistant.skills.HANDLERS", {"web.search": called}):
             _, result = asyncio.run(skills.execute("web_search", '{"query": "nginx"}', session))
@@ -356,33 +370,96 @@ class Permissions(unittest.TestCase):
         called.assert_not_called()
 
 
-class ThisComputerOnly(unittest.TestCase):
-    def test_system_running_refuses_the_server(self):
-        for name in ("server", "my server", "the  server", HOST, "MyServer", "myserver"):
-            with self.subTest(name), mock.patch.object(system, "_tool", return_value="") as tool:
-                with self.assertRaises(ValueError) as raised:
-                    system.running({"name": name}, CONFIG)
-                self.assertEqual(str(raised.exception), system.YOUR_SERVER)
-                if " " in name:
-                    tool.assert_not_called()
+def asked(args, config=CONFIG, here=""):
+    """system.running's result, what the app says, the fake ssh and the fake local tool."""
+    session = Session()
+    with mock.patch.object(serverstatus, "_run", return_value=(0, FULL, b"")) as run, \
+            mock.patch.object(system, "_tool", return_value=here) as tool:
+        result = system.running(args, config, session)
+    return result, " ".join(s.text for s in session.after), run, tool
+
+
+class SystemRunning(unittest.TestCase):
+    def test_on_server_goes_to_the_server_and_not_here(self):
+        for args in ({"name": "localai", "on": "server"}, {"name": "localai", "on": "Server"},
+                     {"name": "localai", "on": "my server"}, {"name": "localai", "on": HOST}):
+            with self.subTest(args):
+                result, text, run, tool = asked(args)
+                self.assertEqual(result, {APP_SAYS: True})
+                self.assertTrue(text.startswith("Yes, on your server I see the docker container "
+                                                "localai-api-1"), text)
+                run.assert_called_once()
+                tool.assert_not_called()
+                self.assertNotIn("localai", " ".join(run.call_args.args[0]))
+
+    def test_server_as_the_name_is_the_whole_list(self):
+        for name in ("server", "my server", "the  server", "Server"):
+            with self.subTest(name):
+                _, text, _, tool = asked({"name": name})
+                self.assertTrue(text.startswith("On your server, 2 docker containers"), text)
+                tool.assert_not_called()
+
+    def test_the_server_named_is_looked_for_here_first(self):
+        for name in (HOST, "MyServer.Example", "myserver"):
+            with self.subTest(name):
+                result, text, run, tool = asked({"name": name})
+                self.assertEqual(result, {APP_SAYS: True})
+                self.assertTrue(text.startswith("On your server, 2 docker containers"), text)
+                tool.assert_called()
 
     def test_a_server_named_like_a_program_still_lets_that_program_be_found_here(self):
         for host in ("docker.lan", "plex", "localai.lan", "pi"):
             config = {**CONFIG, "server": f"{host}:8080"}
             name = host.partition(".")[0]
-            with self.subTest(host), mock.patch.object(system, "_tool", return_value="active\n"):
-                self.assertEqual(system.running({"name": name}, config),
-                                 {"name": name, "running": True})
+            with self.subTest(host):
+                result, text, run, _ = asked({"name": name}, config, here="active\n")
+                self.assertEqual(result, {"name": name, "running": True})
+                run.assert_not_called()
 
-    def test_other_names_still_look_here(self):
-        with mock.patch.object(system, "_tool", return_value="active\n"):
-            self.assertTrue(system.running({"name": "docker"}, CONFIG)["running"])
-            self.assertTrue(system.running({"name": "localhost"},
-                                           {**CONFIG, "server": "localhost:8080"})["running"])
+    def test_this_computer_is_as_before(self):
+        for args in ({"name": "docker"}, {"name": "docker", "on": "this computer"},
+                     {"name": "docker", "on": "this machine"}):
+            with self.subTest(args):
+                result, text, run, _ = asked(args, here="active\n")
+                self.assertEqual(result, {"name": "docker", "running": True})
+                self.assertEqual(text, "")
+                run.assert_not_called()
+        self.assertEqual(asked({"name": "localhost"}, {**CONFIG, "server": "localhost:8080"},
+                               here="active\n")[0], {"name": "localhost", "running": True})
+        with self.assertRaises(ValueError):
+            asked({"name": "a b"})
 
-    def test_its_description_says_this_computer(self):
+    def test_another_computer_it_cannot_ask_is_said(self):
+        with self.assertRaises(ValueError) as raised:
+            asked({"name": "plex", "on": "nas"})
+        self.assertEqual(str(raised.exception), "I can only check this computer and the server in "
+                                                "Settings. Nothing called plex is running on this "
+                                                "computer.")
+        self.assertTrue(asked({"name": "plex", "on": "nas"}, here="active\n")[0]["running"])
+        for here in ("this computer", "My computer", "here"):
+            self.assertEqual(asked({"name": "plex", "on": here})[0],
+                             {"name": "plex", "running": False})
+
+    def test_on_server_with_no_server_to_ask_says_so(self):
+        for server, sentence in (("", serverstatus.NO_SERVER),
+                                 ("localhost:8080", serverstatus.ON_THIS_COMPUTER),
+                                 ("-x:80", serverstatus.BAD_HOST)):
+            with self.subTest(server):
+                result, text, run, _ = asked({"name": "x", "on": "server"},
+                                             {**CONFIG, "server": server})
+                self.assertEqual((result, text), ({APP_SAYS: True}, sentence))
+                run.assert_not_called()
+
+    def test_the_eval_judges_as_the_handler_does(self):
+        self.assertTrue(system.about_server({"name": HOST}, CONFIG))
+        self.assertTrue(system.about_server({"name": "x", "on": "server"}, CONFIG))
+        self.assertFalse(system.about_server({"name": "docker"}, CONFIG))
+        self.assertFalse(system.on_server({"name": HOST}, CONFIG), "looked for here first")
+
+    def test_its_description_is_the_base_one(self):
         description = Skills().actions["system.running"]["description"]
-        self.assertIn("on this computer", description)
+        self.assertEqual(description, "Check whether a program or service is running, such as "
+                                      "docker")
 
 
 if __name__ == "__main__":
