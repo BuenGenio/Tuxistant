@@ -37,6 +37,13 @@ FULL = (b"@docker\n"
 HERE = {"thislaptop", "thislaptop.local"}      # this computer's own names, made up
 REAL_THIS_COMPUTER = serverstatus._this_computer
 REAL_RUN = serverstatus._run
+# What INNER must be, word for word: anything added before a read would run on your server with
+# no click, and RemoteCommand runs it on this computer.
+PINNED_INNER = ('export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T="timeout 8"; '
+                'echo @docker; $T docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}" '
+                '2>&1; echo "@exit $?"; echo @systemd; $T systemctl list-units '
+                '--type=service --state=running --no-legend --plain --no-pager '
+                '2>/dev/null; echo "@exit $?"')
 
 
 def setUpModule():
@@ -73,12 +80,7 @@ class FixedCommand(unittest.TestCase):
 
     def test_what_is_sent_is_the_read_only_command_alone(self):
         """Word for word: anything added before a read would run on your server with no click."""
-        self.assertEqual(serverstatus.INNER,
-                         'export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T="timeout 8"; '
-                         'echo @docker; $T docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}" '
-                         '2>&1; echo "@exit $?"; echo @systemd; $T systemctl list-units '
-                         '--type=service --state=running --no-legend --plain --no-pager '
-                         '2>/dev/null; echo "@exit $?"')
+        self.assertEqual(serverstatus.INNER, PINNED_INNER)
         self.assertEqual(serverstatus.REMOTE, "exec sh -c " + shlex.quote(serverstatus.INNER))
         # Read first by the remote user's own shell: fish keeps a backslash in single quotes
         # and csh expands a ! there.
@@ -131,10 +133,13 @@ class Host(unittest.TestCase):
 
     def test_this_computer_in_any_spelling(self):
         for host in ("localhost", "localhost.", "LOCALHOST", "127.0.0.1", "127.1", "0", "0.0.0.0",
-                     "::1", "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1", "::", "ip6-localhost"):
+                     "::1", "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1", "::", "ip6-localhost",
+                     "localhost4", "localhost6", "localhost4.localdomain4",
+                     "localhost6.localdomain6", "tux.localhost", "Tux.Localhost."):
             with self.subTest(host):
                 self.assertTrue(serverstatus.is_local(host))
-        for host in (HOST, "myserver", "10.0.0.5", "fd00::5", "1", "my nas", "a\x00b"):
+        for host in (HOST, "myserver", "10.0.0.5", "fd00::5", "1", "my nas", "a\x00b",
+                     "mylocalhost", "localhost.lan", "localhost7"):
             with self.subTest(host):
                 self.assertFalse(serverstatus.is_local(host))
 
@@ -189,6 +194,25 @@ class Filtering(unittest.TestCase):
         only = b"@docker\nbroken|app|Restarting (1) 5 seconds ago\n@exit 0\n@systemd\n@exit 0\n"
         self.assertTrue(said(answer=(0, only, b""))[0].startswith(
             "No docker containers are really up on your server. Restarting"))
+
+    def test_matches_with_a_status_are_told_apart(self):
+        """Each status has a comma of its own, so the matches are kept apart by semicolons."""
+        web = (b"@docker\nweb|nginx|Up 2 days\nweb-old|nginx|Restarting (1) 5 seconds ago\n"
+               b"web-idle|nginx|Up 2 hours (Paused)\n@exit 0\n@systemd\n"
+               b"web.service loaded active running x\n@exit 0\n")
+        self.assertEqual(said({"name": "web", "on": "my server"}, answer=(0, web, b""))[0],
+                         "Yes, on your server I see the docker container web, up 2 days; the "
+                         "docker container web-old, restarting again and again; the docker "
+                         "container web-idle, paused; and the service web.")
+        down = web.replace(b"web|nginx|Up 2 days\n", b"").replace(b"web.service loaded active "
+                                                                 b"running x\n", b"")
+        self.assertEqual(said({"name": "web"}, answer=(0, down, b""))[0],
+                         "Not really: on your server I see the docker container web-old, "
+                         "restarting again and again; and the docker container web-idle, paused.")
+        plain = (b"@docker\n@exit 0\n@systemd\nweb.service loaded active running x\n"
+                 b"web-api.service loaded active running x\n@exit 0\n")
+        self.assertEqual(said({"name": "web"}, answer=(0, plain, b""))[0],
+                         "Yes, on your server I see the service web and the service web-api.")
 
     def test_docker_s_times_are_said_as_words(self):
         times = (b"@docker\nweb|nginx|Up About an hour\nnew|app|Up Less than a second\n@exit 0\n"
@@ -266,8 +290,8 @@ class Filtering(unittest.TestCase):
         config = {**CONFIG, "server": "localai.lan:8080"}
         self.assertTrue(said({"name": "localai"}, config)[0].startswith(
             "Yes, on your server I see the docker container localai-api-1"))
-        config = {**CONFIG, "server": "stormy.lan:8080"}
-        self.assertTrue(said({"name": "stormy"}, config)[0].startswith("On your server, 2 docker"))
+        config = {**CONFIG, "server": "zephyr.lan:8080"}
+        self.assertTrue(said({"name": "zephyr"}, config)[0].startswith("On your server, 2 docker"))
         # A single label is the whole host, and still a name to look for.
         many = (b"@docker\n" + b"".join(b"app%d|img|Up 1 day\n" % i for i in range(12))
                 + b"plex|plexinc/pms-docker|Up 2 days\n@exit 0\n@systemd\n@exit 0\n")
@@ -276,8 +300,26 @@ class Filtering(unittest.TestCase):
                 self.assertEqual(said({"name": "plex"}, {**CONFIG, "server": server},
                                       answer=(0, many, b""))[0],
                                  "Yes, on your server I see the docker container plex, up 2 days.")
-        self.assertTrue(said({"name": "stormy"}, {**CONFIG, "server": "stormy:8080"})[0]
+        self.assertTrue(said({"name": "zephyr"}, {**CONFIG, "server": "zephyr:8080"})[0]
                         .startswith("On your server, 2 docker"))
+
+    def test_another_address_is_a_name_to_look_for(self):
+        """192.0.21.2 has the digits of 192.0.2.12, but is not the server's name."""
+        config = {**CONFIG, "server": "192.0.2.12:8080"}
+        self.assertEqual(said({"name": "192.0.21.2"}, config)[0],
+                         "I don't see 192.0.21.2 among the docker containers or services "
+                         "running on your server.")
+        for name in ("192.0.2.12", "my 192.0.2.12", "192.0.2.12 server"):
+            with self.subTest(name):
+                self.assertTrue(said({"name": name}, config)[0].startswith("On your server, 2"))
+
+    def test_the_server_s_label_with_words_around_it_is_the_whole_list(self):
+        config = {**CONFIG, "server": "nas.lan:8080"}
+        for args in ({"name": "nas server", "on": "my server"},
+                     {"name": "nas containers", "on": "my server"},
+                     {"name": "my home nas", "on": "my server"}):
+            with self.subTest(args):
+                self.assertTrue(said(args, config)[0].startswith("On your server, 2 docker"))
 
     def test_a_name_found_by_container_name_or_image(self):
         text, _, _ = said({"name": "LocalAI"})
@@ -302,7 +344,8 @@ class Filtering(unittest.TestCase):
     def test_ssh_itself_is_running_once_it_answered(self):
         """Debian and Ubuntu call it ssh.service, which "sshd" is not in."""
         debian = b"@docker\n@exit 0\n@systemd\nssh.service loaded active running x\n@exit 0\n"
-        for name in ("sshd", "ssh", "openssh", "openssh-server", "the ssh server", "SSH service"):
+        for name in ("sshd", "ssh", "openssh", "openssh-server", "the ssh server", "SSH service",
+                     "the ssh daemon"):
             with self.subTest(name):
                 text, session, _ = said({"name": name}, answer=(0, debian, b""))
                 self.assertEqual(text, serverstatus.OVER_SSH)
@@ -328,7 +371,8 @@ class Errors(unittest.TestCase):
         self.assertEqual(said(config={**CONFIG, "server": ""})[0], serverstatus.NO_SERVER)
 
     def test_the_server_is_this_computer(self):
-        for server in ("localhost:8080", "127.0.0.1:8080", "[::1]:8080"):
+        for server in ("localhost:8080", "127.0.0.1:8080", "[::1]:8080", "localhost6:8080",
+                       "tux.localhost:8080"):
             text, _, run = said(config={**CONFIG, "server": server})
             self.assertEqual(text, serverstatus.ON_THIS_COMPUTER, server)
             run.assert_not_called()
@@ -538,13 +582,47 @@ SYSTEMCTL_CALL = ["list-units", "--type=service", "--state=running", "--no-legen
                   "--no-pager"]
 SHELLS = [shell for shell in ("/bin/sh", "/bin/bash", "/bin/dash", "/usr/bin/zsh")
           if os.path.exists(shell)]
+# A stand-in PATH stops only a command looked up by name. With these, /usr/bin/docker or
+# /usr/bin/systemctl given by its path finds no daemon either.
+DEAD_SOCKETS = {"DOCKER_HOST": "unix:///nonexistent",
+                "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=/nonexistent",
+                "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent"}
+BWRAP = shutil.which("bwrap", path="/usr/bin:/bin")
+INSERTED = "docker pause web >/dev/null; "      # by test_a_call_before_the_read_is_seen
+
+
+def _sandbox(folder: str) -> list[str]:
+    """bwrap with /usr, the folder and nothing else: no /run, so no docker or D-Bus socket, and
+    no network. Empty where bwrap can't run, which leaves the dead sockets."""
+    if not BWRAP:
+        return []
+    argv = [BWRAP, "--unshare-all", "--die-with-parent", "--ro-bind", "/usr", "/usr"]
+    for path in ("/bin", "/sbin", "/lib", "/lib64"):
+        if os.path.islink(path):
+            argv += ["--symlink", os.readlink(path), path]
+        elif os.path.isdir(path):
+            argv += ["--ro-bind", path, path]
+    argv += ["--ro-bind-try", "/etc/ld.so.cache", "/etc/ld.so.cache", "--proc", "/proc",
+             "--dev", "/dev", "--tmpfs", "/tmp", "--bind", folder, folder, "--"]
+    try:
+        works = subprocess.run([*argv, "/bin/sh", "-c", "true"], timeout=10,
+                               stdin=subprocess.DEVNULL, capture_output=True, env=DEAD_SOCKETS)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return argv if works.returncode == 0 else []
 
 
 class RemoteCommand(unittest.TestCase):
     """What goes over ssh, run here by a shell as the server's would, with stand-ins for docker
-    and systemctl first and alone on PATH: never the real ones."""
+    and systemctl first and alone on PATH: never the real ones. It runs only once it is the
+    pinned read-only command, in a sandbox with no /run where bwrap works, and with dead docker
+    and D-Bus sockets, as /usr/bin/docker named by its path would get past the stand-ins."""
 
     def setUp(self):
+        # Before any shell is started: a mutant that adds a command must fail, not run it here.
+        self.assertEqual(serverstatus.INNER, PINNED_INNER, "not run: INNER isn't the pinned one")
+        self.assertEqual(serverstatus.REMOTE, "exec sh -c " + shlex.quote(PINNED_INNER))
+        self.inner = PINNED_INNER
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.bin, self.log = os.path.join(folder.name, "bin"), os.path.join(folder.name, "log")
@@ -552,6 +630,8 @@ class RemoteCommand(unittest.TestCase):
         os.mkdir(self.log)
         for name in ("sh", "true"):
             os.symlink(shutil.which(name, path="/usr/bin:/bin"), os.path.join(self.bin, name))
+        self.env = {"PATH": self.bin, "HOME": folder.name, **DEAD_SOCKETS}
+        self.sandbox = _sandbox(folder.name)
 
     def fake(self, name: str, script: str):
         path = os.path.join(self.bin, name)
@@ -567,7 +647,8 @@ class RemoteCommand(unittest.TestCase):
 
         def over_ssh(argv, env):
             self.assertEqual(argv, serverstatus.command(HOST))
-            return REAL_RUN([shell, "-c", argv[-1]], {"PATH": self.bin})
+            self.assertEqual(argv[-1], "exec sh -c " + shlex.quote(self.inner), "not run here")
+            return REAL_RUN([*self.sandbox, shell, "-c", argv[-1]], self.env)
         with mock.patch.object(serverstatus, "_run", over_ssh):
             return serverstatus.read(HOST)
 
@@ -602,8 +683,9 @@ class RemoteCommand(unittest.TestCase):
         """The stand-ins keep every call, so an extra one can't hide behind the real read."""
         self.fake("docker", FAKE_DOCKER)
         self.fake("systemctl", FAKE_SYSTEMCTL)
-        extra = serverstatus.INNER.replace("echo @docker;", "docker pause web >/dev/null; "
-                                                            "echo @docker;")
+        extra = serverstatus.INNER.replace("echo @docker;", INSERTED + "echo @docker;")
+        self.inner = PINNED_INNER.replace("echo @docker;", INSERTED + "echo @docker;")
+        self.assertEqual(extra, self.inner, "not run: more than the one call was added")
         with mock.patch.object(serverstatus, "REMOTE", "exec sh -c " + shlex.quote(extra)):
             self.read()
         self.assertEqual(self.calls("docker"), [["pause", "web"], DOCKER_CALL])
@@ -622,6 +704,19 @@ class RemoteCommand(unittest.TestCase):
                     "--no-pager"])
                 self.assertEqual(self.calls("docker"), [DOCKER_CALL])
                 self.assertEqual(self.calls("systemctl"), [SYSTEMCTL_CALL])
+
+    def test_a_daemon_is_out_of_reach_even_by_its_path(self):
+        """What a command added to INNER would meet if it named /usr/bin/docker: no socket to
+        reach in the sandbox, and dead ones named where there is none."""
+        probe = ("for s in /run/docker.sock /var/run/docker.sock "
+                 "/run/dbus/system_bus_socket; do test -e $s && echo $s; done; "
+                 "echo \"$DOCKER_HOST $DBUS_SYSTEM_BUS_ADDRESS\"")
+        done = REAL_RUN([*self.sandbox, "/bin/sh", "-c", probe], self.env)
+        self.assertEqual(done[0], 0, done)
+        lines = done[1].decode().splitlines()
+        self.assertEqual(lines[-1], "unix:///nonexistent unix:path=/nonexistent")
+        if self.sandbox:
+            self.assertEqual(lines, lines[-1:], "a socket can be seen in the sandbox")
 
     def test_docker_missing_with_or_without_a_real_timeout(self):
         self.fake("systemctl", FAKE_SYSTEMCTL)
@@ -664,10 +759,14 @@ class RealServerCheck(unittest.TestCase):
                 self.assertEqual(file.read().splitlines(), argv[1:])
         self.assertIn("ControlMaster=no", argv)
 
-    def test_its_local_step_expects_what_the_compose_file_runs(self):
-        compose = (ROOT / "server" / "compose.yaml").read_text()
-        self.assertIn("container_name: local-ai", compose)
+    def test_its_local_step_expects_the_process_the_server_runs(self):
+        """pgrep sees the process name, which comes from the image's /local-ai, not from the
+        container's name in compose.yaml."""
+        readme = (ROOT / "server" / "README.md").read_text()
+        self.assertIn("Inside the container the command is `/local-ai`", readme)
         self.assertIn("`local-ai` process", self.check())
+        for name in ("localai", "local-ai", "local_ai"):
+            self.assertTrue(re.fullmatch(system._any_dashes(name), "local-ai"), name)
 
 
 def _gone(pid: int) -> bool:
@@ -770,12 +869,14 @@ class SystemRunning(unittest.TestCase):
     def test_the_server_by_its_label_with_my_or_the_before_it(self):
         """"Is Plex running on my NAS?" for nas.lan, as the model copies on as it heard it."""
         for server, label in (("nas.lan:8080", "nas"), ("pi:8080", "pi"),
-                              ("stormy-nas.lan:8080", "stormy nas"),
-                              ("stormy-nas.lan:8080", "Stormy-NAS")):
+                              ("zephyr-nas.lan:8080", "zephyr nas"),
+                              ("zephyr-nas.lan:8080", "Zephyr-NAS")):
             config = {**CONFIG, "server": server}
             for args in ({"name": "localai", "on": f"my {label}"},
                          {"name": "localai", "on": f"the {label}"},
-                         {"name": "localai", "on": label}):
+                         {"name": "localai", "on": label},
+                         {"name": "localai", "on": f"my home {label}"},
+                         {"name": "localai", "on": f"the home {label}"}):
                 with self.subTest(server=server, args=args):
                     result, text, run, tool = asked(args, config)
                     self.assertTrue(text.startswith("Yes, on your server I see the docker "
@@ -784,11 +885,71 @@ class SystemRunning(unittest.TestCase):
                     tool.assert_not_called()
                     self.assertTrue(system.about_server(args, config))
             for args in ({"name": "docker", "on": f"my {label}"}, {"name": f"my {label}"},
-                         {"name": f"the {label}"}):
+                         {"name": f"the {label}"}, {"name": f"my {label} server"},
+                         {"name": f"{label} server"}, {"name": f"my home {label}"}):
                 with self.subTest(server=server, args=args):
                     result, text, run, _ = asked(args, config)
                     self.assertTrue(text.startswith("On your server, 2 docker containers"), text)
                     run.assert_called_once()
+                    self.assertTrue(system.about_server(args, config))
+
+    def test_a_label_that_starts_with_my_or_the_is_still_its_name(self):
+        """my-nas.lan is my-nas, whatever is said before it: only a my of its own is dropped."""
+        for server, on, names in (
+                ("my-nas.lan:8080", ("my-nas", "my my-nas", "my-nas.lan", "My-NAS"),
+                 ("my-nas", "my-nas.lan")),
+                ("the-pi.lan:8080", ("the-pi", "my the-pi"), ("the-pi",)),
+                ("own-cloud:8080", ("own-cloud", "the own-cloud"), ("own-cloud",)),
+                ("home.lan:8080", ("home", "my home"), ("home",)),
+                ("own.lan:8080", ("own",), ("own",))):
+            config = {**CONFIG, "server": server}
+            for said_on in on:
+                args = {"name": "localai", "on": said_on}
+                with self.subTest(server=server, args=args):
+                    result, text, run, tool = asked(args, config)
+                    self.assertTrue(text.startswith("Yes, on your server I see the docker "
+                                                    "container localai-api-1"), text)
+                    run.assert_called_once()
+                    tool.assert_not_called()
+            for name in names:
+                with self.subTest(server=server, name=name):
+                    result, text, run, _ = asked({"name": name}, config)
+                    self.assertEqual(result, {APP_SAYS: True})
+                    self.assertIn("On your server, 2 docker containers", text)
+                    run.assert_called_once()
+
+    def test_another_address_is_another_computer(self):
+        """The same digits are not the same address: a yes would be about the wrong computer."""
+        for server, other in (("192.0.2.12:8080", "192.0.21.2"),
+                              ("[fd00::12]:8080", "fd00::1:2"), ("192.0.2.15:8080", "192.0.2.1.5"),
+                              ("web-11.lan:8080", "web1-1")):
+            config = {**CONFIG, "server": server}
+            for args in ({"name": "nginx", "on": other}, {"name": "docker", "on": other},
+                         {"name": "nginx", "on": f"my {other}"}):
+                with self.subTest(server=server, args=args), \
+                        mock.patch.object(serverstatus, "_run") as run, \
+                        mock.patch.object(system, "_tool", return_value=""):
+                    with self.assertRaises(ValueError) as raised:
+                        system.running(args, config, Session())
+                    self.assertTrue(str(raised.exception).startswith(system.ONLY_TWO))
+                    run.assert_not_called()
+                    self.assertFalse(system.about_server(args, config))
+        for name, server in (("192.0.21.2", "192.0.2.12"), ("web1-1", "web-11.lan")):
+            with self.subTest(name):
+                result, text, run, tool = asked({"name": name}, {**CONFIG, "server": server})
+                self.assertEqual((result, text), ({"name": name, "running": False}, ""))
+                run.assert_not_called()
+                tool.assert_called()
+        config = {**CONFIG, "server": "192.0.2.12:8080"}
+        for on in ("192.0.2.12", "my 192.0.2.12", "::ffff:192.0.2.12", "192.0.2.12?"):
+            with self.subTest(on):
+                self.assertEqual(asked({"name": "nginx", "on": on}, config)[1],
+                                 "Yes, on your server I see the service nginx.")
+        for on in ("[fd00::12]", "fd00:0::12", "FD00::12"):
+            with self.subTest(on):
+                self.assertEqual(asked({"name": "nginx", "on": on},
+                                       {**CONFIG, "server": "[fd00::12]:8080"})[1],
+                                 "Yes, on your server I see the service nginx.")
 
     def test_server_as_the_name_is_the_whole_list(self):
         for name in ("server", "my server", "the  server", "Server", "home server",
@@ -827,6 +988,28 @@ class SystemRunning(unittest.TestCase):
                                  "running: other.")
         text = asked({"name": "plex", "on": "my server"}, {**CONFIG, "server": "plex.lan:8080"})[1]
         self.assertTrue(text.startswith("On your server, 2 docker"), "not looked for here")
+
+    def test_a_label_found_only_in_part_on_the_server_says_this_computer_was_checked(self):
+        complex_ = b"@docker\ncomplex|img|Up 1 day\n@exit 0\n@systemd\n@exit 0\n"
+        plex = b"@docker\nplex|img|Up 2 days\n@exit 0\n@systemd\n@exit 0\n"
+        config = {**CONFIG, "server": "plex.lan:8080"}
+        for answer, sentence in (
+                (complex_, "Nothing called plex is running on this computer, and I don't see "
+                           "plex on your server, but I see the docker container complex, up 1 "
+                           "day."),
+                (plex, "Yes, on your server I see the docker container plex, up 2 days.")):
+            with self.subTest(sentence), mock.patch.object(
+                    serverstatus, "_run", return_value=(0, answer, b"")), \
+                    mock.patch.object(system, "_tool", return_value=""):
+                session = Session()
+                system.running({"name": "plex"}, config, session)
+                self.assertEqual(session.after[0].text, sentence)
+
+    def test_a_server_named_like_a_program_says_the_program_is_not_here(self):
+        """Is docker running? with no docker here and a server called docker.lan."""
+        text = asked({"name": "docker"}, {**CONFIG, "server": "docker.lan:8080"})[1]
+        self.assertTrue(text.startswith("Nothing called docker is running on this computer. On "
+                                        "your server, 2 docker containers"), text)
 
     def test_an_on_that_may_be_another_server_names_the_one_in_settings(self):
         for on in ("my work server", "the office server", "my minecraft server"):
@@ -908,6 +1091,22 @@ class SystemRunning(unittest.TestCase):
                                      f"I can only check this computer and the server in "
                                      f"Settings. {sentence}")
 
+    def test_a_name_of_two_words_on_another_computer_gets_the_same_sentence(self):
+        """Not "Say which program": one was named. Nothing was looked at here, so nothing is
+        said about this computer and the conversation isn't marked."""
+        session = Session()
+        with mock.patch.object(serverstatus, "_run") as run, \
+                mock.patch.object(system, "_tool", return_value="active\n") as tool:
+            with self.assertRaises(ValueError) as raised:
+                system.running({"name": "home assistant", "on": "my phone"}, CONFIG, session)
+        self.assertEqual(str(raised.exception), system.ONLY_TWO)
+        run.assert_not_called()
+        tool.assert_not_called()
+        self.assertFalse(session.tainted)
+        with self.assertRaises(ValueError) as raised:
+            asked({"name": "home assistant", "on": "this computer"})
+        self.assertEqual(str(raised.exception), "Say which program or service to check.")
+
     def test_words_for_this_computer_are_this_computer(self):
         for on in ("this computer", "My computer", "here", "my desktop", "the laptop", "computer",
                    "this pc", "my machine", "system", True, "true", "127.0.0.1", "localhost",
@@ -927,7 +1126,8 @@ class SystemRunning(unittest.TestCase):
 
     def test_a_server_on_this_computer_is_looked_at_here(self):
         """LocalAI on the laptop: the server is this computer, so a name is checked here."""
-        for server in ("localhost:8080", "127.0.0.1:8080", "[::1]:8080", "thislaptop:8080"):
+        for server in ("localhost:8080", "127.0.0.1:8080", "[::1]:8080", "thislaptop:8080",
+                       "localhost6:8080", "tux.localhost:8080"):
             config = {**CONFIG, "server": server}
             for args in ({"name": "localai", "on": "my server"}, {"name": "localai", "on": "server"},
                          {"name": "localai", "on": "my home server"}):

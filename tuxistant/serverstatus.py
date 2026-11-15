@@ -88,7 +88,11 @@ STATUS = re.compile(r"[A-Za-z0-9 ().,:-]{1,60}")
 UNIT = re.compile(r"([A-Za-z0-9][A-Za-z0-9@._:+-]{0,99})\.service")
 EXIT = re.compile(r"@exit ([0-9]{1,3})")
 IPV6 = re.compile(r"\[([0-9a-fA-F:.]+)\]")
-LOCAL = ("localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback")
+# The names /etc/hosts gives this computer by convention, and below .localhost, which
+# systemd-resolved and glibc send to loopback. tools/eval_config.py uses these too.
+LOCAL_NAMES = frozenset({"localhost", "localhost.localdomain", "localhost4", "localhost6",
+                         "localhost4.localdomain4", "localhost6.localdomain6", "ip6-localhost",
+                         "ip6-loopback"})
 # Words around a name rather than in it, as in "ssh myserver docker ps": with only these
 # left, the whole list was asked for. Otherwise they stay in the name, but a match can do
 # without them, so "minecraft server" finds minecraft and "sql server" is not just sql.
@@ -100,6 +104,10 @@ AROUND = {"server", "servers", "my", "our", "own", "the", "your", "on", "is", "a
 FILLER = {"my", "our", "own", "the", "your", "on", "is", "are", "what", "which", "all",
           "everything", "anything", "running"}
 SERVER_WORDS = {"server", "servers"}
+# Before the server's name, as in "my nas" or "the pi".
+POSSESSIVES = {"my", "our", "your", "the", "own"}
+# Around the server's name and never part of it, as in "my home nas" or "the nas server".
+AROUND_A_HOST = POSSESSIVES | SERVER_WORDS | {"home"}
 # The server that answered over ssh runs one of these, whatever its unit is called.
 SSH_NAMES = {"ssh", "sshd", "openssh", "opensshserver"}
 # Part of the system itself, so they are counted but not named: nobody asks after getty.
@@ -147,7 +155,8 @@ def is_local(host: str) -> bool:
         try:
             address = ipaddress.IPv4Address(socket.inet_aton(host))
         except (OSError, ValueError):       # ValueError: a NUL in what the model wrote
-            return host in LOCAL or host in _this_computer()
+            return (host in LOCAL_NAMES or host.endswith(".localhost")
+                    or host in _this_computer())
     address = getattr(address, "ipv4_mapped", None) or address
     return address.is_loopback or address.is_unspecified
 
@@ -161,7 +170,7 @@ def is_address(host: str) -> bool:
 
 
 def _label(host: str) -> str | None:
-    """The first label of a name, as stormy for stormy.lan. An address has none: 10 is no name
+    """The first label of a name, as zephyr for zephyr.lan. An address has none: 10 is no name
     for 10.0.0.5."""
     host = host.casefold()
     return None if is_address(host) else host.partition(".")[0]
@@ -172,10 +181,44 @@ def own_names(host: str) -> set[str]:
     return {host.casefold(), _label(host)} - {None}
 
 
+def _as_address(text: str):
+    """The address text is, as one value, or None for a name. ::ffff:10.0.0.5 is 10.0.0.5."""
+    try:
+        address = ipaddress.ip_address(text.strip().strip(".,?!").removeprefix("[")
+                                       .removesuffix("]"))
+    except ValueError:
+        return None
+    return getattr(address, "ipv4_mapped", None) or address
+
+
+def _same_name(text: str, name: str) -> bool:
+    """The same letters and the same numbers, so web-11 is not web1-1."""
+    return (bool(_key(text)) and _key(text) == _key(name)
+            and re.findall(r"[0-9]+", text) == re.findall(r"[0-9]+", name))
+
+
 def is_own_name(text: str, host: str) -> bool:
-    """Whether text is one of own_names in any spelling: "stormy nas" for stormy-nas.lan."""
-    key = _key(text)
-    return bool(key) and key in {_key(name) for name in own_names(host)}
+    """Whether text is one of own_names in any spelling, as "zephyr nas" for zephyr-nas.lan.
+    An address only as the same address: 192.0.21.2 has the digits of 192.0.2.12, but is
+    another computer."""
+    said, own = _as_address(text), _as_address(host)
+    if said is not None or own is not None:
+        return said == own
+    return any(_same_name(text, name) for name in own_names(host))
+
+
+def _without(text: str, words: set) -> str:
+    """text without these as words of their own: "my-nas" keeps its my."""
+    return " ".join(w for w in (w.strip(".,?!") for w in text.casefold().split())
+                    if w not in words)
+
+
+def names_host(text: str, host: str) -> bool:
+    """Whether text names host: as said, or without my, the, home or server around it, so "my
+    home nas" and "nas server" name nas.lan, and "my-nas" and "home" still name my-nas.lan and
+    home.lan."""
+    return any(is_own_name(said, host) for said in (
+        text, _without(text, POSSESSIVES), _without(text, AROUND_A_HOST)))
 
 
 def target(config) -> str:
@@ -386,10 +429,16 @@ def _asks_after_ssh(args: dict) -> bool:
 
 
 def _listed(names: list[str], limit: int) -> str:
+    """Said with commas and "and", or with semicolons when a name has its status after a comma
+    of its own, so what is a name and what its status can still be heard."""
     said = names[:limit]
     if len(names) > limit:
         said.append(f"{len(names) - limit} more")
-    return said[0] if len(said) == 1 else ", ".join(said[:-1]) + " and " + said[-1]
+    if len(said) == 1:
+        return said[0]
+    if any(", " in item for item in said):
+        return "; ".join(said[:-1]) + "; and " + said[-1]
+    return ", ".join(said[:-1]) + " and " + said[-1]
 
 
 def _is(count: int) -> str:
@@ -546,9 +595,10 @@ def answer(args: dict, config, session=None, missed_here: str | None = None,
     found = read(host)
     if session is not None:
         session.tainted = True
+    seen, _, whole = _seen(found, name) if name else ([], False, False)
     if _asks_after_ssh(args):
         text = OVER_SSH     # its unit may be ssh, sshd or another, but it let me in
-    elif name and is_own_name(" ".join(_needed(name)), host) and not _seen(found, name)[0]:
+    elif name and names_host(_without(name, AROUND), host) and not seen:
         # the server's own name, with nothing there called that
         text = _everything(found)
         if missed_here:
@@ -556,6 +606,10 @@ def answer(args: dict, config, session=None, missed_here: str | None = None,
                     f"it on your server. {text}")
     else:
         text = _one(found, name) if name else _everything(found)
+        if missed_here and not whole:
+            # This computer was looked at first, and only a yes says where it was found.
+            missed = f"Nothing called {missed_here} is running on this computer"
+            text = f"{missed}, and {text}" if name else f"{missed}. {text}"
     if say_which:
         text = f"I checked the server in Settings, {_label(host) or host}. {text}"
     return shown(text, 600)

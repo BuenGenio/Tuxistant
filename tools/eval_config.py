@@ -7,7 +7,8 @@ saved address on this computer, get it only when named for the run.
 
 "On this computer" is judged with no name looked up: loopback and unspecified addresses in every
 form the resolver takes (127.1, 2130706433, 0x7f000001, ::ffff:127.0.0.1), the localhost names
-/etc/hosts gives by convention, this computer's own name with or without .local, which Debian and
+/etc/hosts gives by convention and any name under .localhost, the same ones as for the server
+in tuxistant/serverstatus.py, this computer's own name with or without .local, which Debian and
 Ubuntu map to 127.0.1.1 and mDNS answers, and the addresses its own network interfaces hold, as
 the kernel lists them in /proc (LAN, docker0). Other names /etc/hosts maps to this computer are
 not caught.
@@ -23,15 +24,14 @@ import tempfile
 from pathlib import Path
 
 from tuxistant.config import DEFAULTS, clean_server
-from tuxistant.serverstatus import is_address, own_names
+from tuxistant.serverstatus import LOCAL_NAMES, is_address, own_names
 from tuxistant.webfetch import this_computer
 
 ENV = "TUXISTANT_SERVER"
 FLAG = "--server"
 NOTHING_SENT = "Nothing was sent."
-LOCAL_NAMES = {"localhost", "localhost.localdomain", "localhost4", "localhost6",
-               "localhost4.localdomain4", "localhost6.localdomain6", "ip6-localhost",
-               "ip6-loopback"}
+# A word this long the model may split, as zephyr box for zephyrbox.
+SPLIT_FROM = 6
 
 
 RECIPES = Path(__file__).resolve().parent.parent / "tests" / "recipes"
@@ -42,23 +42,32 @@ GENERIC_LABELS = {"local", "localdomain", "home", "arpa", "internal", "intranet"
                   "srv", "host", "nas"}
 
 
+def _spelled(word: str) -> str:
+    """A word of a label, and once it has SPLIT_FROM letters or more and isn't generic, also
+    with a space, dot, dash or underscore between any two of them."""
+    split = len(word) >= SPLIT_FROM and word not in GENERIC_LABELS
+    return (r"[\s._-]?" if split else "").join(map(re.escape, word))
+
+
 def _patterns(host: str) -> list[str]:
     """The host, its first label, every other label and every word of a label of three letters
     or more that isn't generic, and a label of more than one word written with a space, a dot or
-    nothing between them, as alice nas or AliceNAS for alice-nas.lan. The longest first."""
-    names, joined = own_names(host), set()
+    nothing between them, as alice nas or AliceNAS for alice-nas.lan. A long word may be split
+    too, as zephyr box for zephyrbox.lan. The longest first, by what each stands for."""
+    found = {name: re.escape(name) for name in own_names(host)}
     if not is_address(host):
         for label in host.casefold().split("."):
             words = [w for w in re.split(r"[-_]", label) if w]
-            names |= {w for w in [label, *words] if len(w) >= 3 and w not in GENERIC_LABELS}
+            telling = [w for w in [label, *words] if len(w) >= 3 and w not in GENERIC_LABELS]
+            found |= {w: _spelled(w) if w in words else re.escape(w) for w in telling}
             if len(words) > 1 and set(words) - GENERIC_LABELS:
-                joined.add(r"[\s._-]?".join(map(re.escape, words)))
-    return sorted(joined | set(map(re.escape, names)), key=len, reverse=True)
+                found[" " + label] = r"[\s._-]?".join(map(_spelled, words))
+    return [found[name] for name in sorted(found, key=len, reverse=True)]
 
 
 def redacted(text: str, host: str, placeholder: str = "{server}") -> str:
     """text with the server's host, its first label and any other telling label or word of it
-    in place of placeholder, in any case: the model may call stormy.lan stormy and alice-nas.lan
+    in place of placeholder, in any case: the model may call zephyr.lan zephyr and alice-nas.lan
     alice nas, and what is printed goes into public notes. The longest first and only as a whole
     word, so a short label leaves other words alone."""
     for pattern in _patterns(host):

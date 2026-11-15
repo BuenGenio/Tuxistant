@@ -8,11 +8,14 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 from unittest.mock import patch
 
 import yaml
@@ -505,19 +508,12 @@ class RoutingCases(unittest.TestCase):
                 self.assertEqual(space["judged"]("system_running", args), name)
         self.assertEqual(space["judged"]("shell_run", '{"command": "ssh nas"}'), "shell_run")
 
-    def test_what_is_printed_names_no_server(self):
-        """The model may name stormy.lan as stormy, and the output goes into TESTING.md."""
-        tree = ast.parse((ROOT / "tools" / "eval_routing.py").read_text())
-        samples = [ast.unparse(node.value) for node in ast.walk(tree)
-                   if isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "sample"]
-        self.assertEqual(samples, ["''", "redacted(args, SERVER_HOST)[:90]"])
-        printed = [ast.unparse(node) for node in ast.walk(tree)
-                   if isinstance(node, ast.Call) and ast.unparse(node.func) == "print"]
-        self.assertTrue(any("redacted(misses[0], SERVER_HOST)" in line for line in printed))
+    def test_what_is_redacted(self):
+        """The model may name zephyr.lan as zephyr, and the output goes into TESTING.md."""
         for host, said, shown in (
-                ("stormy.lan", '{"name": "localai", "on": "Stormy"}',
+                ("zephyr.lan", '{"name": "localai", "on": "Zephyr"}',
                  '{"name": "localai", "on": "{server}"}'),
-                ("stormy.lan", '{"name": "stormy"} ssh STORMY.LAN docker ps',
+                ("zephyr.lan", '{"name": "zephyr"} ssh ZEPHYR.LAN docker ps',
                  '{"name": "{server}"} ssh {server} docker ps'),
                 ("box.tail1234.ts.net", '{"on": "box"} box.tail1234 tail1234.ts.net',
                  '{"on": "{server}"} {server}.{server} {server}.ts.net'),
@@ -529,8 +525,14 @@ class RoutingCases(unittest.TestCase):
                 # A label of more than one word, as the model may write it.
                 ("jeff-nas.lan", '{"on": "jeff nas"} Jeff-NAS JeffNAS jeff_nas, my nas',
                  '{"on": "{server}"} {server} {server} {server}, my nas'),
-                ("stormy-box.lan", '{"on": "StormyBox"} stormy box, Stormy',
+                ("zephyr-box.lan", '{"on": "ZephyrBox"} zephyr box, Zephyr',
                  '{"on": "{server}"} {server}, {server}'),
+                # A long word split by the model, but not a short or generic one.
+                ("zephyrbox.lan", "my zephyr box, Zephyr-Box, zephyr_box. zephyrboxes",
+                 "my {server}, {server}, {server}. zephyrboxes"),
+                ("zephyrbox-kitchen.lan", "zephyr box kitchen, kit chen, Zephyrbox.Kitchen",
+                 "{server}, {server}, {server}"),
+                ("pi.lan", "p i on pi", "p i on {server}"),
                 ("alice-nas.lan", '"on": "alice nas" Alice NAS alicenas alice jeff',
                  '"on": "{server}" {server} {server} {server} jeff'),
                 # Every label of three letters or more, but no generic one.
@@ -540,6 +542,35 @@ class RoutingCases(unittest.TestCase):
                 ("home-server.lan", "my home server, home-server", "my home server, {server}")):
             with self.subTest(host):
                 self.assertEqual(eval_config.redacted(said, host), shown)
+
+    def test_what_is_printed_names_no_server(self):
+        """eval_routing itself, with a stand-in for the model that names the server in every
+        spelling it might, the case text filled in, and no network."""
+        calls = []
+
+        async def first_tool(text):
+            calls.append(text)
+            spelled = SPELLINGS[len(calls) % len(SPELLINGS)]
+            if len(calls) % 3 == 0:
+                return None, f"I think {spelled} is fine. {text}"
+            return "system_running", json.dumps({"name": "localai", "on": f"my {spelled}",
+                                                 "text": text})
+        printed, space = _run_routing(first_tool)
+        self.assertGreater(len(calls), 150)
+        self.assertTrue(any(ROUTED_HOST in text for text in calls), "the cases were filled in")
+        self.assertGreater(printed.count("{server}"), 100)
+        self.assertIsNone(re.search(r"zephyr|kitchen", printed, re.I),
+                          [line for line in printed.splitlines()
+                           if re.search(r"zephyr|kitchen", line, re.I)][:5])
+        self.assertFalse(space["SERVER_IS_HERE"])
+
+    def test_a_connection_that_fails_names_no_server_either(self):
+        async def first_tool(text):
+            raise ConnectionRefusedError(f"Connect call failed ('{ROUTED_HOST}', 8080)")
+        with self.assertRaises(SystemExit) as raised:
+            _run_routing(first_tool)
+        self.assertEqual(str(raised.exception.code),
+                         "The model server didn't answer (ConnectionRefusedError).")
 
     def test_a_run_whose_server_is_this_computer_leaves_the_server_cases_out(self):
         """_server_host drops a local host, so they could never be judged right."""
@@ -553,6 +584,45 @@ class RoutingCases(unittest.TestCase):
         text = "Send the photo from yesterday to my phone"
         self.assertNotIn(text, self.cases("RECIPE_CASES"))
         self.assertEqual(self.cases("CASES")[text], {"file_find", "phone_send", "task_run"})
+
+
+ROUTED_HOST = "zephyrbox-kitchen.lan"      # made up
+SPELLINGS = (ROUTED_HOST, ROUTED_HOST.upper(), "zephyrbox-kitchen", "zephyrbox kitchen",
+             "ZephyrboxKitchen", "zephyrbox", "Zephyrbox.Kitchen", "zephyrbox_kitchen", "kitchen",
+             f"{ROUTED_HOST}:8080", f"ssh://{ROUTED_HOST}", "zephyr box", "Zephyr-Box kitchen",
+             "zephyr box kitchen")
+
+
+class _Settings:
+    """Settings that are never read from a file: the server comes with the run."""
+    def __init__(self):
+        self.values = dict(DEFAULTS)
+
+    def __getitem__(self, key):
+        return self.values[key]
+
+
+def _run_routing(first_tool) -> tuple[str, dict]:
+    """tools/eval_routing.py, run once a case with first_tool as the model, and what it printed.
+    websockets is a stand-in that can't connect, and Settings are never read."""
+    path = ROOT / "tools" / "eval_routing.py"
+    tree = ast.parse(path.read_text())
+    tree.body = [node for node in tree.body if ast.unparse(node) != "run()"]
+    offline_socket = types.SimpleNamespace(
+        connect=mock.Mock(side_effect=AssertionError("the network was reached")),
+        WebSocketException=type("WebSocketException", (Exception,), {}))
+    space = {"__name__": "eval_routing", "__file__": str(path)}
+    printed = io.StringIO()
+    with patch.dict("os.environ", {"TUXISTANT_SERVER": f"{ROUTED_HOST}:8080",
+                                   "TUX_EVAL_HOME": "", "TUX_EVAL_RECIPES": ""}), \
+            patch.dict(sys.modules, {"websockets": offline_socket}), \
+            patch.object(sys, "argv", ["eval_routing.py", "1"]), \
+            patch.object(sys, "path", list(sys.path)), \
+            patch("tuxistant.config.Config", _Settings), contextlib.redirect_stdout(printed):
+        exec(compile(tree, str(path), "exec"), space)
+        space["first_tool"] = first_tool
+        space["run"]()
+    return printed.getvalue(), space
 
 
 class LiveCutoff(unittest.IsolatedAsyncioTestCase):

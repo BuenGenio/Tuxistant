@@ -110,8 +110,6 @@ FACTS = {"uptime": _uptime, "ip": _ip, "memory": _memory, "cpu": _cpu, "battery"
 HERE = {"this", "my", "the", "our", "own", "here", "local", "localhost", "computer", "desktop",
         "laptop", "pc", "machine", "system", "device"}
 NOTHING = ("", "true", "false", "none", "null")
-# Before the server's name in on or name, as in "my nas" or "the pi".
-POSSESSIVES = {"my", "our", "your", "the", "own"}
 ONLY_TWO = "I can only check this computer and the server in Settings."
 
 
@@ -143,11 +141,11 @@ def _words(text: str) -> set[str]:
 
 
 def _names_the_server(said: str, config) -> bool:
-    """The server's name, or its first label, as stormy for stormy.lan, with my or the before
-    it and in any spelling: "my nas" for nas.lan, "stormy nas" for stormy-nas.lan."""
+    """The server's name, or its first label, as zephyr for zephyr.lan, with my, home or server
+    around it and in any spelling: "my home nas" for nas.lan, "zephyr nas" for zephyr-nas.lan.
+    An address only as itself."""
     host = _server_host(config)
-    rest = " ".join(w for w in re.findall(r"[a-z0-9]+", said) if w not in POSSESSIVES)
-    return bool(host) and serverstatus.is_own_name(rest, host)
+    return bool(host) and serverstatus.names_host(said, host)
 
 
 def _here(on: str) -> bool:
@@ -170,9 +168,8 @@ def _maybe_another(args: dict, config) -> bool:
     """An on with more in it than your server, as "my work server": it may mean another one,
     so the answer names the one in Settings."""
     on = _said(args.get("on"))
-    rest = [w for w in re.findall(r"[a-z0-9]+", on)
-            if w not in POSSESSIVES | serverstatus.SERVER_WORDS | {"home"}]
-    return on not in NOTHING and bool(rest) and not _names_the_server(" ".join(rest), config)
+    rest = _words(on) - serverstatus.AROUND_A_HOST
+    return on not in NOTHING and bool(rest) and not _names_the_server(on, config)
 
 
 def _whole_list(name: str) -> bool:
@@ -208,7 +205,8 @@ def _on_the_server(args: dict, config, session, missed_here: str | None = None) 
 
 def _any_dashes(name: str) -> str:
     """A pattern for pgrep that takes name with or without - or _ between its letters, as the
-    model says localai for the local-ai that LocalAI's compose file runs."""
+    model says localai for the local-ai process that LocalAI's image runs. systemctl takes only
+    the exact name of a unit."""
     letters = [re.sub(r"([.+])", r"\\\1", c) for c in name if c not in "-_"]
     return "[-_]?".join(letters)
 
@@ -231,10 +229,13 @@ def running(args: dict, config, session=None) -> dict:
     if not SERVICE_NAME.fullmatch(name):
         if _named_server(args, config):     # such as fd00::5, which no program here is called
             return _on_the_server(args, config, session)
+        if not _here(on):
+            raise ValueError(ONLY_TWO)      # and nothing was looked at here
         raise ValueError("Say which program or service to check.")
     found = _here_by_name(name)
     if not found and _named_server(args, config):
-        # a label such as plex may be a program after all, but not a host with a dot
+        # A label such as plex, or docker for docker.lan, may be a program after all, so the
+        # answer says it isn't here. A host with a dot or an address is no program's name.
         return _on_the_server(args, config, session, None if "." in name else name)
     if not _here(on):
         # Another computer, which can't be asked: a plain yes or no would be about the wrong

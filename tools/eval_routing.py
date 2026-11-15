@@ -46,7 +46,8 @@ KEY = cfg["api_key"]
 SERVER_HOST = host_of(cfg["server"]) or "myserver.example"
 # And {label}, its first label, as people say "my nas" for nas.lan.
 SERVER_LABEL = SERVER_HOST if is_address(SERVER_HOST) else SERVER_HOST.partition(".")[0]
-# A server on this computer is no server to ask over ssh, so its cases can never be right.
+# A server the handler takes for this computer is looked at here, never over ssh, so its cases
+# can never be right. One named by this computer's LAN address is asked over ssh, as by Tux.
 SERVER_IS_HERE = is_local(SERVER_HOST)
 HOME = os.environ.get("TUX_EVAL_HOME") == "1"
 RECIPES = os.environ.get("TUX_EVAL_RECIPES") == "1"
@@ -429,4 +430,13 @@ async def main():
         print("BAD" if misses else "ok ", text[:52].ljust(52), f"{REPS - len(misses)}/{REPS}", redacted(misses[0], SERVER_HOST)[:70] if misses else "")
     print(f"{known}/{asked} facts answered")
 
-asyncio.run(main())
+
+def run():
+    """Why a connection failed names the server, so only the kind of failure is said."""
+    try:
+        asyncio.run(main())
+    except (OSError, TimeoutError, websockets.WebSocketException) as error:
+        sys.exit(f"The model server didn't answer ({type(error).__name__}).")
+
+
+run()
