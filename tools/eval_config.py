@@ -15,6 +15,7 @@ not caught.
 import atexit
 import ipaddress
 import os
+import re
 import shutil
 import socket
 import sys
@@ -22,6 +23,7 @@ import tempfile
 from pathlib import Path
 
 from tuxistant.config import DEFAULTS, clean_server
+from tuxistant.serverstatus import is_address, own_names
 from tuxistant.webfetch import this_computer
 
 ENV = "TUXISTANT_SERVER"
@@ -33,6 +35,24 @@ LOCAL_NAMES = {"localhost", "localhost.localdomain", "localhost4", "localhost6",
 
 
 RECIPES = Path(__file__).resolve().parent.parent / "tests" / "recipes"
+# Labels of a host that say nothing about whose server it is.
+GENERIC_LABELS = {"local", "localdomain", "home", "arpa", "internal", "intranet", "private",
+                  "example", "test", "invalid"}
+
+
+def redacted(text: str, host: str, placeholder: str = "{server}") -> str:
+    """text with the server's host, its first label and any other telling label of it in place
+    of placeholder, in any case: the model may call stormy.lan stormy, and what is printed goes
+    into public notes. The longest first and only as a whole word, so a short label leaves other
+    words alone."""
+    names = own_names(host)
+    if not is_address(host):
+        names |= {label for label in host.casefold().split(".")
+                  if len(label) > 3 and label not in GENERIC_LABELS}
+    for name in sorted(names, key=len, reverse=True):
+        text = re.sub(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", placeholder, text,
+                      flags=re.I)
+    return text
 
 
 def eval_skills() -> Path:

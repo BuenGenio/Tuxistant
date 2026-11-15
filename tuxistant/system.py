@@ -106,42 +106,84 @@ FACTS = {"uptime": _uptime, "ip": _ip, "memory": _memory, "cpu": _cpu, "battery"
          "wifi": _wifi, "busiest": _busiest, "os": _os}
 
 
-SERVER_WORDS = ("server", "my server", "the server", "your server")
-HERE_WORDS = ("", "this computer", "my computer", "the computer", "here", "this", "local",
-              "localhost", "this laptop", "my laptop", "this machine", "this pc")
+# Words for this computer in "on", which the model fills in even when nobody named one.
+HERE = {"this", "my", "the", "our", "own", "here", "local", "localhost", "computer", "desktop",
+        "laptop", "pc", "machine", "system", "device"}
+NOTHING = ("", "true", "false", "none", "null")
 ONLY_TWO = "I can only check this computer and the server in Settings."
+
+
+def _settings_host(config) -> str | None:
+    try:
+        return serverstatus.host_of(config["server"]) if config is not None else None
+    except (TypeError, KeyError):
+        return None
 
 
 def _server_host(config) -> str | None:
     """The host of the server in Settings, when it is another computer."""
-    try:
-        host = serverstatus.host_of(config["server"]) if config is not None else None
-    except (TypeError, KeyError):
-        return None
+    host = _settings_host(config)
     return None if not host or serverstatus.is_local(host) else host.casefold()
+
+
+def _server_is_here(config) -> bool:
+    """The server in Settings is this computer, as when LocalAI runs here."""
+    host = _settings_host(config)
+    return bool(host) and serverstatus.is_local(host)
 
 
 def _said(value) -> str:
     return " ".join(str(value or "").split()).casefold()
 
 
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", text))
+
+
 def _names_the_server(name: str, config) -> bool:
     """The server's name, or its first label, as stormy for stormy.lan."""
     host = _server_host(config)
-    return bool(host) and name in (host, host.partition(".")[0])
+    return bool(host) and name in serverstatus.own_names(host)
+
+
+def _here(on: str) -> bool:
+    """An on that means this computer: none, "my laptop", "localhost", this computer's name."""
+    return (on in NOTHING or serverstatus.is_local(on)
+            or bool(_words(on)) and _words(on) <= HERE)
 
 
 def on_server(args: dict, config) -> bool:
-    """Asked about the server outright: by on, or by "server" as the name."""
+    """Asked about the server outright: by an on with "server" in it, such as my home server or
+    the servers, or the server's name, or by "server" with only words like these as the name.
+    The model copies on as it heard it, so "my minecraft server" counts too."""
     on, name = _said(args.get("on")), _said(args.get("name"))
-    return on in SERVER_WORDS or name in SERVER_WORDS or _names_the_server(on, config)
+    return (bool(_words(on) & serverstatus.SERVER_WORDS) or serverstatus.names_a_server(name)
+            or _names_the_server(on, config))
+
+
+def _whole_list(name: str) -> bool:
+    """Nothing in particular, such as "server" or "containers". docker alone is a program."""
+    return serverstatus.asks_for_all(name) and name not in ("docker", "ssh", "systemd")
+
+
+def _from_the_server(args: dict, config) -> bool:
+    """on_server, unless the server in Settings is this computer: then a name is looked for
+    here, which is the same machine, and only the whole list goes to serverstatus to be said
+    it can't be had."""
+    return on_server(args, config) and (not _server_is_here(config)
+                                        or _whole_list(_said(args.get("name"))))
+
+
+def _named_server(args: dict, config) -> bool:
+    """The server named as the name, as the model does as often as in on, but only with no on:
+    "on this computer" means here, even on a server called plex."""
+    return _said(args.get("on")) in NOTHING and _names_the_server(_said(args.get("name")), config)
 
 
 def about_server(args: dict, config) -> bool:
-    """Whether running() answers from the server, when nothing here has the name: as above, or
-    the server named, as the model names it in "name" as often as in "on". Named, it is looked
-    for here first, as a server called docker.lan or plex is named like a program."""
-    return on_server(args, config) or _names_the_server(_said(args.get("name")), config)
+    """Whether running() answers from the server, when nothing here has the name. Named, it is
+    looked for here first, as a server called docker.lan or plex is named like a program."""
+    return _from_the_server(args, config) or _named_server(args, config)
 
 
 def _on_the_server(args: dict, config, session) -> dict:
@@ -149,23 +191,32 @@ def _on_the_server(args: dict, config, session) -> dict:
     return serverstatus.running(args, config, session if session is not None else Session())
 
 
+def _here_by_name(name: str) -> bool:
+    active = any(_tool("systemctl", *scope, "is-active", "--", name).strip() == "active"
+                 for scope in ([], ["--user"]))
+    return active or bool(_tool("pgrep", "-i", "-x", "--", name).strip())
+
+
 def running(args: dict, config, session=None) -> dict:
     """Whether a service or program is up, here or on the server. Here, a name goes no further
     than these two read-only tools, and this needs the real system, which the shell sandbox
     hides."""
+    if _from_the_server(args, config):
+        return _on_the_server(args, config, session)
+    name, on = _said(args.get("name")), _said(args.get("on"))
     if on_server(args, config):
-        return _on_the_server(args, config, session)
-    name = _said(args.get("name"))
+        on = ""         # the server in Settings is this computer
     if not SERVICE_NAME.fullmatch(name):
+        if _named_server(args, config):     # such as fd00::5, which no program here is called
+            return _on_the_server(args, config, session)
         raise ValueError("Say which program or service to check.")
-    active = any(_tool("systemctl", *scope, "is-active", "--", name).strip() == "active"
-                 for scope in ([], ["--user"]))
-    found = active or bool(_tool("pgrep", "-i", "-x", "--", name).strip())
-    if not found and _names_the_server(name, config):
+    found = _here_by_name(name)
+    if not found and _named_server(args, config):
         return _on_the_server(args, config, session)
-    if not found and _said(args.get("on")) not in HERE_WORDS:
-        # another computer, which can't be asked: a plain no would be about the wrong one
-        raise ValueError(f"{ONLY_TWO} Nothing called {name} is running on this computer.")
+    if not _here(on):
+        # another computer, which can't be asked: a plain yes or no would be about the wrong one
+        raise ValueError(f"{ONLY_TWO} On this computer, {name} is running." if found else
+                         f"{ONLY_TWO} Nothing called {name} is running on this computer.")
     return {"name": name, "running": found}
 
 

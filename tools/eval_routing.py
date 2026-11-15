@@ -33,9 +33,9 @@ import websockets
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from tools.eval_config import eval_skills, evaluation_server
+from tools.eval_config import eval_skills, evaluation_server, redacted
 from tuxistant.config import Config, DEFAULTS
-from tuxistant.serverstatus import host_of
+from tuxistant.serverstatus import host_of, is_local
 from tuxistant.system import about_server
 from tuxistant.skillhost import offline
 
@@ -44,6 +44,8 @@ evaluation_server(cfg)
 KEY = cfg["api_key"]
 # Said in the cases in place of {server}, and never printed: the results show the placeholder.
 SERVER_HOST = host_of(cfg["server"]) or "myserver.example"
+# A server on this computer is no server to ask over ssh, so its cases can never be right.
+SERVER_IS_HERE = is_local(SERVER_HOST)
 HOME = os.environ.get("TUX_EVAL_HOME") == "1"
 RECIPES = os.environ.get("TUX_EVAL_RECIPES") == "1"
 MAIL = os.environ.get("TUX_EVAL_MAIL", "1") == "1"
@@ -93,6 +95,10 @@ CASES = [
     ("Which services are running on {server}?", {"system_running@server"}),
     ("What's running on my server?", {"system_running@server"}),
     ("Is LocalAI running on {server}?", {"system_running@server"}),
+    # How most people name this machine, which the model copies into on word for word.
+    ("Is LocalAI running on my home server?", {"system_running@server"}),
+    # Local, though they say server: an on of "server" here would go over ssh.
+    ("Is the Plex server running?", {"system_running"}),
     # A command asked for word for word may go to the shell, which shows it on a card.
     ("Run ssh {server} docker ps", {"system_running@server", "shell_run"}),
     ("Install VLC", {"shell_run"}),
@@ -371,7 +377,7 @@ async def first_tool(text):
 async def main():
     print(len(skills.tools()), "tools:", ", ".join(t["name"] for t in skills.tools()))
     print("tool list size:", len(json.dumps(skills.tools())), "characters")
-    right = total = 0
+    right = total = skipped = 0
     started = time.monotonic()
     for text, wanted in CASES + (HOME_CASES if HOME else []) + (RECIPE_CASES if RECIPES else []):
         if ONLY and ONLY.lower() not in text.lower():
@@ -386,6 +392,9 @@ async def main():
             wanted = wanted - (SWITCHED - OFFERED)
             if not wanted:
                 continue    # its tool is off in this setup
+        if SERVER_IS_HERE and wanted and "system_running@server" in wanted:
+            skipped += 1
+            continue
         seen = collections.Counter()
         sample = ""
         for _ in range(REPS):
@@ -396,9 +405,11 @@ async def main():
             right += ok
             total += 1
             if name and name != "ERROR" and not sample:
-                sample = re.sub(re.escape(SERVER_HOST), "{server}", args, flags=re.I)[:90]
+                sample = redacted(args, SERVER_HOST)[:90]
         mark = "ok " if ((wanted is None and set(seen) == {None}) or (wanted and set(seen) <= wanted)) else "BAD"
         print(mark, text[:52].ljust(52), dict(seen), sample)
+    if skipped:
+        print(f"{skipped} cases about your server left out: the server for this run is this computer")
     print(f"{right}/{total} right, {(time.monotonic() - started) / max(total, 1):.1f} s each")
     known = asked = 0
     for text, answer in FACTS + (HOME_FACTS if HOME else []):
@@ -409,7 +420,7 @@ async def main():
                   if name != "knowledge_answer" and (name or not re.search(answer, said, re.I))]
         known += REPS - len(misses)
         asked += REPS
-        print("BAD" if misses else "ok ", text[:52].ljust(52), f"{REPS - len(misses)}/{REPS}", misses[0][:70] if misses else "")
+        print("BAD" if misses else "ok ", text[:52].ljust(52), f"{REPS - len(misses)}/{REPS}", redacted(misses[0], SERVER_HOST)[:70] if misses else "")
     print(f"{known}/{asked} facts answered")
 
 asyncio.run(main())

@@ -21,10 +21,10 @@ from tools import eval_config
 from tools.eval_config import Refused, evaluation_server, on_this_computer, run_server
 from tools.eval_cutoffs import ACTIONS, install, owner, stand_ins
 from tests.test_realtime_live import CountingSkills
-from tuxistant import (apps, calendars, homeassistant, mail, mcp, media, phone, timers,
-                       webfetch)
+from tuxistant import (apps, calendars, homeassistant, mail, mcp, media, phone, serverstatus,
+                       system, timers, webfetch)
 from tuxistant.config import DEFAULTS, Config
-from tuxistant.gate import Session
+from tuxistant.gate import APP_SAYS, Session
 from tuxistant.skillhost import BUNDLED, Offline
 from tuxistant.skills import HANDLERS
 
@@ -398,10 +398,23 @@ class EveryActionIsCutOff(unittest.TestCase):
             listed = apps._installed()
             self.assertTrue(listed and all(app.path.startswith("/eval/") for app in listed))
             self.assertEqual(apps._default_for("https"), "firefox.desktop")
+            self.assertIs(serverstatus._run, eval_cutoffs._made_up_ssh)
             printed = io.StringIO()
             with contextlib.redirect_stdout(printed):
                 self.assertTrue(apps._launch("/eval/applications/firefox.desktop"))
             self.assertIn("(would open firefox.desktop)", printed.getvalue())
+
+    def test_no_evaluation_reaches_your_server(self):
+        """system.running on the server has no card, so it would really run: ssh is never
+        started, whatever server the evaluation has."""
+        config = {**DEFAULTS, "server": "real.example:8080"}
+        session = Session()
+        with install(), contextlib.redirect_stdout(io.StringIO()), \
+                patch("subprocess.Popen", side_effect=AssertionError("ssh was started")):
+            result = system.running({"name": "localai", "on": "server"}, config, session)
+        self.assertEqual(result, {APP_SAYS: True})
+        self.assertEqual([said.text for said in session.after],
+                         ["Yes, on your server I see the docker container localai, up 3 days."])
 
     def test_eval_flows_installs_them_first_and_leaves_them_alone(self):
         """Read and never imported, as importing it would run it."""
@@ -462,6 +475,42 @@ class RoutingCases(unittest.TestCase):
             if isinstance(node, ast.Assign) and node.targets[0].id == name:
                 return dict(ast.literal_eval(node.value))
         raise AssertionError(name)
+
+    def test_your_server_by_the_words_people_use_and_a_local_server_by_name(self):
+        cases = self.cases("CASES")
+        self.assertEqual(cases["Is LocalAI running on my home server?"], {"system_running@server"})
+        self.assertEqual(cases["Is the Plex server running?"], {"system_running"})
+
+    def test_what_is_printed_names_no_server(self):
+        """The model may name stormy.lan as stormy, and the output goes into TESTING.md."""
+        tree = ast.parse((ROOT / "tools" / "eval_routing.py").read_text())
+        samples = [ast.unparse(node.value) for node in ast.walk(tree)
+                   if isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "sample"]
+        self.assertEqual(samples, ["''", "redacted(args, SERVER_HOST)[:90]"])
+        printed = [ast.unparse(node) for node in ast.walk(tree)
+                   if isinstance(node, ast.Call) and ast.unparse(node.func) == "print"]
+        self.assertTrue(any("redacted(misses[0], SERVER_HOST)" in line for line in printed))
+        for host, said, shown in (
+                ("stormy.lan", '{"name": "localai", "on": "Stormy"}',
+                 '{"name": "localai", "on": "{server}"}'),
+                ("stormy.lan", '{"name": "stormy"} ssh STORMY.LAN docker ps',
+                 '{"name": "{server}"} ssh {server} docker ps'),
+                ("box.tail1234.ts.net", '{"on": "box"} box.tail1234 tail1234.ts.net',
+                 '{"on": "{server}"} {server}.{server} {server}.ts.net'),
+                ("pi.lan", "the pi server, pin and spice on pi.lan.",
+                 "the {server} server, pin and spice on {server}."),
+                ("10.0.0.5", '{"name": "10.0.0.5"} on 10 servers',
+                 '{"name": "{server}"} on 10 servers'),
+                ("nas.home.arpa", "my home nas", "my home {server}")):
+            with self.subTest(host):
+                self.assertEqual(eval_config.redacted(said, host), shown)
+
+    def test_a_run_whose_server_is_this_computer_leaves_the_server_cases_out(self):
+        """_server_host drops a local host, so they could never be judged right."""
+        source = ast.unparse(ast.parse((ROOT / "tools" / "eval_routing.py").read_text()))
+        self.assertIn("SERVER_IS_HERE = is_local(SERVER_HOST)", source)
+        self.assertIn("if SERVER_IS_HERE and wanted and ('system_running@server' in wanted):\n"
+                      "            skipped += 1\n            continue", source)
 
     def test_sending_a_photo_is_asked_in_every_setup_and_never_trashes(self):
         """It went to file_trash with or without recipes, so it can't wait for TUX_EVAL_RECIPES."""
