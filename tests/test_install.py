@@ -833,6 +833,39 @@ class Docs(unittest.TestCase):
                 self.assertIn(source, reads, "name a source this test knows")
                 self.assertTrue(skills.reads_private(actions[reads[source]]["permissions"]))
 
+    def test_every_statement_of_the_click_rule_names_the_mail_exception(self):
+        """Mail declares no network, yet through Online Accounts a question's words go to each
+        account's mail server with no card, even after something private was read. Until the
+        owner settles that, each place that states the rule says so, and the README names the
+        mail server among the services that get your words."""
+        import yaml
+        from tuxistant import skills
+        manifest = yaml.safe_load((ROOT / "tuxistant/skills_builtin/mail.yaml").read_text())
+        if skills.leaves_home(manifest["permissions"]):
+            self.skipTest("mail shows the card now, so there is no exception to name")
+        readme = (ROOT / "README.md").read_text()
+        security = (ROOT / "docs/SECURITY.md").read_text()
+        skills_md = (ROOT / "docs/SKILLS.md").read_text()
+        roadmap = (ROOT / "docs/ROADMAP.md").read_text()
+        statements = {
+            "README privacy": next(line for line in readme.splitlines()
+                                   if line.startswith("- Once a conversation has read")),
+            "README table": next(line for line in readme.splitlines()
+                                 if line.startswith("| Private data can't leave")),
+            "SECURITY": next(line for line in security.splitlines()
+                             if line.startswith("- After private data has been read")),
+            "SKILLS": next(line for line in skills_md.splitlines()
+                           if line.startswith("- **Private data leaving.**")),
+            "ROADMAP": next(line for line in roadmap.splitlines()
+                            if line.startswith("- **After private data is read")),
+        }
+        for where, line in statements.items():
+            with self.subTest(where):
+                self.assertIn("Online Accounts", line)
+                self.assertIn("each connected mail account's own server", line)
+        services = readme.split("only the words below", 1)[1].split("\n- ", 1)[0]
+        self.assertIn("Online Accounts", services)
+
     def test_the_security_table_gives_each_protection_one_status(self):
         readme = (ROOT / "README.md").read_text()
         table = readme.split("| Protection | Status |\n", 1)[1].split("\n\n", 1)[0]

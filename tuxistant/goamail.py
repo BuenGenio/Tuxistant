@@ -15,9 +15,11 @@ accounts alone.
 
 The server does the searching, so a mailbox is never downloaded. Mailboxes are opened read-only,
 mail is read without marking it read, and of each mail only its sender, its subject and the start
-of its text are fetched, for at most 40 mails a mailbox. Only the inbox, or Gmail's All Mail, and
-the Sent folder are searched: never Junk, Trash or Drafts. A server's answers are cut off past
-what was asked for, and the whole search past its time.
+of its text are fetched, for at most 40 mails a mailbox, with the sender line of a few older mails
+to see who wrote before. Only the inbox, or Gmail's All Mail, and the Sent folder are searched:
+never Junk, Trash or Drafts. A server's answers are cut off past what was asked for, and the
+whole search past its time. Whatever goes wrong, what is said is Tux's own sentence, never an
+error's text, which can be a stranger's (see _search).
 
 When a sender first wrote is the date the server took their first mail in, not the date on the
 mail, which its sender wrote.
@@ -95,7 +97,11 @@ NEVER_OPENED = {b"\\noselect", b"\\nonexistent", b"\\junk", b"\\trash", b"\\draf
 TOKEN = re.compile(rb'"(?:[^"\\]|\\.)*"|[^\s()"]+')
 SECTION = re.compile(rb"BODY\[(TEXT|HEADER\.FIELDS \([^)]*\))\](?:<\d+>)? \{\d+\}$", re.I)
 INTERNAL = re.compile(r'"\s?(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d\d):(\d\d):(\d\d) ([+-])(\d\d)(\d\d)"')
-SKIPPED_HTML = re.compile(r"(?is)<(script|style|head)\b.*?</\1\s*>")
+# An element whose text is never read, and its closer. A lazy match from each opener to its
+# closer read on to the end of the text for every opener that never closed: a 16 KB part of
+# "<head " took two seconds, holding the event loop, so each is looked for once (see _skipped).
+SKIPPED_HTML = re.compile(r"(?i)<(script|style|head)\b")
+CLOSER = {name: re.compile(rf"(?i)</{name}\s*>") for name in ("script", "style", "head")}
 BREAK = re.compile(r"(?i)<br\s*/?>|</(?:p|div|tr|li|h\d|table|blockquote)\s*>")
 TAG = re.compile(r"<[^>]*>")
 
@@ -193,12 +199,14 @@ async def _sign_ins(until: float) -> tuple[list[tuple[Account, str]], str]:
                 usable.append((account, token))
             elif isinstance(token, Unusable):
                 failed.append(str(token))
-            elif isinstance(token, GOA_FAILED):
+            elif isinstance(token, Exception):
                 failed.append(NO_ANSWER)    # the account is there: it is no "no mail here"
             else:
                 raise token
     except (Unusable, *GOA_FAILED):
         pass    # no Online Accounts on this desktop
+    except Exception:
+        failed.append(NO_ANSWER)    # never an error's own text: see _search
     finally:
         bus.disconnect()
     return usable, next(iter([*failed, *problems]), "")
@@ -227,13 +235,25 @@ class _Bounded:
     asked for. A literal is read whole by imaplib, so its size is checked first."""
 
     def _limit(self, until: float) -> None:
-        self.until, self.taken, self._cutter = until, 0, None
+        self.until, self.taken, self._cutter, self.addresses = until, 0, None, []
 
     def open(self, host, port, timeout):
+        self.addresses = _addresses(host, port, self.until)
         super().open(host, port, max(0.1, min(timeout, self.until - time.monotonic())))
         self._cutter = threading.Timer(max(0, self.until - time.monotonic()), self._cut)
         self._cutter.daemon = True
         self._cutter.start()
+
+    def _tcp(self, timeout) -> socket.socket:
+        """socket.create_connection's, to each address looked up in time in turn."""
+        failed = OSError("no address")
+        for address in self.addresses:
+            try:
+                return socket.create_connection(
+                    (address, self.port), max(0.1, min(timeout, self.until - time.monotonic())))
+            except OSError as e:
+                failed = e
+        raise failed
 
     def _cut(self) -> None:
         try:
@@ -263,10 +283,36 @@ class _Bounded:
         super().shutdown()
 
 
+def _addresses(host: str, port: int, until: float) -> list[str]:
+    """The host's addresses, looked up in a thread of their own that is given up on at until.
+    socket.create_connection looks a name up before its own timeout starts, so a resolver that
+    never answers would hold the search's thread, and the token with it, past the search's
+    time. The thread given up on holds only the host's name."""
+    found = []
+
+    def look_up():
+        try:
+            found.append([info[4][0] for info in socket.getaddrinfo(
+                host, port, type=socket.SOCK_STREAM) if isinstance(info[4][0], str)])
+        except (OSError, UnicodeError, ValueError):
+            found.append([])
+
+    thread = threading.Thread(target=look_up, daemon=True)
+    thread.start()
+    thread.join(max(0, min(CONNECT_S, until - time.monotonic())))
+    if not found or not found[0]:
+        raise OSError("no address in time")
+    return list(dict.fromkeys(found[0]))
+
+
 class _Tls(_Bounded, imaplib.IMAP4_SSL):
     def __init__(self, host, port, until):
         self._limit(until)
         super().__init__(host, port, ssl_context=_context(), timeout=CONNECT_S)
+
+    def _create_socket(self, timeout):
+        """The address looked up, and the certificate checked against the host's name."""
+        return self.ssl_context.wrap_socket(self._tcp(timeout), server_hostname=self.host)
 
 
 class _Plain(_Bounded, imaplib.IMAP4):
@@ -275,6 +321,9 @@ class _Plain(_Bounded, imaplib.IMAP4):
     def __init__(self, host, port, until):
         self._limit(until)
         super().__init__(host, port, timeout=CONNECT_S)
+
+    def _create_socket(self, timeout):
+        return self._tcp(timeout)
 
     heard = None    # the lines read while STARTTLS is asked for
 
@@ -321,7 +370,7 @@ def _signed_in(account: Account, token: str, until: float) -> imaplib.IMAP4:
             imap = _Tls(account.host, account.port, until)
     except ssl.SSLCertVerificationError:
         raise Unusable(BAD_CERTIFICATE) from None
-    except (OSError, imaplib.IMAP4.error, ValueError):
+    except Exception:   # a server's own words never leave here: see _search
         raise Unusable(UNREACHABLE) from None
     said = [f"user={account.user}\x01auth=Bearer {token}\x01\x01".encode()]
     try:
@@ -330,13 +379,11 @@ def _signed_in(account: Account, token: str, until: float) -> imaplib.IMAP4:
         imap.authenticate("XOAUTH2", lambda _challenge: said.pop() if said else None)
     except BaseException as e:
         imap.shutdown()
-        if isinstance(e, Unusable):
+        if isinstance(e, Unusable) or not isinstance(e, Exception):
             raise
         if isinstance(e, (OSError, imaplib.IMAP4.abort)):
             raise Unusable(UNREACHABLE) from None
-        if isinstance(e, imaplib.IMAP4.error):
-            raise Unusable(REFUSED) from None
-        raise
+        raise Unusable(REFUSED) from None
     return imap
 
 
@@ -495,10 +542,13 @@ def _author(message) -> str:
 
 
 def _subject(message) -> str:
+    """The subject decoded, or as it came if it can't be. An encoded word whose charset name
+    isn't ASCII raises a CharsetError that carries the name, which is the sender's own text: see
+    _search."""
     raw = _flat(message.get("Subject"))
     try:
         return _flat(email.header.make_header(email.header.decode_header(raw)))
-    except (ValueError, LookupError, UnicodeError, email.errors.HeaderParseError):
+    except (ValueError, LookupError, UnicodeError, email.errors.MessageError):
         return raw
 
 
@@ -519,8 +569,34 @@ def _decoded(part) -> str:
 
 
 def _unhtml(text: str) -> str:
-    text = TAG.sub(" ", BREAK.sub("\n", SKIPPED_HTML.sub(" ", text)))
+    text = _untagged(BREAK.sub("\n", _skipped(text)))
     return "\n".join(" ".join(line.split()) for line in html.unescape(text).splitlines())
+
+
+def _skipped(text: str) -> str:
+    """HTML without its scripts, styles and head, each to its first closer, in one pass. An
+    opener with no closer after it stays, and its name is looked for no more: no closer comes
+    after a later one either. So each closer is looked for over any part of the text at most
+    once, where a lazy match read on to the end from every opener."""
+    out, at, start, unclosed = [], 0, 0, set()
+    while opener := SKIPPED_HTML.search(text, start):
+        name = opener[1].lower()
+        closer = None if name in unclosed else CLOSER[name].search(text, opener.end())
+        if closer is None:
+            unclosed.add(name)
+            start = opener.end()
+            continue
+        out += [text[at:opener.start()], " "]
+        at = start = closer.end()
+    return "".join(out) + text[at:]
+
+
+def _untagged(text: str) -> str:
+    """Tags made spaces. A "<" with no ">" after it is no tag, and looking for its end from each
+    one in turn read on to the end of the text every time, so nothing past the last ">" is
+    looked at."""
+    end = text.rfind(">") + 1
+    return TAG.sub(" ", text[:end]) + text[end:]
 
 
 def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
@@ -592,6 +668,8 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
     fetched = _fetched(data) if typ == "OK" else {}
     read = []
     for uid, every in picked:
+        if time.monotonic() > until:    # a mail can be slow to read, and this runs no further
+            break
         found = fetched.get(uid)
         message = found and _parsed(found.get(b"HEADER", b""), found.get(b"TEXT", b""))
         if message:
@@ -600,6 +678,8 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
     talking = _talking(imap, [uid for uid, *_, cut in read if cut], until)
     rows = []
     for uid, every, found, message, body, cut in read:
+        if time.monotonic() > until:
+            break
         kept = mail._kept(stems, _author(message), _subject(message), body, every,
                           _subject_cut(message, found.get(b"HEADER", b"")), cut, uid in talking)
         if kept:
@@ -641,11 +721,16 @@ def _known(imap, boxes: list[str], owners: set[str], own: str, until: float) -> 
 
 def _search(account: Account, token: str, stems: list[mail.Term], until: tuple) -> tuple:
     """(the best of one account as mail.settled gives them, what to say if it failed). Runs in
-    a thread. Out of time or cut off, what was found so far will do."""
+    a thread. Out of time or cut off, what was found so far will do, and so it does whatever else
+    went wrong. An error's own text never leaves here, as it can be a stranger's: a subject's
+    charset name came back to the voice model as the tool's error, and one such mail failed
+    every search it matched."""
     try:
         imap = _signed_in(account, token, until[1])
     except Unusable as e:
         return [], str(e)
+    except Exception:
+        return [], UNREACHABLE
     rows, scored = [], []
     try:
         boxes, sent = _boxes(imap)
@@ -656,15 +741,25 @@ def _search(account: Account, token: str, stems: list[mail.Term], until: tuple) 
         known = _known(imap, boxes, owners, account.address,
                        min(time.monotonic() + LOOKUP_S, until[1]))
         return mail.settled(scored, lambda owner: owner in known), ""
-    except (OSError, imaplib.IMAP4.error, ValueError):
-        if not scored:
-            scored = mail._ranked(rows, stems, set())
-        return mail.settled(scored, lambda _owner: False), ""
+    except Exception:
+        try:
+            return mail.settled(scored or mail._ranked(rows, stems, set()),
+                                lambda _owner: False), ""
+        except Exception:
+            return [], ""
     finally:
         try:
             imap.shutdown()
-        except OSError:
+        except Exception:
             pass
+
+
+def _outcome(result) -> tuple:
+    """One search thread's (best, what to say if it failed), with anything it raised said in
+    Tux's own words: see _search."""
+    if isinstance(result, tuple):
+        return result
+    return [], str(result) if isinstance(result, Unusable) else UNREACHABLE
 
 
 async def find(stems: list[mail.Term], deadline: float) -> list[mail.Mail]:
@@ -683,9 +778,10 @@ async def find(stems: list[mail.Term], deadline: float) -> list[mail.Mail]:
     try:
         results = await asyncio.wait_for(asyncio.gather(*(
             asyncio.to_thread(_search, account, token, stems, until)
-            for account, token in accounts)), until[1] - started + 1)
+            for account, token in accounts), return_exceptions=True), until[1] - started + 1)
     except TimeoutError:
         raise RuntimeError(UNREACHABLE) from None
+    results = [_outcome(result) for result in results]
     if all(failed for _best, failed in results):
         raise RuntimeError(results[0][1])
     best = sorted((item for found, _failed in results for item in found),

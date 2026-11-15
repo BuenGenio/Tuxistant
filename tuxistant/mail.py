@@ -218,11 +218,14 @@ PASSWORD_WORD = re.compile(
 GIVEN = re.compile(r"[^.!?\n]{0,60}?(?:\b(?i:is|are|was|will be|(?:changed|set|reset) to)\b\s*:?"
                    r"|[:=])\s*(\S{3,})")
 # What a secret looks like, next to the word for one.
+# A hyphen may stand right before or after one, as every dash is made one: "code—482913—".
 SHAPED = re.compile(
-    r"(?<![A-Za-z0-9.,/-])\d(?:[ -]?\d){3,11}(?![\w/-]|[.,]\d)"    # 482913, 482 913, 4 8 2 9 1 3
-    r"|(?<![\w@./-])(?=[\w!#$%^&*+=-]*\d)(?=[\w!#$%^&*+=-]*[A-Za-z])[\w!#$%^&*+=-]{4,24}(?![\w@])"
+    r"(?<![A-Za-z0-9.,/])\d(?:[ -]?\d){3,11}(?![\w/]|-[\w/]|[.,]\d)"  # 482913, 482 913, 4 8 2 9 1 3
+    r"|(?<![\w@./])(?=[\w!#$%^&*+=-]*\d)(?=[\w!#$%^&*+=-]*[A-Za-z])[\w!#$%^&*+=-]{4,24}(?![\w@])"
     r"|\b[A-Z]{2,6}(?:-[A-Z0-9]{2,6}){1,3}\b|\b[A-Z]{5,10}\b"     # KQW-XBT, KQWXB
-    r"|(?<![\w.,/-])(?:[A-Za-z0-9] ){3,13}[A-Za-z0-9](?![\w/-])")   # K Q 7 X 9 B
+    r"|(?<![\w.,/-])(?:[A-Za-z0-9] ){3,13}[A-Za-z0-9](?![\w/-])"   # K Q 7 X 9 B
+    r"|(?<![\w.,/-])(?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3} (?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3}"
+    r"(?![\w/]|-[\w/])")                                           # KQ7 X9B
 NOT_A_SECRET = re.compile(r"\d+(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)|(?:19|20)\d\d", re.I)
 JUST_GIVEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)      # "code is 2048" is no year
 # A mail that talks of signing in: there, any number of the right length may be the code. A space
@@ -234,14 +237,24 @@ SIGN_IN_TALK = re.compile(r"\b(?:" + "|".join(
     re.escape(word).replace(r"\ ", "[- ]?").replace(r"\*", r"\w*") for word in SIGN_IN_WORDS)
     + r")\b", re.I)
 MONEY = r"\s*(?:pounds|euros|dollars|gbp|eur|usd|%)"
-NUMBER = re.compile(r"(?<![\w.,/£$€-])\d{3}[ -]\d{3}(?![\w/-])"
-                    rf"|(?<![\w.,/£$€-])\d{{4,8}}(?![\w/-]|[.,]\d|{MONEY})"
-                    rf"|(?<![\w.,/£$€-])\d(?: \d){{3,7}}(?![\w/-]|[.,]\d|{MONEY})", re.I)
-ALONE = re.compile(      # a line that is nothing but a code
-    r"^[ \t]*+((?:\d[ -]?){4,12}"
+NUMBER = re.compile(r"(?<![\w.,/£$€])\d{3}[ -]\d{3}(?![\w/]|-[\w/])"
+                    rf"|(?<![\w.,/£$€])\d{{4,8}}(?![\w/]|-[\w/]|[.,]\d|{MONEY})"
+                    rf"|(?<![\w.,/£$€])\d(?: \d){{3,7}}(?![\w/]|-[\w/]|[.,]\d|{MONEY})", re.I)
+# A line that is nothing but a code, give or take the punctuation a template or html2text puts
+# round one: "*482913*" for a bold code, "482913." or "(KQ7X9B)".
+AROUND = r"""[ \t*_"'“”‘’()\[\]<>.,:;!]*+"""
+ALONE = re.compile(
+    rf"^{AROUND}((?:\d[ -]?){{4,12}}"
     r"|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,14}"
-    r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9])[ \t]*$",
-    re.M)
+    r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9])"
+    rf"{AROUND}$", re.M)
+# In a mail that talks of signing in, letters and digits together are hidden as numbers are:
+# "Use KQ7X9B to sign in".
+MIXED = re.compile(r"(?<![\w@./-])(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])"
+                   r"[A-Za-z0-9-]{5,14}(?![\w@/-])")
+# Every dash is a hyphen to the model, and to the hiding: a code joined by a non-breaking hyphen,
+# as templates write "482&#8209;913" to keep it on one line, is the code it is.
+MINUS = "\u2212"
 SPELT = re.compile(     # a run of lines of one character each, as one to an HTML block makes
     r"^[ \t]*[A-Za-z0-9][ \t]*(?:\n\s*[A-Za-z0-9][ \t]*){3,}$", re.M)
 # The end of a text that was cut short, read backwards: its last word, which the cut may have gone
@@ -288,6 +301,22 @@ def index_path() -> Path | None:
 
 def available() -> bool:
     return index_path() is not None
+
+
+def holds_mail() -> bool | None:
+    """Whether Thunderbird holds mail here, by the rule a search goes by (see _usable): False
+    means the accounts in Online Accounts would be searched, and None that there are indexes
+    but none of them could be read."""
+    try:
+        db = _usable()
+    except NoThunderbird:
+        return False
+    except RuntimeError:
+        return None
+    if db is None:
+        return False
+    db.close()
+    return True
 
 
 def _open(path: Path) -> sqlite3.Connection:
@@ -452,9 +481,10 @@ def _searched(author: str) -> str:
     return NO_REPLY.sub(" ", ADDRESS_END.sub(r"\1", author.removesuffix(INDEX_TAIL)))
 
 
-def _spans(text: str, talk: bool = False) -> list[tuple[int, int]]:
+def _spans(text: str, talk: bool = False, look: bool = True) -> list[tuple[int, int]]:
     """Where a secret may stand in a mail: see SECRET_WORD. talk: take it that the mail talks of
-    signing in, as one cut short may have done so past the cut."""
+    signing in, as one cut short may have done so past the cut. look: whether to look for that
+    talk here as well, which a caller that already has needn't."""
     spans = []
     for word in SECRET_WORD.finditer(text):
         start, end = word.end(), word.end() + SECRET_REACH
@@ -469,9 +499,13 @@ def _spans(text: str, talk: bool = False) -> list[tuple[int, int]]:
         for number in NUMBER.finditer(text, max(0, word.start() - SECRET_BEFORE), word.start()):
             if not YEAR.fullmatch(number[0]):
                 spans.append(number.span())
-    talk = talk or SIGN_IN_TALK.search(text)
-    found = [*(NUMBER.finditer(text) if talk else ()), *ALONE.finditer(text)]
-    spans += [one.span(one.lastindex or 0) for one in found if not YEAR.fullmatch(one[0].strip())]
+    talk = talk or (look and SIGN_IN_TALK.search(text))
+    found = [*ALONE.finditer(text)]
+    if talk:
+        found += [*NUMBER.finditer(text), *(mixed for mixed in MIXED.finditer(text)
+                                            if not NOT_A_SECRET.fullmatch(mixed[0]))]
+    spans += [one.span(one.lastindex or 0) for one in found
+              if not YEAR.fullmatch(one[one.lastindex or 0].strip())]
     return sorted(spans)
 
 
@@ -479,7 +513,8 @@ def _visible(text: str, read: bool = True) -> str:
     """One pass of _seen: the wide and styled forms of letters and digits made plain, character
     references read unless told not to, every line end made a line feed, and every character in
     UNSEEN_KINDS or IGNORABLE taken out but a tab and a line feed, as is a mark on a letter or
-    digit that has no form of its own with the mark. "&#x2028;" is a line end once it is read."""
+    digit that has no form of its own with the mark. "&#x2028;" is a line end once it is read.
+    Every dash and the minus sign are made a hyphen (see MINUS)."""
     text = unicodedata.normalize("NFKC", text)
     text = LINE_END.sub("\n", html.unescape(text) if read else text)
     if text.isascii():
@@ -490,6 +525,8 @@ def _visible(text: str, read: bool = True) -> str:
         if (kind in UNSEEN_KINDS and char not in "\t\n") or IGNORABLE.match(char) or (
                 after and kind in MARKS):
             continue
+        if kind == "Pd" or char == MINUS:
+            char = "-"
         out.append(char)
         after = char.isdecimal() or (char.isascii() and char.isalnum())
     return "".join(out)
@@ -561,10 +598,14 @@ def _hide(text: str, cut: bool = False, talk: bool | None = None) -> str:
     _uncut would end it, as part of a code may be too short to hide. Secrets are looked for in
     all of it, so a word for a code in what goes still hides the code before it, and one that
     runs past that end is hidden whole."""
-    text = _plain(text)
+    return _hidden(_plain(text), cut, cut if talk is None else talk)
+
+
+def _hidden(text: str, cut: bool, talk: bool, look: bool = True) -> str:
+    """_hide, of a text already made plain (see _spans for look)."""
     stop = len(_uncut(text)) if cut else len(text)
     out, at = [], 0
-    for start, end in _spans(text, cut if talk is None else talk):
+    for start, end in _spans(text, talk, look):
         if start >= stop:
             break
         if end > at:
@@ -589,22 +630,20 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
         values += likes * len(fields)
     query = (
         "SELECT m.id, m.date, m.folderID, t.c3author, t.c1subject, "
-        f"substr(t.c0body, 1, {SCAN_CHARS}), length(t.c0body), "
-        f"CASE WHEN length(t.c0body) > {SCAN_CHARS} THEN "
-        f"talks(substr(t.c0body, {SCAN_CHARS - TALK_REACH + 1}, {REST_CHARS})) ELSE 0 END "
+        f"substr(t.c0body, 1, {SCAN_CHARS}), length(t.c0body) "
         "FROM messages m JOIN messagesText_content t ON t.docid = m.id "
         f"WHERE +m.deleted = 0 {_outside(skipped)} "
         f"AND ({(' AND ' if every else ' OR ').join(clauses)}) ORDER BY m.date DESC")
-    db.create_function("talks", 1, _talks, deterministic=True)
     rows = []
     try:
         for row in db.execute(query, values):
-            length = row[6] or 0
-            kept = _kept(stems, _text(row[3]), _text(row[4]), _text(row[5]), every,
-                         body_cut=length > SCAN_CHARS,
-                         talk_past=bool(row[7]) or length > SCAN_CHARS + REST_CHARS)
-            if kept:
-                rows.append((*row[:3], *kept))
+            author, subject, body, length = _text(row[3]), _text(row[4]), _text(row[5]), row[6]
+            if _about(stems, _searched(author), subject, body, every):
+                cut = isinstance(length, int) and length > SCAN_CHARS
+                kept = _kept(stems, author, subject, body, every, body_cut=cut,
+                             talk_past=cut and _rest_talks(db, row[0], length))
+                if kept:
+                    rows.append((*row[:3], *kept))
             if len(rows) == limit or time.monotonic() > deadline[0]:
                 break
     except sqlite3.OperationalError as e:
@@ -613,17 +652,55 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
     return rows
 
 
+def _rest_talks(db: sqlite3.Connection, docid, length: int) -> bool:
+    """Whether the text of a mail past what is read talks of signing in (see _talks). It is read
+    only for a mail about the question, as reading it can take a quarter of a second, and from
+    TALK_REACH before the cut, which may have split a word. A rest longer than REST_CHARS from
+    there is taken to."""
+    start = SCAN_CHARS - TALK_REACH
+    if length > start + REST_CHARS:
+        return True
+    rest = db.execute(f"SELECT substr(c0body, {start + 1}, {REST_CHARS}) "
+                      "FROM messagesText_content WHERE docid = ?", (docid,)).fetchone()
+    return _talks(_text(rest[0])) if rest is not None else True
+
+
 def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
           subject_cut: bool = False, body_cut: bool = False,
           talk_past: bool = False) -> tuple | None:
-    """(author, subject, body) with secrets hidden, if the mail is about the question with them
-    hidden too: a mail found only by its code is not found. The caller says which of the subject
-    and the body was cut short where it was read, and whether the body talks of signing in past
-    that cut (see _hide). A subject is cut only by a hostile header, so it is taken to."""
-    if not _about(stems, _searched(author), subject, body, every):
+    """(author, subject, body) with secrets hidden, as the model will read them, if the mail is
+    about the question as the model will read it. A mail found only by its code is not found,
+    and nor is one found only by digits that the second pass hides once the lines are joined, or
+    "thanks 48" would find "Your Acme code is\\n482\\n913\\nThanks" and "thanks 47" wouldn't. So
+    both passes are made here, and the ranking reads what the model reads. The caller says which
+    of the subject and the body was cut short where it was read, and whether the body talks of
+    signing in past that cut (see _hide). A subject is cut only by a hostile header, so it is
+    taken to.
+
+    The model reads the subject and the text together, so whether a mail talks of signing in is
+    decided for the whole of it: "Sign in to Acme" over "Enter 482913 on the page" hides the
+    number, and so does a word for a secret in the subject, as in "Your Acme code" over a number
+    on its own."""
+    searched = _searched(author)
+    if not _about(stems, searched, subject, body, every):
         return None
-    subject, body = _hide(subject, subject_cut), _hide(body, body_cut, talk_past)
-    return (author, subject, body) if _about(stems, _searched(author), subject, body, every) else None
+    texts, talk = _passed([_plain(subject), _plain(body)], [subject_cut, body_cut], talk_past,
+                          subject_cut)
+    seen = [_plain(_joined(text[:CLEANED_CHARS])) for text in texts]    # as _shown reads them
+    (subject, body), _ = _passed(seen, [len(text) > CLEANED_CHARS for text in texts], talk,
+                                 subject_cut)
+    return (author, subject, body) if _about(stems, searched, subject, body, every) else None
+
+
+def _passed(texts: list[str], cuts: list[bool], talk: bool,
+            subject_cut: bool) -> tuple[list[str], bool]:
+    """One pass of hiding over a mail's [subject, body], made plain as that pass reads them,
+    with sign-in talk anywhere in the mail counting for all of it (see _kept), and whether
+    there was any."""
+    talk = talk or any(SIGN_IN_TALK.search(text) for text in texts)
+    return [_hidden(texts[0], cuts[0], talk or subject_cut, look=False),
+            _hidden(texts[1], cuts[1], talk or bool(SECRET_WORD.search(texts[0])),
+                    look=False)], talk
 
 
 def _about(stems: list[Term], author: str, subject: str, body: str, every: bool = False) -> bool:
@@ -737,16 +814,35 @@ def _came_by(db: sqlite3.Connection, row: int, owner: str, skipped: list[int]) -
     return now
 
 
-def _known(db: sqlite3.Connection, owner: str, skipped: list[int], first: dict) -> bool:
+def _own(db: sqlite3.Connection, sent: set[int]) -> set[str]:
+    """The addresses of the mail in the folders of mail the user sent: the user's own. One of
+    these is the easiest address to forge, so mail from it anywhere else is anyone's, as it is
+    through Online Accounts (see goamail._known)."""
+    if not sent:
+        return set()
+    query = ("SELECT DISTINCT t.c3author FROM messages m "
+             "JOIN messagesText_content t ON t.docid = m.id "
+             f"WHERE m.folderID IN ({','.join(map(str, sorted(sent)))})")
+    return {address for (author,) in db.execute(query)
+            if (address := _sender(_text(author))[1])}
+
+
+def _known(db: sqlite3.Connection, owner: str, skipped: list[int], first: dict,
+           sent: set[int] = frozenset()) -> bool:
     """Whether a sender's first mail came at least SETTLED_DAYS ago. The mails indexed after it
     say when it came. In a mailbox too small for that, its own date has to do. Out of time
-    counts as never: the warning costs less than its absence."""
+    counts as never: the warning costs less than its absence, and so does the user's own
+    address on a mail that wasn't in Sent (see _own)."""
     if not owner:
         return False
     now = time.time()
     try:
         if "" not in first:
             first[""] = len(db.execute(f"SELECT 1 FROM messages LIMIT {SMALL_INDEX}").fetchall())
+        if None not in first:
+            first[None] = _own(db, sent)
+        if owner in first[None]:
+            return False
         if owner not in first:
             began = _first_mail(db, owner, skipped)
             first[owner] = began and (min(began[1], now) if first[""] < SMALL_INDEX
@@ -778,9 +874,11 @@ def settled(scored: list[tuple], known) -> list[tuple]:
     return sorted(best, key=lambda item: item[:3], reverse=True)
 
 
-def _settled(db: sqlite3.Connection, scored: list[tuple], skipped: list[int]) -> list[Mail]:
+def _settled(db: sqlite3.Connection, scored: list[tuple], skipped: list[int],
+             sent: set[int] = frozenset()) -> list[Mail]:
     first = {}
-    return [item[3] for item in settled(scored, lambda owner: _known(db, owner, skipped, first))]
+    return [item[3] for item in settled(
+        scored, lambda owner: _known(db, owner, skipped, first, sent))]
 
 
 def find(stems: list[Term]) -> list[Mail]:
@@ -798,7 +896,7 @@ def find(stems: list[Term]) -> list[Mail]:
             rows += _rows(db, stems, False, skipped, ANY_HITS, deadline)
             scored = _ranked(rows, stems, sent)
             deadline[0] = time.monotonic() + LOOKUP_S
-            return _settled(db, scored, skipped)
+            return _settled(db, scored, skipped, sent)
         finally:
             db.close()
     except sqlite3.Error:   # Thunderbird was half way through writing, or this isn't its index
@@ -884,12 +982,18 @@ async def _answer(question: str, mails: list[Mail], config, deadline: float) -> 
 async def _found(stems: list[Term], deadline: float) -> list[Mail]:
     """From Thunderbird's index, or if Thunderbird holds no mail here, from the accounts in GNOME
     Online Accounts. Never both: whoever reads mail in Thunderbird has it all there already. The
-    accounts are given what is left of the deadline, less the time to read the answer."""
+    accounts are given what is left of the deadline, less the time to read the answer. An error
+    goes to the voice model as the tool's result, and one raised over a mail can carry the
+    mail's own text, so only Tux's own sentences get past here, as in goamail._search."""
     try:
         return await asyncio.wait_for(asyncio.to_thread(find, stems), SEARCH_S + 2)
     except NoThunderbird:
         from . import goamail   # it reads this module's rules, so it is loaded after it
         return await goamail.find(stems, deadline - ANSWER_S)
+    except (RuntimeError, TimeoutError):
+        raise
+    except Exception:
+        raise RuntimeError(UNREADABLE) from None
 
 
 async def search(args: dict, config, session) -> dict:

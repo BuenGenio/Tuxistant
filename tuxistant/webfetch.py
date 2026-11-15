@@ -77,6 +77,7 @@ BAD_SETTING = ("A server address in Settings has characters I can't check, so I'
                "anything until it's fixed in Settings.")
 UNREADABLE = "That page couldn't be read."
 HIDDEN_CATEGORIES = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
+ASCII_HIDDEN = {c: " " for c in range(128) if unicodedata.category(chr(c)) in HIDDEN_CATEGORIES}
 TAG = re.compile(r"<[^<>]*>")    # not [^>]: that goes quadratic on a page of a million "<"
 HIDDEN_STYLE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden")
 IGNORED_TAGS = {"script", "style", "noscript", "template", "svg", "head", "nav", "header",
@@ -138,8 +139,11 @@ def clean(text: str, limit: int) -> str:
     both can arrive escaped. Hidden characters go too, as they can carry what a reader can't see.
     The text is cut first, so a hostile page can't make this expensive."""
     text = TAG.sub(" ", html.unescape(text[:limit * 4])).replace("<", " ").replace(">", " ")
-    text = " ".join("".join(" " if unicodedata.category(c) in HIDDEN_CATEGORIES else c
-                            for c in text).split())
+    if text.isascii():  # its hidden characters are its controls, and looking at each is slow
+        text = " ".join(text.translate(ASCII_HIDDEN).split())
+    else:
+        text = " ".join("".join(" " if unicodedata.category(c) in HIDDEN_CATEGORIES else c
+                                for c in text).split())
     return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0]
 
 

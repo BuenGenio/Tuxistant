@@ -22,6 +22,9 @@ FN_HELPER = "/usr/local/lib/tuxistant/tuxistant-fn"
 MODULES = {"dbus_fast": "python3-dbus-fast", "websockets": "python3-websockets",
            "yaml": "python3-yaml", "gi": "python3-gi"}
 SKILLS_LOAD = "skills load"
+# What doctor says of mail, by whether Thunderbird holds any, as a search decides it.
+MAIL_DETAIL = {True: "", False: "Thunderbird holds no mail: Online Accounts will be searched",
+               None: "Thunderbird's mail index couldn't be read"}
 
 
 async def call(member: str, signature: str = "", body: tuple = ()) -> list:
@@ -217,9 +220,7 @@ def checks(config) -> list[tuple[bool, str, str]]:
         # Optional, like the helper: without the bindings only the calendar is missing.
         (True, "calendar available", "" if calendars.available() else
          "not installed: the calendar needs evolution-data-server and gir1.2-ecal-2.0"),
-        (True, "mail search available", "" if mail.available() else
-         "no Thunderbird mail found: mail search will try a Google or Microsoft account in "
-         "Online Accounts"),
+        (True, "mail search available", MAIL_DETAIL[mail.holds_mail()]),
         (extension_installed(), "GNOME extension installed", EXTENSION),
         (extension_enabled(), "GNOME extension enabled", EXTENSION),
         (daemon_activatable(), "daemon can be started", BUS_NAME),

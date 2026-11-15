@@ -9,8 +9,10 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tests.mail_index import build  # noqa: E402
 from tests.test_daemon_fakes import FakeSpeech  # noqa: E402
 from tuxistant import __main__ as cli  # noqa: E402
+from tuxistant import mail  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 
 
@@ -25,10 +27,13 @@ class Doctor(unittest.TestCase):
             "TUXISTANT_FN_HELPER": str(self.folder / "tuxistant-fn")})
         patcher.start()
         self.addCleanup(patcher.stop)
-        # The real gsettings would read the session of whoever runs the tests.
-        patcher = mock.patch.object(cli, "shell_setting", self.shell_setting)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        # The real gsettings would read the session of whoever runs the tests, and the real
+        # profiles would be someone's mail.
+        for target, name, value in ((cli, "shell_setting", self.shell_setting),
+                                    (mail, "ROOTS", (str(self.folder / "mail"),))):
+            patcher = mock.patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.settings = {}
 
     def shell_setting(self, key):
@@ -56,6 +61,22 @@ class Doctor(unittest.TestCase):
         self.assertTrue(results["speech to text model present"])
         self.assertTrue(results["Fn helper running"], "holding Fn is optional")
         self.assertFalse(results["GNOME extension installed"])
+
+    def test_the_mail_line_says_what_a_search_would_search(self):
+        """An empty profile has an index too, and a search goes past it to Online Accounts."""
+        def detail():
+            return next(detail for _, what, detail in cli.checks(self.config(9))
+                        if what == "mail search available")
+
+        searched = "Thunderbird holds no mail: Online Accounts will be searched"
+        self.assertEqual(detail(), searched)
+        build(self.folder / "mail", [], "empty.default")
+        self.assertEqual(detail(), searched)
+        build(self.folder / "mail", [{"subject": "Hi", "author": "a@b.example", "body": "Hi."}])
+        self.assertEqual(detail(), "")
+        for profile in ("empty.default", "abcd1234.default"):
+            (self.folder / "mail" / profile / mail.INDEX).write_bytes(b"not an index" * 100)
+        self.assertEqual(detail(), "Thunderbird's mail index couldn't be read")
 
     def test_bad_key_is_reachable_but_not_accepted(self):
         results = self.results(self.config(self.fake().port, key="wrong"))

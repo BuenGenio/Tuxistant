@@ -21,8 +21,8 @@ from tools import eval_config
 from tools.eval_config import Refused, evaluation_server, on_this_computer, run_server
 from tools.eval_cutoffs import ACTIONS, install, owner, stand_ins
 from tests.test_realtime_live import CountingSkills
-from tuxistant import (apps, calendars, homeassistant, mail, mcp, media, phone, timers,
-                       webfetch)
+from tuxistant import (apps, calendars, goamail, homeassistant, mail, mcp, media, phone,
+                       timers, webfetch)
 from tuxistant.config import DEFAULTS, Config
 from tuxistant.gate import Session
 from tuxistant.skillhost import BUNDLED, Offline
@@ -394,6 +394,11 @@ class EveryActionIsCutOff(unittest.TestCase):
             self.assertIsInstance(homeassistant._call.__self__, eval_cutoffs.NoHome)
             temp = tempfile.gettempdir()
             self.assertTrue(all(root.startswith(temp) for root in mail.ROOTS), mail.ROOTS)
+            # With the made-up index missing or empty, mail search would go on to the real
+            # Online Accounts, get a real token and read real mail.
+            self.assertIn("goamail._connect", ACTIONS["mail.search"])
+            with self.assertRaises(RuntimeError):
+                goamail._connect()
             self.assertTrue(str(timers._attached.path).startswith(temp))
             listed = apps._installed()
             self.assertTrue(listed and all(app.path.startswith("/eval/") for app in listed))
