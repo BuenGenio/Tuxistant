@@ -16,10 +16,11 @@ accounts alone.
 The server does the searching, so a mailbox is never downloaded. Mailboxes are opened read-only,
 mail is read without marking it read, and of each mail only its sender, its subject and the start
 of its text are fetched, for at most 40 mails a mailbox, with the sender line of a few older mails
-to see who wrote before. Only the inbox, or Gmail's All Mail, and the Sent folder are searched:
-never Junk, Trash or Drafts. A server's answers are cut off past what was asked for, and the
-whole search past its time. Whatever goes wrong, what is said is Tux's own sentence, never an
-error's text, which can be a stranger's (see _search).
+to see who wrote before, and of a few in Sent to see which of those is the user. Only the inbox,
+or Gmail's All Mail, and the Sent folder are searched: never Junk, Trash or Drafts. A server's
+answers are cut off past what was asked for, and the whole search past its time. Whatever goes
+wrong, what is said is Tux's own sentence, never an error's text, which can be a stranger's (see
+_search).
 
 When a sender first wrote is the date the server took their first mail in, not the date on the
 mail, which its sender wrote.
@@ -607,8 +608,7 @@ def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
     leaves = [part for part in message.walk() if not part.is_multipart()]
     plain = marked = None
     for part in leaves:
-        if part.get_filename() or str(part.get("Content-Disposition", "")).lower().startswith(
-                "attachment"):
+        if _attached(part):
             continue
         kind = part.get_content_type()
         if kind == "text/plain" and plain is None:
@@ -618,6 +618,16 @@ def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
     text, cut = plain if plain and plain[0].strip() else (
         (_unhtml(_closed(*marked)), marked[1]) if marked else ("", False))
     return text[:mail.SCAN_CHARS], cut or len(text) > mail.SCAN_CHARS
+
+
+def _attached(part) -> bool:
+    """Whether a part is an attachment. One whose filename can't be read is: the email package
+    raised for a filename in IDNA, whose codec refuses to replace what it can't decode."""
+    try:
+        return bool(part.get_filename()) or str(part.get("Content-Disposition", "")).lower(
+            ).startswith("attachment")
+    except (ValueError, LookupError, TypeError, email.errors.MessageError):
+        return True
 
 
 def _closed(html: str, cut: bool) -> str:
@@ -671,26 +681,50 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
         if time.monotonic() > until:    # a mail can be slow to read, and this runs no further
             break
         found = fetched.get(uid)
-        message = found and _parsed(found.get(b"HEADER", b""), found.get(b"TEXT", b""))
+        message = found and _read(found)
         if message:
-            read.append((uid, every, found, message,
-                         *_body(message, len(found.get(b"TEXT", b"")) >= TEXT_BYTES)))
+            read.append((uid, every, found, *message))
     talking = _talking(imap, [uid for uid, *_, cut in read if cut], until)
     rows = []
     for uid, every, found, message, body, cut in read:
         if time.monotonic() > until:
             break
-        kept = mail._kept(stems, _author(message), _subject(message), body, every,
-                          _subject_cut(message, found.get(b"HEADER", b"")), cut, uid in talking)
+        kept = _hidden(stems, message, found, body, every, cut, uid in talking)
         if kept:
             rows.append(((folder, uid), _stamp(found.get(b"INTERNALDATE")), folder, *kept))
     return rows
 
 
-def _wrote_before(imap, owner: str, before: str) -> bool:
-    """Whether a mail from exactly this address came before that day. The server's FROM matches
-    the name beside an address too, so the sender lines it finds are read here."""
-    uids = sorted(_uids(_ask(imap, "SEARCH", "BEFORE", before, "FROM", f'"{owner}"')))
+# One stranger's mail that can't be read costs that mail, never the mailbox it is in: a filename
+# the email package raised over ended the mailbox, and the search found nothing for every
+# question that mail matched. So whatever goes wrong over one mail skips it.
+
+def _read(found: dict) -> tuple | None:
+    """(message, its text, whether that was cut short) of one fetched mail, or None."""
+    text = found.get(b"TEXT", b"")
+    try:
+        message = _parsed(found.get(b"HEADER", b""), text)
+        return message and (message, *_body(message, len(text) >= TEXT_BYTES))
+    except Exception:
+        return None
+
+
+def _hidden(stems: list[mail.Term], message, found: dict, body: str, every: bool, cut: bool,
+            talking: bool) -> tuple | None:
+    """mail._kept of one mail, or None."""
+    try:
+        return mail._kept(stems, _author(message), _subject(message), body, every,
+                          _subject_cut(message, found.get(b"HEADER", b"")), cut, talking)
+    except Exception:
+        return None
+
+
+def _wrote(imap, owner: str, before: str | None = None) -> bool:
+    """Whether the open mailbox holds a mail from exactly this address, one that came before that
+    day if one is given. The server's FROM matches the name beside an address too, so the sender
+    lines it finds are read here."""
+    since = ("BEFORE", before) if before else ()
+    uids = sorted(_uids(_ask(imap, "SEARCH", *since, "FROM", f'"{owner}"')))
     if not uids:
         return False
     typ, data = _ask(imap, "FETCH", ",".join(map(str, uids[:FROM_CHECKED])),
@@ -702,10 +736,13 @@ def _wrote_before(imap, owner: str, before: str) -> bool:
     return False
 
 
-def _known(imap, boxes: list[str], owners: set[str], own: str, until: float) -> set[str]:
-    """The senders whose first mail came at least SETTLED_DAYS ago. A mail from the account's
-    own address that isn't in Sent is anyone's: that address is the easiest one to forge. Out of
-    time counts as never: the warning costs less than its absence."""
+def _known(imap, boxes: list[str], sent: str | None, owners: set[str], own: str,
+           until: float) -> set[str]:
+    """The senders whose first mail came at least SETTLED_DAYS ago. A mail from one of the
+    user's own addresses that isn't in Sent is anyone's, as those are the easiest to forge: the
+    account's own, and any other that mail in Sent is from, as mail._own has it. Gmail's All
+    Mail holds what the user sent, so an address they send from as well was otherwise a sender of
+    long standing. Out of time counts as never: the warning costs less than its absence."""
     before = _imap_date(datetime.now(timezone.utc) - timedelta(days=mail.SETTLED_DAYS))
     found, owners = set(), {owner for owner in owners if owner and owner != own}
     for box in boxes:
@@ -714,9 +751,20 @@ def _known(imap, boxes: list[str], owners: set[str], own: str, until: float) -> 
         for owner in sorted(owners - found):
             if time.monotonic() > until:
                 break
-            if _wrote_before(imap, owner, before):
+            if _wrote(imap, owner, before):
                 found.add(owner)
-    return found
+    return found - _own(imap, sent, found, until)
+
+
+def _own(imap, sent: str | None, owners: set[str], until: float) -> set[str]:
+    """Of these addresses, the ones that mail in Sent is from, and any there was no time to look
+    for. Only senders found to be known are looked for, as no one else can lose by it."""
+    if not sent or not owners:
+        return set()
+    if time.monotonic() > until or not _select(imap, sent):
+        return set(owners)
+    return {owner for owner in sorted(owners)
+            if time.monotonic() > until or _wrote(imap, owner)}
 
 
 def _search(account: Account, token: str, stems: list[mail.Term], until: tuple) -> tuple:
@@ -738,7 +786,7 @@ def _search(account: Account, token: str, stems: list[mail.Term], until: tuple) 
             rows += _rows(imap, box, folder, stems, until[0])
         scored = mail._ranked(rows, stems, {len(boxes)} if sent and sent not in boxes else set())
         owners = {item[3].owner for item in mail.checked(scored) if not item[3].by_user}
-        known = _known(imap, boxes, owners, account.address,
+        known = _known(imap, boxes, sent, owners, account.address,
                        min(time.monotonic() + LOOKUP_S, until[1]))
         return mail.settled(scored, lambda owner: owner in known), ""
     except Exception:

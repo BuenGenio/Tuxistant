@@ -24,6 +24,7 @@ is said with a warning. When a mail came is judged by the mails Thunderbird inde
 the date on a mail is whatever its sender wrote.
 """
 import asyncio
+import bisect
 import html
 import re
 import secrets
@@ -61,6 +62,7 @@ CLEANED_CHARS = 2 * SCAN_CHARS  # and how much it is cut from, whole, with secre
 SUBJECT_CHARS = 200
 SECRET_REACH = 160      # how far after the word for a secret the secret itself is looked for
 SECRET_BEFORE = 60      # and how far before it: "482913 is your code"
+NAMED_CHARS = 300       # how far down a mail's text a word for a secret names one in its subject
 TALK_REACH = 20         # how far before a cut its rest is read from, for words the cut split
 REST_CHARS = 50_000     # and how much of that rest: past it, a mail is taken to talk of signing in
 TRIED = 3               # mails shown to the model, best first
@@ -205,9 +207,12 @@ IGNORABLE = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 MARKS = frozenset(("Mn", "Me"))    # a keycap or an accent on a letter or digit of a code
 UNESCAPES = 4
+# Each alternative is looked for from every place in a mail, so none may read on to the end of a
+# run of letters from each of them: "[A-Za-zÀ-ÿ]*code" after a lookbehind for ASCII letters only
+# did, and 16,000 "é" took a second and a half, holding the event loop.
 SECRET_WORD = re.compile(
     r"(?<![A-Za-z])(?:pass(?:words?|phrases?|codes?|wd)?|pwd|pins?|otp|keys?|tokens?)(?![A-Za-z])"
-    r"|(?<![A-Za-z])(?!post|bar|zip)[A-Za-zÀ-ÿ]*codes?(?![A-Za-z])|c[oó]dig\w*|codic\w*"
+    r"|(?<![A-Za-zÀ-ÿ])(?!post|bar|zip)[A-Za-zÀ-ÿ]{0,40}codes?(?![A-Za-z])|c[oó]dig\w*|codic\w*"
     r"|(?<![A-Za-z])k[oó]d\w*|код\w*|парол\w*"
     r"|passwort\w*|kennwort\w*|contrase[ñn]a\w*|senha\w*|(?<![A-Za-z])clave\w*|has[łl][oa]\w*"
     r"|mot de passe|wachtwoord\w*|コード|パスワード|暗証|码|碼|코드|번호|رمز", re.I)
@@ -218,10 +223,12 @@ PASSWORD_WORD = re.compile(
 GIVEN = re.compile(r"[^.!?\n]{0,60}?(?:\b(?i:is|are|was|will be|(?:changed|set|reset) to)\b\s*:?"
                    r"|[:=])\s*(\S{3,})")
 # What a secret looks like, next to the word for one.
-# A hyphen may stand right before or after one, as every dash is made one: "code—482913—".
+# A hyphen may stand right before or after one, as every dash is made one: "code—482913—". A
+# lookahead looks no further than the match it guards can reach.
 SHAPED = re.compile(
     r"(?<![A-Za-z0-9.,/])\d(?:[ -]?\d){3,11}(?![\w/]|-[\w/]|[.,]\d)"  # 482913, 482 913, 4 8 2 9 1 3
-    r"|(?<![\w@./])(?=[\w!#$%^&*+=-]*\d)(?=[\w!#$%^&*+=-]*[A-Za-z])[\w!#$%^&*+=-]{4,24}(?![\w@])"
+    r"|(?<![\w@./])(?=[\w!#$%^&*+=-]{0,23}\d)(?=[\w!#$%^&*+=-]{0,23}[A-Za-z])"
+    r"[\w!#$%^&*+=-]{4,24}(?![\w@])"
     r"|\b[A-Z]{2,6}(?:-[A-Z0-9]{2,6}){1,3}\b|\b[A-Z]{5,10}\b"     # KQW-XBT, KQWXB
     r"|(?<![\w.,/-])(?:[A-Za-z0-9] ){3,13}[A-Za-z0-9](?![\w/-])"   # K Q 7 X 9 B
     r"|(?<![\w.,/-])(?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3} (?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3}"
@@ -240,21 +247,26 @@ MONEY = r"\s*(?:pounds|euros|dollars|gbp|eur|usd|%)"
 NUMBER = re.compile(r"(?<![\w.,/£$€])\d{3}[ -]\d{3}(?![\w/]|-[\w/])"
                     rf"|(?<![\w.,/£$€])\d{{4,8}}(?![\w/]|-[\w/]|[.,]\d|{MONEY})"
                     rf"|(?<![\w.,/£$€])\d(?: \d){{3,7}}(?![\w/]|-[\w/]|[.,]\d|{MONEY})", re.I)
-# A line that is nothing but a code, give or take the punctuation a template or html2text puts
-# round one: "*482913*" for a bold code, "482913." or "(KQ7X9B)".
-AROUND = r"""[ \t*_"'“”‘’()\[\]<>.,:;!]*+"""
+# A line that is nothing but a code, give or take the punctuation a template, html2text or the
+# plain part of an HTML mail puts round one: "*482913*" for a bold code, "482913.", "(KQ7X9B)",
+# "`482913`" for code, "- 482913" or "+ 482913" for an item of a list (a bullet is made a hyphen:
+# see DASHES), "| 482913 |" for a table's cell, "# 482913", or an arrow pointing at it.
+AROUND = (r"""[ \t*_"'“”‘’‹›«»()\[\]{}<>.,:;!?`|#=~/\-"""
+          r"\u2190-\u21ff\u2794-\u27bf\u2b05-\u2b07\u25b6\u25ba\u25c0\u25c4]*+")
 ALONE = re.compile(
-    rf"^{AROUND}((?:\d[ -]?){{4,12}}"
+    rf"^(?:\+[ \t])?{AROUND}((?:\d[ -]?){{4,12}}"
     r"|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,14}"
     r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9])"
     rf"{AROUND}$", re.M)
 # In a mail that talks of signing in, letters and digits together are hidden as numbers are:
 # "Use KQ7X9B to sign in".
-MIXED = re.compile(r"(?<![\w@./-])(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])"
+MIXED = re.compile(r"(?<![\w@./-])(?=[A-Za-z0-9-]{0,13}\d)(?=[A-Za-z0-9-]{0,13}[A-Za-z])"
                    r"[A-Za-z0-9-]{5,14}(?![\w@/-])")
 # Every dash is a hyphen to the model, and to the hiding: a code joined by a non-breaking hyphen,
-# as templates write "482&#8209;913" to keep it on one line, is the code it is.
-MINUS = "\u2212"
+# as templates write "482&#8209;913" to keep it on one line, is the code it is. So are the other
+# minus signs, and the dots and bullets that stand between the groups of a code as a dash would,
+# as in "482·913", and a bullet before an item of a list.
+DASHES = frozenset("\u2212\u02d7\u2796\u00b7\u2027\u2043\u30fb\u2022\u2219")
 SPELT = re.compile(     # a run of lines of one character each, as one to an HTML block makes
     r"^[ \t]*[A-Za-z0-9][ \t]*(?:\n\s*[A-Za-z0-9][ \t]*){3,}$", re.M)
 # The end of a text that was cut short, read backwards: its last word, which the cut may have gone
@@ -263,6 +275,7 @@ SPELT = re.compile(     # a run of lines of one character each, as one to an HTM
 # most 14 (see SHAPED and ALONE), and the last word may be an ordinary one after it.
 CUT_TAIL = re.compile(r"\S*+(?:[\s-]++(?:\d++|[^\W_])(?!\w)){0,14}+[\s-]*+")
 YEAR = re.compile(r"(?:19|20)\d\d")
+DIGIT = re.compile(r"\d")
 # Asking for one outright is refused, which is kinder than an answer with a gap in it.
 ASKS_FOR_ONE = re.compile(
     r"\b(?:passwords?|passcodes?|passphrases?|otp)\b|\b(?:my|the)\s+pin\b|\bpin\s+(?:number|code)\b"
@@ -485,20 +498,20 @@ def _spans(text: str, talk: bool = False, look: bool = True) -> list[tuple[int, 
     """Where a secret may stand in a mail: see SECRET_WORD. talk: take it that the mail talks of
     signing in, as one cut short may have done so past the cut. look: whether to look for that
     talk here as well, which a caller that already has needn't."""
-    spans = []
+    spans, ends = [], []
     for word in SECRET_WORD.finditer(text):
-        start, end = word.end(), word.end() + SECRET_REACH
+        ends.append(word.end())
         if PASSWORD_WORD.fullmatch(word[0]):
-            given = GIVEN.match(text, start, end)
+            given = GIVEN.match(text, word.end(), word.end() + SECRET_REACH)
             if given:
                 spans.append(given.span(1))
-        for shaped in SHAPED.finditer(text, start, end):
-            before = text[max(start, shaped.start() - 6):shaped.start()]
-            if not NOT_A_SECRET.fullmatch(shaped[0]) or JUST_GIVEN.search(before):
-                spans.append(shaped.span())
-        for number in NUMBER.finditer(text, max(0, word.start() - SECRET_BEFORE), word.start()):
+        before = max(0, word.start() - SECRET_BEFORE)
+        if not DIGIT.search(text, before, word.start()):
+            continue    # a stranger's mail can hold ten thousand words for a code and no number
+        for number in NUMBER.finditer(text, before, word.start()):
             if not YEAR.fullmatch(number[0]):
                 spans.append(number.span())
+    spans += _shaped(text, ends)
     talk = talk or (look and SIGN_IN_TALK.search(text))
     found = [*ALONE.finditer(text)]
     if talk:
@@ -509,12 +522,31 @@ def _spans(text: str, talk: bool = False, look: bool = True) -> list[tuple[int, 
     return sorted(spans)
 
 
+def _shaped(text: str, ends: list[int]) -> list[tuple[int, int]]:
+    """What is shaped like a secret within SECRET_REACH after any of these ends of a word for
+    one. Reaches that overlap are looked through once, as one: looked through word by word, a
+    stranger's "码!" ten thousand times over was ten thousand words and took a second for each
+    mail, on the event loop. A year counts as one only right after "is" or a colon, looked for
+    back to the end of the nearest word before it, as it was in that word's own reach."""
+    found, at = [], 0
+    while at < len(ends):
+        start = end = ends[at]
+        while at < len(ends) and ends[at] <= end:
+            end, at = ends[at] + SECRET_REACH, at + 1
+        for shaped in SHAPED.finditer(text, start, end):
+            since = ends[bisect.bisect_right(ends, shaped.start()) - 1]
+            before = text[max(since, shaped.start() - 6):shaped.start()]
+            if not NOT_A_SECRET.fullmatch(shaped[0]) or JUST_GIVEN.search(before):
+                found.append(shaped.span())
+    return found
+
+
 def _visible(text: str, read: bool = True) -> str:
     """One pass of _seen: the wide and styled forms of letters and digits made plain, character
     references read unless told not to, every line end made a line feed, and every character in
     UNSEEN_KINDS or IGNORABLE taken out but a tab and a line feed, as is a mark on a letter or
     digit that has no form of its own with the mark. "&#x2028;" is a line end once it is read.
-    Every dash and the minus sign are made a hyphen (see MINUS)."""
+    Every dash, and what stands for one, is made a hyphen (see DASHES)."""
     text = unicodedata.normalize("NFKC", text)
     text = LINE_END.sub("\n", html.unescape(text) if read else text)
     if text.isascii():
@@ -525,7 +557,7 @@ def _visible(text: str, read: bool = True) -> str:
         if (kind in UNSEEN_KINDS and char not in "\t\n") or IGNORABLE.match(char) or (
                 after and kind in MARKS):
             continue
-        if kind == "Pd" or char == MINUS:
+        if kind == "Pd" or char in DASHES:
             char = "-"
         out.append(char)
         after = char.isdecimal() or (char.isascii() and char.isalnum())
@@ -637,11 +669,16 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
     rows = []
     try:
         for row in db.execute(query, values):
+            if time.monotonic() > deadline[0]:  # a stranger's mail can be slow to read
+                break
             author, subject, body, length = _text(row[3]), _text(row[4]), _text(row[5]), row[6]
             if _about(stems, _searched(author), subject, body, every):
                 cut = isinstance(length, int) and length > SCAN_CHARS
+                talk_past = cut and _rest_talks(db, row[0], length)
+                if time.monotonic() > deadline[0]:
+                    break
                 kept = _kept(stems, author, subject, body, every, body_cut=cut,
-                             talk_past=cut and _rest_talks(db, row[0], length))
+                             talk_past=talk_past)
                 if kept:
                     rows.append((*row[:3], *kept))
             if len(rows) == limit or time.monotonic() > deadline[0]:
@@ -680,7 +717,7 @@ def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
     The model reads the subject and the text together, so whether a mail talks of signing in is
     decided for the whole of it: "Sign in to Acme" over "Enter 482913 on the page" hides the
     number, and so does a word for a secret in the subject, as in "Your Acme code" over a number
-    on its own."""
+    on its own, or near the top of the text, as in "Acme 482913" over "Here is your code."."""
     searched = _searched(author)
     if not _about(stems, searched, subject, body, every):
         return None
@@ -696,11 +733,12 @@ def _passed(texts: list[str], cuts: list[bool], talk: bool,
             subject_cut: bool) -> tuple[list[str], bool]:
     """One pass of hiding over a mail's [subject, body], made plain as that pass reads them,
     with sign-in talk anywhere in the mail counting for all of it (see _kept), and whether
-    there was any."""
+    there was any. A word for a secret in one counts as that talk for the other: in the text
+    only near its top (see NAMED_CHARS)."""
     talk = talk or any(SIGN_IN_TALK.search(text) for text in texts)
-    return [_hidden(texts[0], cuts[0], talk or subject_cut, look=False),
-            _hidden(texts[1], cuts[1], talk or bool(SECRET_WORD.search(texts[0])),
-                    look=False)], talk
+    named = SECRET_WORD.search(texts[1][:NAMED_CHARS]), SECRET_WORD.search(texts[0])
+    return [_hidden(texts[0], cuts[0], bool(talk or subject_cut or named[0]), look=False),
+            _hidden(texts[1], cuts[1], bool(talk or named[1]), look=False)], talk
 
 
 def _about(stems: list[Term], author: str, subject: str, body: str, every: bool = False) -> bool:
@@ -938,11 +976,18 @@ async def _note(question: str, mail: Mail, config, seconds: float) -> str:
     """What one mail says about the question, or nothing. The fence is one a mail can't guess, so
     it can't close it, and no angle bracket or link is left in what the model reads. Secrets are
     hidden again in the very text the model reads: putting the lines, tags and links of a mail
-    together can join up a code that was in pieces, as one digit to a line is."""
+    together can join up a code that was in pieces, as one digit to a line is. That is done in a
+    thread, as the voice runs on this loop and a stranger's mail can be slow to hide, and it
+    comes off the model's time."""
     fence = f"===== {secrets.token_hex(8)} ====="
     whose = ("The user sent this email" if mail.by_user
              else f"Email from {mail.sender or 'unknown'}, sent")
-    subject, body = _shown(mail.subject, SUBJECT_CHARS), _shown(mail.body, BODY_CHARS)
+    started = time.monotonic()
+    subject, body = await asyncio.to_thread(
+        lambda: (_shown(mail.subject, SUBJECT_CHARS), _shown(mail.body, BODY_CHARS)))
+    seconds -= time.monotonic() - started
+    if seconds <= 0:
+        return ""
     user = (f"Question: {question}\n\n{whose} on {mail.sent_on:%A} {mail.sent_on.day} "
             f"{mail.sent_on:%B %Y}:\n{fence}\nSubject: {subject}\n\n{body}\n{fence}")
     note = clean(URL.sub(" ", await _brain(config, READ, user, ANSWER_TOKENS, seconds)),

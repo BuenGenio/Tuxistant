@@ -89,20 +89,38 @@ SPLIT_TALK = ("Please sign\nin within 10 minutes.", "Please sign\u00ad in within
 
 
 # (subject, text) of mails whose sign-in talk, or word for a code, is in one and the code in the
-# other. The model reads both together, so each code is hidden.
+# other. The model reads both together, so each code is hidden, whichever way round.
 SPLIT_ACROSS = (("Sign in to Acme", "Hi, enter 482913 on the page to continue."),
                 ("Acme 482913", "Use it to sign in to Acme."),
                 ("Your Acme verification code", "Enter this on the page: 482913"),
-                ("Your Acme code", "Hello from Acme.\n\nEnter this on the page: 482913 thanks"))
+                ("Your Acme code", "Hello from Acme.\n\nEnter this on the page: 482913 thanks"),
+                ("Acme 482913", "Here is your code."),
+                ("Acme: 482913", "This is your Acme code. Thanks."),
+                ("Acme 482-913", "That is your code for Acme."),
+                ("Acme KQ7X9B", "That's your Acme code."),
+                ("Acme 482913", "Your password reset for Acme."),
+                ("Acme: KQ7X9B", "Here is your Acme PIN. Thanks, the Acme team"),
+                ("Acme 482913", "Use it as your Acme passcode."),
+                ("Acme: 482913", "This is the code you asked for. Don't share it."))
 # Codes joined by a dash that isn't a hyphen-minus: a non-breaking hyphen, which templates write
-# as &#8209; to keep a code on one line, a hyphen, a minus sign and an en dash.
+# as &#8209; to keep a code on one line, a hyphen, a minus sign and an en dash, and the dots and
+# other minus signs that stand where a dash would.
 DASHED = ("Your Acme code is 482‑913.", "Your Acme code:\n482&#8209;913\nThanks",
           "Sign in to Acme with 482‐913 now.", "Your Acme code is KQ7‑X9B.",
-          "Your Acme code is 482−913.", "Your Acme code is 482–913.")
+          "Your Acme code is 482−913.", "Your Acme code is 482–913.",
+          "Your Acme code is 482·913.", "Your Acme code is 482‧913.",
+          "Your Acme code is 482⁃913.", "Your Acme code is 482➖913.")
 DASHED_CODES = (r"482\W{0,3}913", r"KQ7\W{0,3}X9B")
-# A code on its own line with punctuation round it, as html2text writes a bold one.
+# A code on its own line with punctuation round it, as html2text writes a bold one, as the plain
+# part of an HTML mail writes an item of a list or code, or as a table's cell is written.
 DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nThanks",
-           "Hello from Acme.\n**KQ7X9B**\nThanks", "Hello from Acme.\n(482 913)\nThanks")
+           "Hello from Acme.\n**KQ7X9B**\nThanks", "Hello from Acme.\n(482 913)\nThanks",
+           "Hello from Acme.\n`482913`\nThanks", "Hello from Acme.\n- 482913\nThanks",
+           "Hello from Acme.\n• KQ7X9B\nThanks", "Hello from Acme.\n| 482913 |\nThanks",
+           "Hello from Acme.\n# 482913\nThanks", "Hello from Acme.\n/482913/\nThanks")
+# Bodies built to be slow to hide: a word for a code over and over, and runs of letters that
+# the word for one may end.
+SLOW_TO_HIDE = ("码!" * 10_000, "pin!" * 5000, "é" * 16_000, "×" * 16_000, "À" * 16_000)
 # A code only the second pass hides, once the lines are joined: "Your Acme code is 482 913".
 SPLIT_LINES = "Your Acme code is\n482\n913\nThanks, the team"
 
@@ -538,10 +556,21 @@ class Secrets(Base):
                 ("Acme\nYour Acme code—482913—use it today.", "482913"),
                 ("Acme\nYour Acme code-482913.", "482913"),
                 ("Acme\nYour code is 482913—.", "482913"),
+                ("Acme\nYour Acme code is 482·913.", "913"),
+                ("Acme\nYour Acme code is 482‧913.", "913"),
+                ("Acme\nYour Acme code is 482⁃913.", "913"),
+                ("Acme\nYour Acme code is 482˗913.", "913"),
+                ("Acme\nYour Acme code is 482➖913.", "913"),
+                ("Acme\nYour Acme code is 482・913.", "913"),
                 # Alone on its line with punctuation round it.
                 ("Acme\nHere it is:\n*482913*\nThanks", "482913"),
                 ("Acme\nHere it is:\n482913.\nThanks", "482913"),
                 ("Acme\nHere it is:\n“KQ7X9B”\nThanks", "KQ7X9B"),
+                *((f"Hello from Acme.\n{line}\nThanks", "913" if "913" in line else "X9B")
+                  for line in ("`482913`", "- 482913", "• 482913", "· 482913", "+ 482913",
+                               "| 482913 |", "# 482913", "{482913}", "=482913=", "~482913~",
+                               "482913 ←", "→ 482913", "482·913", "/482913/", "« 482913 »",
+                               "— 482913", "‹KQ7X9B›", "- KQ7X9B")),
                 # Letters and digits together, in a mail that talks of signing in or beside the
                 # word for a code.
                 ("Acme\nUse KQ7X9B to sign in to Acme.", "KQ7X9B"),
@@ -702,10 +731,13 @@ class Secrets(Base):
 
     async def test_sign_in_talk_in_the_subject_counts_for_the_text_and_back(self):
         """The model reads them together, so a code in one is hidden when the other talks of
-        signing in, or names a code."""
+        signing in, or names a code: "Acme 482913" over "Here is your code." reached it whole."""
+        codes = (*DASHED_CODES, "482913", "KQ7X9B")
         for subject, body in SPLIT_ACROSS:
-            self.assertNotRegex(" ".join(mail._kept(mail.terms("Acme"), "", subject, body,
-                                                    False)[1:]), r"4\D?8\D?2", subject)
+            kept = mail._kept(mail.terms("Acme"), "", subject, body, False)
+            shown = f"{mail._shown(kept[1], mail.SUBJECT_CHARS)} {mail._shown(kept[2], 400)}"
+            for code in codes:
+                self.assertNotRegex(shown, code, subject)
         self.index(*({"subject": subject, "body": body, "days_ago": 1 + n, "id": f"{n}@x",
                       "author": "Acme <account@acme.example>"}
                      for n, (subject, body) in enumerate(SPLIT_ACROSS)))
@@ -715,7 +747,18 @@ class Secrets(Base):
         self.assertEqual(len(self.model), len(SPLIT_ACROSS))
         for call in range(len(SPLIT_ACROSS)):
             self.assertIn(mail.HIDDEN, self.read(call))
-            self.assertNotIn("482913", self.read(call))
+            for code in codes:
+                self.assertNotRegex(self.read(call), code)
+
+    def test_a_word_for_a_code_far_down_the_text_leaves_the_subject_alone(self):
+        """Near the top, the word names the subject's code. Further down it is a promo code's,
+        and the order number in the subject may be the answer."""
+        promo = " Use the code SAVE10 for 10% off your next order."
+        near, far = (mail._kept(mail.terms("Acme"), "", "Acme order 48213377",
+                                "Thanks for your order." + pad + promo, False)
+                     for pad in ("", " It is on its way to you." * 20))
+        self.assertEqual(near[1], f"Acme order {mail.HIDDEN}")
+        self.assertEqual(far[1], "Acme order 48213377")
 
     async def test_a_code_joined_by_a_dash_or_dressed_in_punctuation_is_hidden(self):
         texts = DASHED + DRESSED
@@ -1289,6 +1332,45 @@ class Strangers(Base):
         self.assertNotIn("you sent", said)
         self.assertTrue(said.endswith(mail.NEW_SENDER), said)
 
+    async def test_mail_built_to_be_slow_to_hide_doesnt_switch_search_off(self):
+        """Three strangers' mails of "码!" over and over, dated to be read first, took seconds
+        each to hide, and the search ran out of time before it reached the real mail."""
+        hostile = [{"subject": f"Passport application renewal {n}", "days_ago": 0.1 + n / 100,
+                    "author": f"S <s{n}@strangers.example>", "body": "码!" * 10_000}
+                   for n in range(3)]
+        self.index({"subject": "Hello", "author": OFFICE, "days_ago": 900, "body": "Hello."},
+                   PASSPORT, *hostile, strangers=True)
+        self.says = ["You applied on the 2nd."]
+        said, told = await self.ask()
+        self.assertEqual(told, research.TOLD)
+        self.assertTrue(said.startswith("You applied on the 2nd. That's from an email from "
+                                        "notify.citizen.example"), said)
+
+    async def test_hiding_what_the_model_reads_never_holds_the_event_loop(self):
+        """The voice runs on the event loop, and the text the model reads was hidden on it: a
+        stranger's mail slow to hide made the voice stutter."""
+        self.index(PASSPORT)
+        real, worst, ticking = mail._shown, [0.0], [True]
+
+        def slow(*args):
+            time.sleep(0.5)
+            return real(*args)
+
+        async def tick():
+            last = time.monotonic()
+            while ticking[0]:
+                await asyncio.sleep(0.01)
+                worst[0], last = max(worst[0], time.monotonic() - last), time.monotonic()
+
+        ticker = asyncio.create_task(tick())
+        self.says = ["Then."]
+        with mock.patch.object(mail, "_shown", slow):
+            said, _ = await self.ask()
+        ticking[0] = False
+        await ticker
+        self.assertTrue(said.startswith("Then."), said)
+        self.assertLess(worst[0], 0.4)
+
     async def test_what_you_sent_is_said_to_be_yours(self):
         self.index({**PASSPORT, "folder": SENT, "author": "Me <someone@example.org>"}, strangers=True)
         self.says = ["Then."]
@@ -1415,6 +1497,47 @@ class Limits(Base):
         for rest in ("\ufdfa" * 5555, "\uff33" * 50_000, "&nbsp;" * 9000, "<" * 50_000,
                      "K\n" * 25_000):
             self.assertLess(timed(rest), max(0.5, 20 * plain), rest[:10])
+
+    def test_mail_built_to_be_slow_to_hide_is_hidden_quickly(self):
+        """What is shaped like a code was looked for after each word for one, from each place
+        it could start to the end of that word's reach, and the word "code" was looked for from
+        each letter of a run of "é" to its end. 20,000 characters of either took seconds to
+        hide, half of it on the event loop. Each is timed against an ordinary mail as long, so a
+        busy machine doesn't fail it, while one that grows with the square of its length still
+        would."""
+        def timed(body):
+            started = time.monotonic()
+            kept = mail._kept(mail.terms("Acme"), "Acme <account@acme.example>",
+                              "About your Acme account", body, False)
+            mail._shown(kept[1], mail.SUBJECT_CHARS), mail._shown(kept[2], mail.BODY_CHARS)
+            return time.monotonic() - started
+
+        size = mail.SCAN_CHARS
+        ordinary = min(timed(("Thanks for your order. " * size)[:size]) for _ in range(3))
+        for body in SLOW_TO_HIDE:
+            self.assertLess(timed(body[:size]), max(0.25, 20 * ordinary), body[:4])
+
+    async def test_a_search_out_of_time_hides_no_more_mail(self):
+        """The time was looked at only once a mail had been hidden, after the rest of a long
+        one had been read, and a stranger's mail can make either slow."""
+        long = {**PASSPORT, "body": PASSPORT["body"] + " More." * 4000}
+        self.index(*({**long, "id": f"{n}@x", "days_ago": 1 + n} for n in range(3)))
+        real, hidden = mail._kept, []
+
+        def counted(*args, **kwargs):
+            hidden.append(args)
+            return real(*args, **kwargs)
+
+        def slow(*_args):
+            time.sleep(1.2)
+            return False
+
+        started = time.monotonic()
+        with mock.patch.object(mail, "SEARCH_S", 1), mock.patch.object(mail, "_rest_talks", slow), \
+                mock.patch.object(mail, "_kept", counted):
+            self.assertEqual(await self.ask(), ("", {"message": mail.NOTHING_FOUND}))
+        self.assertEqual(hidden, [])
+        self.assertLess(time.monotonic() - started, 2)     # one rest read, not one a search
 
     async def test_it_is_off_until_switched_on(self):
         self.assertIs(DEFAULTS["mail_search"], False)

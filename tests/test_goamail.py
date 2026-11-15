@@ -40,6 +40,7 @@ SCAM = message("Urgent: your application to renew your passport",
                "Passport Office <help@passport-support.example>",
                "Your application was rejected. Call us today and pay the fee.")
 HELLO = message("Hello", OFFICE, "Hello.")
+ACME = "Acme <account@acme.example>"
 FOLDER = CERT = KEY = BUS = None
 
 
@@ -400,20 +401,25 @@ class Secrets(Goa):
                              question)
         self.assertEqual(self.model, [])
 
-    async def test_codes_are_judged_for_the_whole_mail_and_whatever_joins_them(self):
-        """Sign-in talk or a word for a code in the subject counts for the text and back, a code
-        joined by a non-breaking hyphen is still one, as is one dressed in punctuation alone
-        on its line."""
-        author = "Acme <account@acme.example>"
-        mails = [*(message(subject, author, body) for subject, body in SPLIT_ACROSS),
-                 *(message(f"About your Acme account {n}", author, text)
-                   for n, text in enumerate(DASHED + DRESSED)),
-                 *(message(f"About your Acme account, page {n}", author, None,
-                           html=f"<p>Hello from Acme.</p><p>{page}</p><p>Thanks</p>")
-                   for n, page in enumerate(("Your code is 482&#8209;913.",
-                                             "Sign in to Acme with 482&#8209;913 now.",
-                                             "Your code is KQ7&#8209;X9B.",
-                                             "<b>482913</b>.", "<strong>KQ7X9B</strong>!")))]
+    async def test_codes_are_judged_for_the_whole_mail(self):
+        """Sign-in talk or a word for a code in the subject counts for the text, and back."""
+        await self.all_hidden([message(subject, ACME, body) for subject, body in SPLIT_ACROSS])
+
+    async def test_a_code_joined_by_a_dash_or_dressed_in_punctuation_is_hidden(self):
+        """A code joined by a non-breaking hyphen is still one, as is one dressed in punctuation
+        alone on its line."""
+        await self.all_hidden([
+            *(message(f"About your Acme account {n}", ACME, text)
+              for n, text in enumerate(DASHED + DRESSED)),
+            *(message(f"About your Acme account, page {n}", ACME, None,
+                      html=f"<p>Hello from Acme.</p><p>{page}</p><p>Thanks</p>")
+              for n, page in enumerate(("Your code is 482&#8209;913.",
+                                        "Sign in to Acme with 482&#8209;913 now.",
+                                        "Your code is KQ7&#8209;X9B.",
+                                        "<b>482913</b>.", "<strong>KQ7X9B</strong>!")))])
+
+    async def all_hidden(self, mails):
+        """Each of these mails is shown to the model with its code hidden."""
         await self.mailbox(gmail(inbox=[(raw, 1 + n / 100) for n, raw in enumerate(mails)]))
         self.says = ["NOTHING"] * len(mails)
         with mock.patch.object(mail, "TRIED", len(mails)):
@@ -495,6 +501,37 @@ class Strangers(Goa):
         said, _ = await self.ask()
         self.assertNotIn("you sent", said)
         self.assertTrue(said.endswith(mail.NEW_SENDER), said)
+
+    async def test_mail_from_an_address_you_send_from_outside_sent_is_anyones(self):
+        """Gmail's All Mail holds what you sent, so an address you send from, other than the
+        account's own, was a sender of long standing there, and mail forged from it was read out
+        with no warning, where Thunderbird's mail warned. Mail in Sent is yours, whatever
+        address it is from, and a sender who is not you is still known."""
+        alias = "Me <work.alias@mailbox.example>"
+        notes = [(message(f"Note {n}", alias, "Hello."), 300 + n) for n in range(5)]
+        forged = message("Your account was hacked", alias,
+                         "I got into your account. Send 500 pounds in bitcoin today.")
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (PASSPORT, 13), (forged, 0.5)],
+                                 sent=[*notes, (message("Hello", f"Me <{USER}>", "Hi."), 200)]))
+        self.says = ["They want 500 pounds in bitcoin."]
+        said, _ = await self.ask("What did the mail about my hacked account say?")
+        self.assertTrue(said.startswith("They want 500 pounds in bitcoin. That's from an email "
+                                        "from work.alias@mailbox.example"), said)
+        self.assertTrue(said.endswith(mail.NEW_SENDER), said)
+        self.says = ["On the 29th."]
+        said, _ = await self.ask()
+        self.assertTrue(said.startswith("On the 29th. That's from an email from "
+                                        "notify.citizen.example"), said)
+        self.assertNotIn(mail.NEW_SENDER, said)
+
+    def test_an_address_there_was_no_time_to_look_for_in_sent_is_taken_to_be_yours(self):
+        class Unasked:
+            def __getattr__(self, name):
+                raise AssertionError("the server was asked")
+        owners = {"a@x.example"}
+        self.assertEqual(goamail._own(Unasked(), "Sent", owners, time.monotonic() - 1), owners)
+        self.assertEqual(goamail._own(Unasked(), None, owners, time.monotonic() + 9), set())
+        self.assertEqual(goamail._own(Unasked(), "Sent", set(), time.monotonic() + 9), set())
 
     async def test_what_you_sent_is_said_to_be_yours(self):
         mine = message("Re: renew passport application", f"Me <{USER}>",
@@ -893,6 +930,56 @@ class HostileMail(Goa):
                 self.assertIn(result.get("message") or result.get("error"),
                               (mail.NOTHING_FOUND, goamail.UNREACHABLE, goamail.REFUSED,
                                goamail.NO_ANSWER))
+
+    async def test_a_part_whose_filename_cant_be_read_costs_only_that_mail(self):
+        """The email package raised over a filename in IDNA, whose codec refuses to replace what
+        it can't read, and that ended the mailbox: one stranger's mail switched search off for
+        every question it matched."""
+        raw = (f"From: Passport Office <help@passport-support.example>\r\nTo: {USER}\r\n"
+               "Subject: Renew your passport application today\r\nMIME-Version: 1.0\r\n"
+               'Content-Type: multipart/mixed; boundary="B"\r\n\r\n--B\r\n'
+               "Content-Type: text/plain; charset=utf-8\r\n"
+               "Content-Disposition: inline; filename*=idna''x\r\n\r\n"
+               "Pay the fee today.\r\n--B--\r\n").encode()
+        head, _, text = raw.partition(b"\r\n\r\n")
+        self.assertEqual(goamail._body(goamail._parsed(head, text)), ("", False))
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (PASSPORT, 13), (raw, 1)]))
+        session = Session()
+        self.says = ["You applied on Thursday."]
+        name, result = await Skills(config=CONFIG).execute(
+            "mail_search", json.dumps({"question": ASKED}), session)
+        self.assertEqual((name, result), ("mail.search", research.TOLD))
+        self.assertIn("We will write to you again", self.read(0))
+
+    async def test_whatever_goes_wrong_over_one_mail_costs_only_that_mail(self):
+        """An error over one mail ended its mailbox, so the search found nothing. Whatever goes
+        wrong after the search, what it found is still the answer, with the warning, as no one
+        could be looked up."""
+        await self.mailbox(gmail(inbox=[(HELLO, 900), (PASSPORT, 13), (SCAM, 1)]))
+
+        def failing(real):
+            def over_the_scam(message, *args):
+                if "Urgent" in str(message.get("Subject")):
+                    raise KeyError(self.WORDS)
+                return real(message, *args)
+            return over_the_scam
+
+        for name in ("_subject", "_body", "_author"):
+            with self.subTest(name), mock.patch.object(goamail, name,
+                                                       failing(getattr(goamail, name))):
+                self.model.clear()
+                self.says = ["On the 29th."]
+                said, told = await self.ask()
+                self.assertEqual(told, research.TOLD)
+                self.assertIn("We will write to you again", self.read(0))
+                self.assertTrue(said.startswith("On the 29th. That's from an email from "
+                                                "notify.citizen.example"), said)
+        self.says = ["On the 29th."]
+        with mock.patch.object(goamail, "_known", side_effect=KeyError(self.WORDS)):
+            said, told = await self.ask()
+        self.assertEqual(told, research.TOLD)
+        self.assertTrue(said.startswith("On the 29th."), said)
+        self.assertTrue(said.endswith(mail.NEW_SENDER), said)
 
     def test_html_built_to_be_slow_is_read_quickly(self):
         """A lazy match from each "<head" that never closed read on to the end of the text, and

@@ -124,6 +124,17 @@ class Logic(unittest.TestCase):
         self.assertEqual(sa.permission_list({"network": ["home", "a.org"], "<b>x</b>": True}),
                          [("Use the network", "your own server, a.org"), ("Use <b>x</b>", "")])
 
+    def test_the_mail_skills_page_says_what_its_permissions_dont(self):
+        """Without Thunderbird, mail search sends the question's words to each account's server
+        in Online Accounts, from goamail.py, which no permission of its own says."""
+        from tuxistant.skills import Skills
+        details = Skills().details("org.tuxistant.mail")
+        self.assertEqual(sa.skill_permissions(details), [
+            ("Read your mail", ""), sa.ALSO_DOES["org.tuxistant.mail"]])
+        self.assertIn("tuxistant/goamail.py, tuxistant/mail.py", sa.code_words(details))
+        self.assertEqual(sa.skill_permissions({**details, "source": "yours"}),
+                         [("Read your mail", "")])
+
     def test_risk_words(self):
         self.assertEqual(sa.risk_words("high", ["shell", "files_write"], {}),
                          "Because it can run shell commands and change files")

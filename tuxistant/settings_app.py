@@ -53,6 +53,12 @@ PERMISSION_WORDS = {
     "home_control": "control devices through Home Assistant",
     "home_read": "read the state of your home",
 }
+# What a built-in skill does that its permissions don't say, and the code it does it in: mail
+# search without Thunderbird asks each account's own server, from goamail.py, with no permission
+# of its own to show for it.
+ALSO_DOES = {"org.tuxistant.mail": ("Send your question's words to your mail server",
+                                    "Without Thunderbird, to each account in Online Accounts")}
+ALSO_IN = {"tuxistant.mail": ("tuxistant.goamail",)}
 SKILLS_FOLDER = DATA_DIR / "skills"   # where your skills and recipes go, as skillhost.USER_DIR
 HOME_SERVER = "home"        # a network permission naming the server this install talks to
 SHELL_ACTION = "shell.run"
@@ -1513,8 +1519,8 @@ def code_words(details: dict) -> str:
     if details.get("source") in ("yours", "bundled"):
         return ("Its own program, in the files below. It runs in a sandbox that sees its own "
                 "folder and none of your home folder, with the network only if it asks for it")
-    modules = sorted({module_file(a["module"]) for a in details.get("actions", [])
-                      if a.get("module")})
+    modules = sorted({module_file(module) for a in details.get("actions", []) if a.get("module")
+                      for module in (a["module"], *ALSO_IN.get(a["module"], ()))})
     where = f" in {', '.join(modules)}" if modules else ""
     return (f"Built in: Python code{where}. The manifest says what the model is offered, and "
             "the code decides what really happens")
@@ -1537,6 +1543,12 @@ def permission_list(permissions: dict) -> list[tuple[str, str]]:
                               else str(name) for name in value)
         found.append((words[0].upper() + words[1:], where))
     return found
+
+
+def skill_permissions(details: dict) -> list[tuple[str, str]]:
+    """permission_list, and what a built-in skill does besides (see ALSO_DOES)."""
+    also = ALSO_DOES.get(details.get("id")) if details.get("source") == "built-in" else None
+    return permission_list(details.get("permissions") or {}) + ([also] if also else [])
 
 
 def risk_words(risk: str, because: list | None, permissions: dict) -> str:
@@ -1668,7 +1680,7 @@ class SkillDialog(Adw.PreferencesDialog):
     def show_permissions(self, skill, because):
         for row in self.permission_rows:
             self.permissions.remove(row)
-        rows = [plain_row(what, where) for what, where in permission_list(skill["permissions"])]
+        rows = [plain_row(what, where) for what, where in skill_permissions(skill)]
         if not rows:
             rows.append(plain_row("None", "It needs no special permissions"))
         risk = plain_row(risk_label(skill["risk"]),
