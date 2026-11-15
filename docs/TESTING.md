@@ -26,6 +26,8 @@
 
 `tests/test_mail.py` builds a made-up copy of Thunderbird's index with `tests/mail_index.py`, and fails if anything opens an index outside its temporary folder. `tools/eval_cutoffs.py`, which both `tools/eval_flows.py` and `tests/test_realtime_live.py` install, points mail search at a made-up mailbox from the same file, with a landlord, a dentist, a sign-in code and a scam in it, so an evaluation never reads real mail or sends any of it to a model. Keep it that way: every mail in there is invented, and none may be copied from a real inbox. Its senders use `mailbox.example` in place of a real mailbox provider, so that no address could be a real person's.
 
+`tests/test_mail.py` points the session bus address at no socket, so without a Thunderbird index the search can't reach the real Online Accounts. `tests/test_goamail.py` starts its own `dbus-daemon` with no service files, so nothing real can be started on it, puts a made-up Online Accounts there, and runs a made-up IMAP server on 127.0.0.1 with a certificate made for the run by `openssl` and trusted only by the test (`tests/imap_fake.py`). Its mails end each line with CRLF, as a real server sends them. The server writes down every command, so the tests check what was asked as well as what came back. `tools/eval_cutoffs.py` blocks `goamail._connect`, the one way to Online Accounts.
+
 ## Media
 
 The opt-in live protocol test permits only `time.now`; every unexpected tool is blocked before its handler runs.

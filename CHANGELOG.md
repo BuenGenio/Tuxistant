@@ -2,6 +2,16 @@
 
 ## Not yet released
 
+Two changes reach what 0.5.0 already did:
+
+- With "Search my mail" on and no mail in Thunderbird, Tux now searches a Google or Microsoft account in Online Accounts on that account's own server, where 0.5.0 said it couldn't find any mail. The question's words go to that server with no card, even after the conversation has read something private. Not yet tried on a real desktop or a real account.
+- Mail search hides more of a mail before it is read, Thunderbird's mail too: a code spelt out one character to a line or with a space between each, and, in a mail too long to be read whole, every number as long as a code when the rest of the mail talks of signing in. So an order number or a booking reference that 0.5.0 read out can now come out as "hidden".
+
+After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension is unchanged.
+
+- Mail search without Thunderbird: when Thunderbird holds no mail, a Google or Microsoft account added in GNOME Settings under Online Accounts is searched on its own server, over IMAP, behind the same "Search my mail" switch. The same codes are hidden, the same first-time senders are warned about, and the answer is read out by the app as before, never handed to a model with tools. Tux asks Online Accounts only for an access token that lasts about an hour, once per search, and sends it only to the account's mail server over TLS with its certificate checked; an account set up with a password is left alone. Mailboxes are opened read-only and nothing is marked read. Only the inbox, or Gmail's All Mail, and Sent are searched, at most 40 mails a mailbox are fetched, and only their sender, subject and the start of their text. Tested against a made-up Online Accounts on a private bus and a made-up mail server on this computer. Not yet tried on a real desktop or a real account.
+- Mail search hides a sign-in code laid out one character to a line, as an HTML mail with each character in a block of its own reads, as it hides one with a line to itself, and one with a space between each character too, as one character to a table cell reads. Before, such a code was hidden only near a word such as "code", and one with letters in it not at all. This holds for Thunderbird's mail as well as for Online Accounts, and for a mail whose lines end with a carriage return and a line feed, as a mail server sends them, or with a line or paragraph separator, NEL, a vertical tab or a form feed. A code padded with characters no one sees is hidden too: bidi isolates such as those a Fluent template puts round each value, other format and control characters, private-use and tag characters, variation selectors, keycaps, wide letters and digits, and character references such as `&#52;`. A code is no longer half shown where a mail is cut to what the model reads, or where Tux stops reading it.
+
 ## 0.5.0
 
 The stable release, by the owner's choice, and what the website offers. Every change in it was reviewed, and the review's findings were fixed and checked again, but most of what it adds has only run in tests, in an isolated GNOME Shell and in evaluations against a real model, not yet on a real desktop: each entry below says how far it was tried. 0.2.0 is the last release whose additions all worked on the owner's own desktop.

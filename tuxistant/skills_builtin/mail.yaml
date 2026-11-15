@@ -1,7 +1,7 @@
 # None of a mail's text goes back to the model that picks tools: see tuxistant/mail.py.
 id: org.tuxistant.mail
 name: Mail
-description: Answers questions from the mail Thunderbird keeps on this computer. Off until you turn it on in Settings
+description: Answers questions from your mail, from Thunderbird on this computer or a Google or Microsoft account in Online Accounts. Off until you turn it on in Settings
 version: 1.0.0
 permissions:
   mail_read: true

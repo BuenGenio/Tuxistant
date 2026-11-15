@@ -65,8 +65,9 @@ LIGHTS_NOTE = ("The TP-Link account your Tapo lights are set up with. The passwo
 HOME_NOTE = ("Make a long-lived access token on your profile page in Home Assistant, under "
              "Security. Enter the address first: a new address needs its own token. Plain "
              "http is only used on your own network")
-MAIL_NOTE = ("Answers come from the mail Thunderbird keeps on this computer. What a mail says "
-             "goes to your own server to be read, and nowhere else")
+MAIL_NOTE = ("Answers come from the mail Thunderbird keeps on this computer, or without it from "
+             "a Google or Microsoft account in Online Accounts, searched on its own server. What a "
+             "mail says goes to your own server to be read, and nowhere else")
 AUTOMATIC = "Automatic"
 PHONE_NOTE = "Used when you don't name a device"
 CALENDARS_TIMEOUT_MS = 30000    # the daemon connects to each calendar to see if it can be changed
