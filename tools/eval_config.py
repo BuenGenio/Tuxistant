@@ -35,23 +35,34 @@ LOCAL_NAMES = {"localhost", "localhost.localdomain", "localhost4", "localhost6",
 
 
 RECIPES = Path(__file__).resolve().parent.parent / "tests" / "recipes"
-# Labels of a host that say nothing about whose server it is.
+# Labels of a host, or words of one, that say nothing about whose server it is.
 GENERIC_LABELS = {"local", "localdomain", "home", "arpa", "internal", "intranet", "private",
-                  "example", "test", "invalid"}
+                  "example", "test", "invalid", "lan", "com", "net", "org", "dev", "edu", "gov",
+                  "int", "info", "app", "cloud", "site", "xyz", "corp", "server", "servers",
+                  "srv", "host", "nas"}
+
+
+def _patterns(host: str) -> list[str]:
+    """The host, its first label, every other label and every word of a label of three letters
+    or more that isn't generic, and a label of more than one word written with a space, a dot or
+    nothing between them, as alice nas or AliceNAS for alice-nas.lan. The longest first."""
+    names, joined = own_names(host), set()
+    if not is_address(host):
+        for label in host.casefold().split("."):
+            words = [w for w in re.split(r"[-_]", label) if w]
+            names |= {w for w in [label, *words] if len(w) >= 3 and w not in GENERIC_LABELS}
+            if len(words) > 1 and set(words) - GENERIC_LABELS:
+                joined.add(r"[\s._-]?".join(map(re.escape, words)))
+    return sorted(joined | set(map(re.escape, names)), key=len, reverse=True)
 
 
 def redacted(text: str, host: str, placeholder: str = "{server}") -> str:
-    """text with the server's host, its first label and any other telling label of it in place
-    of placeholder, in any case: the model may call stormy.lan stormy, and what is printed goes
-    into public notes. The longest first and only as a whole word, so a short label leaves other
-    words alone."""
-    names = own_names(host)
-    if not is_address(host):
-        names |= {label for label in host.casefold().split(".")
-                  if len(label) > 3 and label not in GENERIC_LABELS}
-    for name in sorted(names, key=len, reverse=True):
-        text = re.sub(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", placeholder, text,
-                      flags=re.I)
+    """text with the server's host, its first label and any other telling label or word of it
+    in place of placeholder, in any case: the model may call stormy.lan stormy and alice-nas.lan
+    alice nas, and what is printed goes into public notes. The longest first and only as a whole
+    word, so a short label leaves other words alone."""
+    for pattern in _patterns(host):
+        text = re.sub(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", placeholder, text, flags=re.I)
     return text
 
 

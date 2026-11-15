@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tools.eval_config import eval_skills, evaluation_server, redacted
 from tuxistant.config import Config, DEFAULTS
-from tuxistant.serverstatus import host_of, is_local
+from tuxistant.serverstatus import host_of, is_address, is_local
 from tuxistant.system import about_server
 from tuxistant.skillhost import offline
 
@@ -44,6 +44,8 @@ evaluation_server(cfg)
 KEY = cfg["api_key"]
 # Said in the cases in place of {server}, and never printed: the results show the placeholder.
 SERVER_HOST = host_of(cfg["server"]) or "myserver.example"
+# And {label}, its first label, as people say "my nas" for nas.lan.
+SERVER_LABEL = SERVER_HOST if is_address(SERVER_HOST) else SERVER_HOST.partition(".")[0]
 # A server on this computer is no server to ask over ssh, so its cases can never be right.
 SERVER_IS_HERE = is_local(SERVER_HOST)
 HOME = os.environ.get("TUX_EVAL_HOME") == "1"
@@ -89,14 +91,17 @@ CASES = [
     ("What's my IP address?", {"system_info"}),
     ("Is docker running?", {"system_running"}),
     ("Is Firefox running?", {"system_running"}),
-    # Your own server. {server} is its host, filled in from the server this run uses, so the
-    # file never names one. system_running@server is system_running asked about the server, by
-    # its "on" or by naming it, as the handler judges it: without that it looks on this computer.
+    # Your own server. {server} is its host, filled in from the server this run uses, and {label}
+    # its first label, so the file never names one. system_running@server is system_running
+    # asked about the server, by its "on" or by naming it, as the handler judges it: without
+    # that it looks on this computer.
     ("Which services are running on {server}?", {"system_running@server"}),
     ("What's running on my server?", {"system_running@server"}),
     ("Is LocalAI running on {server}?", {"system_running@server"}),
     # How most people name this machine, which the model copies into on word for word.
     ("Is LocalAI running on my home server?", {"system_running@server"}),
+    # As people name the server by its first label, "my nas", which the model copies into on.
+    ("Is LocalAI running on my {label}?", {"system_running@server"}),
     # Local, though they say server: an on of "server" here would go over ssh.
     ("Is the Plex server running?", {"system_running"}),
     # A command asked for word for word may go to the shell, which shows it on a card.
@@ -398,7 +403,8 @@ async def main():
         seen = collections.Counter()
         sample = ""
         for _ in range(REPS):
-            name, args = await first_tool(text.replace("{server}", SERVER_HOST))
+            name, args = await first_tool(text.replace("{server}", SERVER_HOST)
+                                          .replace("{label}", SERVER_LABEL))
             name = judged(name, args) if name not in (None, "ERROR") else name
             seen[name] += 1
             ok = (name is None) if wanted is None else name in wanted

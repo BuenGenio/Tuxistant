@@ -110,6 +110,8 @@ FACTS = {"uptime": _uptime, "ip": _ip, "memory": _memory, "cpu": _cpu, "battery"
 HERE = {"this", "my", "the", "our", "own", "here", "local", "localhost", "computer", "desktop",
         "laptop", "pc", "machine", "system", "device"}
 NOTHING = ("", "true", "false", "none", "null")
+# Before the server's name in on or name, as in "my nas" or "the pi".
+POSSESSIVES = {"my", "our", "your", "the", "own"}
 ONLY_TWO = "I can only check this computer and the server in Settings."
 
 
@@ -140,10 +142,12 @@ def _words(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", text))
 
 
-def _names_the_server(name: str, config) -> bool:
-    """The server's name, or its first label, as stormy for stormy.lan."""
+def _names_the_server(said: str, config) -> bool:
+    """The server's name, or its first label, as stormy for stormy.lan, with my or the before
+    it and in any spelling: "my nas" for nas.lan, "stormy nas" for stormy-nas.lan."""
     host = _server_host(config)
-    return bool(host) and name in serverstatus.own_names(host)
+    rest = " ".join(w for w in re.findall(r"[a-z0-9]+", said) if w not in POSSESSIVES)
+    return bool(host) and serverstatus.is_own_name(rest, host)
 
 
 def _here(on: str) -> bool:
@@ -154,11 +158,21 @@ def _here(on: str) -> bool:
 
 def on_server(args: dict, config) -> bool:
     """Asked about the server outright: by an on with "server" in it, such as my home server or
-    the servers, or the server's name, or by "server" with only words like these as the name.
-    The model copies on as it heard it, so "my minecraft server" counts too."""
+    the servers, or the server's name, or by "server" with only words like these as the name,
+    unless on means this computer. The model copies on as it heard it, so "my minecraft server"
+    counts too."""
     on, name = _said(args.get("on")), _said(args.get("name"))
-    return (bool(_words(on) & serverstatus.SERVER_WORDS) or serverstatus.names_a_server(name)
-            or _names_the_server(on, config))
+    return (bool(_words(on) & serverstatus.SERVER_WORDS) or _names_the_server(on, config)
+            or (on in NOTHING and serverstatus.names_a_server(name)))
+
+
+def _maybe_another(args: dict, config) -> bool:
+    """An on with more in it than your server, as "my work server": it may mean another one,
+    so the answer names the one in Settings."""
+    on = _said(args.get("on"))
+    rest = [w for w in re.findall(r"[a-z0-9]+", on)
+            if w not in POSSESSIVES | serverstatus.SERVER_WORDS | {"home"}]
+    return on not in NOTHING and bool(rest) and not _names_the_server(" ".join(rest), config)
 
 
 def _whole_list(name: str) -> bool:
@@ -186,15 +200,23 @@ def about_server(args: dict, config) -> bool:
     return _from_the_server(args, config) or _named_server(args, config)
 
 
-def _on_the_server(args: dict, config, session) -> dict:
+def _on_the_server(args: dict, config, session, missed_here: str | None = None) -> dict:
     """serverstatus's one fixed command, said by the app. The name is matched here, never sent."""
-    return serverstatus.running(args, config, session if session is not None else Session())
+    return serverstatus.running(args, config, session if session is not None else Session(),
+                                missed_here, _maybe_another(args, config))
+
+
+def _any_dashes(name: str) -> str:
+    """A pattern for pgrep that takes name with or without - or _ between its letters, as the
+    model says localai for the local-ai that LocalAI's compose file runs."""
+    letters = [re.sub(r"([.+])", r"\\\1", c) for c in name if c not in "-_"]
+    return "[-_]?".join(letters)
 
 
 def _here_by_name(name: str) -> bool:
     active = any(_tool("systemctl", *scope, "is-active", "--", name).strip() == "active"
                  for scope in ([], ["--user"]))
-    return active or bool(_tool("pgrep", "-i", "-x", "--", name).strip())
+    return active or bool(_tool("pgrep", "-i", "-x", "--", _any_dashes(name)).strip())
 
 
 def running(args: dict, config, session=None) -> dict:
@@ -212,9 +234,13 @@ def running(args: dict, config, session=None) -> dict:
         raise ValueError("Say which program or service to check.")
     found = _here_by_name(name)
     if not found and _named_server(args, config):
-        return _on_the_server(args, config, session)
+        # a label such as plex may be a program after all, but not a host with a dot
+        return _on_the_server(args, config, session, None if "." in name else name)
     if not _here(on):
-        # another computer, which can't be asked: a plain yes or no would be about the wrong one
+        # Another computer, which can't be asked: a plain yes or no would be about the wrong
+        # one. What this computer runs is said all the same, and raising skips files_read.
+        if session is not None:
+            session.tainted = True
         raise ValueError(f"{ONLY_TWO} On this computer, {name} is running." if found else
                          f"{ONLY_TWO} Nothing called {name} is running on this computer.")
     return {"name": name, "running": found}

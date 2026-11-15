@@ -6,6 +6,7 @@ import ast
 import asyncio
 import contextlib
 import io
+import json
 import os
 import subprocess
 import sys
@@ -480,6 +481,29 @@ class RoutingCases(unittest.TestCase):
         cases = self.cases("CASES")
         self.assertEqual(cases["Is LocalAI running on my home server?"], {"system_running@server"})
         self.assertEqual(cases["Is the Plex server running?"], {"system_running"})
+        self.assertEqual(cases["Is LocalAI running on my {label}?"], {"system_running@server"})
+
+    def test_the_cases_are_asked_with_the_server_filled_in_and_judged_by_the_handler(self):
+        tree = ast.parse((ROOT / "tools" / "eval_routing.py").read_text())
+        source = ast.unparse(tree)
+        self.assertIn("name, args = await first_tool(text.replace('{server}', SERVER_HOST)"
+                      ".replace('{label}', SERVER_LABEL))", source)
+        self.assertIn("name = judged(name, args) if name not in (None, 'ERROR') else name",
+                      source)
+        self.assertIn("SERVER_LABEL = SERVER_HOST if is_address(SERVER_HOST) else "
+                      "SERVER_HOST.partition('.')[0]", source)
+        judged = next(node for node in tree.body
+                      if isinstance(node, ast.FunctionDef) and node.name == "judged")
+        space = {"json": json, "about_server": system.about_server,
+                 "cfg": {**DEFAULTS, "server": "nas.lan:8080"}}
+        exec(compile(ast.Module([judged], []), "eval_routing.py", "exec"), space)
+        for args, name in (('{"name": "localai", "on": "my nas"}', "system_running@server"),
+                           ('{"name": "localai", "on": "my server"}', "system_running@server"),
+                           ('{"name": "firefox"}', "system_running"),
+                           ('{"name": "plex", "on": "office pc"}', "system_running")):
+            with self.subTest(args):
+                self.assertEqual(space["judged"]("system_running", args), name)
+        self.assertEqual(space["judged"]("shell_run", '{"command": "ssh nas"}'), "shell_run")
 
     def test_what_is_printed_names_no_server(self):
         """The model may name stormy.lan as stormy, and the output goes into TESTING.md."""
@@ -501,7 +525,19 @@ class RoutingCases(unittest.TestCase):
                  "the {server} server, pin and spice on {server}."),
                 ("10.0.0.5", '{"name": "10.0.0.5"} on 10 servers',
                  '{"name": "{server}"} on 10 servers'),
-                ("nas.home.arpa", "my home nas", "my home {server}")):
+                ("nas.home.arpa", "my home nas", "my home {server}"),
+                # A label of more than one word, as the model may write it.
+                ("jeff-nas.lan", '{"on": "jeff nas"} Jeff-NAS JeffNAS jeff_nas, my nas',
+                 '{"on": "{server}"} {server} {server} {server}, my nas'),
+                ("stormy-box.lan", '{"on": "StormyBox"} stormy box, Stormy',
+                 '{"on": "{server}"} {server}, {server}'),
+                ("alice-nas.lan", '"on": "alice nas" Alice NAS alicenas alice jeff',
+                 '"on": "{server}" {server} {server} {server} jeff'),
+                # Every label of three letters or more, but no generic one.
+                ("pi.bob.lan", "pi.bob bob bobby on the lan", "{server}.{server} {server} bobby "
+                                                             "on the lan"),
+                ("pi.jeff.lan", "jeff, jeffrey", "{server}, jeffrey"),
+                ("home-server.lan", "my home server, home-server", "my home server, {server}")):
             with self.subTest(host):
                 self.assertEqual(eval_config.redacted(said, host), shown)
 

@@ -3,12 +3,15 @@ ssh here: nothing reaches a network or a real server."""
 import asyncio
 import json
 import os
+import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tuxistant import serverstatus, system
@@ -16,6 +19,7 @@ from tuxistant.config import DEFAULTS
 from tuxistant.gate import APP_SAYS, Session
 from tuxistant.skills import Skills, leaves_home
 
+ROOT = Path(__file__).resolve().parent.parent
 HOST = "myserver.example"
 CONFIG = {**DEFAULTS, "server": f"{HOST}:8080"}
 FULL = (b"@docker\n"
@@ -58,6 +62,7 @@ class FixedCommand(unittest.TestCase):
         self.assertEqual(argv, ["ssh", "-T", "-x", "-a", "-o", "IgnoreUnknown=*",
                                 "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
                                 "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no",
+                                "-o", "CheckHostIP=no",
                                 "-o", "ClearAllForwardings=yes", "-o", "Tunnel=no",
                                 "-o", "PermitLocalCommand=no", "-o", "RemoteCommand=none",
                                 "-o", "ControlMaster=no", "-o", "ControlPath=none",
@@ -67,6 +72,13 @@ class FixedCommand(unittest.TestCase):
         self.assertEqual(serverstatus.REMOTE, serverstatus.command("other.example")[-1])
 
     def test_what_is_sent_is_the_read_only_command_alone(self):
+        """Word for word: anything added before a read would run on your server with no click."""
+        self.assertEqual(serverstatus.INNER,
+                         'export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T="timeout 8"; '
+                         'echo @docker; $T docker ps --format "{{.Names}}|{{.Image}}|{{.Status}}" '
+                         '2>&1; echo "@exit $?"; echo @systemd; $T systemctl list-units '
+                         '--type=service --state=running --no-legend --plain --no-pager '
+                         '2>/dev/null; echo "@exit $?"')
         self.assertEqual(serverstatus.REMOTE, "exec sh -c " + shlex.quote(serverstatus.INNER))
         # Read first by the remote user's own shell: fish keeps a backslash in single quotes
         # and csh expands a ! there.
@@ -173,10 +185,28 @@ class Filtering(unittest.TestCase):
                          "and again, so not really up: broken.")
         self.assertEqual(said({"name": "broken"}, answer=(0, looping, b""))[0],
                          "Not really: on your server I see the docker container broken, "
-                         "restarting 5 seconds ago.")
+                         "restarting again and again.")
         only = b"@docker\nbroken|app|Restarting (1) 5 seconds ago\n@exit 0\n@systemd\n@exit 0\n"
         self.assertTrue(said(answer=(0, only, b""))[0].startswith(
             "No docker containers are really up on your server. Restarting"))
+
+    def test_docker_s_times_are_said_as_words(self):
+        times = (b"@docker\nweb|nginx|Up About an hour\nnew|app|Up Less than a second\n@exit 0\n"
+                 b"@systemd\n@exit 0\n")
+        self.assertEqual(said({"name": "web"}, answer=(0, times, b""))[0],
+                         "Yes, on your server I see the docker container web, up about an hour.")
+        self.assertEqual(said({"name": "new"}, answer=(0, times, b""))[0],
+                         "Yes, on your server I see the docker container new, up less than a "
+                         "second.")
+
+    def test_services_that_are_all_named_are_listed_plainly(self):
+        one = b"@docker\n@exit 0\n@systemd\nnginx.service loaded active running x\n@exit 0\n"
+        self.assertEqual(said(answer=(0, one, b""))[0], "No docker containers are running on "
+                         "your server. There is 1 system service running: nginx.")
+        two = one.replace(b"@exit 0\n@systemd\n",
+                          b"@exit 0\n@systemd\npostgresql.service loaded active running x\n")
+        self.assertTrue(said(answer=(0, two, b""))[0].endswith(
+            "There are 2 system services running: postgresql and nginx."))
 
     def test_a_paused_container_is_not_running(self):
         paused = (b"@docker\nweb|nginx|Up 2 days\nidle|app|Up 2 hours (Paused)\n@exit 0\n"
@@ -206,12 +236,31 @@ class Filtering(unittest.TestCase):
                 ("ai", "I don't see ai among the docker containers or services running on your "
                        "server."),
                 ("api", "Yes, on your server I see the docker container localai-api-1, up 3 "
-                        "days.")):
+                        "days."),
+                # Not a word cut before matching, and not a key inside another word.
+                ("sql server", "I don't see sql server on your server, but I see the service "
+                               "postgresql."),
+                ("postgres", "Yes, on your server I see the service postgresql."),
+                ("localai server", "Yes, on your server I see the docker container "
+                                   "localai-api-1, up 3 days."),
+                ("the nginx service", "Yes, on your server I see the service nginx.")):
             with self.subTest(name):
                 self.assertEqual(said({"name": name}, answer=(0, homelab, b""))[0], sentence)
         self.assertIn("I don't see db", said({"name": "db"})[0])
-        short = b"@docker\nopen-ai|x|Up 1 day\n@exit 0\n@systemd\n@exit 0\n"
+        short = b"@docker\nopen-ai|img|Up 1 day\n@exit 0\n@systemd\n@exit 0\n"
         self.assertTrue(said({"name": "ai"}, answer=(0, short, b""))[0].startswith("Yes"))
+        # Two letters alone are never some of a name: no "but I see open-ai".
+        self.assertEqual(said({"name": "x ai"}, answer=(0, short, b""))[0],
+                         "I don't see x ai among the docker containers or services running on "
+                         "your server.")
+        plex = b"@docker\nplex|plexinc/pms-docker|Up 2 days\n@exit 0\n@systemd\n@exit 0\n"
+        self.assertEqual(said({"name": "Plex Media Server", "on": "server"},
+                              answer=(0, plex, b""))[0],
+                         "I don't see plex media server on your server, but I see the docker "
+                         "container plex, up 2 days.")
+        minecraft = b"@docker\nminecraft|itzg/minecraft-server|Up 1 day\n@exit 0\n@systemd\n@exit 0\n"
+        self.assertEqual(said({"name": "minecraft server"}, answer=(0, minecraft, b""))[0],
+                         "Yes, on your server I see the docker container minecraft, up 1 day.")
 
     def test_a_server_named_like_what_runs_on_it(self):
         config = {**CONFIG, "server": "localai.lan:8080"}
@@ -245,9 +294,22 @@ class Filtering(unittest.TestCase):
     def test_words_around_a_name_ask_for_the_whole_list(self):
         for name in ("server", "my server", HOST, "MyServer.Example", "myserver", f"ssh {HOST}",
                      "docker", "my home server", "our server", "the servers.", "home server",
-                     "Docker containers", "services"):
+                     "Docker containers", "services", "processes", "programs", "apps",
+                     "applications", "*", "all the running apps"):
             with self.subTest(name):
                 self.assertTrue(said({"name": name})[0].startswith("On your server, 2 docker"))
+
+    def test_ssh_itself_is_running_once_it_answered(self):
+        """Debian and Ubuntu call it ssh.service, which "sshd" is not in."""
+        debian = b"@docker\n@exit 0\n@systemd\nssh.service loaded active running x\n@exit 0\n"
+        for name in ("sshd", "ssh", "openssh", "openssh-server", "the ssh server", "SSH service"):
+            with self.subTest(name):
+                text, session, _ = said({"name": name}, answer=(0, debian, b""))
+                self.assertEqual(text, serverstatus.OVER_SSH)
+                self.assertTrue(session.tainted)
+        self.assertEqual(said({"name": "sshd"}, answer=(255, b"", b"Permission denied"))[0],
+                         serverstatus.NO_KEY)
+        self.assertTrue(said({"name": f"ssh {HOST}"})[0].startswith("On your server, 2 docker"))
 
     def test_a_name_that_is_not_a_plain_word(self):
         for name in ("a;b", "$(id)", "x", "a" * 60, "../etc", "name|line", "-v"):
@@ -316,7 +378,7 @@ class Errors(unittest.TestCase):
                      b"@exit 0\n")
         text = said(answer=(0, no_docker, b""))[0]
         self.assertTrue(text.startswith("Docker isn't installed on your server."), text)
-        self.assertIn("1 system service running, among them nginx", text)
+        self.assertIn("There is 1 system service running: nginx.", text)
         self.assertIn("couldn't check docker there", said({"name": "x1"}, answer=(0, no_docker, b""))[0])
         down = (b"@docker\nCannot connect to the Docker daemon at unix:///var/run/docker.sock.\n"
                 b"@exit 1\n@systemd\n@exit 0\n")
@@ -457,12 +519,13 @@ class BoundedRun(unittest.TestCase):
         self.assertEqual((code, output), (0, b"''\n"))
 
 
+# Each call is added to the log, so a call before the real read is seen too.
 FAKE_DOCKER = """#!/bin/sh
-printf '%s\\n' "$@" > {log}/docker
+printf '%s\\n' "$@" @end >> {log}/docker
 printf 'web|nginx:latest|Up 2 days\\nplex|plexinc/pms-docker|Up 1 hour\\n'
 """
 FAKE_SYSTEMCTL = """#!/bin/sh
-printf '%s\\n' "$@" > {log}/systemctl
+printf '%s\\n' "$@" @end >> {log}/systemctl
 printf 'nginx.service loaded active running A web server\\n'
 """
 FAKE_TIMEOUT = """#!/bin/sh
@@ -470,6 +533,11 @@ printf '%s\\n' "$*" >> {log}/timeout
 shift
 exec "$@"
 """
+DOCKER_CALL = ["ps", "--format", "{{.Names}}|{{.Image}}|{{.Status}}"]
+SYSTEMCTL_CALL = ["list-units", "--type=service", "--state=running", "--no-legend", "--plain",
+                  "--no-pager"]
+SHELLS = [shell for shell in ("/bin/sh", "/bin/bash", "/bin/dash", "/usr/bin/zsh")
+          if os.path.exists(shell)]
 
 
 class RemoteCommand(unittest.TestCase):
@@ -492,7 +560,11 @@ class RemoteCommand(unittest.TestCase):
         os.chmod(path, 0o755)
 
     def read(self, shell="/bin/sh") -> dict:
-        """serverstatus.read, with the shell here in place of ssh and the server."""
+        """serverstatus.read, with the shell here in place of ssh and the server, and the logs
+        of an earlier read cleared."""
+        for name in os.listdir(self.log):
+            os.remove(os.path.join(self.log, name))
+
         def over_ssh(argv, env):
             self.assertEqual(argv, serverstatus.command(HOST))
             return REAL_RUN([shell, "-c", argv[-1]], {"PATH": self.bin})
@@ -503,34 +575,53 @@ class RemoteCommand(unittest.TestCase):
         with open(os.path.join(self.log, name)) as file:
             return file.read().splitlines()
 
+    def calls(self, name: str) -> list[list[str]]:
+        """Each call of a stand-in, with its arguments."""
+        found, call = [], []
+        for line in self.logged(name):
+            if line == "@end":
+                found.append(call)
+                call = []
+            else:
+                call.append(line)
+        self.assertEqual(call, [], "a call that didn't finish")
+        return found
+
     def test_it_runs_the_two_reads_with_these_arguments_alone(self):
         self.fake("docker", FAKE_DOCKER)
         self.fake("systemctl", FAKE_SYSTEMCTL)
-        shells = [shell for shell in ("/bin/sh", "/bin/bash", "/bin/dash", "/usr/bin/zsh")
-                  if os.path.exists(shell)]
-        for shell in shells:
+        for shell in SHELLS:
             with self.subTest(shell):
                 found = self.read(shell)
                 self.assertEqual([c["name"] for c in found["docker"]], ["web", "plex"])
                 self.assertEqual(found["systemd"], ["nginx"])
-                self.assertEqual(self.logged("docker"),
-                                 ["ps", "--format", "{{.Names}}|{{.Image}}|{{.Status}}"])
-                self.assertEqual(self.logged("systemctl"),
-                                 ["list-units", "--type=service", "--state=running",
-                                  "--no-legend", "--plain", "--no-pager"])
+                self.assertEqual(self.calls("docker"), [DOCKER_CALL])
+                self.assertEqual(self.calls("systemctl"), [SYSTEMCTL_CALL])
+
+    def test_a_call_before_the_read_is_seen(self):
+        """The stand-ins keep every call, so an extra one can't hide behind the real read."""
+        self.fake("docker", FAKE_DOCKER)
+        self.fake("systemctl", FAKE_SYSTEMCTL)
+        extra = serverstatus.INNER.replace("echo @docker;", "docker pause web >/dev/null; "
+                                                            "echo @docker;")
+        with mock.patch.object(serverstatus, "REMOTE", "exec sh -c " + shlex.quote(extra)):
+            self.read()
+        self.assertEqual(self.calls("docker"), [["pause", "web"], DOCKER_CALL])
 
     def test_with_a_timeout_there_each_read_gets_one(self):
         self.fake("docker", FAKE_DOCKER)
         self.fake("systemctl", FAKE_SYSTEMCTL)
         self.fake("timeout", FAKE_TIMEOUT)
-        found = self.read()
-        self.assertEqual(found["systemd"], ["nginx"])
-        self.assertEqual(self.logged("timeout"), [
-            "8 true", "8 docker ps --format {{.Names}}|{{.Image}}|{{.Status}}",
-            "8 systemctl list-units --type=service --state=running --no-legend --plain "
-            "--no-pager"])
-        self.assertEqual(self.logged("docker"),
-                         ["ps", "--format", "{{.Names}}|{{.Image}}|{{.Status}}"])
+        for shell in SHELLS:
+            with self.subTest(shell):
+                found = self.read(shell)
+                self.assertEqual(found["systemd"], ["nginx"])
+                self.assertEqual(self.logged("timeout"), [
+                    "8 true", "8 docker ps --format {{.Names}}|{{.Image}}|{{.Status}}",
+                    "8 systemctl list-units --type=service --state=running --no-legend --plain "
+                    "--no-pager"])
+                self.assertEqual(self.calls("docker"), [DOCKER_CALL])
+                self.assertEqual(self.calls("systemctl"), [SYSTEMCTL_CALL])
 
     def test_docker_missing_with_or_without_a_real_timeout(self):
         self.fake("systemctl", FAKE_SYSTEMCTL)
@@ -542,8 +633,41 @@ class RemoteCommand(unittest.TestCase):
                 found = self.read()
                 self.assertEqual((found["docker"], found["docker_missing"]), (None, True))
                 self.assertEqual(found["systemd"], ["nginx"])
+                self.assertEqual(self.calls("systemctl"), [SYSTEMCTL_CALL])
                 with self.assertRaises(FileNotFoundError):
                     self.logged("docker")
+
+
+class RealServerCheck(unittest.TestCase):
+    """Check 31 in docs/ROADMAP.md, run with a stand-in for ssh first and alone on PATH."""
+
+    def check(self) -> str:
+        roadmap = (ROOT / "docs" / "ROADMAP.md").read_text()
+        return next(line for line in roadmap.splitlines() if line.startswith("31. Your server"))
+
+    def test_its_key_check_runs_tux_s_own_command(self):
+        """So no ControlMaster connection the first step left open stands in for the key."""
+        code = re.search(r"python3 -c '([^']+)' <host>", self.check())[1]
+        with tempfile.TemporaryDirectory() as folder:
+            log = os.path.join(folder, "ssh.log")
+            ssh = os.path.join(folder, "ssh")
+            with open(ssh, "w") as file:
+                file.write(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > {shlex.quote(log)}\n")
+            os.chmod(ssh, 0o755)
+            done = subprocess.run([sys.executable, "-c", code, HOST], cwd=ROOT, text=True,
+                                  capture_output=True, timeout=30,
+                                  env={"PATH": folder, "HOME": folder, "LANG": "C.UTF-8"})
+            self.assertEqual(done.returncode, 0, done.stderr)
+            argv = serverstatus.command(HOST)[:-1] + ["true"]
+            self.assertEqual(done.stdout, shlex.join(argv) + "\n")
+            with open(log) as file:
+                self.assertEqual(file.read().splitlines(), argv[1:])
+        self.assertIn("ControlMaster=no", argv)
+
+    def test_its_local_step_expects_what_the_compose_file_runs(self):
+        compose = (ROOT / "server" / "compose.yaml").read_text()
+        self.assertIn("container_name: local-ai", compose)
+        self.assertIn("`local-ai` process", self.check())
 
 
 def _gone(pid: int) -> bool:
@@ -582,6 +706,27 @@ class Permissions(unittest.TestCase):
                     mock.patch.object(system, "_tool", return_value=""):
                 asyncio.run(Skills(config=CONFIG).execute("system_running", arguments, session))
             self.assertTrue(session.tainted, arguments)
+
+    def test_another_computer_s_answer_marks_it_too(self):
+        """It says what runs on this computer, so a web search after it asks first."""
+        for here in ("active\n", ""):
+            session = Session()
+            skills = Skills(config=CONFIG)
+            with mock.patch.object(serverstatus, "_run") as run, \
+                    mock.patch.object(system, "_tool", return_value=here):
+                _, result = asyncio.run(skills.execute(
+                    "system_running", '{"name": "tor", "on": "my nas"}', session))
+            self.assertIn(system.ONLY_TWO, result["error"])
+            run.assert_not_called()
+            self.assertTrue(session.tainted, here)
+            called = mock.Mock(return_value={"found": 0})
+            with mock.patch.dict("tuxistant.skills.HANDLERS", {"web.search": called}):
+                _, result = asyncio.run(skills.execute("web_search", '{"query": "tor"}', session))
+            self.assertTrue(result["declined"])
+            called.assert_not_called()
+        session = Session()
+        asyncio.run(Skills(config=CONFIG).execute("system_running", '{"name": "a b"}', session))
+        self.assertFalse(session.tainted, "nothing was read")
 
     def test_a_web_search_after_it_needs_a_click(self):
         session = Session()
@@ -622,6 +767,29 @@ class SystemRunning(unittest.TestCase):
                 tool.assert_not_called()
                 self.assertNotIn("localai", " ".join(run.call_args.args[0]))
 
+    def test_the_server_by_its_label_with_my_or_the_before_it(self):
+        """"Is Plex running on my NAS?" for nas.lan, as the model copies on as it heard it."""
+        for server, label in (("nas.lan:8080", "nas"), ("pi:8080", "pi"),
+                              ("stormy-nas.lan:8080", "stormy nas"),
+                              ("stormy-nas.lan:8080", "Stormy-NAS")):
+            config = {**CONFIG, "server": server}
+            for args in ({"name": "localai", "on": f"my {label}"},
+                         {"name": "localai", "on": f"the {label}"},
+                         {"name": "localai", "on": label}):
+                with self.subTest(server=server, args=args):
+                    result, text, run, tool = asked(args, config)
+                    self.assertTrue(text.startswith("Yes, on your server I see the docker "
+                                                    "container localai-api-1"), text)
+                    run.assert_called_once()
+                    tool.assert_not_called()
+                    self.assertTrue(system.about_server(args, config))
+            for args in ({"name": "docker", "on": f"my {label}"}, {"name": f"my {label}"},
+                         {"name": f"the {label}"}):
+                with self.subTest(server=server, args=args):
+                    result, text, run, _ = asked(args, config)
+                    self.assertTrue(text.startswith("On your server, 2 docker containers"), text)
+                    run.assert_called_once()
+
     def test_server_as_the_name_is_the_whole_list(self):
         for name in ("server", "my server", "the  server", "Server", "home server",
                      "my home server", "our server", "the servers"):
@@ -631,12 +799,80 @@ class SystemRunning(unittest.TestCase):
                 tool.assert_not_called()
 
     def test_the_server_named_is_looked_for_here_first(self):
-        for name in (HOST, "MyServer.Example", "myserver"):
+        for name in (HOST, "MyServer.Example"):
             with self.subTest(name):
                 result, text, run, tool = asked({"name": name})
                 self.assertEqual(result, {APP_SAYS: True})
                 self.assertTrue(text.startswith("On your server, 2 docker containers"), text)
                 tool.assert_called()
+        result, text, run, tool = asked({"name": "myserver"})
+        self.assertTrue(text.startswith("Nothing called myserver is running on this computer, "
+                                        "and I don't see it on your server. On your server, 2 "
+                                        "docker containers"), text)
+        tool.assert_called()
+
+    def test_a_label_found_nowhere_says_so_before_the_list(self):
+        """Is Plex running? with Plex down here and on a server called plex: the list alone
+        would never say no."""
+        other = b"@docker\nother|img|Up 1 day\n@exit 0\n@systemd\n@exit 0\n"
+        for server in ("plex:8080", "plex.lan:8080"):
+            with self.subTest(server), mock.patch.object(
+                    serverstatus, "_run", return_value=(0, other, b"")), \
+                    mock.patch.object(system, "_tool", return_value=""):
+                session = Session()
+                system.running({"name": "plex"}, {**CONFIG, "server": server}, session)
+                self.assertEqual(session.after[0].text,
+                                 "Nothing called plex is running on this computer, and I don't "
+                                 "see it on your server. On your server, 1 docker container is "
+                                 "running: other.")
+        text = asked({"name": "plex", "on": "my server"}, {**CONFIG, "server": "plex.lan:8080"})[1]
+        self.assertTrue(text.startswith("On your server, 2 docker"), "not looked for here")
+
+    def test_an_on_that_may_be_another_server_names_the_one_in_settings(self):
+        for on in ("my work server", "the office server", "my minecraft server"):
+            with self.subTest(on):
+                text = asked({"name": "nginx", "on": on})[1]
+                self.assertEqual(text, "I checked the server in Settings, myserver. Yes, on your "
+                                       "server I see the service nginx.")
+        for on in ("my server", "my home server", "myserver", "the myserver server", HOST):
+            with self.subTest(on):
+                self.assertEqual(asked({"name": "nginx", "on": on})[1],
+                                 "Yes, on your server I see the service nginx.")
+        config = {**CONFIG, "server": "10.0.0.5:8080"}
+        self.assertTrue(asked({"name": "nginx", "on": "my work server"}, config)[1].startswith(
+            "I checked the server in Settings, 10.0.0.5. Yes"))
+
+    def test_a_server_said_as_the_name_with_this_computer_as_on_stays_here(self):
+        result, text, run, tool = asked({"name": "server", "on": "this computer"})
+        self.assertEqual((result, text), ({"name": "server", "running": False}, ""))
+        run.assert_not_called()
+        tool.assert_called()
+        for name in ("server", "my server", "the servers"):
+            with self.subTest(name):
+                self.assertFalse(system.about_server({"name": name, "on": "this computer"},
+                                                     CONFIG))
+                self.assertTrue(system.about_server({"name": name}, CONFIG))
+
+    def test_a_local_server_s_name_is_this_computer(self):
+        config = {**CONFIG, "server": "thislaptop:8080"}
+        result, text, run, _ = asked({"name": "thislaptop"}, config)
+        self.assertEqual((result, text), ({"name": "thislaptop", "running": False}, ""))
+        run.assert_not_called()
+
+    def test_localai_on_this_computer_by_any_dashes(self):
+        """The project's compose file runs LocalAI as local-ai, and the model says localai."""
+        def tool(*command):
+            if command[0] == "pgrep":
+                return "123\n" if re.fullmatch(command[-1], "local-ai", re.I) else ""
+            return "inactive\n"
+        config = {**CONFIG, "server": "localhost:8080"}
+        for name in ("localai", "local-ai", "LocalAI", "local_ai"):
+            with self.subTest(name), mock.patch.object(system, "_tool", side_effect=tool):
+                self.assertEqual(system.running({"name": name, "on": "my server"}, config),
+                                 {"name": name.casefold(), "running": True})
+        with mock.patch.object(system, "_tool", side_effect=tool):
+            self.assertFalse(system.running({"name": "locala"}, config)["running"])
+            self.assertFalse(system.running({"name": "local.ai"}, config)["running"])
 
     def test_a_server_named_like_a_program_still_lets_that_program_be_found_here(self):
         for host in ("docker.lan", "plex", "localai.lan", "pi"):

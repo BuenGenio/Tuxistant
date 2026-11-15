@@ -43,14 +43,16 @@ REMOTE = "exec sh -c " + shlex.quote(INNER)
 # Over what ~/.ssh/config says: a RemoteCommand would replace the command, a ControlMaster
 # would leave a connection open for your own sessions to reuse, an IdentityAgent is an agent,
 # ForkAfterAuthentication would leave an ssh that killing its group can't reach, SessionType
-# none would wait for the timeout, UpdateHostKeys would write known_hosts, and ClearAllForwardings
-# leaves a Tunnel. LogLevel ERROR leaves out a long banner but not why ssh failed. ssh before 8.7
-# doesn't know two of these, hence IgnoreUnknown, first; it is "*" because the first one given
-# replaces yours, and an option only your own let through, such as macOS's UseKeychain, would
-# stop ssh.
+# none would wait for the timeout, UpdateHostKeys and CheckHostIP would write known_hosts (the
+# second also calls a key changed for the address unknown), and ClearAllForwardings leaves a
+# Tunnel. LogLevel ERROR leaves out a long banner but not why ssh failed. ssh before 8.7 doesn't
+# know two of these, hence IgnoreUnknown, first; it is "*" because the first one given replaces
+# yours, and an option only your own let through, such as macOS's UseKeychain, would stop ssh.
+# None of these reach a ProxyJump hop, which is a second ssh that reads only your ssh_config.
 SSH_OPTIONS = ("-T", "-x", "-a", "-o", "IgnoreUnknown=*", "-o", "BatchMode=yes",
                "-o", f"ConnectTimeout={CONNECT_TIMEOUT_S}", "-o", "StrictHostKeyChecking=yes",
-               "-o", "UpdateHostKeys=no", "-o", "ClearAllForwardings=yes", "-o", "Tunnel=no",
+               "-o", "UpdateHostKeys=no", "-o", "CheckHostIP=no",
+               "-o", "ClearAllForwardings=yes", "-o", "Tunnel=no",
                "-o", "PermitLocalCommand=no", "-o", "RemoteCommand=none", "-o", "ControlMaster=no",
                "-o", "ControlPath=none", "-o", "IdentityAgent=none",
                "-o", "ForkAfterAuthentication=no", "-o", "SessionType=default",
@@ -77,6 +79,7 @@ NEITHER = "Your server has neither docker nor systemd, so I can't tell what's ru
 BAD_NAME = "Say the name of one program or service, in a word or two."
 DOCKER_REFUSED = ("Your user on the server isn't allowed to use docker, so I can't list its "
                   "containers.")
+OVER_SSH = "Yes, I reached your server over ssh."
 
 NAME = re.compile(r"[a-z0-9][a-z0-9 ._-]{0,%d}" % (MAX_NAME_CHARS - 1))
 CONTAINER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
@@ -87,11 +90,18 @@ EXIT = re.compile(r"@exit ([0-9]{1,3})")
 IPV6 = re.compile(r"\[([0-9a-fA-F:.]+)\]")
 LOCAL = ("localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback")
 # Words around a name rather than in it, as in "ssh myserver docker ps": with only these
-# left, the whole list was asked for.
+# left, the whole list was asked for. Otherwise they stay in the name, but a match can do
+# without them, so "minecraft server" finds minecraft and "sql server" is not just sql.
 AROUND = {"server", "servers", "my", "our", "own", "the", "your", "on", "is", "are", "what",
           "which", "ssh", "docker", "ps", "systemctl", "systemd", "containers", "container",
-          "services", "service", "all", "everything", "anything", "running"}
+          "services", "service", "all", "everything", "anything", "running", "processes",
+          "programs", "apps", "applications", "*"}
+# Never part of a name, so not said back either: "my plex" asks after plex.
+FILLER = {"my", "our", "own", "the", "your", "on", "is", "are", "what", "which", "all",
+          "everything", "anything", "running"}
 SERVER_WORDS = {"server", "servers"}
+# The server that answered over ssh runs one of these, whatever its unit is called.
+SSH_NAMES = {"ssh", "sshd", "openssh", "opensshserver"}
 # Part of the system itself, so they are counted but not named: nobody asks after getty.
 PLUMBING = ("systemd-", "getty@", "serial-getty@", "user@", "dbus", "polkit", "rsyslog", "cron",
             "atd", "udisks2", "irqbalance", "multipathd", "packagekit", "accounts-daemon",
@@ -160,6 +170,12 @@ def _label(host: str) -> str | None:
 def own_names(host: str) -> set[str]:
     """What the server is called: its host, and the first label of a name."""
     return {host.casefold(), _label(host)} - {None}
+
+
+def is_own_name(text: str, host: str) -> bool:
+    """Whether text is one of own_names in any spelling: "stormy nas" for stormy-nas.lan."""
+    key = _key(text)
+    return bool(key) and key in {_key(name) for name in own_names(host)}
 
 
 def target(config) -> str:
@@ -344,16 +360,29 @@ def names_a_server(name) -> bool:
 
 
 def wanted(args: dict, host: str) -> str | None:
-    """The one thing asked after, checked, or None for the whole list. Never sent anywhere.
-    A host with a dot, or an address, is no program's name and is left out; a single label is
-    kept, as on a server called plex or localai.lan, plex or localai is what is asked after."""
-    around = AROUND | ({host.casefold()} - {_label(host)})
-    name = " ".join(w for w in _words(args.get("name")) if w not in around)
-    if not name:
+    """The one thing asked after, as said and checked, or None for the whole list. Never sent
+    anywhere. A host with a dot, or an address, is no program's name and is left out; a single
+    label is kept, as on a server called plex or localai.lan, plex or localai is what is asked
+    after."""
+    dropped = FILLER | ({host.casefold()} - {_label(host)})
+    words = [w for w in _words(args.get("name")) if w not in dropped]
+    if all(w in AROUND for w in words):
         return None
+    name = " ".join(words)
     if not NAME.fullmatch(name) or len(_key(name)) < 2:
         raise Unanswered(BAD_NAME)
     return name
+
+
+def _needed(name: str) -> list[str]:
+    """The words of name a match can't do without."""
+    return [key for key in (_key(w) for w in name.split() if w not in AROUND) if key]
+
+
+def _asks_after_ssh(args: dict) -> bool:
+    words = [w for w in _words(args.get("name"))
+             if w not in FILLER | SERVER_WORDS | {"service", "daemon"}]
+    return _key(" ".join(words)) in SSH_NAMES
 
 
 def _listed(names: list[str], limit: int) -> str:
@@ -392,10 +421,13 @@ def _up(container: dict) -> bool:
 
 
 def _status(container: dict) -> str:
-    """As said after its name: not the exit code in "Restarting (1) 5 seconds ago"."""
+    """As said after its name. The time in "Restarting (1) 5 seconds ago" is when it last
+    stopped, so it isn't said."""
     if _paused(container):
         return ", paused"
-    status = re.sub(r" ?\([0-9]+\)", "", container["status"])
+    if _restarting(container):
+        return ", restarting again and again"
+    status = re.sub(r"\b(About|Less than)\b", lambda word: word[0].lower(), container["status"])
     return f", {status[0].lower()}{status[1:]}" if status else ""
 
 
@@ -430,26 +462,42 @@ def _everything(found: dict) -> str:
         own = [s for s in services if not s.casefold().startswith(PLUMBING)]
         count = f"There {_is(len(services))} {_plural(len(services), 'system service')} running"
         plumbing = "which is" if len(services) == 1 else "all"
-        said.append(f"{count}, among them {_listed(own, SAID_SERVICES)}."
-                    if own else f"{count}, {plumbing} part of the system itself.")
+        if not own:
+            said.append(f"{count}, {plumbing} part of the system itself.")
+        elif len(own) == len(services):
+            said.append(f"{count}: {_listed(own, SAID_SERVICES)}.")
+        else:
+            said.append(f"{count}, among them {_listed(own, SAID_SERVICES)}.")
     return " ".join(said)
 
 
-def _in(key: str, text: str) -> bool:
-    """A short key only as a word of its own: "ai" is not in localai, though it is in open-ai."""
-    if len(key) >= 3:
-        return key in _key(text)
-    return key in re.split(r"[^a-z0-9]+", text.casefold())
+def _in(key: str, text: str) -> str | None:
+    """"whole" where key starts text or one of its words, as postgres does postgresql and api
+    does localai-api-1, "part" where it is only inside one, as sql is in postgresql. A key
+    under three letters only as a word of its own: "ai" is not in localai, though it is in
+    open-ai."""
+    words = [w for w in re.split(r"[^a-z0-9]+", text.casefold()) if w]
+    if len(key) < 3:
+        return "whole" if key in words else None
+    joined, starts, at = "".join(words), set(), 0
+    for word in words:
+        starts.add(at)
+        at += len(word)
+    found = {i for i in range(len(joined)) if joined.startswith(key, i)}
+    if found & starts:
+        return "whole"
+    return "part" if found else None
 
 
 def _match(name: str, *texts: str) -> str | None:
-    """How name is in any of texts: "whole" for the whole name or every word of it, "part" for
-    only some of its words of three letters or more, as homepage is for home assistant."""
-    words = [key for key in map(_key, name.split()) if key]
-    if any(_in(_key(name), text) for text in texts) or (
-            len(words) > 1 and all(any(_in(key, text) for text in texts) for key in words)):
+    """How name is in any of texts: "whole" for the whole name or every word of it but the
+    ones around a name, such as server, "part" for only some of its words of three letters or
+    more, as homepage is for home assistant."""
+    needed = _needed(name)
+    if any(_in(_key(name), text) == "whole" for text in texts) or (
+            needed and all(any(_in(key, text) == "whole" for text in texts) for key in needed)):
         return "whole"
-    if any(_in(key, text) for key in words if len(key) >= 3 for text in texts):
+    if any(_in(key, text) for key in [_key(name), *needed] if len(key) >= 3 for text in texts):
         return "part"
     return None
 
@@ -487,23 +535,37 @@ def _one(found: dict, name: str) -> str:
     return f"I don't see {name} among the docker containers or services running on your server."
 
 
-def answer(args: dict, config, session=None) -> str:
+def answer(args: dict, config, session=None, missed_here: str | None = None,
+           say_which: bool = False) -> str:
     """The sentence to say, from daemon code alone. Marks the conversation as having read
-    something private once the server has answered: what you run there is yours."""
+    something private once the server has answered: what you run there is yours.
+    missed_here is a name this computer was asked for first and doesn't have, and say_which
+    names the server, for an on that may mean another one."""
     host = target(config)
     name = wanted(args, host)
     found = read(host)
     if session is not None:
         session.tainted = True
-    if name in own_names(host) and not _seen(found, name)[0]:
-        name = None     # the server's own name, with nothing there called that
-    return shown(_one(found, name) if name else _everything(found), 600)
+    if _asks_after_ssh(args):
+        text = OVER_SSH     # its unit may be ssh, sshd or another, but it let me in
+    elif name and is_own_name(" ".join(_needed(name)), host) and not _seen(found, name)[0]:
+        # the server's own name, with nothing there called that
+        text = _everything(found)
+        if missed_here:
+            text = (f"Nothing called {missed_here} is running on this computer, and I don't see "
+                    f"it on your server. {text}")
+    else:
+        text = _one(found, name) if name else _everything(found)
+    if say_which:
+        text = f"I checked the server in Settings, {_label(host) or host}. {text}"
+    return shown(text, 600)
 
 
-def running(args: dict, config, session) -> dict:
+def running(args: dict, config, session, missed_here: str | None = None,
+            say_which: bool = False) -> dict:
     """system.running on the server: the answer, or why there is none, said by the app."""
     try:
-        text = answer(args, config, session)
+        text = answer(args, config, session, missed_here, say_which)
     except Unanswered as why:
         text = str(why)
     session.after.append(Speak(text, config["voice"]))
