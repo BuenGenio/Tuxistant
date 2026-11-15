@@ -1098,7 +1098,7 @@ class AsASkill(Base):
         names = lambda config: [tool["name"] for tool in Skills(config=config).tools()]  # noqa: E731
         self.assertNotIn("mail_search", names(DEFAULTS))
         self.assertIn("mail_search", names(CONFIG))
-        self.assertEqual(len(names(CONFIG)), len(names(DEFAULTS)) + 1)
+        self.assertEqual(len(names(CONFIG)), len(names({**CONFIG, "mail_search": False})) + 1)
 
     async def test_switched_off_it_refuses_even_if_the_model_calls_it(self):
         self.index(PASSPORT)

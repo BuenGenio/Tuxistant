@@ -109,8 +109,10 @@ FACTS = {"uptime": _uptime, "ip": _ip, "memory": _memory, "cpu": _cpu, "battery"
 
 
 def _is_the_server(name: str, config) -> bool:
-    """Asked about the server, this would look on this computer and say no with confidence."""
-    if " ".join(name.split()) in ("server", "my server", "the server", "your server"):
+    """Asked about the server, this would look on this computer and say no with confidence.
+    Only asked once nothing here is called that, as a server called docker.lan or plex is
+    named like a program."""
+    if name in ("server", "my server", "the server", "your server"):
         return True
     try:
         host = serverstatus.host_of(config["server"]) if config is not None else None
@@ -124,14 +126,17 @@ def _is_the_server(name: str, config) -> bool:
 def running(args: dict, config, _session=None) -> dict:
     """Whether a service or program is up. A name goes no further than these two read-only tools,
     and this needs the real system, which the shell sandbox hides."""
-    name = str(args.get("name") or "").strip().casefold()
-    if _is_the_server(name, config):
-        raise ValueError(YOUR_SERVER)
+    name = " ".join(str(args.get("name") or "").split()).casefold()
     if not SERVICE_NAME.fullmatch(name):
+        if _is_the_server(name, config):
+            raise ValueError(YOUR_SERVER)
         raise ValueError("Say which program or service to check.")
     active = any(_tool("systemctl", *scope, "is-active", "--", name).strip() == "active"
                  for scope in ([], ["--user"]))
-    return {"name": name, "running": active or bool(_tool("pgrep", "-i", "-x", "--", name).strip())}
+    found = active or bool(_tool("pgrep", "-i", "-x", "--", name).strip())
+    if not found and _is_the_server(name, config):
+        raise ValueError(YOUR_SERVER)
+    return {"name": name, "running": found}
 
 
 def _says_tailscale(config) -> bool:

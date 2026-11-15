@@ -108,7 +108,8 @@ def _tapo_account(config) -> bool:
 
 
 SET_UP = {"home.set": homeassistant.configured, "home.status": homeassistant.configured,
-          "lights.set": _tapo_account, "lights.status": _tapo_account}
+          "lights.set": _tapo_account, "lights.status": _tapo_account,
+          "server.running": serverstatus.configured}
 
 # A handler takes (args, config, session) and returns a dict, or an Ask. One defined with async
 # def runs on the event loop and may use the session's confirm, busy, selection and execute.

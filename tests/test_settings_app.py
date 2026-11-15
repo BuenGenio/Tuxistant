@@ -147,6 +147,8 @@ class Logic(unittest.TestCase):
             {"offered": False, "held_back": "switched_off"}))
         self.assertIn("filled in", sa.held_back_words(
             {"offered": False, "held_back": "not_set_up"}))
+        self.assertIn("server under General", sa.held_back_words(
+            {"name": "server.running", "offered": False, "held_back": "not_set_up"}))
         self.assertEqual(sa.param_words("day", {"type": "string", "enum": ["a", "b"],
                                                 "description": "Which day"}, ["day"]),
                          ("day (required)", 'Which day\ntype: string\nenum: ["a", "b"]'))

@@ -183,7 +183,8 @@ class Details(unittest.TestCase):
 
     def test_every_action_shown_is_the_tool_sent(self):
         from tuxistant.realtime import Realtime
-        skills = Skills(config={**DEFAULTS, "mail_search": True, **HOME})
+        skills = Skills(config={**DEFAULTS, "mail_search": True, **HOME,
+                                "server": "myserver.example:8080"})
         session = Realtime(skills.config, skills, lambda _event: None)._session()
         sent = {tool["name"]: tool for tool in session["tools"]}     # what session.update sends
         self.assertEqual(len(sent), len(skills.actions), "every action is offered here")
@@ -215,7 +216,7 @@ class Details(unittest.TestCase):
         held = {a["name"]: a["held_back"] for s in skills.listing()
                 for a in skills.details(s["id"])["actions"] if not a["offered"]}
         self.assertEqual(held, {"mail.search": "switched_off", "home.set": "not_set_up",
-                                "home.status": "not_set_up"})
+                                "home.status": "not_set_up", "server.running": "not_set_up"})
 
     def test_why_the_risk_is_what_it_is(self):
         from tuxistant.skills import risk_because

@@ -51,11 +51,14 @@ TAPO = os.environ.get("TUX_EVAL_TAPO", "1") == "1"
 SET_UP = {**({"tapo_email": "eval@example.test", "tapo_password": "eval"} if TAPO else {}),
           **({"ha_server": "eval.invalid:8123", "ha_token": "eval"} if HOME else {})}
 # The tools the daemon offers, code skills too, and mail search, which is off until turned on.
-skills = offline({**DEFAULTS, "mail_search": MAIL, **SET_UP}, user=eval_skills()).current()
+# The server is the run's own, so server_running is offered as it would be with that server.
+skills = offline({**DEFAULTS, "server": cfg["server"], "mail_search": MAIL, **SET_UP},
+                 user=eval_skills()).current()
 OFFERED = {t["name"] for t in skills.tools()}
 # Tools a setup switch can turn off. A case for any other tool the daemon doesn't offer stays in
 # and fails, so a renamed tool or a typo in a case shows up as BAD rather than vanishing.
-SWITCHED = {"mail_search", "lights_set", "lights_status", "home_set", "home_status"}
+SWITCHED = {"mail_search", "lights_set", "lights_status", "home_set", "home_status",
+            "server_running"}
 # With Home Assistant and no Tapo account, every light belongs to Home Assistant.
 INSTEAD_OF_TAPO = {"lights_set": "home_set", "lights_status": "home_status"}
 REPS = int(sys.argv[1]) if len(sys.argv) > 1 else 3
@@ -380,7 +383,7 @@ async def main():
             right += ok
             total += 1
             if name and name != "ERROR" and not sample:
-                sample = args.replace(SERVER_HOST, "{server}")[:90]
+                sample = re.sub(re.escape(SERVER_HOST), "{server}", args, flags=re.I)[:90]
         mark = "ok " if ((wanted is None and set(seen) == {None}) or (wanted and set(seen) <= wanted)) else "BAD"
         print(mark, text[:52].ljust(52), dict(seen), sample)
     print(f"{right}/{total} right, {(time.monotonic() - started) / max(total, 1):.1f} s each")

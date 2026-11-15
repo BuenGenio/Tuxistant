@@ -2,15 +2,18 @@
 
 One fixed, read-only command goes to the host of the server in Settings, and nothing the model
 wrote goes with it: a name to look for is matched here, once the answer is back. ssh takes the
-port and user from ~/.ssh/config, and gets no agent, so the key has to work on its own.
+port and user from ~/.ssh/config, and gets no agent, so the key has to work on its own. What
+your ssh_config runs itself, such as a ProxyCommand, still runs.
 What the server sends is someone else's text. It is capped, each name has to look like a name,
 and the app says the answer itself, so none of it reaches a model with tools.
 """
+import ipaddress
 import os
 import re
 import selectors
 import shlex
 import signal
+import socket
 import subprocess
 import time
 
@@ -29,13 +32,17 @@ MAX_NAME_CHARS = 40
 
 # Run by the remote user's own shell, whichever it is, so it hands the work to sh at once.
 INNER = ("export LC_ALL=C; "
-         "echo @docker; docker ps --format \"{{.Names}}|{{.Image}}|{{.Status}}\" 2>/dev/null; "
+         "echo @docker; docker ps --format \"{{.Names}}|{{.Image}}|{{.Status}}\" 2>&1; "
          "echo \"@exit $?\"; "
          "echo @systemd; systemctl list-units --type=service --state=running --no-legend --plain "
          "--no-pager 2>/dev/null; echo \"@exit $?\"")
 REMOTE = "exec sh -c " + shlex.quote(INNER)
+# Over what ~/.ssh/config says: a RemoteCommand would replace the command, a ControlMaster
+# would leave a connection open for your own sessions to reuse, and an IdentityAgent is an agent.
 SSH_OPTIONS = ("-T", "-x", "-a", "-o", "BatchMode=yes", "-o", f"ConnectTimeout={CONNECT_TIMEOUT_S}",
-               "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no")
+               "-o", "StrictHostKeyChecking=yes", "-o", "ClearAllForwardings=yes",
+               "-o", "PermitLocalCommand=no", "-o", "RemoteCommand=none", "-o", "ControlMaster=no",
+               "-o", "ControlPath=none", "-o", "IdentityAgent=none")
 PASSED_ENV = ("PATH", "HOME", "USER", "LANG")
 NOT_FOUND = 127             # what sh says for a command that isn't there
 
@@ -53,15 +60,17 @@ TIMED_OUT = "Your server took too long to answer, so I stopped."
 UNREADABLE = "Your server answered, but not in a way I could read."
 NEITHER = "Your server has neither docker nor systemd, so I can't tell what's running there."
 BAD_NAME = "Say the name of one program or service, in a word or two."
+DOCKER_REFUSED = ("Your user on the server isn't allowed to use docker, so I can't list its "
+                  "containers.")
 
 NAME = re.compile(r"[a-z0-9][a-z0-9 ._-]{0,%d}" % (MAX_NAME_CHARS - 1))
 CONTAINER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 IMAGE = re.compile(r"[A-Za-z0-9_./:@-]{1,200}")
 STATUS = re.compile(r"[A-Za-z0-9 ().,:-]{1,60}")
 UNIT = re.compile(r"([A-Za-z0-9][A-Za-z0-9@._:+-]{0,99})\.service")
-EXIT = re.compile(r"@exit (\d{1,3})")
+EXIT = re.compile(r"@exit ([0-9]{1,3})")
 IPV6 = re.compile(r"\[([0-9a-fA-F:.]+)\]")
-LOCAL = ("localhost", "localhost.localdomain", "ip6-localhost", "::1", "0.0.0.0")
+LOCAL = ("localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback")
 # Words around a name rather than in it, as in "ssh myserver docker ps": with only these
 # left, the whole list was asked for.
 AROUND = {"server", "servers", "my", "the", "your", "on", "is", "are", "what", "which", "ssh",
@@ -96,7 +105,17 @@ def host_of(server) -> str | None:
 
 
 def is_local(host: str) -> bool:
-    return host.casefold() in LOCAL or host.startswith("127.")
+    """Short forms count, as ssh reads "0" and "127.1" as addresses here too."""
+    host = host.casefold().rstrip(".")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            address = ipaddress.IPv4Address(socket.inet_aton(host))
+        except OSError:
+            return host in LOCAL
+    address = getattr(address, "ipv4_mapped", None) or address
+    return address.is_loopback or address.is_unspecified
 
 
 def target(config) -> str:
@@ -112,6 +131,16 @@ def target(config) -> str:
     return host
 
 
+def configured(config) -> bool:
+    """Whether there is a server to ask, so the model is offered the tool: without one it
+    could only fail, and every tool costs the small model some of its other answers."""
+    try:
+        target(config)
+    except (Unanswered, TypeError, KeyError):
+        return False
+    return True
+
+
 def command(host: str) -> list[str]:
     return ["ssh", *SSH_OPTIONS, "--", host, REMOTE]
 
@@ -125,53 +154,69 @@ def _env() -> dict:
 
 
 def _run(argv: list[str], env: dict) -> tuple[int, bytes, bytes]:
-    """(exit code, output, errors), each capped. A server that sends too much is cut off there."""
+    """(exit code, output, errors), each capped. A server that sends too much is cut off there.
+    Done once ssh has exited and its output has ended, even if something ssh started, such as a
+    ProxyCommand, still holds its error pipe: that is killed with the rest of the group."""
     try:
         process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, env=env, start_new_session=True)
     except OSError:
         raise Unanswered(NO_SSH) from None
-    caps = {process.stdout: (bytearray(), MAX_OUTPUT_BYTES),
-            process.stderr: (bytearray(), MAX_ERROR_BYTES)}
+    output, errors = bytearray(), bytearray()
     deadline = time.monotonic() + TIMEOUT_S
     try:
         with selectors.DefaultSelector() as selector:
-            for pipe in caps:
-                selector.register(pipe, selectors.EVENT_READ)
-            full = False
-            while selector.get_map() and not full:
-                left = deadline - time.monotonic()
-                if left <= 0:
-                    raise Unanswered(TIMED_OUT)
-                for key, _ in selector.select(left):
-                    chunk = os.read(key.fd, 65536)
-                    if not chunk:
-                        selector.unregister(key.fileobj)
-                        continue
-                    buffer, cap = caps[key.fileobj]
-                    buffer += chunk[:cap - len(buffer)]
-                    full = full or (key.fileobj is process.stdout and len(buffer) >= cap)
-        if full:    # enough to answer from: the rest is never read
-            os.killpg(process.pid, signal.SIGKILL)
-        code = process.wait(max(0.1, deadline - time.monotonic()))
-        return code, bytes(caps[process.stdout][0]), bytes(caps[process.stderr][0])
+            selector.register(process.stdout, selectors.EVENT_READ, (output, MAX_OUTPUT_BYTES))
+            selector.register(process.stderr, selectors.EVENT_READ, (errors, MAX_ERROR_BYTES))
+            if _drain(selector, process, deadline):     # enough to answer from
+                _kill(process)
+        return process.wait(max(0.1, deadline - time.monotonic())), bytes(output), bytes(errors)
     except subprocess.TimeoutExpired:
         raise Unanswered(TIMED_OUT) from None
     finally:
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            process.wait()
+        _kill(process)
         process.stdout.close()
         process.stderr.close()
+
+
+def _drain(selector, process, deadline: float) -> bool:
+    """Reads both pipes until the output ends and ssh has exited. True if the output was full."""
+    ended = False
+    while selector.get_map() and not (ended and process.poll() is not None):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise Unanswered(TIMED_OUT)
+        for key, _ in selector.select(min(left, 0.05) if ended else left):
+            chunk = os.read(key.fd, 65536)
+            if not chunk:
+                selector.unregister(key.fileobj)
+                ended = ended or key.fileobj is process.stdout
+                continue
+            buffer, cap = key.data
+            buffer += chunk[:cap - len(buffer)]
+            if key.fileobj is process.stdout and len(buffer) >= cap:
+                return True
+    return False
+
+
+def _kill(process) -> None:
+    """The whole group, as what ssh started may outlive it, then ssh itself if that failed."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    if process.poll() is None:
+        try:
+            process.kill()
+            process.wait(2)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
 
 def _ssh_failed(errors: bytes) -> str:
     """ssh's own complaint, read only to pick a sentence: none of it is said."""
     text = errors.decode("utf-8", "replace")
-    if "Permission denied" in text:
+    if "Permission denied" in text or "Too many authentication failures" in text:
         return NO_KEY
     if "Host key verification failed" in text or "host key is known" in text:
         return HOST_KEY
@@ -226,6 +271,9 @@ def read(host: str) -> dict:
         status, lines = sections.get(part, (None, []))
         result[part] = parse(lines) if status == 0 else None
         result[f"{part}_missing"] = status == NOT_FOUND
+    # docker's own complaint, read only to pick a sentence
+    result["docker_refused"] = result["docker"] is None and any(
+        "permission denied" in line.casefold() for line in sections.get("docker", (0, []))[1])
     if result["docker"] is None and result["systemd"] is None and (
             result["docker_missing"] and result["systemd_missing"]):
         raise Unanswered(NEITHER)
@@ -237,9 +285,9 @@ def _key(text: str) -> str:
 
 
 def wanted(args: dict, host: str) -> str | None:
-    """The one thing asked after, checked, or None for the whole list. Never sent anywhere."""
-    host = host.casefold()
-    around = AROUND | {host, host.partition(".")[0]}
+    """The one thing asked after, checked, or None for the whole list. Never sent anywhere.
+    The host's first label stays: on localai.lan, "localai" is what is asked after."""
+    around = AROUND | {host.casefold()}
     name = " ".join(w for w in str(args.get("name") or "").casefold().split() if w not in around)
     if not name:
         return None
@@ -255,13 +303,23 @@ def _listed(names: list[str], limit: int) -> str:
     return said[0] if len(said) == 1 else ", ".join(said[:-1]) + " and " + said[-1]
 
 
+def _is(count: int) -> str:
+    return "is" if count == 1 else "are"
+
+
 def _plural(count: int, one: str) -> str:
     return f"{count} {one}" + ("" if count == 1 else "s")
 
 
 def _docker_unread(found: dict) -> str:
-    return ("Docker isn't installed on your server." if found["docker_missing"]
-            else "Docker on your server didn't answer me.")
+    if found["docker_missing"]:
+        return "Docker isn't installed on your server."
+    return DOCKER_REFUSED if found["docker_refused"] else "Docker on your server didn't answer me."
+
+
+def _restarting(container: dict) -> bool:
+    """docker ps lists a container that keeps crashing too, as "Restarting (1) 5 seconds ago"."""
+    return container["status"].casefold().startswith("restarting")
 
 
 def _everything(found: dict) -> str:
@@ -272,34 +330,57 @@ def _everything(found: dict) -> str:
     elif not containers:
         said.append("No docker containers are running on your server.")
     else:
-        verb = "is" if len(containers) == 1 else "are"
-        said.append(f"On your server, {_plural(len(containers), 'docker container')} {verb} "
-                    f"running: {_listed([c['name'] for c in containers], SAID_CONTAINERS)}.")
+        up = [c["name"] for c in containers if not _restarting(c)]
+        if up:
+            said.append(f"On your server, {_plural(len(up), 'docker container')} "
+                        f"{_is(len(up))} running: {_listed(up, SAID_CONTAINERS)}.")
+        else:
+            said.append("No docker containers are really up on your server.")
         sick = [c["name"] for c in containers if "unhealthy" in c["status"].casefold()]
         if sick:
             said.append(f"Unhealthy: {_listed(sick, SAID_CONTAINERS)}.")
+        if again := [c["name"] for c in containers if _restarting(c)]:
+            said.append(f"Restarting again and again, so not really up: "
+                        f"{_listed(again, SAID_CONTAINERS)}.")
     services = found["systemd"]
     if services is None:
         said.append("Your server doesn't use systemd, so I can't list its services."
                     if found["systemd_missing"] else "I couldn't read its system services.")
     elif services:
         own = [s for s in services if not s.casefold().startswith(PLUMBING)]
-        count = _plural(len(services), "system service")
-        said.append(f"There are {count} running, among them {_listed(own, SAID_SERVICES)}."
-                    if own else f"There are {count} running, all part of the system itself.")
+        count = f"There {_is(len(services))} {_plural(len(services), 'system service')} running"
+        said.append(f"{count}, among them {_listed(own, SAID_SERVICES)}."
+                    if own else f"{count}, all part of the system itself.")
     return " ".join(said)
 
 
-def _one(found: dict, name: str) -> str:
-    key = _key(name)
-    seen = []
+def _keys(name: str) -> set[str]:
+    """The whole name, and each word of it long enough not to match everything."""
+    return {_key(name)} | {key for key in map(_key, name.split()) if len(key) >= 3}
+
+
+def _matches(keys: set[str], *texts: str) -> bool:
+    return any(key in _key(text) for key in keys for text in texts)
+
+
+def _seen(found: dict, name: str) -> tuple[list[str], bool]:
+    """What on the server matches name, as said, and whether any of it is really up."""
+    keys, seen, up = _keys(name), [], False
     for c in found["docker"] or []:
-        if key in _key(c["name"]) or key in _key(c["image"].rpartition("/")[2].partition(":")[0]):
+        if _matches(keys, c["name"], c["image"].rpartition("/")[2].partition(":")[0]):
+            status = c["status"]
             seen.append(f"the docker container {c['name']}"
-                        + (f", {c['status'][0].lower()}{c['status'][1:]}" if c["status"] else ""))
-    seen += [f"the service {s}" for s in found["systemd"] or [] if key in _key(s)]
+                        + (f", {status[0].lower()}{status[1:]}" if status else ""))
+            up = up or not _restarting(c)
+    services = [s for s in found["systemd"] or [] if _matches(keys, s)]
+    return seen + [f"the service {s}" for s in services], up or bool(services)
+
+
+def _one(found: dict, name: str) -> str:
+    seen, up = _seen(found, name)
     if seen:
-        return f"Yes, on your server I see {_listed(seen, SAID_MATCHES)}."
+        start = "Yes, on your server I see" if up else "Not really: on your server I see"
+        return f"{start} {_listed(seen, SAID_MATCHES)}."
     if found["docker"] is None:
         return (f"I don't see {name} among the services running on your server, and I couldn't "
                 "check docker there.")
@@ -316,6 +397,8 @@ def answer(args: dict, config, session=None) -> str:
     found = read(host)
     if session is not None:
         session.tainted = True
+    if name == host.casefold().partition(".")[0] and not _seen(found, name)[0]:
+        name = None     # the server's own name, with nothing there called that
     return shown(_one(found, name) if name else _everything(found), 600)
 
 
