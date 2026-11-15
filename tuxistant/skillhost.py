@@ -808,6 +808,14 @@ class _Place:
                 "actions": list(self.actions)}
 
 
+def _inode(key: str):
+    try:
+        st = os.lstat(key)
+        return (st.st_dev, st.st_ino)
+    except OSError:
+        return None
+
+
 def _text_digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
@@ -1012,7 +1020,8 @@ class SkillHost:
             log.exception("reloading the skills failed")
             problems["skills"] = f"The skills could not be reloaded: {e}"
             self.problems = problems
-            self.grants._records, self.grants._dirty = None, False  # nothing half noted stays
+            # nothing half noted stays, and a file fixed meanwhile counts at the next read
+            self.grants._records, self.grants.broken, self.grants._dirty = None, "", False
             return dict(problems), False, False, ""
         self._swap(skills, running)
         before, last = self.offered, self.last_offered
@@ -1147,7 +1156,10 @@ class SkillHost:
             # as it is the same file; one that changed since may be another renamed onto it
             present = {skill_id for skill_id in known.values() if skill_id}
             self._count += 1
-            unknown = {key: _text_digest(self._peek_key(key) or "") for key in self.failed
+            # by what it holds and which entry it is: a folder renamed onto an empty one that
+            # was already failing is another, so its clock starts again
+            unknown = {key: (_text_digest(self._peek_key(key) or ""), _inode(key))
+                       for key in self.failed
                        if Path(key).parent == self.user and not self._known_id(key)}
             # since when each has failed as it is now: written anew, it starts again
             self.unknown_since = {
@@ -1156,7 +1168,9 @@ class SkillHost:
             marked = self.grants.gone(self.user, found_ids | present, self._held_back)
             self.missing_since = {skill_id: began for skill_id, began
                                   in self.missing_since.items()
-                                  if skill_id in self.grants.held_back}
+                                  if skill_id in self.grants.held_back
+                                  or skill_id in found_ids | present}
+            # kept while a copy stands in, so taking the copy out later still holds it back
             here = found_ids | marked | {
                 place.skill_id for place in self.offered.values() if place.skill_id}
             # one pruned is new when it comes back, so it keeps nothing it saved
