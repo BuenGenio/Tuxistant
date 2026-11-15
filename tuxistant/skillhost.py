@@ -484,6 +484,7 @@ class _Grants:
         self._seen = None       # the identity of the file as it was read, or None
         self._hold = False      # hold() for the next reload
         self.unsaved = ""       # why what was allowed couldn't be saved, for this reload
+        self.held_back: dict[str, list] = {}    # ids not counted taken out, and why
         self._dirty = False
 
     @property
@@ -550,7 +551,7 @@ class _Grants:
         if self.broken:
             return self.broken if _beyond(manifest, {}) else ""
         if record is None or record.get("removed"):
-            return self.unsaved if self.unsaved and _beyond(manifest, {}) else ""
+            return self.unsaved if self.unsaved and _asks(manifest) else ""
         if not _beyond(manifest, record):
             return ""
         return f"It asks {' and '.join(_beyond(manifest, record))}, which it isn't allowed now."
@@ -560,12 +561,19 @@ class _Grants:
         if self.broken:
             return self.broken if _beyond(manifest, {}) else ""
         if record is None or record.get("removed"):
-            return self.unsaved if self.unsaved and _beyond(manifest, {}) else ""
+            return self.unsaved if self.unsaved and _asks(manifest) else ""
         more = _beyond(manifest, record)
         if not more:
             return ""
         if record.get("folder") != folder.name and _there(folder.parent, record) is False:
             record["folder"], self._dirty = folder.name, True   # moved: it stays refused here
+        waiting = self.held_back.get(manifest["id"])
+        if waiting:
+            return (f"It now asks {' and '.join(more)}, which it wasn't allowed before, so the "
+                    "new version isn't used. It isn't counted as taken out while "
+                    f"{', '.join(shown(name, 60) for name in waiting)} in your skills folder "
+                    "can't be read, as that could be it under another name. Fix or take that "
+                    "out first.")
         if manifest.get("recipe"):
             return (f"It now asks {' and '.join(more)}, which it wasn't allowed before, so the "
                     "new version isn't used. To allow it, take the file out of your skills "
@@ -594,11 +602,12 @@ class _Grants:
             record["folder"], self._dirty = folder.name, True   # renamed, or the copy that
         return False                                            # is left of two
 
-    def gone(self, user: Path, here: set[str], unknown: bool = False) -> set[str]:
+    def gone(self, user: Path, here: set[str], held_back=lambda skill_id: []) -> set[str]:
         """Marks removed each record whose file or folder is really not there and whose id no
         skill found in this reload has, and dates those with none. Only call it when the folder
-        could be listed. While a file of yours that won't read has an id no one knows, as when
-        one renamed is broken, nothing is marked. Returns the ids marked or dated."""
+        could be listed. One held_back names files for isn't marked, as one of them may be it
+        renamed and broken; held_back says so. Returns the ids marked or dated."""
+        self.held_back = {}
         marked, now = set(), int(time.time())
         for key, record in self.records.items():
             if record.get("removed"):
@@ -606,7 +615,11 @@ class _Grants:
                     record["removed_at"], self._dirty = now, True
                     marked.add(key)
                 continue
-            if key in here or unknown or _there(user, record) is not False:
+            if key in here or _there(user, record) is not False:
+                continue
+            blocking = held_back(key)
+            if blocking:
+                self.held_back[key] = blocking
                 continue
             record["removed"], record["removed_at"], self._dirty = True, now, True
             marked.add(key)
@@ -670,6 +683,12 @@ class _Grants:
 def _beside(link: Path) -> bool:
     """Whether a link leads to a file in the folder it is in."""
     return Path(os.path.realpath(link)).parent == Path(os.path.realpath(link.parent))
+
+
+def _asks(manifest: dict) -> bool:
+    """Whether a skill with no record needs one noted to load: one that asks for anything, or
+    has code, which would start on whatever an earlier one with its id saved."""
+    return bool(_beyond(manifest, {})) or not manifest.get("recipe")
 
 
 def _identity(file: Path):
@@ -902,7 +921,10 @@ class SkillHost:
         self.last_offered: dict[str, _Found] = {}   # by key, as the last reload offered them
         self.running: dict[str, _Running] = {}      # by folder
         self.failed: dict[str, str] = {}            # by key, why it didn't load, last reload
-        self.seen_ids: dict[str, str] = {}          # yours by key, the id each last read with
+        self.unknown_since: dict[str, tuple] = {}   # yours that won't read, unknown: since, as
+        self.missing_since: dict[str, int] = {}     # ids whose record's folder is gone, since
+        self._count = 0                             # reloads that listed your folder
+        self.seen_ids: dict[str, tuple] = {}        # yours by key: (id, digest) last read with
         self.stopping: set[asyncio.Task] = set()
         self.retired: list[_Running] = []           # retired with no loop to stop them on
         self.watcher = None
@@ -990,6 +1012,7 @@ class SkillHost:
             log.exception("reloading the skills failed")
             problems["skills"] = f"The skills could not be reloaded: {e}"
             self.problems = problems
+            self.grants._records, self.grants._dirty = None, False  # nothing half noted stays
             return dict(problems), False, False, ""
         self._swap(skills, running)
         before, last = self.offered, self.last_offered
@@ -1089,7 +1112,8 @@ class SkillHost:
     def _code(self, folder: Path, bundled: bool) -> _Found:
         manifest, text = _as_loaded(folder / MANIFEST, lambda: load_code_manifest(folder, bundled))
         problem = "" if bundled else self.grants.problem(manifest, folder)
-        if problem:
+        if problem:     # it read, so its id is known, though it doesn't load
+            self.seen_ids[str(folder)] = (manifest["id"], _text_digest(text))
             raise ValueError(problem)
         digest, files = fingerprinted(folder)
         return _Found(str(folder), manifest, folder.resolve(), digest, "code", text,
@@ -1099,7 +1123,8 @@ class SkillHost:
         from . import recipes
         manifest, text = _as_loaded(file, lambda: recipes.load(file))
         problem = self.grants.problem(manifest, file)
-        if problem:
+        if problem:     # it read, so its id is known, though it doesn't load
+            self.seen_ids[str(file)] = (manifest["id"], _text_digest(text))
             raise ValueError(problem)
         return _Found(str(file), manifest, kind="recipe", text=text)
 
@@ -1112,19 +1137,26 @@ class SkillHost:
         if listed:      # a folder that couldn't be read shows nothing gone
             for item in found:
                 if item.manifest["source"] == "yours":
-                    self.seen_ids[item.key] = item.manifest["id"]
-            self.seen_ids = {key: skill_id for key, skill_id in self.seen_ids.items()
+                    self.seen_ids[item.key] = (item.manifest["id"], _text_digest(item.text))
+            self.seen_ids = {key: seen for key, seen in self.seen_ids.items()
                              if os.path.lexists(key)}
             found_ids = {item.manifest["id"] for item in found}
-            # a file there that doesn't load now still has the id it last loaded with
-            present = set(self.seen_ids.values()) | {
-                place.skill_id for key, place in self.offered.items()
-                if place.skill_id and Path(key).parent == self.user and os.path.lexists(key)}
-            # one that won't read and whose id isn't known may be the one a record names
-            unknown = any(Path(key).parent == self.user and key not in self.seen_ids
-                          and not (self.offered.get(key) and self.offered[key].skill_id)
-                          for key in self.failed)
-            marked = self.grants.gone(self.user, found_ids | present, unknown)
+            known = {key: self._known_id(key) for key in set(self.seen_ids) | {
+                key for key in self.offered if Path(key).parent == self.user}}
+            # a file there that doesn't load now still has the id it last read with, as long
+            # as it is the same file; one that changed since may be another renamed onto it
+            present = {skill_id for skill_id in known.values() if skill_id}
+            self._count += 1
+            unknown = {key: _text_digest(self._peek_key(key) or "") for key in self.failed
+                       if Path(key).parent == self.user and not self._known_id(key)}
+            # since when each has failed as it is now: written anew, it starts again
+            self.unknown_since = {
+                key: self.unknown_since[key] if self.unknown_since.get(key, (0, ""))[1] == digest
+                else (self._count, digest) for key, digest in unknown.items()}
+            marked = self.grants.gone(self.user, found_ids | present, self._held_back)
+            self.missing_since = {skill_id: began for skill_id, began
+                                  in self.missing_since.items()
+                                  if skill_id in self.grants.held_back}
             here = found_ids | marked | {
                 place.skill_id for place in self.offered.values() if place.skill_id}
             # one pruned is new when it comes back, so it keeps nothing it saved
@@ -1137,6 +1169,28 @@ class SkillHost:
             for skill_id in clear:      # a recipe keeps nothing, so only code is cleared
                 self._clear_state(skill_id)
         return ""
+
+    @staticmethod
+    def _peek_key(key: str) -> str | None:
+        return _peek(Path(key) / MANIFEST if Path(key).is_dir() else Path(key))
+
+    def _known_id(self, key: str) -> str:
+        """The id a file of yours had when last read, if it is the same file now, by what it
+        holds: from this run, or the place it keeps from before."""
+        digest = _text_digest(self._peek_key(key) or "")
+        seen = self.seen_ids.get(key)
+        if seen and seen[1] == digest:
+            return seen[0]
+        place = self.offered.get(key)
+        return place.skill_id if place and place.digest == digest else ""
+
+    def _held_back(self, skill_id: str) -> list[str]:
+        """The files of yours that won't read, have no known id and began so no earlier than
+        the record's folder went missing, as a rename into one would: while there are, it
+        isn't marked taken out. One there from before, such as a draft, holds nothing."""
+        since = self.missing_since.setdefault(skill_id, self._count)
+        return sorted(Path(key).name for key, (began, _digest) in self.unknown_since.items()
+                      if began >= since)
 
     def _clear_state(self, skill_id: str) -> None:
         """Only the default launcher gives a skill this folder; a test's launcher has none."""

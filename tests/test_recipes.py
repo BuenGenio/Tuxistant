@@ -2369,6 +2369,107 @@ class Host(Case):
                       self.host.reload()[str(self.user / "coins.yaml")])
         self.assertNotIn("coins.leak", self.host.current().actions)
 
+    def onto_notes(self, how: str) -> None:
+        """coins.yaml put where notes.yaml was, both noted, and broken at once."""
+        notes = self.user / "notes.yaml"
+        if how == "replaced":
+            notes.write_text("id: [broken notes")
+            self.host.reload()
+            os.replace(self.user / "coins.yaml", notes)
+        else:
+            notes.unlink()
+            os.rename(self.user / "coins.yaml", notes)
+        notes.write_text("id: [broken coins")
+
+    async def test_a_skill_renamed_onto_another_s_file_keeps_what_it_was_allowed(self):
+        """notes.yaml's id was known, so coins.yaml renamed onto it and broken counted as taken
+        out, and fixed it got evil.example; while Tux ran, after a restart, or over a notes.yaml
+        already broken."""
+        for how in ("renamed", "restart", "replaced"):
+            with self.subTest(how=how):
+                for path in self.user.iterdir():
+                    path.unlink()
+                for name in (skillhost.LOADED, skillhost.GRANTS):
+                    (self.user.parent / name).unlink(missing_ok=True)
+                self.host = self.restart()
+                self.example("work.yaml", "coins.yaml", "notes.yaml")
+                self.onto_notes(how)
+                host = self.restart() if how == "restart" else self.host
+                host.reload()
+                self.assertFalse(json.loads(self.grants().read_text())[
+                    "org.example.coins"].get("removed", False))
+                self.coins_evil("notes.yaml")
+                problem = host.reload()[str(self.user / "notes.yaml")]
+                self.assertIn("now asks to reach evil.example", problem)
+                self.assertNotIn("coins.leak", host.current().actions)
+
+    async def test_a_draft_that_won_t_read_doesn_t_stop_taking_a_skill_out(self):
+        """Any file that wouldn't read, an empty folder or a half-written recipe, stopped the
+        record of a skill taken out from ever counting as taken out, with nothing said."""
+        for stray in ("drafts", "wip.yaml"):
+            with self.subTest(stray=stray):
+                for path in self.user.iterdir():
+                    shutil.rmtree(path) if path.is_dir() else path.unlink()
+                for name in (skillhost.LOADED, skillhost.GRANTS):
+                    (self.user.parent / name).unlink(missing_ok=True)
+                self.host = self.restart()
+                self.example("work.yaml", "coins.yaml")
+                if stray == "drafts":
+                    (self.user / stray).mkdir()
+                else:
+                    (self.user / stray).write_text("id: [half written")
+                self.host.reload()
+                (self.user / "coins.yaml").unlink()
+                self.host.reload()
+                self.coins_evil()
+                self.assertNotIn(str(self.user / "coins.yaml"), self.host.reload())
+                self.assertIn("coins.leak", self.host.current().actions, "put back, allowed")
+
+    async def test_a_skill_held_back_by_a_file_that_won_t_read_says_which(self):
+        self.example("work.yaml", "coins.yaml", "notes.yaml")
+        self.onto_notes("renamed")
+        self.host.reload()
+        self.coins_evil("notes.yaml")
+        self.assertIn("isn't counted as taken out while notes.yaml",
+                      self.host.reload()[str(self.user / "notes.yaml")])
+
+    async def test_a_new_code_skill_waits_while_the_grants_can_t_be_saved(self):
+        """It loaded on what an earlier one with its id had saved, which was cleared under it
+        once the save worked."""
+        class Process:
+            async def stop(self, graceful=True):
+                pass
+        self.host.launcher = lambda *_: Process()
+        self.example("work.yaml")
+        folder = self.code("code", 1)
+        with self.full_disk():
+            problems = self.host.reload()
+        self.assertEqual(problems, {str(folder): skillhost.UNSAVED_GRANTS.format(
+            file=self.grants(), why="No space left on device")})
+        self.assertNotIn("code.a0", self.host.current().actions)
+
+    async def test_an_error_after_a_grant_keeps_nothing_half_noted(self):
+        """The new record stayed in memory unsaved, so the next reload saved it without
+        clearing what the code skill had kept."""
+        class Process:
+            async def stop(self, graceful=True):
+                pass
+        self.host.launcher = lambda *_: Process()
+        self.example("work.yaml")
+        self.code("code", 1)
+        gone, calls = skillhost._Grants.gone, []
+
+        def boom(grants, *args, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("boom")
+            return gone(grants, *args, **kwargs)
+        with mock.patch.object(skillhost._Grants, "gone", boom), \
+                mock.patch.object(SkillHost, "_clear_state") as cleared:
+            self.assertEqual(list(self.host.reload()), ["skills"])
+            self.assertEqual(self.host.reload(), {})
+        self.assertEqual([call.args[0] for call in cleared.call_args_list], ["org.example.code"])
+
     async def test_a_check_names_the_same_skills_as_the_daemon(self):
         """tuxistant doctor reads the same folders with a host of its own, and named work."""
         alarm, refused = self.full()
