@@ -769,7 +769,8 @@ class Docs(unittest.TestCase):
             problems = skillhost.offline({}, user=user).problems
         self.assertEqual(set(problems), {str(user / "b"), str(user / "d")},
                          "b worked in 0.4.0, c still fits, d is too big alone")
-        self.assertNotIn("already", problems[str(user / "d")])
+        self.assertTrue(problems[str(user / "d")].startswith("It has 7 actions"))
+        self.assertIn("some of its own", problems[str(user / "d")], "taking others out won't do")
         seven = "seven or more"
         self.assertEqual(skillhost.USER_TOOLS + 1, 7)
         rule = next(line for line in (ROOT / "docs/SKILLS.md").read_text().splitlines()
@@ -779,13 +780,24 @@ class Docs(unittest.TestCase):
         self.assertIn("first start after updating from 0.4.0", rule)
         self.assertIn("one that was working can be refused", rule)
         self.assertIn(f"One skill with {seven} actions is refused", rule)
-        body = changelog_sections()[0][1]
+        body = changelog_section("0.5.0")
         entry = next(line for line in body.splitlines()
                      if line.startswith("- Skills you add, code skills and recipes together"))
         self.assertIn("first start after 0.4.0", entry)
         self.assertIn(f"One skill with {seven} actions is refused", entry)
         note = next(line for line in body.splitlines() if "loaded in 0.4.0" in line)
         self.assertIn(f"for one with {seven}", note, "taking another out can't bring it back")
+
+    def test_the_budget_contract_names_only_what_is_there(self):
+        """It named _held_by_another() after that was gone."""
+        from tuxistant import skillhost
+        rule = next(line for line in (ROOT / "docs/CONTRACT.md").read_text().splitlines()
+                    if line.startswith("- An action of yours may not start like"))
+        named = set(re.findall(r"`(\w+)\(\)`", rule))
+        self.assertGreater(len(named), 10)
+        homes = (skillhost, skillhost.SkillHost, skillhost._Grants)
+        self.assertEqual({name for name in named
+                          if not any(hasattr(home, name) for home in homes)}, set())
 
     def test_a_reach_list_counts_its_items(self):
         numbers = {"One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5, "Six": 6}
@@ -801,7 +813,7 @@ class Docs(unittest.TestCase):
 
     def test_the_reach_list_names_follow_ups_carrying_a_conversation_over(self):
         from tuxistant import controller
-        body = changelog_sections()[0][1]
+        body = changelog_section("0.5.0")
         reach = body.split("already did:\n\n", 1)[1].split("\n\n", 1)[0]
         self.assertEqual(controller.FOLLOW_ON_S, 120)
         item = next(line for line in reach.splitlines() if "Fn hold within 2 minutes" in line)
@@ -886,7 +898,13 @@ class Docs(unittest.TestCase):
 def changelog_sections():
     """(heading, body) for each "## " section of CHANGELOG.md, newest first."""
     parts = re.split(r"(?m)^## (.+)$", (ROOT / "CHANGELOG.md").read_text())
-    return list(zip(parts[1::2], parts[2::2]))
+    # "Not yet released" right after a release has nothing in it yet
+    return [(heading, body) for heading, body in zip(parts[1::2], parts[2::2]) if body.strip()]
+
+
+def changelog_section(version):
+    """The body of the release that starts with version, such as "0.5.0"."""
+    return next(body for heading, body in changelog_sections() if heading.startswith(version))
 
 
 def built_in_first_words():

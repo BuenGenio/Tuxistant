@@ -1,15 +1,38 @@
 {
-  "linux":   { "version": "0.2.0", "channel": "stable",  "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.2.0.tar.gz" },
-  "macos":   { "version": null, "channel": "planned", "url": null },
-  "windows": { "version": null, "channel": "planned", "url": null },
-  "preview": {
-    "version": "0.4.0",
-    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.4.0.tar.gz",
-    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.4.0"
+  "linux": {
+    "version": "0.5.0",
+    "channel": "stable",
+    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.5.0.tar.gz"
   },
+  "macos": {
+    "version": null,
+    "channel": "planned",
+    "url": null
+  },
+  "windows": {
+    "version": null,
+    "channel": "planned",
+    "url": null
+  },
+  "preview": null,
   "history": [
     {
-      "version": "0.4.0", "date": "2026-11-13", "channel": "preview",
+      "version": "0.5.0",
+      "date": "2026-11-15",
+      "channel": "stable",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.5.0",
+      "added": {
+        "en": "Recipe skills you write in YAML, a page for every skill in Settings, follow-up questions, hands-free dictation and an agreement before anything goes to the cloud",
+        "es": "Habilidades de receta que escribes en YAML, una página para cada habilidad en Configuración, preguntas de seguimiento, dictado manos libres y un acuerdo antes de enviar nada a la nube",
+        "pt": "Habilidades de receita que você escreve em YAML, uma página para cada habilidade em Configurações, perguntas de acompanhamento, ditado sem as mãos e um acordo antes de enviar qualquer coisa para a nuvem",
+        "zh": "用 YAML 编写的配方技能、设置中每个技能的独立页面、追问、免手持听写，以及任何内容发往云端之前的同意",
+        "ar": "مهارات وصفات تكتبها بلغة YAML، وصفحة لكل مهارة في الإعدادات، وأسئلة متابعة، وإملاء دون استخدام اليدين، وموافقة قبل إرسال أي شيء إلى السحابة"
+      }
+    },
+    {
+      "version": "0.4.0",
+      "date": "2026-11-13",
+      "channel": "preview",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.4.0",
       "added": {
         "en": "Opens apps and Settings pages, and keeps questions about your home out of fact lookups",
@@ -20,7 +43,9 @@
       }
     },
     {
-      "version": "0.3.0", "date": "2026-11-13", "channel": "preview",
+      "version": "0.3.0",
+      "date": "2026-11-13",
+      "channel": "preview",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.3.0",
       "added": {
         "en": "Web search and research, facts from Wikipedia, mail search, your own skills, media, timers and Home Assistant",
@@ -31,7 +56,9 @@
       }
     },
     {
-      "version": "0.2.0", "date": "2026-11-13", "channel": "stable",
+      "version": "0.2.0",
+      "date": "2026-11-13",
+      "channel": "stable",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.2.0",
       "added": {
         "en": "Your calendar, and news from a source you choose",
@@ -42,7 +69,9 @@
       }
     },
     {
-      "version": "0.1.0", "date": "2026-11-10", "channel": "preview",
+      "version": "0.1.0",
+      "date": "2026-11-10",
+      "channel": "preview",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.1.0",
       "added": {
         "en": "The first release: talk and listen, dictation, skills with approval cards, themes and Settings",

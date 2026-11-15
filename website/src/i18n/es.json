@@ -37,10 +37,11 @@
   "versionsTitle": "Versiones", "colSystem": "Sistema", "colVersion": "Versión", "colStatus": "Estado", "colNeeds": "Requisitos",
   "preview": "Vista previa", "stable": "Estable", "planned": "Prevista", "linuxNeeds": "GNOME 50 y tu propio servidor LocalAI", "tbd": "Por anunciar",
   "previewTry": "Prueba la vista previa {version} para Linux", "previewSep": ", ", "previewUntried": "aún sin probar en un escritorio real", "releaseNotes": "Notas de la versión",
-  "previewTitle": "Novedades de la vista previa", "previewLead": "Ya están hechas, pero aún sin comprobar en un escritorio real. Cada una pasará a Ya cuando haya funcionado en uno.",
+  "previewTitle": "Novedades de 0.5.0", "previewLead": "Ya están hechas, pero aún sin comprobar en un escritorio real. Cada una pasará a Ya cuando haya funcionado en uno.",
   "previewCaps": [
     ["soon", "Reproduce, pausa y salta canciones"], ["soon", "Temporizadores y recordatorios"], ["soon", "Controla tu Home Assistant"], ["soon", "Busca e investiga en la web"],
-    ["soon", "Responde datos con Wikipedia"], ["soon", "Responde con tu correo"], ["soon", "Tus propias habilidades, aisladas"], ["soon", "Abre apps y páginas de Configuración"]
+    ["soon", "Responde datos con Wikipedia"], ["soon", "Responde con tu correo"], ["soon", "Tus propias habilidades, aisladas"], ["soon", "Abre apps y páginas de Configuración"],
+    ["soon", "Habilidades receta: un archivo YAML, sin código"], ["soon", "Las recetas pueden cambiar Luz nocturna y No molestar"], ["soon", "Cada habilidad con su página en Configuración"], ["soon", "Dirección de Tailscale solo si la activas"], ["soon", "Dictado sin manos: toca Fn dos veces"], ["soon", "Responde a Tux manteniendo Fn otra vez"], ["soon", "La nube solo si aceptas"]
   ],
   "releasesTitle": "Historial de versiones",
   "donateTitle": "Ayuda a crear la próxima versión", "donateText": "Tu apoyo financia las versiones para macOS y Windows.",

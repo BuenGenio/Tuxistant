@@ -174,6 +174,29 @@ class Run:
             await asyncio.sleep(settle)
         return await self.test.command("eval", code=SNAPSHOT)
 
+    @staticmethod
+    def laid_out(card, card_id):
+        """Showing as card_id, with its Allow button placed, so a click can find it."""
+        allow = card.get("allow") or {}
+        return card.get("id") == card_id and isinstance(allow.get("x"), (int, float)) and (
+            allow.get("width") or 0) > 0
+
+    async def shown(self, card_id, settle=0.0):
+        """The card card_id, read settle seconds after it is showing and placed, so a busy
+        machine that is slow to put it up doesn't make the read too early."""
+        await self.wait_card(lambda card: self.laid_out(card, card_id))
+        return await self.card(settle)
+
+    async def wait_card(self, test, deadline_s=10.0):
+        """The card once test holds for it, read as often as the shell answers, so a busy
+        machine waits longer rather than reading too soon. The last read, past the deadline."""
+        end = time.monotonic() + deadline_s
+        while True:
+            card = await self.card()
+            if test(card) or time.monotonic() > end:
+                return card
+            await asyncio.sleep(0.02)
+
     async def shoot(self, name):
         await self.test.command("shoot", path=str(self.out / f"{name}.png"))
 
@@ -249,7 +272,7 @@ async def steps_click(run, report):
     # Straight after it appears a click on Allow does nothing, and neither does one that was held
     # down from before it armed until after.
     daemon.Approval("normal", *SHORT, "click", 45)
-    report["fresh"] = await run.card(0.05)
+    report["fresh"] = await run.wait_card(lambda card: run.laid_out(card, "normal"))
     await run.click(report["fresh"]["allow"])
     report["early_click"] = {"answers": run.answers(), "card": await run.card()}
     await run.shoot("normal_after_early_click")
@@ -269,7 +292,7 @@ async def steps_click(run, report):
     daemon.ApprovalClosed("normal")  # the daemon's own close, after the card has gone
 
     daemon.Approval("held", *SHORT, "click", 45)
-    fresh = await run.card(0.05)
+    fresh = await run.shown("held", 0.05)
     await run.press_and_hold(fresh["allow"], 1100)
     report["held_from_before_armed"] = {"answers": run.answers(), "card": await run.card()}
     await run.click(fresh["deny"])
@@ -277,7 +300,7 @@ async def steps_click(run, report):
 
     # A right click on Allow is not a click on Allow
     daemon.Approval("right", *SHORT, "click", 45)
-    armed = await run.card(ARMED_S)
+    armed = await run.shown("right", ARMED_S)
     await run.test.command("click", x=armed["allow"]["x"] + 10, y=armed["allow"]["y"] + 10, button=3)
     report["right_click"] = {"answers": run.answers(), "card": await run.card()}
     # Nor is a click beside the buttons, and it must not reach what is under the card
@@ -297,14 +320,14 @@ async def steps_admin(run, report):
     report["after_admin"] = {"answers": run.answers(), "card": await run.card()}
 
     daemon.Approval("unknown-level", *SHORT, "root-please", 45)
-    report["unknown_level"] = await run.card(0.2)
+    report["unknown_level"] = await run.shown("unknown-level", 0.2)
     await run.take_down("unknown-level")
 
 
 async def steps_text(run, report):
     daemon = run.daemon
     daemon.Approval("long", *LONG, "click", 45)
-    report["long"] = await run.card(ARMED_S)
+    report["long"] = await run.shown("long", ARMED_S)
     await run.shoot("long_top")
     await run.wheel(report["long"]["detailBox"], 12)
     report["long_some_way"] = await run.card()
@@ -314,25 +337,25 @@ async def steps_text(run, report):
     await run.take_down("long")
 
     daemon.Approval("long-admin", *LONG, "admin", 45)
-    report["long_admin"] = await run.card(ARMED_S)
+    report["long_admin"] = await run.shown("long-admin", ARMED_S)
     await run.shoot("long_admin")
     await run.take_down("long-admin")
 
     daemon.Approval("unbroken", *UNBROKEN, "click", 45)
-    report["unbroken"] = await run.card(ARMED_S)
+    report["unbroken"] = await run.shown("unbroken", ARMED_S)
     await run.wheel(report["unbroken"]["detailBox"], 400)
     report["unbroken_end"] = await run.card()
     await run.shoot("unbroken_end")
     await run.take_down("unbroken")
 
     daemon.Approval("markup", *MARKUP, "click", 45)
-    report["markup"] = await run.card(0.4)
+    report["markup"] = await run.shown("markup", 0.4)
     report["markup_sent"] = list(MARKUP)
     await run.shoot("markup")
     await run.take_down("markup")
 
     daemon.Approval("no-detail", "Empty the Trash?", "", "click", 45)
-    report["no_detail"] = await run.card(0.4)
+    report["no_detail"] = await run.shown("no-detail", 0.4)
     await run.shoot("no_detail")
     await run.take_down("no-detail")
 
@@ -350,10 +373,14 @@ async def steps_lifetime(run, report):
     # Runs out by itself, showing the time, and says nothing: no answer is the daemon's no
     before = len(run.answers())
     daemon.Approval("runs-out", *SHORT, "click", 3)
-    report["time_start"] = (await run.card(0.1))["time"]
-    report["time_later"] = (await run.card(1.3))["time"]
-    report["time_almost"] = await run.card(1.2)
-    report["time_over"] = await run.card(0.7)
+    runs_out = lambda card: card.get("id") == "runs-out"   # noqa: E731
+    start = await run.wait_card(runs_out)
+    report["time_start"] = start.get("time")
+    report["time_later"] = (await run.wait_card(
+        lambda card: runs_out(card) and card.get("time") != start.get("time"))).get("time")
+    report["time_almost"] = await run.wait_card(
+        lambda card: runs_out(card) and card.get("time") == "Denied in 1 s")
+    report["time_over"] = await run.wait_card(lambda card: not card["showing"])
     report["answers_on_timeout"] = run.answers()[before:]
     daemon.ApprovalClosed("runs-out")
 
@@ -368,11 +395,11 @@ async def steps_lifetime(run, report):
     for name, close_first in (("replaced_after_close", True), ("replaced_directly", False)):
         before = len(run.answers())
         daemon.Approval(f"{name}-1", *SHORT, "click", 45)
-        old = await run.card(ARMED_S)
+        old = await run.shown(f"{name}-1", ARMED_S)
         if close_first:
             daemon.ApprovalClosed(f"{name}-1")
         daemon.Approval(f"{name}-2", *SHORT, "click", 45)
-        fresh = await run.card(0.05)
+        fresh = await run.shown(f"{name}-2", 0.05)
         await run.click(old["allow"])
         early = run.answers()[before:]
         armed = await run.card(ARMED_S)
@@ -387,13 +414,13 @@ async def steps_placement(run, report):
     """Where it goes, and that it stays there."""
     daemon = run.daemon
     daemon.Approval("orb", *SHORT, "click", 45)
-    report["with_orb"] = await run.card(0.3)
+    report["with_orb"] = await run.shown("orb", 0.3)
     await run.shoot("with_orb")
     await run.take_down("orb")
 
     await run.use_theme("band-quarter")
     daemon.Approval("band", *SHORT, "click", 45)
-    report["with_band"] = await run.card(ARMED_S)
+    report["with_band"] = await run.shown("band", ARMED_S)
     await run.shoot("with_band")
     # Over a band, the click has to land on the card and not go through it
     await run.click(report["with_band"]["allow"])
@@ -401,13 +428,13 @@ async def steps_placement(run, report):
     await run.take_down("band")
 
     daemon.Approval("band-long", *LONG, "admin", 45)
-    report["with_band_long"] = await run.card(0.3)
+    report["with_band_long"] = await run.shown("band-long", 0.3)
     await run.shoot("with_band_long")
     await run.take_down("band-long")
 
     await run.use_theme("band-full")
     daemon.Approval("full", *LONG, "click", 45)
-    report["with_full_band"] = await run.card(ARMED_S)
+    report["with_full_band"] = await run.shown("full", ARMED_S)
     await run.shoot("with_full_band")
     await run.click(report["with_full_band"]["deny"])
     report["full_band_answers"] = run.answers()[-1:]
@@ -416,14 +443,14 @@ async def steps_placement(run, report):
     await run.use_theme("solid-orb")
     await run.end_turn()
     daemon.Approval("no-blob", *SHORT, "click", 45)
-    report["no_blob"] = await run.card(0.3)
+    report["no_blob"] = await run.shown("no-blob", 0.3)
     await run.shoot("no_blob")
     await run.take_down("no-blob")
 
     # The card does not move under a pointer because the theme did
     await run.begin_turn()
     daemon.Approval("stays", *SHORT, "click", 45)
-    before = await run.card(ARMED_S)
+    before = await run.shown("stays", ARMED_S)
     await run.use_theme("band-quarter")
     report["theme_change"] = {"before": before, "after": await run.card()}
     await run.take_down("stays")
@@ -443,7 +470,7 @@ async def steps_placement(run, report):
     await run.test.command("eval", code="Main.overview.show();")
     await asyncio.sleep(1.2)
     daemon.Approval("overview", *SHORT, "click", 45)
-    report["overview"] = await run.card(ARMED_S)
+    report["overview"] = await run.shown("overview", ARMED_S)
     await run.shoot("overview")
     await run.click(report["overview"]["allow"])
     report["overview_answers"] = run.answers()[-1:]
@@ -460,7 +487,7 @@ async def steps_caption(run, report):
     daemon.Transcript("delete the old reports", True)
     report["caption_before"] = await run.card(0.4)
     daemon.Approval("caption", *SHORT, "click", 45)
-    report["caption_hidden"] = await run.card(0.4)
+    report["caption_hidden"] = await run.shown("caption", 0.4)
     await run.shoot("caption_hidden")
     daemon.Reply("One moment, I am asking first.")
     daemon.Error("This error waits for the card.")
@@ -544,7 +571,7 @@ async def steps_window(run, report):
         await test.command("keys", keyvals=[0x61])  # a
 
         daemon.Approval("window", *SHORT, "click", 45)
-        report["window_card"] = await run.card(ARMED_S)
+        report["window_card"] = await run.shown("window", ARMED_S)
         report["window_focus_card_up"] = await focused()
         await test.command("keys", keyvals=[0x62])  # b, with the card up
         await test.command("click", x=frame["x"] + 60, y=frame["y"] + 120, button=1)
@@ -567,7 +594,7 @@ async def steps_window(run, report):
                 inFullscreen: Main.layoutManager.primaryMonitor.inFullscreen};
         """)
         daemon.Approval("fullscreen", *SHORT, "admin", 45)
-        report["fullscreen_card"] = await run.card(ARMED_S)
+        report["fullscreen_card"] = await run.shown("fullscreen", ARMED_S)
         await run.shoot("fullscreen")
         await run.click(report["fullscreen_card"]["allow"])
         report["fullscreen_answers"] = run.answers()[-1:]
@@ -586,7 +613,7 @@ async def steps_going_away(run, report):
     await run.begin_turn()
     before = len(run.answers())
     daemon.Approval("offline", *SHORT, "click", 45)
-    report["before_offline"] = await run.card(0.3)
+    report["before_offline"] = await run.shown("offline", 0.3)
     await run.args.bus.release_name(BUS_NAME)
     report["offline"] = await run.card(0.5)
     await run.args.bus.request_name(BUS_NAME)
@@ -1134,13 +1161,13 @@ async def scenario_fit(daemon, test, args):
             for kind, level, text in (("short", "click", SHORT), ("long", "admin", LONG),
                                       ("unbroken", "click", UNBROKEN)):
                 daemon.Approval(f"{name}-{kind}", *text, level, 45)
-                report[f"{name}/{kind}"] = await run.card(0.25)
+                report[f"{name}/{kind}"] = await run.shown(f"{name}-{kind}", 0.25)
                 await run.shoot(f"{name}-{kind}")
                 await run.take_down(f"{name}-{kind}")
         title = "Replace every file in " + "a-very-long-folder-name/" * 7 + "?"
         await run.end_turn()
         daemon.Approval("long-title", title[:200], LONG_DETAIL, "admin", 45)
-        report["longest-title/long"] = await run.card(0.25)
+        report["longest-title/long"] = await run.shown("long-title", 0.25)
         await run.shoot("longest-title")
         await run.take_down("long-title")
     finally:
@@ -1159,19 +1186,19 @@ async def scenario_monitors(daemon, test, args):
         second = first[1]
         await run.move_to(second["x"] + 100, second["y"] + 100)
         daemon.Approval("no-blob-second", *SHORT, "click", 45)
-        report["no_blob_second"] = await run.card(0.3)
+        report["no_blob_second"] = await run.shown("no-blob-second", 0.3)
         await run.shoot("no_blob_second")
         await run.take_down("no-blob-second")
 
         await run.begin_turn()
         await run.move_to(first[0]["x"] + 100, first[0]["y"] + 100)
         daemon.Approval("blob-second", *LONG, "click", 45)
-        report["blob_second_pointer_first"] = await run.card(0.3)
+        report["blob_second_pointer_first"] = await run.shown("blob-second", 0.3)
         await run.take_down("blob-second")
         await run.end_turn()
 
         daemon.Approval("no-blob-first", *SHORT, "click", 45)
-        report["no_blob_first"] = await run.card(0.3)
+        report["no_blob_first"] = await run.shown("no-blob-first", 0.3)
         await run.take_down("no-blob-first")
     finally:
         (run.out / "report.json").write_text(json.dumps(report, indent=1))
