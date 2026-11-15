@@ -185,6 +185,9 @@ class BuiltSite(unittest.TestCase):
     def test_the_preview_is_a_secondary_link_that_says_it_is_untried(self):
         preview = json.loads((ROOT / "website/src/releases.json").read_text())["preview"]
         for page in self.pages:
+            if preview is None:     # a stable release newer than any preview: no second link
+                self.assertNotIn('class="dl-preview"', page.read_text(), page)
+                continue
             strings = self.strings(page)
             line = re.search(r'<p class="dl-preview">(.*?)</p>', page.read_text())[1]
             self.assertIn(f'<a href="{preview["url"]}">', line, page)

@@ -1,22 +1,22 @@
 {
   "about": "A local preview of the site once the current rounds ship: python3 website/build.py --preview website/preview/upcoming.json writes website/dist-preview/. Never deployed. Planned entries carry their planned date, and every claim stays Soon.",
   "preview": {
-    "version": "0.5.0",
+    "version": "0.6.0",
     "url": null,
     "page": null
   },
   "releases": [
     {
-      "version": "0.5.0",
-      "date": "2026-11-15",
+      "version": "0.6.0",
+      "date": "2026-11-17",
       "channel": "preview",
       "planned": true,
       "added": {
-        "en": "Recipe skills in one YAML file, a Settings page for each skill, hands-free dictation, answering Tux by holding Fn, and Cloud only once you agree",
-        "es": "Habilidades receta en un solo archivo YAML, una página de Configuración por habilidad, dictado sin manos, responder a Tux manteniendo Fn y la nube solo si aceptas",
-        "pt": "Habilidades receita num único arquivo YAML, uma página de Configurações por habilidade, ditado sem as mãos, responder ao Tux segurando Fn e a nuvem só se você aceitar",
-        "zh": "单个 YAML 文件写成的配方技能、每个技能各有设置页面、免手持听写、按住 Fn 回答 Tux，以及须经你同意才启用的云端",
-        "ar": "مهارات الوصفات في ملف YAML واحد، وصفحة إعدادات لكل مهارة، وإملاء دون استخدام اليدين، والرد على Tux بالضغط المطوّل على Fn، والسحابة فقط بعد موافقتك"
+        "en": "Mail search without Thunderbird, through GNOME Online Accounts",
+        "es": "Búsqueda en el correo sin Thunderbird, a través de Cuentas en línea de GNOME",
+        "pt": "Busca nos e-mails sem o Thunderbird, pelas Contas on-line do GNOME",
+        "zh": "无需 Thunderbird 的邮件搜索，通过 GNOME 在线账户",
+        "ar": "البحث في البريد دون Thunderbird، عبر حسابات GNOME على الإنترنت"
       }
     }
   ],
@@ -24,151 +24,31 @@
     "en": [
       [
         "soon",
-        "Recipe skills: one YAML file, no code"
-      ],
-      [
-        "soon",
-        "Recipes can switch Night Light and Do Not Disturb"
-      ],
-      [
-        "soon",
-        "Each skill on its own page in Settings"
-      ],
-      [
-        "soon",
-        "Tailscale address only when switched on"
-      ],
-      [
-        "soon",
-        "Hands-free dictation: double-tap Fn"
-      ],
-      [
-        "soon",
-        "Answer Tux's questions by holding Fn again"
-      ],
-      [
-        "soon",
-        "Cloud only after you agree"
+        "Searches your mail without Thunderbird"
       ]
     ],
     "es": [
       [
         "soon",
-        "Habilidades receta: un archivo YAML, sin código"
-      ],
-      [
-        "soon",
-        "Las recetas pueden cambiar Luz nocturna y No molestar"
-      ],
-      [
-        "soon",
-        "Cada habilidad con su página en Configuración"
-      ],
-      [
-        "soon",
-        "Dirección de Tailscale solo si la activas"
-      ],
-      [
-        "soon",
-        "Dictado sin manos: toca Fn dos veces"
-      ],
-      [
-        "soon",
-        "Responde a Tux manteniendo Fn otra vez"
-      ],
-      [
-        "soon",
-        "La nube solo si aceptas"
+        "Busca en tu correo sin Thunderbird"
       ]
     ],
     "pt": [
       [
         "soon",
-        "Habilidades receita: um arquivo YAML, sem código"
-      ],
-      [
-        "soon",
-        "Receitas podem alternar Luz noturna e Não Perturbe"
-      ],
-      [
-        "soon",
-        "Cada habilidade com sua página nas Configurações"
-      ],
-      [
-        "soon",
-        "Endereço do Tailscale só se você ativar"
-      ],
-      [
-        "soon",
-        "Ditado sem as mãos: toque duas vezes em Fn"
-      ],
-      [
-        "soon",
-        "Responda ao Tux segurando Fn de novo"
-      ],
-      [
-        "soon",
-        "Nuvem só se você aceitar"
+        "Busca nos seus e-mails sem o Thunderbird"
       ]
     ],
     "zh": [
       [
         "soon",
-        "配方技能：一个 YAML 文件，无需代码"
-      ],
-      [
-        "soon",
-        "配方可开关夜灯和勿扰模式"
-      ],
-      [
-        "soon",
-        "每个技能在设置中都有自己的页面"
-      ],
-      [
-        "soon",
-        "仅在你开启时使用 Tailscale 地址"
-      ],
-      [
-        "soon",
-        "免手持听写：双击 Fn"
-      ],
-      [
-        "soon",
-        "再次按住 Fn 回答 Tux 的问题"
-      ],
-      [
-        "soon",
-        "须经你同意才使用云端"
+        "无需 Thunderbird 即可搜索你的邮件"
       ]
     ],
     "ar": [
       [
         "soon",
-        "مهارات الوصفات: ملف YAML واحد بلا برمجة"
-      ],
-      [
-        "soon",
-        "يمكن للوصفات تشغيل الإضاءة الليلية وعدم الإزعاج وإيقافهما"
-      ],
-      [
-        "soon",
-        "لكل مهارة صفحتها في الإعدادات"
-      ],
-      [
-        "soon",
-        "عنوان Tailscale فقط عند تفعيله"
-      ],
-      [
-        "soon",
-        "إملاء دون يدين: انقر Fn مرتين"
-      ],
-      [
-        "soon",
-        "أجب عن أسئلة Tux بالضغط على Fn مجددًا"
-      ],
-      [
-        "soon",
-        "السحابة فقط بعد موافقتك"
+        "يبحث في بريدك دون Thunderbird"
       ]
     ]
   },
@@ -190,10 +70,10 @@
     }
   },
   "banner": {
-    "en": "Local preview of the site once 0.5.0 ships. Not deployed, and the date is a plan.",
-    "es": "Vista previa local del sitio cuando salga 0.5.0. No está publicada y la fecha es una previsión.",
-    "pt": "Prévia local do site quando sair a 0.5.0. Não está publicada e a data é planejada.",
-    "zh": "本地预览：0.5.0 发布后的网站样子。未上线，日期为计划。",
-    "ar": "معاينة محلية للموقع بعد صدور 0.5.0. غير منشورة، والتاريخ مخطط له."
+    "en": "Local preview of the site once 0.6.0 ships. Not deployed, and the date is a plan.",
+    "es": "Vista previa local del sitio cuando salga 0.6.0. No está publicada y la fecha es una previsión.",
+    "pt": "Prévia local do site quando sair a 0.6.0. Não está publicada e a data é planejada.",
+    "zh": "本地预览：0.6.0 发布后的网站样子。未上线，日期为计划。",
+    "ar": "معاينة محلية للموقع بعد صدور 0.6.0. غير منشورة، والتاريخ مخطط له."
   }
 }

@@ -22,21 +22,22 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 
 ## Install
 
-There are three releases to choose from:
+There are four releases to choose from:
 
-- **0.2.0**, the stable release. What it added to 0.1.0 has all worked on the owner's own desktop, and it is what the website offers.
+- **0.5.0**, the stable release, and what the website offers. It adds recipe skills you write in YAML, a page for every skill in Settings, follow-up questions, hands-free dictation and an agreement before anything goes to the cloud. All of it was reviewed and tested, but most of it hasn't been tried on a real desktop yet; [CHANGELOG.md](CHANGELOG.md) says how far each part was.
+- **0.2.0**, the last release whose additions all worked on the owner's own desktop.
 - **0.3.0**, a preview. It adds media, timers, Home Assistant, mail search, facts from Wikipedia, web search and research, and your own skills. Most of it has only run in tests so far; [CHANGELOG.md](CHANGELOG.md) says which parts.
 - **0.4.0**, a preview. It adds opening apps and Settings pages, and a click before the facts lookup sends a question that may be about your home. None of it has been tried on a real desktop yet.
 
-On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.2.0; for a preview, use `--branch v0.3.0` or `--branch v0.4.0` instead:
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for an earlier release, use `--branch v0.2.0`, `--branch v0.3.0` or `--branch v0.4.0` instead:
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
-git clone --branch v0.2.0 https://github.com/BuenGenio/Tuxistant.git
+git clone --branch v0.5.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
 
-Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.2.0 from the website, and skip `git`: `tar xzf Tuxistant-0.2.0.tar.gz && cd Tuxistant-0.2.0`, or `tar xzf Tuxistant-0.4.0.tar.gz && cd Tuxistant-0.4.0` for the newest preview.
+Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
@@ -69,7 +70,7 @@ To remove everything, including the Fn helper, run `./uninstall.sh`. Your settin
 | Hold Fn | Hold Fn for 1.5 seconds, talk, then let go. Pressing another key during those 1.5 seconds cancels, so Fn shortcuts keep working. Needs the Fn helper |
 | Panel icon | The microphone icon has Talk or Stop, Theme, your recent requests (click one to copy its reply) and Settings |
 
-A hold within 2 minutes of the last one carries on the same conversation, so "Who wrote it?" or "the second one" is understood. When Tux has just asked you something, the blob and the question stay on screen for about 10 seconds after it speaks, with "Hold Fn to answer" under them: hold Fn and answer. If a multi-step task asked, your answer on a hold while the question is up goes straight to that task; a hold after that goes the usual way. Stop, a lock, Deny on an approval card, the shortcut or 2 minutes without a hold end the conversation, and the next hold starts a new one. In the next release, not yet tried on a real desktop.
+A hold within 2 minutes of the last one carries on the same conversation, so "Who wrote it?" or "the second one" is understood. When Tux has just asked you something, the blob and the question stay on screen for about 10 seconds after it speaks, with "Hold Fn to answer" under them: hold Fn and answer. If a multi-step task asked, your answer on a hold while the question is up goes straight to that task; a hold after that goes the usual way. Stop, a lock, Deny on an approval card, the shortcut or 2 minutes without a hold end the conversation, and the next hold starts a new one. From 0.5.0, not yet tried on a real desktop.
 
 During a turn you can also right-click the blob to switch theme, open Settings or stop. A band theme such as Waves lets clicks through to the windows below it, so use the panel icon there.
 
@@ -93,7 +94,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 ## What you can ask
 
-Rows marked 0.3.0 preview need the 0.3.0 preview, and rows marked 0.4.0 preview need the 0.4.0 preview. Of those, only mail search has been used on a real desktop so far.
+Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has them all. Of those, only mail search has been used on a real desktop so far.
 
 | Ask | What happens |
 |---|---|

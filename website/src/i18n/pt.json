@@ -37,10 +37,11 @@
   "versionsTitle": "Versões", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
   "preview": "Prévia", "stable": "Estável", "planned": "Planejada", "linuxNeeds": "GNOME 50 e seu próprio servidor LocalAI", "tbd": "A anunciar",
   "previewTry": "Experimente a prévia {version} para Linux", "previewSep": ", ", "previewUntried": "ainda não testada num computador real", "releaseNotes": "Notas da versão",
-  "previewTitle": "Novidades da prévia", "previewLead": "Já estão prontas, mas ainda não foram comprovadas num computador real. Cada uma passa para Já quando tiver funcionado em um.",
+  "previewTitle": "Novidades da 0.5.0", "previewLead": "Já estão prontas, mas ainda não foram comprovadas num computador real. Cada uma passa para Já quando tiver funcionado em um.",
   "previewCaps": [
     ["soon", "Toca, pausa e pula músicas"], ["soon", "Timers e lembretes"], ["soon", "Controla seu Home Assistant"], ["soon", "Pesquisa e investiga na web"],
-    ["soon", "Responde fatos com a Wikipédia"], ["soon", "Responde com seus e-mails"], ["soon", "Suas próprias habilidades, isoladas"], ["soon", "Abre apps e páginas de Configurações"]
+    ["soon", "Responde fatos com a Wikipédia"], ["soon", "Responde com seus e-mails"], ["soon", "Suas próprias habilidades, isoladas"], ["soon", "Abre apps e páginas de Configurações"],
+    ["soon", "Habilidades receita: um arquivo YAML, sem código"], ["soon", "Receitas podem alternar Luz noturna e Não Perturbe"], ["soon", "Cada habilidade com sua página nas Configurações"], ["soon", "Endereço do Tailscale só se você ativar"], ["soon", "Ditado sem as mãos: toque duas vezes em Fn"], ["soon", "Responda ao Tux segurando Fn de novo"], ["soon", "Nuvem só se você aceitar"]
   ],
   "releasesTitle": "Histórico de versões",
   "donateTitle": "Ajude a criar a próxima versão", "donateText": "Seu apoio financia as versões para macOS e Windows.",
