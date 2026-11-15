@@ -111,6 +111,7 @@ HERE = {"this", "my", "the", "our", "own", "here", "local", "localhost", "comput
         "laptop", "pc", "machine", "system", "device"}
 NOTHING = ("", "true", "false", "none", "null")
 ONLY_TWO = "I can only check this computer and the server in Settings."
+SETTINGS_HERE = "The server in Settings is this computer."
 
 
 def _settings_host(config) -> str | None:
@@ -224,13 +225,17 @@ def running(args: dict, config, session=None) -> dict:
     if _from_the_server(args, config):
         return _on_the_server(args, config, session)
     name, on = _said(args.get("name")), _said(args.get("on"))
-    if on_server(args, config):
-        on = ""         # the server in Settings is this computer
+    # Here on_server means the server in Settings is this computer, which "my server" means,
+    # but "my work server" may be another one.
+    settings_here = on_server(args, config)
+    if settings_here and not _maybe_another(args, config):
+        on = ""
     if not SERVICE_NAME.fullmatch(name):
         if _named_server(args, config):     # such as fd00::5, which no program here is called
             return _on_the_server(args, config, session)
         if not _here(on):
-            raise ValueError(ONLY_TWO)      # and nothing was looked at here
+            # and nothing was looked at here
+            raise ValueError(f"{ONLY_TWO} {SETTINGS_HERE}" if settings_here else ONLY_TWO)
         raise ValueError("Say which program or service to check.")
     found = _here_by_name(name)
     if not found and _named_server(args, config):
@@ -242,6 +247,10 @@ def running(args: dict, config, session=None) -> dict:
         # one. What this computer runs is said all the same, and raising skips files_read.
         if session is not None:
             session.tainted = True
+        if settings_here:
+            said = f"{name} is" if found else f"nothing called {name} is"
+            raise ValueError(f"{ONLY_TWO} The server in Settings is this computer, and {said} "
+                             "running on it.")
         raise ValueError(f"{ONLY_TWO} On this computer, {name} is running." if found else
                          f"{ONLY_TWO} Nothing called {name} is running on this computer.")
     return {"name": name, "running": found}

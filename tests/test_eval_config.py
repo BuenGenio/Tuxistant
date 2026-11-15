@@ -552,10 +552,21 @@ class RoutingCases(unittest.TestCase):
             calls.append(text)
             spelled = SPELLINGS[len(calls) % len(SPELLINGS)]
             if len(calls) % 3 == 0:
-                return None, f"I think {spelled} is fine. {text}"
+                return None, (SAID_ACROSS_THE_CUT if len(calls) % 2 else
+                              f"I think {spelled} is fine. {text}")
+            if len(calls) % 9 == 1:
+                return "system_running", ACROSS_THE_CUT
             return "system_running", json.dumps({"name": "localai", "on": f"my {spelled}",
                                                  "text": text})
+        # Cut before it is redacted, the host would be zephyr or zephyrb, which no pattern takes:
+        # a call's arguments are cut at 90 and a fact's answer at 70.
+        for across, cut in ((ACROSS_THE_CUT, 90), (SAID_ACROSS_THE_CUT, 70)):
+            at = across.index(ROUTED_HOST)
+            self.assertLessEqual(at + len("zephyr"), cut, across)
+            self.assertLess(cut, at + len("zephyrbox"), across)
         printed, space = _run_routing(first_tool)
+        self.assertIn('"on": "{serve', printed, "no call's host was across the cut")
+        self.assertIn("y {serve", printed, "no answer's host was across the cut")
         self.assertGreater(len(calls), 150)
         self.assertTrue(any(ROUTED_HOST in text for text in calls), "the cases were filled in")
         self.assertGreater(printed.count("{server}"), 100)
@@ -591,6 +602,9 @@ SPELLINGS = (ROUTED_HOST, ROUTED_HOST.upper(), "zephyrbox-kitchen", "zephyrbox k
              "ZephyrboxKitchen", "zephyrbox", "Zephyrbox.Kitchen", "zephyrbox_kitchen", "kitchen",
              f"{ROUTED_HOST}:8080", f"ssh://{ROUTED_HOST}", "zephyr box", "Zephyr-Box kitchen",
              "zephyr box kitchen")
+# The host across where eval_routing cuts what it prints: 90 for a call, 70 for an answer.
+ACROSS_THE_CUT = json.dumps({"name": "x" * 63, "on": ROUTED_HOST})
+SAID_ACROSS_THE_CUT = "y" * 63 + " " + ROUTED_HOST
 
 
 class _Settings:

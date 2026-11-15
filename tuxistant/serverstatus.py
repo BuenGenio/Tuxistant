@@ -1,9 +1,10 @@
 """What runs on your own server: its docker containers and systemd services, read over ssh.
 
 One fixed, read-only command goes to the host of the server in Settings, and nothing the model
-wrote goes with it: a name to look for is matched here, once the answer is back. ssh takes the
-port and user from ~/.ssh/config, and gets no agent, so the key has to work on its own. What
-your ssh_config runs itself, such as a ProxyCommand, still runs.
+wrote goes with it: a name to look for is matched here, once the answer is back. It starts
+nothing there either, not even a docker you stopped that its socket would start again. ssh
+takes the port and user from ~/.ssh/config, and gets no agent, so the key has to work on its
+own. What your ssh_config runs itself, such as a ProxyCommand, still runs.
 What the server sends is someone else's text. It is capped, each name has to look like a name,
 and the app says the answer itself, so none of it reaches a model with tools.
 """
@@ -33,21 +34,29 @@ MAX_NAME_CHARS = 40
 # Run by the remote user's own shell, whichever it is, so it hands the work to sh at once.
 # Killing ssh here doesn't end what it started there, as there is no terminal to hang up, so a
 # docker that hangs is given a timeout there too, where one works: an old busybox one fails
-# the "true" first and is left out.
+# the "true" first and is left out. docker ps on a stopped docker whose docker.socket still
+# listens would start it again, and with it every container set to restart, so it is asked only
+# when the service is up or no socket waits for it. No "!": csh expands it even in quotes.
 INNER = ("export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T=\"timeout 8\"; "
-         "echo @docker; $T docker ps --format \"{{.Names}}|{{.Image}}|{{.Status}}\" 2>&1; "
-         "echo \"@exit $?\"; "
+         "D=1; $T systemctl is-active --quiet docker.service 2>/dev/null || "
+         "{ $T systemctl is-active --quiet docker.socket 2>/dev/null && D=; }; "
+         "echo @docker; if [ -n \"$D\" ]; then "
+         "$T docker ps --format \"{{.Names}}|{{.Image}}|{{.Status}}\" 2>&1; "
+         "echo \"@exit $?\"; else echo \"@exit 300\"; fi; "
          "echo @systemd; $T systemctl list-units --type=service --state=running --no-legend "
          "--plain --no-pager 2>/dev/null; echo \"@exit $?\"")
 REMOTE = "exec sh -c " + shlex.quote(INNER)
 # Over what ~/.ssh/config says: a RemoteCommand would replace the command, a ControlMaster
 # would leave a connection open for your own sessions to reuse, an IdentityAgent is an agent,
-# ForkAfterAuthentication would leave an ssh that killing its group can't reach, SessionType
-# none would wait for the timeout, UpdateHostKeys and CheckHostIP would write known_hosts (the
-# second also calls a key changed for the address unknown), and ClearAllForwardings leaves a
-# Tunnel. LogLevel ERROR leaves out a long banner but not why ssh failed. ssh before 8.7 doesn't
-# know two of these, hence IgnoreUnknown, first; it is "*" because the first one given replaces
-# yours, and an option only your own let through, such as macOS's UseKeychain, would stop ssh.
+# GSSAPIDelegateCredentials would hand the server your Kerberos ticket, as -a and -x keep the
+# agent and X11 from it, ForkAfterAuthentication would leave an ssh that killing its group can't
+# reach, SessionType none would wait for the timeout, UpdateHostKeys and CheckHostIP would write
+# known_hosts (the second also calls a key changed for the address unknown), and
+# ClearAllForwardings leaves a Tunnel. LogLevel ERROR leaves out a long banner but not why ssh
+# failed. An ssh built without GSSAPI says it doesn't support that one and goes on. ssh before
+# 8.7 doesn't know two of these, hence IgnoreUnknown, first; it is "*" because the first one
+# given replaces yours, and an option only your own let through, such as macOS's UseKeychain,
+# would stop ssh.
 # None of these reach a ProxyJump hop, which is a second ssh that reads only your ssh_config.
 SSH_OPTIONS = ("-T", "-x", "-a", "-o", "IgnoreUnknown=*", "-o", "BatchMode=yes",
                "-o", f"ConnectTimeout={CONNECT_TIMEOUT_S}", "-o", "StrictHostKeyChecking=yes",
@@ -55,10 +64,11 @@ SSH_OPTIONS = ("-T", "-x", "-a", "-o", "IgnoreUnknown=*", "-o", "BatchMode=yes",
                "-o", "ClearAllForwardings=yes", "-o", "Tunnel=no",
                "-o", "PermitLocalCommand=no", "-o", "RemoteCommand=none", "-o", "ControlMaster=no",
                "-o", "ControlPath=none", "-o", "IdentityAgent=none",
-               "-o", "ForkAfterAuthentication=no", "-o", "SessionType=default",
-               "-o", "LogLevel=ERROR")
+               "-o", "GSSAPIDelegateCredentials=no", "-o", "ForkAfterAuthentication=no",
+               "-o", "SessionType=default", "-o", "LogLevel=ERROR")
 PASSED_ENV = ("PATH", "HOME", "USER", "LANG")
 NOT_FOUND = 127             # what sh says for a command that isn't there
+STOPPED = 300               # docker ps not asked, as above: no exit code is over 255
 
 NO_SERVER = "There's no server set in Settings, so I don't know which one to check."
 ON_THIS_COMPUTER = ("The server in Settings is this computer. I can't list what runs here, but "
@@ -79,6 +89,7 @@ NEITHER = "Your server has neither docker nor systemd, so I can't tell what's ru
 BAD_NAME = "Say the name of one program or service, in a word or two."
 DOCKER_REFUSED = ("Your user on the server isn't allowed to use docker, so I can't list its "
                   "containers.")
+DOCKER_STOPPED = "Docker is stopped on your server, so I didn't start it."
 OVER_SSH = "Yes, I reached your server over ssh."
 
 NAME = re.compile(r"[a-z0-9][a-z0-9 ._-]{0,%d}" % (MAX_NAME_CHARS - 1))
@@ -216,9 +227,9 @@ def _without(text: str, words: set) -> str:
 def names_host(text: str, host: str) -> bool:
     """Whether text names host: as said, or without my, the, home or server around it, so "my
     home nas" and "nas server" name nas.lan, and "my-nas" and "home" still name my-nas.lan and
-    home.lan."""
+    home.lan, or without the other words around a name, as "ssh nas" and "nas containers"."""
     return any(is_own_name(said, host) for said in (
-        text, _without(text, POSSESSIVES), _without(text, AROUND_A_HOST)))
+        text, _without(text, POSSESSIVES), _without(text, AROUND_A_HOST), _without(text, AROUND)))
 
 
 def target(config) -> str:
@@ -372,6 +383,7 @@ def read(host: str) -> dict:
         status, lines = sections.get(part, (None, []))
         result[part] = parse(lines) if status == 0 else None
         result[f"{part}_missing"] = status == NOT_FOUND
+    result["docker_stopped"] = sections.get("docker", (None,))[0] == STOPPED
     # docker's own complaint, read only to pick a sentence
     result["docker_refused"] = result["docker"] is None and any(
         "permission denied" in line.casefold() for line in sections.get("docker", (0, []))[1])
@@ -406,9 +418,10 @@ def wanted(args: dict, host: str) -> str | None:
     """The one thing asked after, as said and checked, or None for the whole list. Never sent
     anywhere. A host with a dot, or an address, is no program's name and is left out; a single
     label is kept, as on a server called plex or localai.lan, plex or localai is what is asked
-    after."""
+    after. An address in any spelling, as [fd00::12] or fd00:0::12, is left out too."""
     dropped = FILLER | ({host.casefold()} - {_label(host)})
-    words = [w for w in _words(args.get("name")) if w not in dropped]
+    words = [w for w in _words(args.get("name"))
+             if w not in dropped and not (is_address(host) and is_own_name(w, host))]
     if all(w in AROUND for w in words):
         return None
     name = " ".join(words)
@@ -452,6 +465,8 @@ def _plural(count: int, one: str) -> str:
 def _docker_unread(found: dict) -> str:
     if found["docker_missing"]:
         return "Docker isn't installed on your server."
+    if found["docker_stopped"]:
+        return DOCKER_STOPPED
     return DOCKER_REFUSED if found["docker_refused"] else "Docker on your server didn't answer me."
 
 
@@ -577,11 +592,20 @@ def _one(found: dict, name: str) -> str:
     if found["docker"] is None and found["systemd"] is None:
         return f"I couldn't check for {name} on your server. {_everything(found)}"
     if found["docker"] is None:
-        return (f"I don't see {name} among the services running on your server, and I couldn't "
-                "check docker there.")
+        docker = "docker is stopped there" if found["docker_stopped"] else (
+            "I couldn't check docker there")
+        return f"I don't see {name} among the services running on your server, and {docker}."
     if found["systemd"] is None:
         return f"I don't see {name} among the docker containers running on your server."
     return f"I don't see {name} among the docker containers or services running on your server."
+
+
+def _as_one(name: str) -> str:
+    """A name that names the server, as one word without server around it: "homenas" for "home
+    nas" and "zephyrnas" for "zephyr nas", so home is no program's name and a label said in parts
+    isn't found by its parts, as nas-backup is not zephyr nas. A label alone, as plex, is still
+    a name to look for, which complex has some of."""
+    return _key(_without(name, SERVER_WORDS))
 
 
 def answer(args: dict, config, session=None, missed_here: str | None = None,
@@ -595,10 +619,10 @@ def answer(args: dict, config, session=None, missed_here: str | None = None,
     found = read(host)
     if session is not None:
         session.tainted = True
-    seen, _, whole = _seen(found, name) if name else ([], False, False)
+    whole = bool(name) and _seen(found, name)[2]
     if _asks_after_ssh(args):
         text = OVER_SSH     # its unit may be ssh, sshd or another, but it let me in
-    elif name and names_host(_without(name, AROUND), host) and not seen:
+    elif name and names_host(name, host) and not _seen(found, _as_one(name))[0]:
         # the server's own name, with nothing there called that
         text = _everything(found)
         if missed_here:
@@ -621,7 +645,21 @@ def running(args: dict, config, session, missed_here: str | None = None,
     try:
         text = answer(args, config, session, missed_here, say_which)
     except Unanswered as why:
-        text = str(why)
+        text = _unanswered(str(why), config, missed_here, say_which)
     session.after.append(Speak(text, config["voice"]))
     return {APP_SAYS: True}
+
+
+def _unanswered(why: str, config, missed_here: str | None, say_which: bool) -> str:
+    """Why the server didn't answer, still after what this computer was found not to have, and
+    which server was tried once one was: a sleeping server must not hide the no from here."""
+    if say_which and why not in (NO_SERVER, BAD_HOST, ON_THIS_COMPUTER, BAD_NAME):
+        try:
+            host = target(config)
+            why = f"I tried the server in Settings, {_label(host) or host}. {why}"
+        except Unanswered:
+            pass
+    if missed_here:
+        why = f"Nothing called {missed_here} is running on this computer. {why}"
+    return shown(why, 600)
 
