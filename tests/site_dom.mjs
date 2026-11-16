@@ -3,12 +3,13 @@
 //
 // usage: node site_dom.mjs INPUT.json REPORT.json (files, as a wrapper round node may print too)
 // INPUT: {"app": path to app.js, "pages": {name: tree}, "cases": [{"page", "userAgent", "platform",
-//        "hash" (optional, the address's #part on arrival), "steps": [null or a selector to click, ...],
-//        "probes": [selector, ...]}]}
+//        "hash" (optional, the address's #part on arrival), "beforematch" (optional: true for a
+//        browser that knows hidden=until-found, as Chromium does), "steps": [null, a selector to
+//        click, or {"focus": selector}, ...], "probes": [selector, ...]}]}
 // A tree is ["tag", {attributes}, [children]], and a child is a tree or a string of text.
 // REPORT: one entry per case: for each step, after its click, each probe's matches as
-//         {text, attrs, parts}, and "#scrolled", what app.js last scrolled into view, as a probe's
-//         matches; or {"error"} if app.js threw.
+//         {text, attrs, parts}, "#scrolled", what app.js last scrolled into view, and "#active", what
+//         has the focus, as a probe's matches; or {"error"} if app.js threw.
 //
 // The DOM has what app.js uses. It gets no WebGL here, so the hero shows its still CSS drawings,
 // with the themes from the themes.js beside app.js, on a page that measures nothing.
@@ -203,8 +204,9 @@ function describe(element) {
   };
 }
 
-function run(app, themes, tree, { userAgent, platform, hash = '', steps, probes }) {
+function run(app, themes, tree, { userAgent, platform, hash = '', beforematch = false, steps, probes }) {
   const document = documentFrom(tree);
+  if (beforematch) document.body.onbeforematch = null;    // what 'onbeforematch' in body looks for
   const context = {
     document,
     navigator: { userAgent, platform },
@@ -228,10 +230,15 @@ function run(app, themes, tree, { userAgent, platform, hash = '', steps, probes 
     vm.createContext(context);
     vm.runInContext(themes, context, { filename: 'themes.js' });
     vm.runInContext(app, context, { filename: 'app.js' });
+    const special = { '#scrolled': () => document.scrolledTo, '#active': () => document.activeElement };
     return steps.map(step => {
-      if (step) click(document, step);
-      return Object.fromEntries(probes.map(probe => [probe, probe === '#scrolled'
-        ? [document.scrolledTo].filter(Boolean).map(describe) : document.querySelectorAll(probe).map(describe)]));
+      if (step?.focus) {
+        const target = document.querySelector(step.focus);
+        if (!target) throw new Error(`nothing to focus at ${step.focus}`);
+        target.focus();
+      } else if (step) click(document, step);
+      return Object.fromEntries(probes.map(probe => [probe, probe in special
+        ? [special[probe]()].filter(Boolean).map(describe) : document.querySelectorAll(probe).map(describe)]));
     });
   } catch (error) {
     return { error: String(error?.stack || error) };

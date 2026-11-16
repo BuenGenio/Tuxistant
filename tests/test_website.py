@@ -450,7 +450,7 @@ class BuiltSite(unittest.TestCase):
                     also = self.build.fill(strings["ctaSoonAlso"], os=names[cta_os])
                     gap = [] if soon.endswith("。") else [["#text", " "]]
                     self.assertEqual(prompt["parts"], [["span", soon], *gap, ["span", also]], where)
-                # New in 0.5.0 keeps its own prompt and both actions.
+                # New since 0.2.0 keeps its own prompt and both actions.
                 last = steps[-1]
                 self.assertEqual([p["text"] for p in last["#preview .acc-cta p"]], [strings["ctaPreview"]], where)
                 self.assertEqual([a["text"] for a in last["#preview .acc-cta a"]], [label, strings["releaseNotes"]], where)
@@ -492,6 +492,35 @@ class BuiltSite(unittest.TestCase):
                 # An address opens the section and then scrolls to what it names: the browser had
                 # nothing open to scroll to. A click opens it first, and the browser follows the link.
                 self.assertEqual([s["attrs"]["id"] for s in last["#scrolled"]], [scrolled] if scrolled else [], where)
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node.js")
+    def test_folding_a_section_moves_focus_out_and_leaves_its_text_findable(self):
+        """Closing a section with the focus inside it moves the focus to its toggle, as Safari leaves
+        it on what had it. A closed panel is hidden until found where the browser knows that, so
+        find in page and a link to a passage of text still reach it, and plainly hidden elsewhere."""
+        link = "#examples .acc-cta a"
+        probes = ["#active", ".acc-panel", "#examples"]
+        pages = {str(page): dom_tree(page.read_text()) for page in self.pages}
+        agent, platform, _ = self.AGENTS["linux"]
+        runs = [{"page": str(page), "userAgent": agent, "platform": platform, "beforematch": found,
+                 "steps": [None, {"focus": link}, "#examples-toggle"], "probes": probes}
+                for page in self.pages for found in (True, False)]
+        with tempfile.TemporaryDirectory() as folder:
+            given, report = Path(folder) / "input.json", Path(folder) / "report.json"
+            given.write_text(json.dumps({"app": str(self.dist / "app.js"), "pages": pages, "cases": runs}))
+            subprocess.run(["node", str(ROOT / "tests/site_dom.mjs"), str(given), str(report)],
+                           capture_output=True, timeout=300, check=True)
+            reports = iter(json.loads(report.read_text()))
+        for page in self.pages:
+            for found in (True, False):
+                where = (page.relative_to(self.dist), "until-found" if found else "hidden")
+                arrived, focused, folded = next(reports)
+                hidden = {panel["attrs"]["id"]: panel["attrs"].get("hidden") for panel in arrived[".acc-panel"]}
+                self.assertEqual(hidden, {"examples-panel": None, "preview-panel": "until-found" if found else "",
+                                          "versions-panel": "until-found" if found else ""}, where)
+                self.assertEqual([a["attrs"].get("data-cta") for a in focused["#active"]], ["download"], where)
+                self.assertIn("is-closed", folded["#examples"][0]["attrs"]["class"], where)
+                self.assertEqual([a["attrs"].get("id") for a in folded["#active"]], ["examples-toggle"], where)
 
     def test_the_releases_chips_fold_with_the_versions_and_come_before_its_call_to_action(self):
         for page in self.pages:
@@ -1045,6 +1074,59 @@ class HeroAndHeader(unittest.TestCase):
             self.assertGreater(abs(moment % float(period) - float(at)), float(shut_until), (period, at))
         age = float(re.search(r"const age = still\(\) \? ([\d.]+) : now - slideStart;", self.js)[1])
         self.assertTrue(0.6 < age < 2.6, "inside the listening part of a turn, past its fade")
+
+    def test_without_script_the_hero_offers_the_linux_download_and_names_it(self):
+        """As a section's download does: the page arrives with the Linux file, named, and the version
+        under it, and app.js then fits all three to the visitor's own system."""
+        releases = json.loads((ROOT / "website/src/releases.json").read_text())
+        linux = releases["linux"]
+        for page in self.pages:
+            code = "en" if page.parent == self.build.DIST else page.parent.name
+            strings = json.loads((ROOT / "website/src/i18n" / f"{code}.json").read_text())
+            _, hero = self.hero(page)
+            label = html_escape(self.build.fill(strings["dlFor"], os="Linux"))
+            self.assertIn(f'<a class="btn btn-main" id="download" href="{html_escape(linux["url"])}">{label}</a>',
+                          hero, page)
+            meta = self.build.fill(strings["dlMeta"], version=linux["version"], channel=strings[linux["channel"]])
+            self.assertIn(f'<span id="dl-meta-text">{html_escape(meta)}</span> · ', hero, page)
+        # With no Linux release yet, it says what is coming and downloads nothing.
+        releases["linux"]["url"] = None
+        self.assertEqual(self.build.hero_download(strings, releases),
+                         '<a class="btn btn-main" id="download" aria-disabled="true">'
+                         f'{html_escape(self.build.fill(strings["dlPending"], os="Linux"))}</a>')
+        for line in ("button.textContent = fill(S.dlFor, { os: osName });", "button.href = release.url;",
+                     "button.removeAttribute('aria-disabled');", "meta.textContent = release.version"):
+            self.assertIn(line, self.js)
+
+    def test_the_tagline_breaks_evenly_and_between_its_sentences(self):
+        """Over the theme, right under the title: two even lines on a phone, not one word alone."""
+        for page in self.pages:
+            code = "en" if page.parent == self.build.DIST else page.parent.name
+            text = json.loads((ROOT / "website/src/i18n" / f"{code}.json").read_text())["tagline"]
+            tagline = re.search(r'<p class="tagline">(.*?)</p>', page.read_text())[1]
+            self.assertEqual(len(re.findall(r"<span>[^<]+</span>", tagline)), 2, page)
+            self.assertEqual(re.sub(r"</?span>", "", tagline), html_escape(text), page)
+        self.assertIn("text-wrap: balance", self.rule(".tagline"))
+        span = self.rule(".tagline span")
+        self.assertIn("display: inline-block", span)
+        self.assertIn("text-wrap: balance", span)
+
+    def test_the_words_over_a_theme_keep_their_contrast_without_a_blur(self):
+        """The claims sit over a band on a wide screen, so they are nearly solid: 4.5:1 for Now and
+        Soon over a ribbon. The pills under the button blur nothing, since the canvas behind them
+        redraws every frame; and asking for less transparency makes them all solid."""
+        self.assertIn("background: color-mix(in srgb, var(--panel) 94%, transparent)", self.rule(".hero .cap"))
+        for selector in (".hero .cap", ".hero .dl-meta", ".hero .dl-preview", ".hero .pick"):
+            self.assertNotIn("backdrop-filter", self.rule(selector), selector)
+        self.assertIn("background: color-mix(in srgb, var(--bg) 90%, transparent)", self.rule(".hero .pick"))
+        reduced = re.findall(r"@media \(prefers-reduced-transparency: reduce\) \{((?:[^{}]*\{[^{}]*\})*)\s*\}", self.css)
+        reduced = " ".join(reduced)
+        self.assertRegex(reduced, r"\.hero \.dl-meta, \.hero \.dl-preview, \.hero \.pick \{ background: var\(--bg\); \}")
+        self.assertRegex(reduced, r"\.hero \.cap \{ background: var\(--panel\); \}")
+
+    def test_the_picker_is_a_thumb_wide_on_a_touch_screen(self):
+        self.assertRegex(self.css, r"@media \(pointer: coarse\) \{\s*\.dot, \.still \{ width: 34px; height: 34px; \}")
+        self.assertIn("width: 9px; height: 9px", self.rule(".dot::before"), "the marks stay the same size")
 
     def test_the_theme_shown_is_marked_by_shape_not_only_colour(self):
         self.assertIn("background: var(--text)", self.rule('.dot[aria-pressed="true"]::before'))

@@ -144,7 +144,10 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
   min-height: var(--hero-h);
 }
 .hero-copy { position: relative; grid-column: 2; grid-row: 1; text-align: center; }
-.tagline { margin: 6px auto 0; max-width: 620px; color: var(--muted); }
+.tagline { margin: 6px auto 0; max-width: 620px; color: var(--muted); text-wrap: balance; }
+/* A sentence to a span, as in the calls to action: a narrow screen breaks between them first, and a
+   sentence too long for a line still breaks evenly, not with one word left on its own. */
+.tagline span { display: inline-block; text-wrap: balance; }
 
 #tux, .fallback { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; pointer-events: none; }
 .has-gl .fallback { display: none; }
@@ -182,6 +185,12 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
 .still { margin-inline-start: 6px; }
 .still::before { content: ""; width: 9px; height: 10px; border-inline: 3px solid currentColor; }
 .still[aria-pressed="true"]::before { border: 0; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+/* On a touch screen each is a thumb's width, the marks the same size: a near miss doesn't pick the
+   theme beside it, and the row grows only a little. */
+@media (pointer: coarse) {
+  .dot, .still { width: 34px; height: 34px; }
+  .still { margin-inline-start: 2px; }
+}
 
 .download { margin-block-start: 12px; }
 .btn-main {
@@ -409,36 +418,35 @@ main > .hero:first-child #tux, main > .hero:first-child .fallback {
 :root:not(.has-gl) .hero[data-theme="scanner"] h1 { color: #f1f2f7; text-shadow: 0 0 1px #07080d, 0 0 3px #07080d, 0 0 6px #07080d, 0 0 12px #07080d; }
 .hero .tagline { color: var(--text); }
 /* The small lines under the button get a calm pill of their own: on a bright or busy part of a
-   theme a halo isn't enough for text this size. */
+   theme a halo isn't enough for text this size. Nearly solid, with no blur: the canvas behind them
+   redraws every frame, and a blur would be redone with it, for little a reader would see. */
 .hero .dl-meta, .hero .dl-preview, .hero .pick {
   width: fit-content;
   margin-inline: auto;
   padding: 1px 10px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--bg) 86%, transparent);
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
 }
 .hero .dl-meta { margin-block-start: 8px; }
 .hero .dl-preview { margin-block-start: 4px; }
 .hero .pick { margin-block-start: 6px; padding-inline-end: 4px; }
-@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .hero .dl-meta, .hero .dl-preview, .hero .pick {
-    background: color-mix(in srgb, var(--bg) 82%, transparent);
-    -webkit-backdrop-filter: blur(10px);
-    backdrop-filter: blur(10px);
-  }
-}
+/* The claims, where a band runs behind them on a wide screen: nearly solid, so the small Now and
+   Soon keep 4.5:1 over a ribbon, which still shows through faintly. */
+.hero .cap { background: color-mix(in srgb, var(--panel) 94%, transparent); }
 @media (prefers-reduced-transparency: reduce) {
-  .hero .dl-meta, .hero .dl-preview, .hero .pick { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .hero .dl-meta, .hero .dl-preview, .hero .pick { background: var(--bg); }
+  .hero .cap { background: var(--panel); }
 }
 
-/* Without WebGL: a still drawing of each theme in CSS, where the script places its shader. */
+/* Without WebGL: a still drawing of each theme in CSS, where the script places its shader. Without
+   script nothing places it, so it is centred, peeking over the name and ending above the claims. */
 .fallback::before {
   content: "";
   position: absolute;
-  left: var(--actor-left, calc(50% - min(200px, 43vw)));
-  top: var(--actor-top, calc(var(--header-h) - 20px));
-  width: var(--actor-width, min(400px, 86vw));
-  height: var(--actor-height, min(400px, 86vw));
+  left: var(--actor-left, calc(50% - min(150px, 34vw)));
+  top: var(--actor-top, calc(var(--header-h) - 12px));
+  width: var(--actor-width, min(300px, 68vw));
+  height: var(--actor-height, min(300px, 68vw));
 }
 .hero[data-theme="tux"] .fallback::before {
   background:
@@ -490,6 +498,7 @@ main > .hero:first-child #tux, main > .hero:first-child .fallback {
   .hero-copy { grid-column: 1 / -1; grid-row: auto; padding-block: 28px 18px; }
   .caps-a, .caps-b { grid-column: auto; grid-row: auto; align-items: stretch; gap: 6px; }
   .hero-copy::before { inset: 14px -16px -10px; }
+  .fallback::before { top: var(--actor-top, 0px); }     /* the name sits higher here: his eyes still peek over it */
 }
 /* ==== end of hero background ==== */
 

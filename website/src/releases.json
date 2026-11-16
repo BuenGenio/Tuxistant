@@ -24,8 +24,8 @@
       "features": [
         {"icon": "recipe", "label": {"en": "Recipe skills in YAML", "es": "Habilidades de receta en YAML", "pt": "Habilidades de receita em YAML", "zh": "YAML 配方技能", "ar": "مهارات الوصفات بلغة YAML"}},
         {"icon": "followup", "label": {"en": "Follow-up questions", "es": "Preguntas de seguimiento", "pt": "Perguntas de acompanhamento", "zh": "追问", "ar": "أسئلة المتابعة"}},
-        {"icon": "dictation", "label": {"en": "Hands-free dictation", "es": "Dictado manos libres", "pt": "Ditado sem as mãos", "zh": "免手持听写", "ar": "إملاء دون استخدام اليدين"}},
-        {"icon": "settings", "label": {"en": "A page for every skill in Settings", "es": "Configuración por habilidad", "pt": "Configurações por habilidade", "zh": "设置中每个技能的独立页面", "ar": "صفحة لكل مهارة في الإعدادات"}},
+        {"icon": "dictation", "label": {"en": "Hands-free dictation", "es": "Dictado sin manos", "pt": "Ditado sem as mãos", "zh": "免按住听写", "ar": "إملاء دون يدين"}},
+        {"icon": "settings", "label": {"en": "A page for every skill in Settings", "es": "Cada habilidad con su página", "pt": "Cada habilidade com sua página", "zh": "设置中每个技能的独立页面", "ar": "صفحة لكل مهارة في الإعدادات"}},
         {"icon": "consent", "label": {"en": "Cloud only after you agree", "es": "La nube solo si aceptas", "pt": "Nuvem só se você aceitar", "zh": "须经你同意才使用云端", "ar": "السحابة فقط بعد موافقتك"}}
       ]
     },
@@ -37,7 +37,7 @@
       "features": [
         {"icon": "apps", "label": {"en": "Opening apps", "es": "Abrir apps", "pt": "Abrir apps", "zh": "打开应用", "ar": "فتح التطبيقات"}},
         {"icon": "settings", "label": {"en": "Opening Settings pages", "es": "Abrir páginas de Configuración", "pt": "Abrir páginas de Configurações", "zh": "打开设置页面", "ar": "فتح صفحات الإعدادات"}},
-        {"icon": "shield", "label": {"en": "Home questions out of fact lookups", "es": "Tu casa fuera de las búsquedas de datos", "pt": "Sua casa fora das buscas de fatos", "zh": "关于你家的问题不进入事实查询", "ar": "أسئلة منزلك خارج البحث عن المعلومات"}}
+        {"icon": "shield", "label": {"en": "Home questions kept out of fact lookups", "es": "Preguntas de casa fuera de búsquedas", "pt": "Perguntas da casa fora das buscas", "zh": "关于你家的问题不进入事实查询", "ar": "أسئلة منزلك خارج البحث عن المعلومات"}}
       ]
     },
     {
@@ -74,6 +74,7 @@
         {"icon": "voice", "label": {"en": "Talk and listen", "es": "Hablar y escuchar", "pt": "Falar e ouvir", "zh": "对话与聆听", "ar": "التحدث والاستماع"}},
         {"icon": "dictation", "label": {"en": "Dictation", "es": "Dictado", "pt": "Ditado", "zh": "听写", "ar": "الإملاء"}},
         {"icon": "approve", "label": {"en": "Skills with approval cards", "es": "Habilidades con tarjetas de aprobación", "pt": "Habilidades com cartões de aprovação", "zh": "带确认卡片的技能", "ar": "مهارات ببطاقات موافقة"}},
+        {"icon": "steps", "label": {"en": "Several steps in one request", "es": "Varios pasos en una sola petición", "pt": "Vários passos num só pedido", "zh": "一次请求完成多个步骤", "ar": "عدة خطوات في طلب واحد"}},
         {"icon": "settings", "label": {"en": "Settings", "es": "Configuración", "pt": "Configurações", "zh": "设置", "ar": "الإعدادات"}},
         {"icon": "theme", "label": {"en": "Themes", "es": "Temas", "pt": "Temas", "zh": "主题", "ar": "السمات"}}
       ]

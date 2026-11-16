@@ -38,7 +38,7 @@
   "versionsTitle": "Versões e histórico", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
   "preview": "Prévia", "stable": "Estável", "planned": "Planejada", "linuxNeeds": "GNOME 50 e seu próprio servidor LocalAI", "tbd": "A anunciar",
   "previewTry": "Experimente a prévia {version} para Linux", "previewSep": ", ", "previewUntried": "ainda não testada num computador real", "releaseNotes": "Notas da versão",
-  "previewTitle": "Novidades da 0.5.0", "previewLead": "Já estão prontas, mas ainda não foram comprovadas num computador real. Cada uma passa para Já quando tiver funcionado em um.",
+  "previewTitle": "Novidades desde a 0.2.0", "previewLead": "Já estão prontas, mas ainda não foram comprovadas num computador real. Cada uma passa para Já quando tiver funcionado em um.",
   "previewCaps": [
     ["soon", "Toca, pausa e pula músicas"], ["soon", "Timers e lembretes"], ["soon", "Controla seu Home Assistant"], ["soon", "Pesquisa e investiga na web"],
     ["soon", "Responde fatos com a Wikipédia"], ["soon", "Responde com seus e-mails"], ["soon", "Suas próprias habilidades, isoladas"], ["soon", "Abre apps e páginas de Configurações"],

@@ -238,10 +238,11 @@ FEATURE_ICONS = {
                 '<path d="m9.5 13.5 2 2 3.5-3.5"/>'),
     "calendar": '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
     "news": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8.5h10M7 12.5h4M7 16h4M14 12.5h3V16h-3z"/>',
+    "steps": '<path d="M3 20h5v-5h5v-5h5V5h3"/>',
 }
-# The icons with lines of writing, left-aligned on a page or a list, which run the other way right
-# to left, so the Arabic page mirrors them.
-FEATURE_MIRRORED = {"dictation", "news", "recipe"}
+# The icons with lines of writing, left-aligned on a page or a list, and the steps, which climb
+# the way a line is read: right to left they run the other way, so the Arabic page mirrors them.
+FEATURE_MIRRORED = {"dictation", "news", "recipe", "steps"}
 # Characters: a chip, not a sentence. About 40 Latin characters fit one line at 360 px.
 FEATURE_LABEL_LENGTH = (2, 40)
 
@@ -404,6 +405,34 @@ def acc_close(prompt, *actions):
             '</div></div></section>')
 
 
+def sentences_html(text):
+    """A sentence to a span, as app.js does for a call to action, so a narrow screen breaks between
+    sentences before it breaks inside one. A full-width stop, as Chinese ends a sentence with, has
+    no space after it."""
+    parts = re.split(r"((?<=[.!?])\s+|(?<=[\u3002\uff01\uff1f]))", text)
+    return "".join(esc(part) if index % 2 else f"<span>{esc(part)}</span>"
+                   for index, part in enumerate(parts) if part or index % 2)
+
+
+def hero_download(strings, releases):
+    """The hero's button as it stands without script: the Linux file, named as such, as app.js
+    shows a phone. app.js then points it at the visitor's own system and says which."""
+    linux = releases["linux"]
+    if linux["url"]:
+        label = fill(strings["dlFor"], os="Linux")
+        return f'<a class="btn btn-main" id="download" href="{esc(linux["url"])}">{esc(label)}</a>'
+    label = fill(strings["dlPending"] if linux["version"] else strings["dlSoon"], os="Linux")
+    return f'<a class="btn btn-main" id="download" aria-disabled="true">{esc(label)}</a>'
+
+
+def hero_meta(strings, releases):
+    """The line under the hero's button: which version it downloads, as app.js words it."""
+    linux = releases["linux"]
+    if not linux["version"]:
+        return strings["dlPlanned"]
+    return fill(strings["dlMeta"], version=linux["version"], channel=strings[linux["channel"]])
+
+
 def cta_download(strings, releases):
     """The newest stable download, as the hero's button offers it: the Linux file, and it says so,
     since that is what it fetches without script too. app.js points it at the visitor's own system
@@ -485,10 +514,10 @@ def page(code, strings, languages, releases, detect, policy):
     <div class="hero-in wrap">
       <div class="hero-copy">
         <h1>Tuxistant</h1>
-        <p class="tagline">{esc(strings['tagline'])}</p>
+        <p class="tagline">{sentences_html(strings['tagline'])}</p>
         <div class="download">
-          <a class="btn btn-main" id="download" aria-disabled="true"></a>
-          <p class="dl-meta"><span id="dl-meta-text"></span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
+          {hero_download(strings, releases)}
+          <p class="dl-meta"><span id="dl-meta-text">{esc(hero_meta(strings, releases))}</span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
           {preview_html(strings, releases)}
         </div>
         <div class="pick"><span id="theme-name">{esc(strings['themes'][THEME_ORDER[0]])}</span><span class="dots" id="dots"></span></div>

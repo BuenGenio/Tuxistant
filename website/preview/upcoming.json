@@ -12,7 +12,7 @@
       "channel": "preview",
       "planned": true,
       "features": [
-        {"icon": "mail", "label": {"en": "Mail without Thunderbird", "es": "Correo sin Thunderbird", "pt": "E-mails sem o Thunderbird", "zh": "邮件无需 Thunderbird", "ar": "البريد دون Thunderbird"}}
+        {"icon": "mail", "label": {"en": "Mail search without Thunderbird", "es": "Búsqueda en el correo sin Thunderbird", "pt": "Busca nos e-mails sem o Thunderbird", "zh": "无需 Thunderbird 的邮件搜索", "ar": "البحث في البريد دون Thunderbird"}}
       ]
     }
   ],
