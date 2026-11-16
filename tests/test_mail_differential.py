@@ -454,7 +454,8 @@ def corpus() -> list[dict]:
 
 # Three capitals beside three digits, an amount or a flight: never a code (see mail.AMOUNT).
 AMOUNT = re.compile(r"[A-Z]{3} \d{3}(?:[.,]\d+)?|\d{3}(?:[.,]\d+)? [A-Z]{3}")
-TIMES = re.compile(r"\d{1,2}(?:am|pm)(?:[-–]\d{1,2}(?:am|pm))?")     # "2pm-4pm" is no code
+# "2pm-4pm" and "14h35" are no code.
+TIMES = re.compile(r"\d{1,2}(?:am|pm)(?:[-–]\d{1,2}(?:am|pm))?|\d{1,2}h\d\d")
 
 
 # What this version hides on purpose that 0.5.0 read out, as CHANGELOG and docs/CONTRACT.md step 5
@@ -583,21 +584,51 @@ class AgainstFiveOh(unittest.TestCase):
         """A server sends the first 16,000 bytes of a mail, where Thunderbird's index held 0.5.0
         20,000 characters of it: sign-in talk past the cut, which the server's own search finds,
         counts for 0.5.0's rules too, so a code before a currency's code they don't take for a
-        price, or a price whose sign is after it, is hidden as 0.5.0 hid it."""
+        price, or a price whose sign is after it, is hidden as 0.5.0 hid it. The server is one
+        that matches whole words only, as Gmail is taken to, so it has to be asked for the
+        Spanish and Portuguese words 0.5.0's verif\\w+ took too."""
         filler = "Thanks for being with us this year.\n" * 470
         read = []
-        for head in ("Use 482913 CAD team.", "Total 1500 € paid.", "Ref 4829 1375 CHF."):
-            text = f"{head}\n{filler}Sign in to Acme now."
+        for head, talk in (("Use 482913 CAD team.", "Sign in to Acme now."),
+                           ("Total 1500 € paid.", "Sign in to Acme now."),
+                           ("Ref 4829 1375 CHF.", "Sign in to Acme now."),
+                           ("Total del pedido: 1500 €", "Verifica tu correo para seguir en Acme."),
+                           ("Total do pedido: 4999 €", "Verifique o seu e-mail para seguir."),
+                           ("Total: 1250 €", "Completa la verificación de tu cuenta."),
+                           ("Total: 1250 €", "Conclua a verificação da sua conta.")):
+            text = f"{head}\n{filler}{talk}"
             self.assertLess(goamail.TEXT_BYTES, len(text.encode()))
             self.assertLess(len(text), mail.SCAN_CHARS)
             m = {"kind": "code", "why": f"cut {head!r}", "subject": "Message from Acme",
                  "plain": text, "html": None, "cte": "8bit", "tokens": [head]}
+            talking = any(re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text, re.I)
+                          for term in goamail.TALK_TERMS)
             read.append((m, old_read(m["subject"], text), thunderbird_read(m["subject"], text),
-                         online_read(m, talking=True)))
+                         online_read(m, talking=talking)))
             self.assertTrue(old_tokens(text), head)
         broken = floor_broken(read)
         if broken:
             self.fail(report(broken, "pieces 0.5.0 hid that reach the model"))
+
+    def test_a_cut_itinerary_whose_footer_talks_keeps_its_flights(self):
+        """An airline's HTML mail, longer than what Online Accounts fetches, whose footer past
+        that talks of signing in, as the server's search finds: every number of it is taken to be
+        a code, as 0.5.0's talk took them, but the flights and the booking's reference, which
+        0.5.0 read out on lines that didn't talk, were hidden on every line."""
+        cell = '<tr><td style="padding:8px 16px;font-family:Arial,sans-serif">{}</td></tr>\n'
+        markup = ("<table>" + cell.format("Flight BA2617: London Heathrow T5 to Madrid, departs "
+                                          "16:50.") + cell.format("Flight IB3402 back, 09:15.")
+                  + cell.format("Booking reference W123456789, ref HMX4K2.")
+                  + cell.format("Seat selection opens at check-in.") * 300
+                  + cell.format("Log in to manage your booking.") + "</table>")
+        self.assertLess(goamail.TEXT_BYTES, len(markup.encode()))
+        m = {"kind": "ordinary", "why": "cut itinerary", "subject": "Your Acme Air trip",
+             "plain": None, "html": markup, "cte": "qp", "tokens": ["BA2617"]}
+        old = old_read(m["subject"], index_text(m))
+        for read in (thunderbird_read(m["subject"], index_text(m)), online_read(m, talking=True)):
+            for flight in ("BA2617", "IB3402", "W123456789", "HMX4K2"):
+                self.assertEqual(shown(flight, old), "whole", flight)
+                self.assertEqual(shown(flight, read), "whole", read)
 
     def test_no_ordinary_number_0_5_0_read_out_is_hidden(self):
         hidden_now = defaultdict(list)

@@ -469,12 +469,16 @@ class PasswordIface(ServiceInterface):
         return "the-users-real-password"
 
 
-async def online_accounts(address: str, accounts: list[dict]) -> tuple[MessageBus, Calls]:
+async def online_accounts(address: str, accounts: list[dict],
+                          stalled: bool = False) -> tuple[MessageBus, Calls]:
     """Online Accounts on the private bus at address, with these accounts. Each is a dict of
     host, and optionally oauth2 (default True), password, ssl, tls, accept_errors, attention,
-    mail_disabled, token, slow (seconds a token takes) and address."""
+    mail_disabled, token, slow (seconds a token takes) and address. stalled: it never answers
+    when asked to list them, as a goa-daemon that was just started or is busy may not in time."""
     assert "tux-goa-bus-" in address, "only on the test's own bus"
     bus = await MessageBus(bus_address=address).connect()
+    if stalled:
+        bus.add_message_handler(lambda asked: asked.member == "GetManagedObjects" or None)
     calls = Calls()
     for number, spec in enumerate(accounts, 1):
         path = f"/org/gnome/OnlineAccounts/Accounts/account_{number}"

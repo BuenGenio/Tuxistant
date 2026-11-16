@@ -74,11 +74,15 @@ FROM_CHECKED = 10       # a sender's older mails whose sender line is read, to f
 FIELDS = "FROM SUBJECT MIME-VERSION CONTENT-TYPE CONTENT-TRANSFER-ENCODING"
 # mail.SIGN_IN_WORDS as a server is asked for them: each way of writing a space, and a * left
 # off, so "verif" finds "verification" on a server that finds any part of a word. Gmail's finds
-# whole words only, so the words a * stands for most are asked for too.
+# whole words only, so the words a * stands for most are asked for too, in Spanish and Portuguese
+# as well, as 0.5.0's talk took "Verifica tu correo" and "Verifique o seu e-mail". One that isn't
+# ASCII is asked for on its own (see _talking).
 TALK_TERMS = tuple(dict.fromkeys(
     [word.rstrip("*").replace(" ", gap) for word in mail.SIGN_IN_WORDS for gap in ("", " ", "-")]
     + ["verify", "verified", "verifying", "verification", "authenticate", "authenticated",
-       "authentication", "authenticator"]))
+       "authentication", "authenticator", "verifica", "verificar", "verifique", "verifiquem",
+       "verificado", "verificada", "verificamos", "verificacion", "verificacao", "verificación",
+       "verificação"]))
 CA_FILE = None          # the system's certificates. Only a test points this anywhere else
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 
@@ -141,6 +145,12 @@ LINE_ENDS = re.compile(r"\r\n?")
 CODECS = {"iso8859-1": "cp1252", "ascii": "cp1252", "iso8859-9": "cp1254", "tis-620": "cp874",
           "iso8859-11": "cp874", "gb2312": "gb18030", "gbk": "gb18030", "x-gbk": "gb18030",
           "euc_kr": "cp949"}
+# The charset of an HTML part whose Content-Type names none, from a <meta> in its first 1,024
+# bytes, as Thunderbird and browsers take it (the WHATWG prescan): `<meta charset="gb2312">` or
+# `<meta http-equiv="Content-Type" content="text/html; charset=gb2312">`. Read as UTF-8, an older
+# Chinese sender's 验证码 was gone, and the code after it with it.
+META_CHARSET = re.compile(rb"(?i)<meta\b[^<>]*?charset\s*=\s*[\"']?\s*([\w.:-]{1,40})")
+META_BYTES = 1024
 # An encoded word (RFC 2047), and the space between two of them, which is not part of the text.
 ENCODED_WORD = re.compile(r"=\?([^?\s]+)\?([QqBb])\?([^?\s]*)\?=")
 BETWEEN_WORDS = re.compile(r"(?<=\?=)\s+(?==\?[^?\s]+\?[QqBb]\?)")
@@ -217,8 +227,9 @@ async def _sign_ins(until: float) -> tuple[list[tuple[Account, str]], str]:
     with an account that could have been searched is said before what is wrong with the rest."""
     try:
         bus = await asyncio.wait_for(_connect(), _left(until))
-    except (OSError, EOFError, LookupError, ValueError, TypeError, AuthError, DBusError,
-            TimeoutError):
+    except TimeoutError:
+        return [], NO_ANSWER    # a bus that is there but slow: it is no "no mail here"
+    except (OSError, EOFError, LookupError, ValueError, TypeError, AuthError, DBusError):
         return [], ""
     usable, failed, problems = [], [], []
     try:
@@ -243,6 +254,8 @@ async def _sign_ins(until: float) -> tuple[list[tuple[Account, str]], str]:
                 failed.append(NO_ANSWER)    # the account is there: it is no "no mail here"
             else:
                 raise token
+    except TimeoutError:
+        failed.append(NO_ANSWER)    # slow to list its accounts, as when it was just started
     except (Unusable, *GOA_FAILED):
         pass    # no Online Accounts on this desktop
     except Exception:
@@ -608,21 +621,50 @@ def _header(message, name: str) -> str | None:
 
 
 def _words(text: str) -> str:
-    """A header with its encoded words read, each by its charset as Thunderbird reads it (see
-    CODECS), and anything else as it is. One that can't be read stays as it came."""
-    return ENCODED_WORD.sub(_word, BETWEEN_WORDS.sub("", text))
+    """A header with its encoded words read by their charset as Thunderbird reads it (see
+    CODECS), and anything else as it is. A run of words side by side in one charset is read as
+    one, as Thunderbird reads it: many senders split a long subject every so many bytes, through
+    a character if one falls there, and each word read alone, "Seu código" was "Seu c��digo",
+    and the code after it was no longer after a word for one. What can't be read stays as it
+    came."""
+    text = BETWEEN_WORDS.sub("", text)
+    out, at, run = [], 0, None      # run: [codec, its bytes so far, where its first word starts]
+    for found in ENCODED_WORD.finditer(text):
+        word = _word(found)
+        if run and (found.start() > at or word is None or word[0] != run[0]):
+            out.append(_run(text, *run, at))
+            run = None
+        out.append(text[at:found.start()])
+        if word is None:
+            out.append(found[0])
+        elif run:
+            run[1] += word[1]
+        else:
+            run = [*word, found.start()]
+        at = found.end()
+    if run:
+        out.append(_run(text, *run, at))
+    return "".join(out) + text[at:]
 
 
-def _word(found: re.Match) -> str:
+def _word(found: re.Match) -> tuple[str, bytes] | None:
+    """(the codec an encoded word is read with, its bytes), or None if it can't be read."""
     charset, kind, data = found.groups()
     try:
         if kind in "Bb":
-            raw = _base64(data)
-        else:
-            raw = email.quoprimime.header_decode(data).encode("latin-1", "replace")
-        return raw.decode(_codec(charset.split("*")[0]), "replace")
-    except (ValueError, LookupError, UnicodeError):
-        return found[0]
+            return _codec(charset.split("*")[0]), _base64(data)
+        return (_codec(charset.split("*")[0]),
+                email.quoprimime.header_decode(data).encode("latin-1", "replace"))
+    except (ValueError, UnicodeError):
+        return None
+
+
+def _run(text: str, codec: str, data: bytes, start: int, end: int) -> str:
+    """A run of encoded words in one charset read as one, or as it came if it can't be."""
+    try:
+        return data.decode(codec, "replace")
+    except (LookupError, UnicodeError, ValueError, TypeError):
+        return text[start:end]
 
 
 def _parsed(header: bytes, text: bytes) -> email.message.Message | None:
@@ -656,8 +698,12 @@ def _decoded(part) -> str:
             data = _base64(str(part.get_payload()))
         else:
             data = part.get_payload(decode=True) or b""
+        label = part.get_content_charset()
+        if label is None and part.get_content_type() == "text/html":
+            meta = META_CHARSET.search(data, 0, META_BYTES)
+            label = meta and meta[1].decode("ascii")
         try:
-            return data.decode(_codec(part.get_content_charset()), "replace")
+            return data.decode(_codec(label), "replace")
         except (LookupError, ValueError, TypeError):
             return data.decode("utf-8", "replace")
     except (ValueError, TypeError, LookupError, AttributeError):
@@ -759,14 +805,22 @@ def _closed(html: str, cut: bool) -> str:
 def _talking(imap, uids: list[int], until: float) -> set[int]:
     """Of these mails, cut short where they were fetched to, the ones that talk of signing in
     anywhere in their text, past the cut too: one search for all of them, as the server reads
-    each whole. Any it can't be asked about are taken to."""
+    each whole, and one more for each word that isn't ASCII, which goes as a UTF-8 literal. Any
+    it can't be asked about are taken to."""
     if not uids:
         return set()
     if time.monotonic() > until:
         return set(uids)
-    asked = "OR " * (len(TALK_TERMS) - 1) + " ".join(f'BODY "{term}"' for term in TALK_TERMS)
-    reply = _ask(imap, "SEARCH", "UID", ",".join(map(str, uids)), asked)
-    return _uids(reply) & set(uids) if reply[0] == "OK" else set(uids)
+    listed, plain = ",".join(map(str, uids)), [term for term in TALK_TERMS if term.isascii()]
+    replies = [_ask(imap, "SEARCH", "UID", listed,
+                    "OR " * (len(plain) - 1) + " ".join(f'BODY "{term}"' for term in plain))]
+    for term in TALK_TERMS:
+        if not term.isascii() and replies[-1][0] == "OK":
+            imap.literal = term.encode()
+            replies.append(_ask(imap, "SEARCH", "CHARSET", "UTF-8", "UID", listed, "BODY"))
+    if any(typ != "OK" for typ, _data in replies):
+        return set(uids)
+    return set().union(*map(_uids, replies)) & set(uids)
 
 
 def _subject_cut(message, header: bytes) -> bool:

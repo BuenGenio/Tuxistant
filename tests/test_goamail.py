@@ -28,8 +28,8 @@ from tests.mail_index import build  # noqa: E402
 from tests.test_mail import (ASKED, CONFIG, DASHED, DRESSED, GLUED,  # noqa: E402
                              GROUPS, GROWN, IN_PARTS, INTO_WORD_AFTER, LONE_DIGIT, LONG, ORDER,
                              ORDER_NUMBERS, SHOWN_CODES, SPLIT_ACROSS, TALK_PAST, TWICE_NAMED,
-                             WIDE_CODE, WIDE_SPELT, WIDE_TOKENS, WORD_AFTER, Base, escaped,
-                             straddling)
+                             PLACES, WIDE_CODE, WIDE_SPELT, WIDE_TOKENS, WORD_AFTER, Base,
+                             built_to_place, escaped, straddling)
 from tuxistant import goamail, mail, research  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
@@ -98,9 +98,13 @@ class Goa(Base):
         self.addCleanup(patcher.stop)
         self.calls = imap_fake.Calls()
 
-    async def accounts(self, *specs):
-        bus, self.calls = await imap_fake.online_accounts(BUS.address, list(specs))
-        self.addAsyncCleanup(self._gone, bus)
+    async def accounts(self, *specs, stalled=False):
+        """A made-up Online Accounts with these accounts, in place of one the test made before,
+        which would otherwise keep the name and answer for its own, earlier mail server."""
+        if getattr(self, "bus", None):
+            await self._gone(self.bus)
+        self.bus, self.calls = await imap_fake.online_accounts(BUS.address, list(specs), stalled)
+        self.addAsyncCleanup(self._gone, self.bus)
         self.addAsyncCleanup(self._answered, self.calls)
 
     async def _answered(self, calls):
@@ -108,8 +112,9 @@ class Goa(Base):
         await asyncio.sleep(0.05)   # so that a token still on its way is answered, not cut off
 
     async def _gone(self, bus):
-        bus.disconnect()
-        await asyncio.sleep(0.05)   # so that the next test's Online Accounts can take the name
+        if bus.connected:
+            bus.disconnect()
+            await asyncio.sleep(0.05)   # so that the next Online Accounts can take the name
 
     async def mailbox(self, boxes, mode="ssl", account=None, **options) -> Server:
         server = Server(CERT, KEY, boxes, mode, **options)
@@ -864,6 +869,24 @@ class Accounts(Goa):
         self.assertLess(time.monotonic() - started, 2)
         self.assertEqual(server.commands, [])
 
+    async def test_online_accounts_slow_to_list_its_accounts_is_no_no_mail(self):
+        """Online Accounts was there but didn't list its accounts in time, as when it was just
+        started, or the bus itself was slow to let Tux in, and Tux said there was no mail on this
+        computer."""
+        await self.accounts({"host": "imap.unused.example"}, stalled=True)
+
+        async def stalled():
+            await asyncio.sleep(60)
+
+        for connect in (goamail._connect, stalled):
+            started = time.monotonic()
+            with mock.patch.object(goamail, "_connect", connect), \
+                    mock.patch.object(goamail, "SIGN_IN_S", 0.5), \
+                    self.assertRaisesRegex(RuntimeError, goamail.NO_ANSWER):
+                await self.ask()
+            self.assertLess(time.monotonic() - started, 2)
+        self.assertEqual(self.calls.made, [])
+
     async def test_an_account_set_up_to_skip_checks_is_left_alone(self):
         for unsafe in ({"accept_errors": True}, {"ssl": False, "tls": False}):
             server = Server(CERT, KEY, gmail(inbox=[(PASSPORT, 13)]))
@@ -1034,6 +1057,64 @@ class CutShort(Goa):
         await self.ask("Did Acme email me about my account?")
         self.assertNotIn("482913", self.read(0))
 
+    async def test_spanish_and_portuguese_talk_past_the_cut_counts_on_a_whole_word_server(self):
+        """0.5.0's verif\\w+ took "Verifica" and "Verifique", and so hid a number its own rules
+        hide only in a mail that talks of signing in, such as one before a currency's sign. A
+        server that matches whole words only wasn't asked for either, so a mail longer than the
+        fetch whose only such talk was past it had its number read out."""
+        cases = (("Total del pedido: 1500 € pagado.",
+                  "Verifica tu correo para seguir comprando en Acme."),
+                 ("Total do pedido: 4999 € pago.",
+                  "Verifique o seu e-mail para continuar na Acme."),
+                 ("Total de la compra: 1250 € pagado.",
+                  "Completa la verificación de tu cuenta de Acme."))
+        filler = "Gracias por comprar en Acme. Te avisaremos cuando salga tu pedido.\n" * 260
+        raws = [message("Your Acme order", "Acme <orders@acme.example>", f"{head}\n{filler}{talk}")
+                for head, talk in cases]
+        for raw in raws:
+            self.assertGreater(len(text_of(raw)), goamail.TEXT_BYTES)
+        await self.mailbox(gmail(inbox=[(raw, 1 + n) for n, raw in enumerate(raws)]),
+                           whole_words=True)
+        with mock.patch.object(mail, "TRIED", len(cases)):
+            await self.ask("What was the total of my Acme order?")
+        shown = " ".join(self.read(n) for n in range(len(self.model)))
+        self.assertEqual(len(self.model), len(cases))
+        for head, talk in cases:
+            self.assertIn(head.split(":")[0], shown)
+            self.assertNotIn(head.split()[-3], shown, talk)
+
+    async def test_a_long_itinerary_whose_footer_talks_keeps_its_flights(self):
+        """An airline's HTML mail is longer than what is fetched, and the server finds "Log in to
+        manage your booking" past the cut, or "signin" in a link at its top, so every number in
+        it is taken to be a code, as 0.5.0's talk took them. Flight numbers and references,
+        letters with digits, were hidden on every line of it too, where 0.5.0 and Thunderbird's
+        path read them out: only a line that talks of signing in itself hides them."""
+        style = "<style>" + ".c{padding:8px 16px;font-family:Arial,sans-serif;color:#333}" * 130 \
+            + "</style>"
+        raws = []
+        for nav, footer in (("", "Log in to manage your booking."),
+                            ('<p><a href="https://www.acme.example/ap/signin?return=trips">Your '
+                             "trips</a></p>", "Acme Air Ltd, registered in England.")):
+            html = (f"<html><head>{style}</head><body>{nav}<p>Flight BA2491 departs London "
+                    "Heathrow on 12 March 2026 at 14:35.</p><p>Return flight IB3166 on 19 March."
+                    "</p><p>Booking reference W123456789, ref HMX4K2.</p>"
+                    + "<p>&nbsp;</p>" * 800 + f"<p>{footer}</p></body></html>")
+            raws.append(message("Your Acme Air trip", "Acme Air <trips@acme.example>", None,
+                                html=html))
+            self.assertGreater(len(text_of(raws[-1])), goamail.TEXT_BYTES)
+        for whole_words in (False, True):
+            self.model.clear()
+            await self.mailbox(gmail(inbox=[(raw, 1 + n) for n, raw in enumerate(raws)]),
+                               whole_words=whole_words)
+            with mock.patch.object(mail, "TRIED", len(raws)):
+                await self.ask("Which flight is my Acme Air trip?")
+            self.assertEqual(len(self.model), len(raws))
+            for n in range(len(raws)):
+                shown = self.read(n).split("=====")[2]
+                self.assertIn("Heathrow", shown)
+                for kept in ("BA2491", "IB3166", "W123456789", "HMX4K2", "14:35"):
+                    self.assertIn(kept, shown, (n, whole_words))
+
     def test_mails_the_server_cant_be_asked_about_are_taken_to_talk_of_signing_in(self):
         class Refusing:
             literal = None
@@ -1047,7 +1128,9 @@ class CutShort(Goa):
     def test_what_the_server_is_asked_for_is_sign_in_talk(self):
         for term in goamail.TALK_TERMS:
             self.assertRegex(term, mail.SIGN_IN_TALK)
-            self.assertRegex(term, r"^[a-z0-9 -]+$")    # needs no quoting
+            self.assertRegex(term, r"^[^\W_]+(?:[ -][^\W_]+)*$")    # needs no quoting
+        self.assertIn("verifica", goamail.TALK_TERMS)
+        self.assertIn("verificação", goamail.TALK_TERMS)
         self.assertEqual(goamail._closed('<p>Hi.</p><td style="pad', True), "<p>Hi.</p>")
         self.assertEqual(goamail._closed('<p>Hi.</p><td style="pad', False),
                          '<p>Hi.</p><td style="pad')
@@ -1366,6 +1449,53 @@ class Decoding(Goa):
         self.assertEqual(goamail._author(goamail._read(found)[0]),
                          "José Núñez <jose@acme.example>")
 
+    def test_a_subject_split_through_a_character_is_read_as_thunderbird_reads_it(self):
+        """Many senders split a long subject into encoded words every so many bytes, through a
+        character if one falls there. Thunderbird reads the words side by side in one charset as
+        one; each read alone, the character was two U+FFFD, "Seu c\ufffd\ufffddigo", and the
+        code after it was no longer after a word for one."""
+        def b_words(data: bytes, width: int) -> bytes:
+            return b" ".join(b"=?UTF-8?B?" + base64.b64encode(data[at:at + width]) + b"?="
+                             for at in range(0, len(data), width))
+
+        def q_words(data: bytes, width: int) -> bytes:
+            return b"\r\n ".join(b"=?utf-8?q?" + "".join(
+                chr(byte) if chr(byte).isalnum() and byte < 128 else "_" if byte == 32
+                else f"={byte:02X}" for byte in data[at:at + width]).encode() + b"?="
+                for at in range(0, len(data), width))
+
+        for subject, code, body in (
+                ("Tu código de Acme es 239143", "239143", "Hola, Sam: gracias por usar Acme."),
+                ("Seu código de acesso Acme: 652314", "652314", "Olá! Obrigado por usar a Acme."),
+                ("【Acme】您的验证码是484702", "484702", "亲爱的用户，感谢您使用Acme。"),
+                ("رمز الدخول إلى Acme هو 610068", "610068", "مرحبا، شكرا لاستخدامك Acme.")):
+            data = subject.encode()
+            for width in range(5, 14):
+                for words in (b_words(data, width), q_words(data, width)):
+                    found = fetched_mail(words, body.encode())
+                    self.assertEqual(goamail._subject(goamail._read(found)[0]), subject, words)
+                    self.assertNotIn(code, shown_of(found), words)
+        self.assertEqual(goamail._words("=?utf-8?b?w6k=?= =?iso-8859-1?q?=E9?= x =?utf-8?b?w6k=?="),
+                         "éé x é")
+        self.assertEqual(goamail._words("=?utf-8?b?w6k=?==?x-unknown-label?b?w6k=?="), "éé")
+        self.assertEqual(goamail._words("=?base64?b?QUFB?= =?utf-8?b?w6k=?="),
+                         "=?base64?b?QUFB?=é")
+
+    def test_an_html_part_named_its_charset_only_in_a_meta_is_read_in_it(self):
+        """Older Chinese and Arabic senders name the charset of an HTML part in a <meta> and not
+        in its Content-Type, which Thunderbird and browsers read. Read as UTF-8, "验证码" was
+        gone, and the code after it was shown."""
+        for meta, charset, page, code in (
+                ('<meta http-equiv="Content-Type" content="text/html; charset=gb2312">', "gbk",
+                 "<p>【Acme】您的验证码是585113，请勿泄露。</p>", "585113"),
+                ("<meta charset='windows-1256'>", "cp1256", "<p>رمز التحقق الخاص بك هو 482913</p>",
+                 "482913")):
+            html = f"<html><head>{meta}<title>Acme</title></head><body>{page}</body></html>"
+            found = fetched_mail(b"Acme", html.encode(charset), kind="html")
+            found[b"HEADER"] = found[b"HEADER"].replace(b"; charset=utf-8", b"")
+            self.assertIn(page[3:-4], goamail._read(found)[1])
+            self.assertNotIn(code, shown_of(found), meta)
+
     def test_charset_labels_are_read_as_thunderbird_reads_them(self):
         """ISO-8859-1 and ASCII as Windows-1252, and GB2312 as GBK, as Thunderbird and every
         browser read them: read as labelled, the "…" in a password was a line end and cut it in
@@ -1435,7 +1565,8 @@ class Decoding(Goa):
     def test_mail_built_to_be_slow_to_hide_is_read_quickly(self):
         """A piece 0.5.0's rules hide many times over, of which making the text plain makes one
         more, was placed once for each place it was hidden at every place it stands: 16 KB of
-        it took seconds and gigabytes to hide, for each mail."""
+        it took seconds and gigabytes to hide, for each mail. A hundred pieces that each stand
+        thousands of times still took most of a second, as only the pieces were counted."""
         def timed(text):
             found = fetched_mail(b"About your Acme account", text.encode())
             started = time.monotonic()
@@ -1446,7 +1577,8 @@ class Decoding(Goa):
         ordinary = min(timed(("Thanks for your order. " * size)[:size]) for _ in range(3))
         for text in ("Sign in to Acme ４８２９\r\n" + "4829 " * 3200,
                      "pin 4829 " * 490 + "４８２９",
-                     "Your Acme code\r\n４８２９\r\n" + "4829\r\n" * 2600):
+                     "Your Acme code\r\n４８２９\r\n" + "4829\r\n" * 2600,
+                     built_to_place(size, PLACES)):
             self.assertLess(timed(text[:size]), max(0.25, 20 * ordinary), text[:20])
 
 

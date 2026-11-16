@@ -29,6 +29,7 @@ from tuxistant.webfetch import clean  # noqa: E402
 CONFIG = {**DEFAULTS, "server": "home:8080", "api_key": "sk-never-send-me", "mail_search": True}
 # Named so that no word anyone asks about here is in the name: a sender's name is searched too.
 OFFICE = "Citizen Services <no-reply@notify.citizen.example>"
+ACME = "Acme <account@acme.example>"
 PASSPORT = {"subject": "Passport application received", "author": OFFICE, "days_ago": 13,
             "body": "Thank you for sending your application to renew your passport. We will "
                     "write to you again when it has been printed."}
@@ -264,16 +265,35 @@ DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nTha
            "Hello from Acme.\n482913．\nThanks", "Hello from Acme.\nKQ7X9B。\nThanks",
            # In wide brackets, which are made ones NFKC leaves alone.
            "Hello from Acme.\n（482913）\nThanks")
+
+
+def built_to_place(total: int, plan: list) -> str:
+    """A text whose pieces 0.5.0's rules hide cost a second to place in it made plain: lines of
+    "pwd pwd ... pwd:" before a long run of ones, where each word's reach of 160 characters
+    ends the password it gives at another place in the run, so that each makes a piece of ones
+    of its own length, which stands thousands of times in the text, and a wide letter first
+    makes the text made plain differ from it. plan: (spaces before the colon, spaces after it,
+    words) for each line."""
+    parts, each = ["\uff58\n"], total // len(plan)
+    for before, after, words in plan:
+        head = "pwd " * (words - 1) + "pwd" + " " * before + ":" + " " * after
+        parts.append(head + "1" * (each - len(head) - 1) + "\n")
+    return "".join(parts)[:total]
+
+
+PLACES = [(before, 57 * (n // 4), 15) for n, before in enumerate((0, 1, 2, 3, 0, 1))] + [(2, 57, 9)]
 # Bodies built to be slow to hide: a word for a code over and over, runs of letters that the
 # word for one may end, a ligature NFKC makes 18 characters of, and runs of what no one sees that
 # a keycap's mark could follow. And a piece 0.5.0's rules hide many times over, of which making
 # the text plain makes one more, as a wide copy of it is: each place it was hidden was placed at
-# every place it stands, and a few such mails took seconds and gigabytes to hide.
+# every place it stands, and a few such mails took seconds and gigabytes to hide; and a hundred
+# such pieces that each stand thousands of times (see built_to_place).
 SLOW_TO_HIDE = ("码!" * 10_000, "pin!" * 5000, "é" * 16_000, "×" * 16_000, "À" * 16_000,
                 "\ufdfa" * 20_000, "\ufe0f" * 20_000, "\u3164" * 20_000, "\U000e0020" * 20_000,
                 "Your Acme code\n４８２９\n" + "4829\n" * 4000,
                 "Your Acme code\n４８２９１３\n" + "482913\n" * 2850,
-                "pin 4829 " * 490 + "４８２９", "Sign in to Acme.\n" + "1234 " * 3990 + "１２３４")
+                "pin 4829 " * 490 + "４８２９", "Sign in to Acme.\n" + "1234 " * 3990 + "１２３４",
+                built_to_place(20_000, PLACES))
 # A code only the second pass hides, once the lines are joined: "Your Acme code is 482 913".
 SPLIT_LINES = "Your Acme code is\n482\n913\nThanks, the team"
 
@@ -831,9 +851,9 @@ class Secrets(Base):
                 ("حساب\nرمز المرور الخاص بك هو shamsilyawm", "shamsilyawm"),
                 ("Code\nرمز التحقق الخاص بك هو 2047", "2047"),
                 # كود, "code", as Arabic senders write it as well as رمز, after the number too.
-                ("Code\nكود التحقق الخاص بك هو 482913", "482913"),
-                ("Code\n482913 هو كود التحقق الخاص بك. لا تشاركه مع أحد.", "482913"),
-                ("Code\nكود التفعيل: 482913", "482913"), ("Code\nأدخل الكود 482913", "482913"),
+                ("Acme\nكود التحقق الخاص بك هو 482913", "482913"),
+                ("Acme\n482913 هو كود التحقق الخاص بك. لا تشاركه مع أحد.", "482913"),
+                ("Acme\nكود التفعيل: 482913", "482913"), ("Acme\nأدخل الكود 482913", "482913"),
                 ("PIN\nYOUR ACME PIN IS 2047. DO NOT SHARE IT.", "2047"),
                 ("Account\nYour temporary password WAS sunshine", "sunshine"),
                 # A colon after a word for "is" in another language: the password is after the
@@ -1270,41 +1290,95 @@ class Secrets(Base):
 
     def test_a_word_for_a_qr_gift_or_tracking_code_counts_for_its_own_part_only(self):
         """A subject that names a QR code, a gift, promo or discount code, a parcel's tracking
-        code or a booking's, in any of five languages, says nothing of a sign-in code, and the
-        dates, times, prices, orders, flights and phone numbers in its text were all hidden."""
-        texts = {"en": "Event: 14 March 2026, doors 19:30. Order 4829137, total 1250 GBP. "
-                       "Flight BA2491 lands 18:45. Questions? Call 0800 123 4567.",
-                 "es": "Tu pedido 4829137 llega el 12/03/2026 entre 10:00-12:00. Total: 1250 € "
-                       "Vuelo IB3166. Llámanos al 900 123 456.",
-                 "pt": "Embarque às 14h35. Total 1250 reais, R$ 4999. Ligue +55 11 98765-4321.",
-                 "ar": "رقم الطلب 19999، اتصل على 920012345، المبلغ 1250 ريال."}
+        or pickup code, a booking's or an event's, in any of five languages, says nothing of a
+        sign-in code, and the dates, times, prices, orders, flights and phone numbers in its text
+        were all hidden. Each list of such words lacked the next one, so only a word that names a
+        sign-in code counts for the other part now, and only as it would standing before it, at
+        the top of the text: never as talk of signing in, which hides every number in it. Nor
+        does one that gives its own code or password, as "Use code SAVE20" does."""
+        texts = {"en": ("Event: 14 March 2026, doors 19:30. Order 4829137, total 1250 GBP. "
+                        "Flight BA2491 lands 18:45. Questions? Call 0800 123 4567.",
+                        "Shop the sale at Acme, 1234 Main St, Springfield 62704. Your order "
+                        "4829137 ships free.\nFlight deals: BA2491 from 99 GBP. Call 0800 123 "
+                        "4567. Store hours 0900\u20131730."),
+                 "es": ("Tu pedido 4829137 llega el 12/03/2026 entre 10:00-12:00. Total: 1250 € "
+                        "Vuelo IB3166. Llámanos al 900 123 456.",),
+                 "pt": ("Embarque às 14h35. Total 1250 reais, R$ 4999. Ligue +55 11 98765-4321.",
+                        "Pedido 4829137 enviado em 12/03/2026. Ligue 0800 123 4567."),
+                 "ar": ("رقم الطلب 19999، اتصل على 920012345، المبلغ 1250 ريال.",)}
         for subject, lang in (
                 ("Your QR code ticket for Acme Live", "en"), ("Your Acme gift code", "en"),
                 ("Tracking code for your Acme order", "en"), ("Your Acme booking code", "en"),
                 ("Your Acme discount code inside", "en"), ("Your Acme promo code", "en"),
                 ("Your Acme voucher code", "en"), ("Your Acme coupon code", "en"),
+                ("Your Acme gift card code", "en"), ("Your Acme booking confirmation code", "en"),
+                ("Your Acme parcel locker pickup code", "en"), ("Your Acme referral code", "en"),
+                ("Your Acme offer code inside", "en"), ("Your invite code for Acme", "en"),
+                ("Your Acme ticket code", "en"), ("Your Acme access code for the event", "en"),
+                ("Use code SAVE20 for 20% off at Acme", "en"),
+                ("Enter code ACME10 at checkout", "en"), ("Extra 20% off with code FALL20", "en"),
                 ("Código de seguimiento de tu pedido Acme", "es"),
                 ("Tu código de descuento de Acme", "es"), ("Tu código promocional Acme", "es"),
+                ("Tu código de recogida Acme", "es"), ("Tu código de canje Acme", "es"),
+                ("Código de confirmación de tu reserva Acme", "es"),
+                ("Usa el código AHORRO20 en Acme", "es"), ("Código de cupón Acme", "es"),
                 ("Seu código de desconto Acme", "pt"), ("Código de rastreio Acme", "pt"),
+                ("Seu código de retirada Acme", "pt"), ("Seu código de resgate Acme", "pt"),
+                ("Código do seu vale-presente Acme", "pt"),
+                ("Seu boleto Acme: código de barras", "pt"),
+                ("Use o código ACME10 e ganhe 10%", "pt"),
                 ("رمز الخصم الخاص بك من Acme", "ar"), ("رمز الحجز Acme", "ar"),
-                ("رمز التتبع Acme", "ar")):
-            kept_mail = mail._kept(mail.terms("Acme"), "", subject, texts[lang], False)
-            self.assertNotIn(mail.HIDDEN, mail._shown(kept_mail[2], 400), subject)
-        # One that names a sign-in code still does.
+                ("رمز التتبع Acme", "ar"), ("رمز الاستلام Acme", "ar"), ("رمز القسيمة Acme", "ar"),
+                ("رمز الهدية Acme", "ar")):
+            for text in texts[lang]:
+                kept_mail = mail._kept(mail.terms("Acme"), ACME, subject, text, False)
+                self.assertNotIn(mail.HIDDEN, mail._shown(kept_mail[2], 400), subject)
+        # The other way round, a word for a code that gives its own at the top of the text.
+        for top in ("Thanks! Use code SAVE20 on your next order.", "Wi-Fi password: acme-guest",
+                    "Your confirmation code is HMX4K2.", "Usa el código VERANO10 en tu pedido.",
+                    "Senha do Wi-Fi: acme-guest", "استخدم الكود SPRING10 لخصم 10%."):
+            kept_mail = mail._kept(mail.terms("Acme"), ACME, "Your Acme order 4829137 has shipped",
+                                   top + "\n\nThanks for shopping with Acme.", False)
+            self.assertEqual(mail._shown(kept_mail[1], 200), "Your Acme order 4829137 has shipped",
+                             top)
+        # A security notice whose subject names a password or a PIN reaches the top of its text
+        # at most, as the word would there.
+        for subject, text, kept in (
+                ("Your Acme password was changed", "Hi Sam, if this wasn't you, call 0800 123 4567"
+                 " and quote case 48291377.", "call 0800 123 4567 and quote case 48291377"),
+                ("Tu contraseña de Acme ha cambiado", "Hola, Sam:\n\nTe escribimos para avisarte "
+                 "de que hoy se ha hecho un cambio en tu cuenta de Acme. Si lo has hecho tú, no "
+                 "tienes que hacer nada más.\n\nSi no has sido tú, llama al 900 123 456 y cita "
+                 "el caso 48291377.", "llama al 900 123 456 y cita el caso 48291377"),
+                ("您的Acme密码已更改", "您好！\n\n" + "我们写信通知您，您的Acme账户今天发生了变更。"
+                 "如果是您本人操作，则无需进行任何操作，您可以照常使用。" * 3 + "\n\n如果不是您本人操作，"
+                 "请致电 400-123-4567，案例编号 48291377。", "400-123-4567，案例编号 48291377"),
+                ("Your Acme PIN was changed", "Hi Sam,\n\nWe're writing to let you know about "
+                 "a change to your Acme account today. If you made it, there's nothing else to "
+                 "do, and you can carry on as before.\n\nYour next trip: flight BA2491 to "
+                 "Madrid, booking HMX4K2.", "flight BA2491 to Madrid, booking HMX4K2")):
+            kept_mail = mail._kept(mail.terms("Acme"), ACME, subject, text, False)
+            self.assertIn(kept.replace("，", "、"), mail._shown(kept_mail[2], 600), subject)
+        # One that names a sign-in code still does, as does a bare "code".
         for subject in ("Your Acme verification code", "Tu código de verificación de Acme",
-                        "Seu código de acesso Acme", "كود التحقق من Acme", "Your Acme code"):
-            kept_mail = mail._kept(mail.terms("Acme"), "", subject, "Hi, it is 482913.", False)
+                        "Seu código de segurança Acme", "كود التحقق من Acme", "Your Acme code",
+                        "Your Acme login code", "Your Acme PIN", "رمز التحقق من Acme",
+                        "您的Acme验证码"):
+            kept_mail = mail._kept(mail.terms("Acme"), ACME, subject, "Hi, it is 482913.", False)
             self.assertNotIn("482913", kept_mail[2], subject)
 
-    def test_a_word_for_a_code_far_down_the_text_leaves_the_subject_alone(self):
-        """Near the top, the word names the subject's code. Further down it is a promo code's,
-        and the order number in the subject may be the answer."""
-        promo = " Use the code SAVE10 for 10% off your next order."
-        near, far = (mail._kept(mail.terms("Acme"), "", "Acme order 48213377",
-                                "Thanks for your order." + pad + promo, False)
-                     for pad in ("", " It is on its way to you." * 20))
-        self.assertEqual(near[1], f"Acme order {mail.HIDDEN}")
-        self.assertEqual(far[1], "Acme order 48213377")
+    def test_a_word_for_a_code_near_the_top_of_the_text_names_the_subjects(self):
+        """Near the top, a word for a code that doesn't give one names the subject's code.
+        Further down, or giving its own, as a promo code's does, it says nothing of the order
+        number in the subject, which may be the answer: "Use the code SAVE10" at the top hid it."""
+        for pad, line, hidden in (
+                ("", " This is your Acme code.", True),
+                (" It is on its way to you." * 20, " This is your Acme code.", False),
+                ("", " Use the code SAVE10 for 10% off your next order.", False)):
+            kept_mail = mail._kept(mail.terms("Acme"), "", "Acme order 48213377",
+                                   "Thanks for your order." + pad + line, False)
+            self.assertEqual(kept_mail[1], f"Acme order {mail.HIDDEN}" if hidden
+                             else "Acme order 48213377", line)
 
     async def test_a_code_joined_by_a_dash_or_dressed_in_punctuation_is_hidden(self):
         await self.all_hidden(DASHED + DRESSED)
@@ -2199,11 +2273,11 @@ class Limits(Base):
         each letter of a run of "é" to its end. 20,000 characters of either took seconds to
         hide, half of it on the event loop. Each is timed against an ordinary mail as long, so a
         busy machine doesn't fail it, while one that grows with the square of its length still
-        would."""
-        def timed(body):
+        would. Each is timed as a subject too, which a hostile header can make as long."""
+        def timed(body, subject="About your Acme account"):
             started = time.monotonic()
-            kept = mail._kept(mail.terms("Acme"), "Acme <account@acme.example>",
-                              "About your Acme account", body, False)
+            kept = mail._kept(mail.terms("Acme"), "Acme <account@acme.example>", subject, body,
+                              False)
             mail._shown(kept[1], mail.SUBJECT_CHARS), mail._shown(kept[2], mail.BODY_CHARS)
             return time.monotonic() - started
 
@@ -2211,6 +2285,8 @@ class Limits(Base):
         ordinary = min(timed(("Thanks for your order. " * size)[:size]) for _ in range(3))
         for body in SLOW_TO_HIDE:
             self.assertLess(timed(body[:size]), max(0.25, 20 * ordinary), body[:4])
+            self.assertLess(timed("Thanks.", "Acme " + body[:size]), max(0.25, 20 * ordinary),
+                            body[:4])
 
     async def test_a_search_out_of_time_hides_no_more_mail(self):
         """The time was looked at only once a mail had been hidden, after the rest of a long

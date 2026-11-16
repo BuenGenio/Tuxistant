@@ -265,24 +265,30 @@ NAMING = r"pass(?:words?|phrases?|codes?|wd)|pwd|pins?|otp"
 SECRET_WORD = _secret_words(NAMING + "|pass|keys?|tokens?",
                             "密码|密碼|비밀번호|認証番号|確認番号|口令|コード|パスワード|暗証|码|碼|코드"
                             "|번호|รหัสผ่าน|รหัส(?!ไปรษณีย์)")
-# A word for a secret in one part of a mail that counts for the other (see _passed). A bare
-# "pass", "key" or "token" names one only beside it: "Your Acme pass" is a boarding pass, and
-# "Your room key is at the desk" has nothing to do with the order number in the subject. Nor do
-# 码, 번호, コード or รหัส alone, which also mean a number, a QR code, a barcode or a postcode:
-# "您的订单号码" is "your order number", and 전화번호 a phone number. Across parts only a word that
-# names a secret, such as 验证码, 인증번호 or รหัสยืนยัน, counts.
-CROSS_WORD = _secret_words(NAMING, "验证码|驗證碼|校验码|校驗碼|动态码|動態碼|密码|密碼|認証コード"
-                                   "|確認コード|認証番号|確認番号|口令|ワンタイム|パスワード|暗証"
-                                   "|인증번호|비밀번호|인증 ?코드|보안 ?코드|รหัสผ่าน|รหัสยืนยัน")
-# Nor does a word for a QR code, a gift, promo, discount, coupon or voucher code, a parcel's
-# tracking code, a booking's or a postcode, written before "code" in English and after the word
-# for one in Spanish, Portuguese and Arabic: "Your QR code ticket" or "Código de seguimiento de
-# tu pedido" over a mail of dates, prices and flights hid them all, which 0.5.0 read out.
-EVERYDAY_BEFORE = re.compile(r"(?:\bqr|\bgift|\bpromo(?:tional)?|\bdiscount|\bcoupon|\bvoucher"
-                             r"|\btracking|\bbooking|\breservation|\bpostal|\bzip)[- ]?$", re.I)
-EVERYDAY_AFTER = re.compile(r"\s*(?:(?:de|do|da)\s+)?(?:qr\b|descuento|promocional|seguimiento"
-                            r"|rastreo|reserva|postal|regalo|desconto|rastreio|rastreamento"
-                            r"|presente)|\s*(?:ال)?(?:خصم|حجز|تتبع|بريدي|ترويجي)", re.I)
+# A word for a secret in one part of a mail that counts for the other (see _passed): only one
+# that names a sign-in code, a PIN or a password, such as "verification code", "código de
+# seguridad", "رمز التحقق", 验证码, 인증번호 or รหัสยืนยัน, or a bare "code" in small letters after
+# "your", "my", "our", "the" or "this", "new" and at most a name, "Your Acme code" or "Here is
+# your code.", where in capitals, "Your QR code" or "Your Pickup Code", it may be an everyday one.
+# Each such code has a word of its own, a pickup, gift card, referral, ticket or tracking code,
+# a código de recogida or رمز الاستلام, and a list of them always lacked the next one: under any
+# of them, a text of dates, prices, orders and flights lost them all, which 0.5.0 read out. An
+# access code and a confirmation code are an event's and a booking's too. A bare código, كود or
+# رمز, or 码, 번호, コード or รหัส alone, also name an order, a QR code, a barcode or a postcode:
+# "您的订单号码" is "your order number", and 전화번호 a phone number. A bare "pass", "key" or "token"
+# names one only beside it: "Your Acme pass" is a boarding pass.
+SIGN_IN_CODE = (r"(?:verification|security|sign[- ]?in|log[- ]?in|one[- ]?time|authentication"
+                r"|2fa|two[- ](?:factor|step))[- ]?codes?")
+CROSS_CJK = ("验证码|驗證碼|校验码|校驗碼|动态码|動態碼|密码|密碼|認証コード|確認コード|認証番号|確認番号"
+             "|口令|ワンタイム|パスワード|暗証|인증번호|비밀번호|인증 ?코드|보안 ?코드|รหัสผ่าน|รหัสยืนยัน")
+CROSS_WORD = re.compile(
+    rf"(?=[2A-Za-zÀ-ÿ\u015f\u03ba\u03c3\u092a\u05e1\u0631\u0643"
+    rf"{''.join(sorted({word[0] for word in CROSS_CJK.split('|')}))}])(?:"
+    rf"(?<![A-Za-z])(?:{SIGN_IN_CODE}|{NAMING}|clave\w*|c[oó]digos? de (?:verificaci[oó]n"
+    r"|verifica[cç][aã]o|seguridad|seguran[cç]a|inicio de sesi[oó]n))(?![A-Za-z])"
+    r"|(?<![A-Za-z])(?:your|the|this|my|our)\s{1,3}(?:new\s{1,3})?"
+    r"(?:(?-i:[A-Z][a-z])[\w.&'-]{0,30}\s{1,3})?(?-i:codes?)(?![A-Za-z])"
+    rf"|{PASSWORDS}|mã (?:xác|otp)|(?:رمز|كود) (?:ال)?(?:تحقق|تفعيل|دخول)|{CROSS_CJK})", re.I)
 # A password is whatever follows a colon or "is", even a plain word: the English "is", or that of
 # a language above that writes a space round it, "Ihr Passwort ist", "Vaše heslo je" or "Mật khẩu
 # là". Not that of one that writes none, as Japanese, Chinese, Korean or Thai do, where the
@@ -386,7 +392,8 @@ SHAPED = re.compile(
     rf"|[A-Z]{{3}} [A-Z]{{3}})(?!{WORD_CHAR})"                                      # KQW XBT
     rf"|{SPACED}|{GROUPED}")
 SUFFIX = "(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)"     # an ordinal's, a time's or a size's
-NOT_A_SECRET = re.compile(rf"\d+{SUFFIX}|(?:19|20)\d\d", re.I)
+# And a time as Portuguese and French write one, "14h35", and a span of hours, "24-hour".
+NOT_A_SECRET = re.compile(rf"\d+{SUFFIX}|(?:19|20)\d\d|\d{{1,2}}h\d\d|\d+-hours?", re.I)
 SUFFIXED = re.compile(rf"\d+{SUFFIX}", re.I)
 # "code is 2048", "Code: 2048" or "Ihr Code lautet 2048" is no year: after a colon or a word for
 # "is" that GIVEN knows, looked for this far back (see _just_given).
@@ -724,16 +731,17 @@ def _searched(author: str) -> str:
     return NO_REPLY.sub(" ", ADDRESS_END.sub(r"\1", author.removesuffix(INDEX_TAIL)))
 
 
-def _spans(seen: str, talk: bool = False, look: bool = True, lead: int = 0,
+def _spans(seen: str, talk: bool = False, lead: int = 0,
            joined: bool = False) -> list[tuple[int, int]]:
     """Where a secret may stand in a mail, as the model reads it: see SECRET_WORD. It is looked
     for as the hiding reads the text (see _apart), but for a password given after "is" or a
     colon, which is whatever the model reads there, dashes and dots in it too: "Sunny—Day—7".
-    talk: take it that the text talks of signing in, as one cut short may have done so past the
-    cut, so letters with digits count on every line (see MIXED). look: whether to look for that
-    talk here as well, where they count on the lines that hold it. Numbers count anywhere in a
-    text that talks, as for 0.5.0. lead: how far from its start the text is in reach of a word
-    for a secret that stands before it, in the other part of the mail (see _passed). joined: the
+    Numbers count anywhere in a text that talks of signing in, as for 0.5.0, and letters with
+    digits on a line that does (see MIXED). talk: take it that the text talks of signing in, as
+    one cut short may have done so past the cut, which makes numbers count, as 0.5.0's talk did,
+    and no letters with digits: no line of it talks, and a flight number or a booking reference
+    there is as 0.5.0 read it. lead: how far from its start the text is in reach of a word for a
+    secret that stands before it, in the other part of the mail (see _passed). joined: the
     text's lines are joined, as the model reads them (see _ranged), where letters with digits
     don't count, as a footer joined to the line before it would talk for that line."""
     spans, ends, text = [], [], _apart(seen, joined)
@@ -749,13 +757,13 @@ def _spans(seen: str, talk: bool = False, look: bool = True, lead: int = 0,
             if not YEAR.fullmatch(number[0]):
                 spans.append(number.span())
     spans += _shaped(text, ends, lead)
-    lines = _talking_lines(text) if look else []
+    lines = _talking_lines(text)
     found = [*ALONE.finditer(text)]
     if talk or lines:
         found += [number for number in _numbers(text, seen) if not _glued(text, number)]
-        found += [] if joined else [
-            mixed for start, end in ([(0, len(text))] if talk else lines)
-            for mixed in MIXED.finditer(text, start, end) if not _ordinary(mixed[0])]
+    if not joined:
+        found += [mixed for start, end in lines for mixed in MIXED.finditer(text, start, end)
+                  if not _ordinary(mixed[0])]
     spans += [one.span(one.lastindex or 0) for one in found
               if not YEAR.fullmatch(one[one.lastindex or 0].strip())]
     return sorted(spans)
@@ -1075,15 +1083,15 @@ def _hide(text: str, cut: bool = False, talk: bool | None = None, joined: bool =
     return _hidden(text, cut, cut if talk is None else talk or grown, joined=joined)
 
 
-def _hidden(text: str, cut: bool, talk: bool, look: bool = True, lead: int = 0,
-            joined: bool = False, floor=()) -> str:
-    """_hide, of a text already made plain (see _spans for look, lead and joined), and of what
-    else is in floor (see _floored). Secrets that overlap, as "482913" and "482913-it" do, are one
+def _hidden(text: str, cut: bool, talk: bool, lead: int = 0, joined: bool = False,
+            floor=()) -> str:
+    """_hide, of a text already made plain (see _spans for lead and joined), and of what else is
+    in floor (see _floored). Secrets that overlap, as "482913" and "482913-it" do, are one
     [hidden]. They are looked for with every dash a space (see _apart and _spans), and cut from
     the text as it is."""
     stop = len(_uncut(_apart(text))) if cut else len(text)
     out, at = [], 0
-    for start, end in sorted([*_spans(text, talk, look, lead, joined), *floor]):
+    for start, end in sorted([*_spans(text, talk, lead, joined), *floor]):
         if start >= stop:
             break
         if end > at:
@@ -1177,9 +1185,9 @@ def _secret_free(subject: str, body: str, subject_cut: bool = False, body_cut: b
 
     Whether a mail talks of signing in is decided for the subject and the text each, as 0.5.0
     did: "Your Acme order 4829137 has shipped" over "Log in to your account to track it" keeps its
-    order number. The model reads them together, though, so a word that names a secret in one
-    counts for the other, as in "Your Acme code" over a number on its own, or "Acme 482913" over
-    "Here is your code." (see _passed).
+    order number. The model reads them together, though, so a word that names a sign-in code in
+    one counts for the other as it would standing before it, as in "Your Acme code" over "Hi, it
+    is 482913.", or "Acme 482913" over "Here is your code." (see _passed).
 
     What 0.5.0's rules hide is hidden too, in the first pass (see _floored), with the glue that
     goamail puts where an inline HTML tag stood (see JOIN). They read 0.5.0's 20,000 characters of
@@ -1201,29 +1209,43 @@ def _passed(texts: list[str], cuts: list[bool], talks: list[bool], joined: bool 
             floors: tuple = ((), ())) -> tuple[list[str], list[bool]]:
     """One pass of hiding over a mail's [subject, body], made plain as that pass reads them,
     each taken to talk of signing in where talks says or where it does itself (see
-    _secret_free), and whether each did. A word for a secret in one counts for the other (see
-    CROSS_WORD) as that talk, and as a word for one would that stood right before it, as the
-    model reads "Subject: ..." and then the text: so "Your Acme code" over "Enter KQW-XBT" hides
-    the letters as it would in one line. One in the subject reaches the first SECRET_REACH
-    characters of the text, and one near the top of the text (see NAMED_CHARS) the whole
-    subject. joined: the texts' lines are joined (see _ranged). floors: what else to hide in
-    each (see _floored)."""
+    _secret_free), and whether each did. A word that names a sign-in code in one (see
+    CROSS_WORD) counts for the other as it would standing right before it, as the model reads
+    "Subject: ..." and then the text: so "Your Acme code" over "Enter KQW-XBT" hides the letters
+    as it would in one line. One in the subject reaches the first SECRET_REACH characters of the
+    text, and one near the top of the text (see NAMED_CHARS) the whole subject. It is no talk of
+    signing in for the other part, which would hide every number in it: "Your Acme PIN was
+    changed" over a text of a flight, a booking and a phone number further down hid them all.
+    joined: the texts' lines are joined (see _ranged). floors: what else to hide in each (see
+    _floored)."""
     apart = [_apart(text) for text in texts]
-    named = _names_one(apart[1][:NAMED_CHARS]), _names_one(apart[0])
-    return [_hidden(texts[0], cuts[0], talks[0] or named[0], True,
-                    len(texts[0]) if named[0] else 0, joined, floors[0]),
-            _hidden(texts[1], cuts[1], talks[1] or named[1], True,
-                    SECRET_REACH if named[1] else 0, joined, floors[1])], \
+    named = (_names_one(texts[1][:NAMED_CHARS], apart[1][:NAMED_CHARS]),
+             _names_one(texts[0], apart[0]))
+    return [_hidden(texts[0], cuts[0], talks[0], len(texts[0]) if named[0] else 0, joined,
+                    floors[0]),
+            _hidden(texts[1], cuts[1], talks[1], SECRET_REACH if named[1] else 0, joined,
+                    floors[1])], \
         [bool(talk or SIGN_IN_TALK.search(text)) for talk, text in zip(talks, apart)]
 
 
-def _names_one(text: str) -> bool:
-    """Whether a part of a mail holds a word that names a secret for the other part (see
-    CROSS_WORD), and not a QR code's, a discount's, a parcel's or a booking's (see
-    EVERYDAY_BEFORE)."""
-    return any(not (EVERYDAY_BEFORE.search(text, max(0, word.start() - 20), word.start())
-                    or EVERYDAY_AFTER.match(text, word.end()))
-               for word in CROSS_WORD.finditer(text))
+def _names_one(seen: str, text: str) -> bool:
+    """Whether a part of a mail, made plain (seen) and as the hiding reads it (text, see
+    _apart), names a sign-in code for the other part (see CROSS_WORD): a word for one that
+    doesn't give it itself, as "Your Acme code" doesn't. One that does says nothing of the other
+    part: "Use code SAVE20", "Your confirmation code is HMX4K2." or "Wi-Fi password: acme-guest"
+    at the top of the text, under "Your Acme order 4829137 has shipped". What is given may be
+    hidden already, by the first pass."""
+    words = [*CROSS_WORD.finditer(text)]
+    if not words:
+        return False
+    given = sorted([start for start, _end in _shaped(text, [word.end() for word in words])]
+                   + [hidden.start() for hidden in re.finditer(re.escape(HIDDEN), text)])
+    for word in words:
+        at = bisect.bisect_left(given, word.end())
+        if not (at < len(given) and given[at] < word.end() + SECRET_REACH
+                or PASSWORD_WORD.fullmatch(word[0]) and _passwords(seen, word.end())):
+            return True
+    return False
 
 
 def _floored(text: str, glue: str = "",
@@ -1255,9 +1277,12 @@ def _placed(text: str, plain: str, spans: list) -> list[tuple[int, int]] | None:
     "482913é": at the same count of that piece before it, or everywhere it stands if making the
     text plain changed how many there are. A piece that isn't there at all is shown nowhere, as
     "8209" of "482&#8209;913" isn't. None if looking would cost too much: a piece in too long a
-    text (see FLOOR_WORK), or more places than the two texts have characters. Each piece is
-    placed once, however many spans hold it: placed for each, one stranger's 20,000 characters
-    of "1234 " and one wide "１２３４" were 16 million places, gigabytes and seconds to hide."""
+    text (see FLOOR_WORK), or more places where the pieces stand, in the two texts together, than
+    the two have characters, as each is looked at in turn. Each piece is placed once, however
+    many spans hold it: placed for each, one stranger's 20,000 characters of "1234 " and one
+    wide "１２３４" were 16 million places, gigabytes and seconds to hide. And the places are
+    counted for all the pieces, not for each: "pwd pwd pwd:" before a long run of digits, over
+    and over, made a hundred pieces of ones that each stood thousands of times, a second a mail."""
     pieces = {}
     for start, end in set(spans):    # 0.5.0's rules give one span again for each word in reach
         while end < len(text) and unicodedata.category(text[end])[0] == "M":
@@ -1265,22 +1290,27 @@ def _placed(text: str, plain: str, spans: list) -> list[tuple[int, int]] | None:
         pieces.setdefault(text[start:end], []).append(start)
     if len(pieces) * (len(text) + len(plain)) > FLOOR_WORK:
         return None
-    placed, most = set(), len(text) + len(plain)
+    placed, left = set(), len(text) + len(plain)
     for piece, starts in pieces.items():
         made = _made_plain(piece)[0].strip()
-        raw, found = _starts(text, piece), _starts(plain, made) if made else []
+        raw = _starts(text, piece, left)
+        found = _starts(plain, made, left - len(raw)) if made and raw is not None else []
+        if raw is None or found is None:
+            return None
+        left -= len(raw) + len(found)
         ats = found if len(raw) != len(found) else [found[bisect.bisect_left(raw, start)]
                                                     for start in starts]
         placed.update((at, at + len(made)) for at in ats)
-        if len(placed) > most:
-            return None
     return sorted(placed)
 
 
-def _starts(text: str, piece: str) -> list[int]:
-    """Every place a piece starts in a text, overlapping or not."""
+def _starts(text: str, piece: str, most: int) -> list[int] | None:
+    """Every place a piece starts in a text, overlapping or not, or None if there are more than
+    most."""
     found, at = [], text.find(piece)
     while at >= 0:
+        if len(found) == most:
+            return None
         found.append(at)
         at = text.find(piece, at + 1)
     return found
