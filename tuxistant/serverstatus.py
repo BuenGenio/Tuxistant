@@ -1,10 +1,12 @@
 """What runs on your own server: its docker containers and systemd services, read over ssh.
 
 One fixed, read-only command goes to the host of the server in Settings, and nothing the model
-wrote goes with it: a name to look for is matched here, once the answer is back. It starts
-nothing there either, not even a docker you stopped that its socket would start again. ssh
-takes the port and user from ~/.ssh/config, and gets no agent, so the key has to work on its
-own. What your ssh_config runs itself, such as a ProxyCommand, still runs.
+wrote goes with it: a name to look for is matched here, once the answer is back. The command
+starts nothing there, not even a docker you stopped that its socket would start again, though
+the login opens a session there as any ssh does, which starts your user services if nothing
+else keeps them running. ssh takes the port and user from ~/.ssh/config, and gets no agent, so
+the key has to work on its own. What your ssh_config runs itself, such as a ProxyCommand, still
+runs.
 What the server sends is someone else's text. It is capped, each name has to look like a name,
 and the app says the answer itself, so none of it reaches a model with tools.
 """
@@ -92,7 +94,8 @@ DOCKER_REFUSED = ("Your user on the server isn't allowed to use docker, so I can
 DOCKER_STOPPED = "Docker is stopped on your server, so I didn't start it."
 OVER_SSH = "Yes, I reached your server over ssh."
 
-NAME = re.compile(r"[a-z0-9][a-z0-9 ._-]{0,%d}" % (MAX_NAME_CHARS - 1))
+# "@" as in wg-quick@wg0, which a service here may be called too
+NAME = re.compile(r"[a-z0-9][a-z0-9 ._@-]{0,%d}" % (MAX_NAME_CHARS - 1))
 CONTAINER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 IMAGE = re.compile(r"[A-Za-z0-9_./:@-]{1,200}")
 STATUS = re.compile(r"[A-Za-z0-9 ().,:-]{1,60}")
@@ -117,8 +120,9 @@ FILLER = {"my", "our", "own", "the", "your", "on", "is", "are", "what", "which",
 SERVER_WORDS = {"server", "servers"}
 # Before the server's name, as in "my nas" or "the pi".
 POSSESSIVES = {"my", "our", "your", "the", "own"}
-# Around the server's name and never part of it, as in "my home nas" or "the nas server".
-AROUND_A_HOST = POSSESSIVES | SERVER_WORDS | {"home"}
+# Around the server's name and never part of it, as in "my home nas", "the nas server" or
+# "my nas box".
+AROUND_A_HOST = POSSESSIVES | SERVER_WORDS | {"home", "box", "host"}
 # The server that answered over ssh runs one of these, whatever its unit is called.
 SSH_NAMES = {"ssh", "sshd", "openssh", "opensshserver"}
 # Part of the system itself, so they are counted but not named: nobody asks after getty.
@@ -225,9 +229,10 @@ def _without(text: str, words: set) -> str:
 
 
 def names_host(text: str, host: str) -> bool:
-    """Whether text names host: as said, or without my, the, home or server around it, so "my
-    home nas" and "nas server" name nas.lan, and "my-nas" and "home" still name my-nas.lan and
-    home.lan, or without the other words around a name, as "ssh nas" and "nas containers"."""
+    """Whether text names host: as said, or without my, the, home, server or box around it, so
+    "my home nas", "nas server" and "my nas box" name nas.lan, and "my-nas" and "home" still name
+    my-nas.lan and home.lan, or without the other words around a name, as "ssh nas" and "nas
+    containers"."""
     return any(is_own_name(said, host) for said in (
         text, _without(text, POSSESSIVES), _without(text, AROUND_A_HOST), _without(text, AROUND)))
 
@@ -398,8 +403,9 @@ def _key(text: str) -> str:
 
 
 def _words(name) -> list[str]:
-    """Its words, without "home" before server: a home server is a server."""
-    words = [w.strip(".,?!") for w in str(name or "").casefold().split()]
+    """Its words, without "home" before server: a home server is a server. A unit's ".service"
+    is left out, as the units listed have none."""
+    words = [w.strip(".,?!").removesuffix(".service") for w in str(name or "").casefold().split()]
     return [w for w, after in zip(words, words[1:] + [""])
             if w and not (w == "home" and after in SERVER_WORDS)]
 
@@ -600,12 +606,21 @@ def _one(found: dict, name: str) -> str:
     return f"I don't see {name} among the docker containers or services running on your server."
 
 
-def _as_one(name: str) -> str:
-    """A name that names the server, as one word without server around it: "homenas" for "home
-    nas" and "zephyrnas" for "zephyr nas", so home is no program's name and a label said in parts
-    isn't found by its parts, as nas-backup is not zephyr nas. A label alone, as plex, is still
-    a name to look for, which complex has some of."""
-    return _key(_without(name, SERVER_WORDS))
+def _called(found: dict, name: str) -> bool:
+    """Whether a container, its image or a service there is called name exactly, once the words
+    around a name are gone: "the plex service" is plex, but nas-backup is no nas, and "my home
+    nas" is homenas, so home is no program's name."""
+    said = _without(name, AROUND)
+    there = [part for c in found["docker"] or []
+             for part in (c["name"], c["image"].rpartition("/")[2].partition(":")[0])]
+    return any(_same_name(said, text) for text in there + (found["systemd"] or []))
+
+
+def _on_a_server(args: dict, host: str) -> bool:
+    """An on that says server without naming this one, as "my server": a name that is the
+    server's own is then asked after as a program."""
+    on = " ".join(_words(args.get("on")))
+    return any(w in SERVER_WORDS for w in on.split()) and not names_host(on, host)
 
 
 def answer(args: dict, config, session=None, missed_here: str | None = None,
@@ -622,12 +637,14 @@ def answer(args: dict, config, session=None, missed_here: str | None = None,
     whole = bool(name) and _seen(found, name)[2]
     if _asks_after_ssh(args):
         text = OVER_SSH     # its unit may be ssh, sshd or another, but it let me in
-    elif name and names_host(name, host) and not _seen(found, _as_one(name))[0]:
+    elif name and names_host(name, host) and not _called(found, name):
         # the server's own name, with nothing there called that
         text = _everything(found)
         if missed_here:
-            text = (f"Nothing called {missed_here} is running on this computer, and I don't see "
-                    f"it on your server. {text}")
+            text = (f"Nothing called {missed_here} is running on this computer or on your "
+                    f"server. {text}")
+        elif is_own_name(name, host) and _on_a_server(args, host):
+            text = f"Nothing called {name} is running on your server. {text}"
     else:
         text = _one(found, name) if name else _everything(found)
         if missed_here and not whole:
@@ -653,7 +670,7 @@ def running(args: dict, config, session, missed_here: str | None = None,
 def _unanswered(why: str, config, missed_here: str | None, say_which: bool) -> str:
     """Why the server didn't answer, still after what this computer was found not to have, and
     which server was tried once one was: a sleeping server must not hide the no from here."""
-    if say_which and why not in (NO_SERVER, BAD_HOST, ON_THIS_COMPUTER, BAD_NAME):
+    if say_which and why not in (NO_SERVER, BAD_HOST, ON_THIS_COMPUTER, BAD_NAME, NO_SSH):
         try:
             host = target(config)
             why = f"I tried the server in Settings, {_label(host) or host}. {why}"

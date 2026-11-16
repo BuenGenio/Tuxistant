@@ -1,7 +1,7 @@
 """system.running on your server: one fixed command over ssh to the server in Settings. Only fakes stand in for
 ssh here: nothing reaches a network or a real server. serverstatus._run, which starts ssh, is a
 stand-in that fails for the whole module, as ssh reads the developer's own ~/.ssh/config whatever
-HOME says."""
+HOME says, and subprocess.Popen refuses ssh, docker and systemctl however they are started."""
 import asyncio
 import json
 import os
@@ -50,7 +50,26 @@ PINNED_INNER = ('export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T="timeo
                 'echo @systemd; $T systemctl list-units '
                 '--type=service --state=running --no-legend --plain --no-pager '
                 '2>/dev/null; echo "@exit $?"')
-REACHED = []        # what reached the stand-in for _run, checked after each test
+REACHED = []        # what reached the stand-in for _run or was refused, checked after each test
+REAL_POPEN = subprocess.Popen
+REFUSED = {"ssh", "docker", "systemctl"}
+
+
+class _NoSshPopen(REAL_POPEN):
+    """subprocess.Popen for the whole module, which subprocess.run and REAL_RUN start through:
+    ssh, docker or systemctl, by name or by path, is refused and kept in REACHED, so a change
+    that starts ssh some way other than _run can't reach the real one. Everything else, such as
+    sys.executable, /bin/sh or bwrap, starts as usual."""
+
+    def __init__(self, args, *rest, **kwargs):
+        argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
+        programs = [kwargs.get("executable", rest[1] if len(rest) > 1 else None), *argv[:1]]
+        if kwargs.get("shell") and argv:
+            programs += shlex.split(os.fsdecode(argv[0]))
+        if any(p is not None and os.path.basename(os.fsdecode(p)) in REFUSED for p in programs):
+            REACHED.append(argv)
+            raise AssertionError(f"a test started {argv[:1]}")
+        super().__init__(args, *rest, **kwargs)
 
 
 def _no_real_ssh(argv, _env):
@@ -64,8 +83,10 @@ def _no_real_ssh(argv, _env):
 def setUpModule():
     """The same on every computer: no test depends on what this one is called. A test that
     means to run something uses REAL_RUN by name, on a stand-in."""
-    for name, new in (("_this_computer", mock.Mock(return_value=HERE)), ("_run", _no_real_ssh)):
-        patcher = mock.patch.object(serverstatus, name, new)
+    for module, name, new in ((serverstatus, "_this_computer", mock.Mock(return_value=HERE)),
+                              (serverstatus, "_run", _no_real_ssh),
+                              (subprocess, "Popen", _NoSshPopen)):
+        patcher = mock.patch.object(module, name, new)
         patcher.start()
         unittest.addModuleCleanup(patcher.stop)
 
@@ -74,6 +95,60 @@ class Case(unittest.TestCase):
     def setUp(self):
         REACHED.clear()
         self.addCleanup(lambda: self.assertEqual(REACHED, [], "a test reached the real ssh"))
+
+
+class NoRealSsh(Case):
+    """None of these can start anything real: with no PATH and /nonexistent, a guard that went
+    missing finds nothing to run either, and the test fails on FileNotFoundError."""
+
+    def test_ssh_docker_and_systemctl_are_refused_however_they_are_started(self):
+        nowhere = {"PATH": "/nonexistent"}
+        for how, start in (
+                ("by name", lambda: subprocess.run(["ssh", "-T", HOST, "true"], env=nowhere)),
+                ("by path", lambda: subprocess.run(["/nonexistent/ssh", HOST], env=nowhere)),
+                ("as a Path", lambda: subprocess.run([Path("/nonexistent/docker"), "ps"],
+                                                     env=nowhere)),
+                ("as a string", lambda: subprocess.run("systemctl", env=nowhere)),
+                ("as executable", lambda: subprocess.run(["x", HOST], env=nowhere,
+                                                         executable="/nonexistent/ssh")),
+                ("in a shell", lambda: subprocess.run("ssh -T x true", shell=True, env=nowhere)),
+                ("by Popen", lambda: subprocess.Popen(["docker", "ps"], env=nowhere)),
+                ("by REAL_RUN", lambda: REAL_RUN(serverstatus.command(HOST), nowhere))):
+            with self.subTest(how):
+                with self.assertRaises(AssertionError):
+                    start()
+                self.assertEqual(len(REACHED), 1)
+                REACHED.clear()
+
+    def test_a_read_that_starts_ssh_itself_is_caught(self):
+        """As a change that left _run out would: the stand-in for _run never sees it."""
+        def by_itself(argv, env):
+            done = subprocess.run(argv, env={**env, "PATH": "/nonexistent"}, capture_output=True)
+            return done.returncode, done.stdout, done.stderr
+        with mock.patch.object(serverstatus, "_run", by_itself):
+            with self.assertRaises(AssertionError):
+                serverstatus.read(HOST)
+        self.assertEqual(REACHED, [serverstatus.command(HOST)])
+        REACHED.clear()
+
+    def test_other_programs_still_start(self):
+        done = subprocess.run([sys.executable, "-c", "print('ok')"], capture_output=True)
+        self.assertEqual(done.stdout, b"ok\n")
+
+    def test_every_class_checks_nothing_reached_ssh(self):
+        """A setUp of its own must call Case's, or REACHED is neither cleared nor checked."""
+        for case in Case.__subclasses__():
+            with self.subTest(case.__name__):
+                test = case(next(name for name in dir(case) if name.startswith("test_")))
+                REACHED.append(["ssh"])
+                try:
+                    test.setUp()
+                    self.assertEqual(REACHED, [], "not cleared before the test")
+                    REACHED.append(["ssh"])
+                    self.assertFalse(test.doCleanups(), "not checked after the test")
+                finally:
+                    test.doCleanups()
+                    REACHED.clear()
 
 
 def said(args=None, config=CONFIG, answer=(0, FULL, b"")):
@@ -366,17 +441,84 @@ class Filtering(Case):
             with self.subTest(server=server, args=args):
                 text = said(args, {**CONFIG, "server": f"{server}:8080"}, (0, homelab, b""))[0]
                 self.assertTrue(text.startswith(listed), text)
-        # A label alone, or with server after it, is still a name to look for.
-        config = {**CONFIG, "server": "nas.lan:8080"}
-        for name in ("nas", "my nas", "nas server"):
-            with self.subTest(name):
-                self.assertEqual(said({"name": name}, config, (0, homelab, b""))[0],
-                                 "Yes, on your server I see the docker container nas-backup, up "
-                                 "1 day.")
+        # A label alone, or with server after it, is looked for only as something called that.
         self.assertEqual(said({"name": "plex server"}, {**CONFIG, "server": "plex.lan:8080"},
                               (0, homelab, b""))[0],
                          "Not really: on your server I see the docker container plex, restarting "
                          "again and again.")
+
+    def test_the_server_s_label_is_a_program_only_when_something_is_called_exactly_that(self):
+        """"What's running on my NAS?" for nas.lan: nas-backup starts with nas, but isn't
+        called that, so it doesn't stand in for the list."""
+        homelab = (b"@docker\nnas-backup|restic/restic|Up 1 day\njellyfin|jellyfin/jellyfin|Up 2 "
+                   b"days\n@exit 0\n@systemd\n@exit 0\n")
+        listed = "On your server, 2 docker containers are running: nas-backup and jellyfin."
+        config = {**CONFIG, "server": "nas.lan:8080"}
+        for args in ({"name": "nas"}, {"name": "my nas"}, {"name": "the nas server"},
+                     {"name": "nas server"}, {"name": "nas", "on": "my nas"},
+                     {"name": "my nas", "on": "my nas"}, {"name": "nas service"}):
+            with self.subTest(args):
+                self.assertEqual(said(args, config, (0, homelab, b""))[0], listed)
+        # Called that by its container, its image or its service, it is what is asked after.
+        for answer, seen in (
+                (b"@docker\nnas|img|Up 1 hour\n@exit 0\n@systemd\n@exit 0\n",
+                 "Yes, on your server I see the docker container nas, up 1 hour."),
+                (b"@docker\nfiles|linuxserver/nas:latest|Up 1 hour\n@exit 0\n@systemd\n@exit 0\n",
+                 "Yes, on your server I see the docker container files, up 1 hour."),
+                (b"@docker\n@exit 0\n@systemd\nnas.service loaded active running x\n@exit 0\n",
+                 "Yes, on your server I see the service nas.")):
+            with self.subTest(seen):
+                self.assertEqual(said({"name": "my nas"}, config, (0, answer, b""))[0], seen)
+
+    def test_the_server_s_label_with_service_or_container_finds_what_is_called_that(self):
+        """plex.lan running plex among more containers than are said: "the plex service" is
+        plex, as the words around a name are no part of it."""
+        many = (b"@docker\n" + b"".join(b"app%d|img|Up 1 day\n" % i for i in range(12))
+                + b"plex|plexinc/pms-docker|Up 2 days\n@exit 0\n@systemd\n"
+                + b"pihole-FTL.service loaded active running x\n@exit 0\n")
+        yes = "Yes, on your server I see the docker container plex, up 2 days."
+        for server in ("plex.lan:8080", "plex:8080"):
+            config = {**CONFIG, "server": server}
+            for args in ({"name": "the plex service", "on": "my server"},
+                         {"name": "plex container", "on": "server"}, {"name": "plex service"},
+                         {"name": "the plex container"}, {"name": "plex docker", "on": "plex"},
+                         {"name": "plex server"}):
+                with self.subTest(server=server, args=args):
+                    self.assertEqual(said(args, config, (0, many, b""))[0], yes)
+        pihole = (b"@docker\npihole|pihole/pihole|Up 3 days\nweb|nginx|Up 1 day\n@exit 0\n"
+                  b"@systemd\n@exit 0\n")
+        for args in ({"name": "pihole service"}, {"name": "the pihole container", "on": "server"}):
+            with self.subTest(args):
+                self.assertEqual(said(args, {**CONFIG, "server": "pihole.lan:8080"},
+                                      (0, pihole, b""))[0],
+                                 "Yes, on your server I see the docker container pihole, up 3 "
+                                 "days.")
+
+    def test_the_server_s_label_asked_after_on_your_server_says_no_before_the_list(self):
+        """"Is Plex running on my server?" on plex.lan with no plex there: the list alone, cut
+        after a few names, never says no."""
+        many = (b"@docker\nsonarr|img|Up 1 day\nradarr|img|Up 1 day\n"
+                + b"".join(b"c%d|img|Up 1 day\n" % i for i in range(10)) + b"@exit 0\n@systemd\n"
+                + b"@exit 0\n")
+        listed = ("On your server, 12 docker containers are running: sonarr, radarr, c0, c1, c2, "
+                  "c3, c4, c5 and 4 more.")
+        for server in ("plex.lan:8080", "plex:8080"):
+            config = {**CONFIG, "server": server}
+            for args, start in (
+                    ({"name": "plex", "on": "my server"},
+                     "Nothing called plex is running on your server. "),
+                    ({"name": "Plex", "on": "the servers"},
+                     "Nothing called plex is running on your server. "),
+                    ({"name": "plex", "on": "my work server"},
+                     "I checked the server in Settings, plex. Nothing called plex is running on "
+                     "your server. "),
+                    # The server named as itself twice: what runs on it.
+                    ({"name": "plex", "on": "plex"}, ""), ({"name": "plex", "on": "my plex"}, ""),
+                    ({"name": "my plex"}, "")):
+                with self.subTest(server=server, args=args):
+                    result, text, run, tool = asked(args, config, answer=(0, many, b""))
+                    self.assertEqual(text, start + listed)
+                    tool.assert_not_called()
 
     def test_a_name_found_by_container_name_or_image(self):
         text, _, _ = said({"name": "LocalAI"})
@@ -410,6 +552,22 @@ class Filtering(Case):
         self.assertEqual(said({"name": "sshd"}, answer=(255, b"", b"Permission denied"))[0],
                          serverstatus.NO_KEY)
         self.assertTrue(said({"name": f"ssh {HOST}"})[0].startswith("On your server, 2 docker"))
+
+    def test_a_service_named_with_service_or_an_at(self):
+        """As this computer takes them, as systemctl is-active nginx.service or wg-quick@wg0."""
+        units = (b"@docker\n@exit 0\n@systemd\nnginx.service loaded active running x\n"
+                 b"postgresql.service loaded active running x\n"
+                 b"wg-quick@wg0.service loaded active running x\n@exit 0\n")
+        for name, seen in (("nginx.service", "nginx"), ("postgresql.service", "postgresql"),
+                           ("wg-quick@wg0", "wg-quick@wg0"),
+                           ("wg-quick@wg0.service", "wg-quick@wg0"),
+                           ("the nginx.service service", "nginx")):
+            with self.subTest(name):
+                self.assertEqual(said({"name": name, "on": "my server"}, answer=(0, units, b""))[0],
+                                 f"Yes, on your server I see the service {seen}.")
+        self.assertTrue(said({"name": "docker.service", "on": "my server"})[0].startswith(
+            "On your server, 2 docker"))
+        self.assertEqual(said({"name": "sshd.service"})[0], serverstatus.OVER_SSH)
 
     def test_a_name_that_is_not_a_plain_word(self):
         for name in ("a;b", "$(id)", "x", "a" * 60, "../etc", "name|line", "-v"):
@@ -621,8 +779,9 @@ class BoundedRun(Case):
         self.assertEqual(str(raised.exception), serverstatus.TIMED_OUT)
 
     def test_no_ssh_program(self):
+        """Not called ssh, which no test may start, even where there is none."""
         with self.assertRaises(serverstatus.Unanswered) as raised:
-            REAL_RUN(["/nonexistent/ssh"], {"PATH": "/nonexistent"})
+            REAL_RUN(["/nonexistent/no-ssh-here"], {"PATH": "/nonexistent"})
         self.assertEqual(str(raised.exception), serverstatus.NO_SSH)
 
     def test_stdin_is_closed(self):
@@ -724,6 +883,7 @@ class RemoteCommand(Case):
     and D-Bus sockets, as /usr/bin/docker named by its path would get past the stand-ins."""
 
     def setUp(self):
+        super().setUp()
         # Before any shell is started: a mutant that adds a command must fail, not run it here.
         self.assertEqual(serverstatus.INNER, PINNED_INNER, "not run: INNER isn't the pinned one")
         self.assertEqual(serverstatus.REMOTE, "exec sh -c " + shlex.quote(PINNED_INNER))
@@ -922,21 +1082,51 @@ class RealServerCheck(Case):
 
     def test_it_leaves_the_server_and_the_key_as_it_found_them(self):
         """The server in Settings runs LocalAI, in docker with server/compose.yaml: stopped and
-        never started again, Tux couldn't hear the next step."""
+        never started again, Tux couldn't hear the next step. Starting docker again brings back
+        only the containers with a restart policy, so the others are noted and started."""
         check = self.check()
         stops = re.findall(r"`sudo systemctl stop ([^`]+)`", check)
         self.assertTrue(stops, "no step stops docker: then this test can go")
         for stop in stops:
-            after = check[check.index(f"systemctl stop {stop}"):]
+            before, _, after = check.partition(f"`sudo systemctl stop {stop}`")
             started = re.findall(r"`sudo systemctl start ([^`]+)`", after)
             self.assertTrue(started and set(stop.split()) <= set(started[0].split()), stop)
             self.assertIn("`docker ps`", after.partition("systemctl start")[2])
-            self.assertIn("where LocalAI runs outside docker", check[:check.index(stop)])
+            self.assertIn("where LocalAI runs outside docker", before)
+            noted = re.findall(r"`(\w+)=\$\(docker ps -q\)`", before)
+            self.assertTrue(noted, "the running containers aren't noted before docker stops")
+            self.assertIn(f"`docker start ${noted[-1]}`", after.partition("systemctl start")[2],
+                          "a container with no restart policy is left stopped")
         moved = re.findall(r"`mv (\S+) (\S+)`", check)
         self.assertTrue(moved, "no step moves the key")
         for i, (key, aside) in enumerate(moved):
             if not key.endswith(".off"):
                 self.assertIn((aside, key), moved[i + 1:], "the key is never moved back")
+
+    def test_it_leaves_the_server_in_settings_and_its_key_as_it_found_them(self):
+        """A new server in Settings clears the API key, so voice stops until a key is entered,
+        and the owner's server and its key have to be put back."""
+        check = self.check()
+        changes = [m.end() for m in re.finditer(r"(?i)set the server in Settings to ", check)]
+        self.assertTrue(changes, "no step changes the server in Settings: then this test can go")
+        for at in changes:
+            self.assertIn("NVIDIA GPU", check[:at], "not limited to where LocalAI runs here")
+            step = check[at:]
+            self.assertLess(step.index("enter the key from `server/.env`"), step.index(" ask "),
+                            "asked by voice before the new server has a key")
+            back = step.find("set the server in Settings back to yours")
+            self.assertGreater(back, 0, "the server in Settings is never set back")
+            self.assertIn("enter its API key again", step[back:])
+            self.assertIn("`docker compose down`", step[back:])
+            self.assertIn("once more", step[back:])
+
+    def test_its_other_steps(self):
+        """An ssh_config with no known_hosts, a security key, and an ssh master of the owner's."""
+        check = self.check()
+        for said in ("`UserKnownHostsFile /dev/null`", "an `-sk` key",
+                     '`pgrep -a -P "$(systemctl --user show -p MainPID --value tuxistant)" ssh`'):
+            self.assertIn(said, check)
+        self.assertNotIn("Check `ps` afterwards", check)
 
     def test_its_local_step_expects_the_process_the_server_runs(self):
         """pgrep sees the process name, which comes from the image's /local-ai, not from the
@@ -946,6 +1136,37 @@ class RealServerCheck(Case):
         self.assertIn("`local-ai` process", self.check())
         for name in ("localai", "local-ai", "local_ai"):
             self.assertTrue(re.fullmatch(system._any_dashes(name), "local-ai"), name)
+
+
+class Docs(Case):
+    """What docs/SKILLS.md and the changelog say it does."""
+
+    def skills(self) -> str:
+        return (ROOT / "docs" / "SKILLS.md").read_text()
+
+    def test_a_stopped_docker_is_described_as_it_is_said(self):
+        """With docker.socket stopped too, docker ps is asked and can't connect."""
+        both = (b"@docker\nCannot connect to the Docker daemon at unix:///var/run/docker.sock. "
+                b"Is the docker daemon running?\n@exit 1\n@systemd\n@exit 0\n")
+        text = self.skills()
+        self.assertIn(f'when its `docker.socket` still listens, Tux says '
+                      f'"{serverstatus.DOCKER_STOPPED}"', text)
+        self.assertIn(f'with the socket stopped too it says "{said(answer=(0, both, b""))[0]}"',
+                      text)
+
+    def test_only_the_command_is_said_to_start_nothing(self):
+        """The login can start the user's own services there."""
+        for path in ("docs/SKILLS.md", "CHANGELOG.md", "tuxistant/serverstatus.py"):
+            with self.subTest(path):
+                text = " ".join((ROOT / path).read_text().split())
+                self.assertNotIn("It starts nothing there", text)
+                self.assertIn("starts your user services", text)
+
+    def test_what_it_needs_of_ssh_and_what_marks_the_conversation(self):
+        text = self.skills()
+        for said in ("`UserKnownHostsFile /dev/null`", "an `-sk` key, isn't supported",
+                     "after any `system.running` that read something, here or there"):
+            self.assertIn(said, text)
 
 
 def _gone(pid: int) -> bool:
@@ -1152,9 +1373,9 @@ class SystemRunning(Case):
                 self.assertTrue(text.startswith("On your server, 2 docker containers"), text)
                 tool.assert_called()
         result, text, run, tool = asked({"name": "myserver"})
-        self.assertTrue(text.startswith("Nothing called myserver is running on this computer, "
-                                        "and I don't see it on your server. On your server, 2 "
-                                        "docker containers"), text)
+        self.assertTrue(text.startswith("Nothing called myserver is running on this computer or "
+                                        "on your server. On your server, 2 docker containers"),
+                        text)
         tool.assert_called()
 
     def test_a_label_found_nowhere_says_so_before_the_list(self):
@@ -1168,20 +1389,25 @@ class SystemRunning(Case):
                 session = Session()
                 system.running({"name": "plex"}, {**CONFIG, "server": server}, session)
                 self.assertEqual(session.after[0].text,
-                                 "Nothing called plex is running on this computer, and I don't "
-                                 "see it on your server. On your server, 1 docker container is "
-                                 "running: other.")
-        text = asked({"name": "plex", "on": "my server"}, {**CONFIG, "server": "plex.lan:8080"})[1]
-        self.assertTrue(text.startswith("On your server, 2 docker"), "not looked for here")
+                                 "Nothing called plex is running on this computer or on your "
+                                 "server. On your server, 1 docker container is running: other.")
+        result, text, run, tool = asked({"name": "plex", "on": "my server"},
+                                        {**CONFIG, "server": "plex.lan:8080"})
+        self.assertTrue(text.startswith("Nothing called plex is running on your server. On your "
+                                        "server, 2 docker"), text)
+        tool.assert_not_called()
 
     def test_a_label_found_only_in_part_on_the_server_says_this_computer_was_checked(self):
-        complex_ = b"@docker\ncomplex|img|Up 1 day\n@exit 0\n@systemd\n@exit 0\n"
+        """complex and plexmediaserver have plex in them, but neither is called that, so the
+        list names them among the rest."""
+        complex_ = (b"@docker\ncomplex|img|Up 1 day\n@exit 0\n@systemd\n"
+                    b"plexmediaserver.service loaded active running x\n@exit 0\n")
         plex = b"@docker\nplex|img|Up 2 days\n@exit 0\n@systemd\n@exit 0\n"
         config = {**CONFIG, "server": "plex.lan:8080"}
         for answer, sentence in (
-                (complex_, "Nothing called plex is running on this computer, and I don't see "
-                           "plex on your server, but I see the docker container complex, up 1 "
-                           "day."),
+                (complex_, "Nothing called plex is running on this computer or on your server. "
+                           "On your server, 1 docker container is running: complex. There is 1 "
+                           "system service running: plexmediaserver."),
                 (plex, "Yes, on your server I see the docker container plex, up 2 days.")):
             with self.subTest(sentence), mock.patch.object(
                     serverstatus, "_run", return_value=(0, answer, b"")), \
@@ -1227,6 +1453,13 @@ class SystemRunning(Case):
                                  f"I tried the server in Settings, myserver. {why}")
                 self.assertEqual(asked({"name": "nginx", "on": "my server"}, answer=answer)[1],
                                  why)
+        # With no ssh here nothing was tried either.
+        with mock.patch.object(serverstatus, "_run",
+                               side_effect=serverstatus.Unanswered(serverstatus.NO_SSH)), \
+                mock.patch.object(system, "_tool", return_value=""):
+            session = Session()
+            system.running({"name": "plex", "on": "my work server"}, CONFIG, session)
+        self.assertEqual(session.after[0].text, serverstatus.NO_SSH)
         # Nothing was tried for these, so no server is named.
         for args, config, why in (
                 ({"name": "a;b", "on": "my work server"}, CONFIG, serverstatus.BAD_NAME),
@@ -1368,6 +1601,27 @@ class SystemRunning(Case):
                 result, _, run, _ = asked({"name": "firefox", "on": on})
                 self.assertEqual(result, {"name": "firefox", "running": False})
                 run.assert_not_called()
+
+    def test_the_server_as_a_box_or_a_host(self):
+        config = {**CONFIG, "server": "nas.lan:8080"}
+        for on in ("my nas box", "the nas host", "my home nas box", "nas box"):
+            with self.subTest(on):
+                result, text, run, tool = asked({"name": "localai", "on": on}, config)
+                self.assertTrue(text.startswith("Yes, on your server I see the docker container "
+                                                "localai-api-1"), text)
+                tool.assert_not_called()
+
+    def test_another_computer_with_no_server_in_settings(self):
+        """No server to check, so the sentence doesn't speak of one."""
+        config = {**CONFIG, "server": ""}
+        for here, sentence in (("", "Nothing called plex is running on this computer."),
+                               ("active\n", "On this computer, plex is running.")):
+            with self.subTest(here=here), self.assertRaises(ValueError) as raised:
+                asked({"name": "plex", "on": "my nas"}, config, here=here)
+            self.assertEqual(str(raised.exception), f"{serverstatus.NO_SERVER} {sentence}")
+        with self.assertRaises(ValueError) as raised:
+            asked({"name": "home assistant", "on": "my phone"}, config)
+        self.assertEqual(str(raised.exception), serverstatus.NO_SERVER)
 
     def test_on_server_with_no_server_to_ask_says_so(self):
         for server, sentence in (("", serverstatus.NO_SERVER), ("-x:80", serverstatus.BAD_HOST)):

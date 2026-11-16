@@ -121,6 +121,15 @@ def _settings_host(config) -> str | None:
         return None
 
 
+def _only_two(config) -> str:
+    """What else can be checked: with no server in Settings, only this computer."""
+    try:
+        server = str(config["server"] or "").strip() if config is not None else ""
+    except (TypeError, KeyError):
+        server = ""
+    return ONLY_TWO if server else serverstatus.NO_SERVER
+
+
 def _server_host(config) -> str | None:
     """The host of the server in Settings, when it is another computer."""
     host = _settings_host(config)
@@ -235,7 +244,8 @@ def running(args: dict, config, session=None) -> dict:
             return _on_the_server(args, config, session)
         if not _here(on):
             # and nothing was looked at here
-            raise ValueError(f"{ONLY_TWO} {SETTINGS_HERE}" if settings_here else ONLY_TWO)
+            raise ValueError(f"{ONLY_TWO} {SETTINGS_HERE}" if settings_here else
+                             _only_two(config))
         raise ValueError("Say which program or service to check.")
     found = _here_by_name(name)
     if not found and _named_server(args, config):
@@ -251,8 +261,9 @@ def running(args: dict, config, session=None) -> dict:
             said = f"{name} is" if found else f"nothing called {name} is"
             raise ValueError(f"{ONLY_TWO} The server in Settings is this computer, and {said} "
                              "running on it.")
-        raise ValueError(f"{ONLY_TWO} On this computer, {name} is running." if found else
-                         f"{ONLY_TWO} Nothing called {name} is running on this computer.")
+        only = _only_two(config)
+        raise ValueError(f"{only} On this computer, {name} is running." if found else
+                         f"{only} Nothing called {name} is running on this computer.")
     return {"name": name, "running": found}
 
 
