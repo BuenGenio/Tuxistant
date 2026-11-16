@@ -1992,7 +1992,8 @@ class Docs(Case):
             failed = system.here_said("php-fpm")[1]
         with mock.patch.object(system, "_read", side_effect=lambda *command: (
                 (1, "") if "--user" in command else (0, "") if command[0] == "systemctl"
-                else (0, "4100 /usr/sbin/php-fpm --db-password=x\n"))):
+                else (0, "4100 /usr/sbin/php-fpm --db-password=x\n"))), \
+                mock.patch.object(system, "_kernel_thread", return_value=False):
             partly = system.here_said("php-fpm")[1]
         self.assertEqual(partly, "On this computer, pgrep listed 1 process in a way I couldn't "
                                  "read. I couldn't read all of systemd's list here.")
@@ -2007,8 +2008,21 @@ class Docs(Case):
                       "thread's or a zombie's is, by its own name instead", skills)
         self.assertIn("or in their own name where the command line is empty, as a kernel thread's "
                       "or a zombie's is", _changelog_entry())
-        self.assertIn("a line from pgrep that isn't a pid and a name of up to 15 characters is "
-                      "counted, not said", _changelog_entry())
+        self.assertIn("A line from pgrep that isn't a pid and a name of up to 15 characters, or of "
+                      "up to 63 for a process Linux flags as a kernel thread, such as "
+                      "`kworker/R-nvme-wq`, is counted, not said.", _changelog_entry())
+        # A kernel thread's name is longer than 15 characters, as Linux keeps it whole.
+        self.assertIn("A line from pgrep is said only as a pid and a name of up to 15 characters, "
+                      "as long as Linux keeps a user process's own name, or of up to 63 for a "
+                      "process its `/proc/<pid>/stat` flags as a kernel thread, which has no "
+                      "command line and whose name Linux keeps whole, such as "
+                      "`kworker/R-nvme-wq`.", skills)
+        for text in (skills, _changelog_entry(), _flat("docs/SECURITY.md"),
+                     " ".join(system._processes_here.__doc__.split())):
+            self.assertNotIn("as long as Linux keeps a process's own name", text)
+        # Up to 4 is how many are said, of the services and of the processes, not of separators.
+        self.assertIn(f"between its letters. Tux says up to {system.SAID_HERE} of each, services "
+                      "and processes, and how many more,", _changelog_entry())
         # The local step of check 31: localai is the local-ai process, with or without its dash.
         self.assertIn("as the check here takes \"localai\" for `local-ai` with or without the "
                       "dash", _check_31())
@@ -2102,9 +2116,10 @@ class Docs(Case):
         self.assertTrue(hasattr(Relay, "test_no_sentence_judges_whether_anything_works"))
 
     def test_the_pictures_show_what_tux_says(self):
-        """The README's History shows a reply to "Is docker running?": the one Tux says for a
-        made-up listing, which is no verdict. tools/docs_images.py takes the picture from
-        tests/shell_harness/docs_shots.py, which is read here, not imported."""
+        """The reply to "Is docker running?" that tests/shell_harness/docs_shots.py puts in
+        History is the one Tux says for a made-up listing, which is no verdict. Only that file is
+        checked, read here, not imported: the picture tools/docs_images.py takes from it,
+        docs/images/settings-history.png, is as up to date as its last run."""
         tree = ast.parse((ROOT / "tests" / "shell_harness" / "docs_shots.py").read_text())
         turns = next(ast.literal_eval(node.value) for node in tree.body
                      if isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "TURNS")
@@ -2130,9 +2145,13 @@ class Docs(Case):
         self.assertIn("Before release, the relay first answered \"Is docker running?\"", section)
         self.assertIn("No release did this: 0.5.0 asked `pgrep -x`", section)
         self.assertNotIn("\"Is docker running?\" on this computer was answered", section)
-        self.assertIn("no more than 15 characters of a line after its pid can be read out",
-                      section)
+        self.assertIn("no more than 15 characters of a line after its pid can be read out for "
+                      "any process but a kernel thread", section)
+        self.assertIn("or of up to 63 when its `/proc/<pid>/stat` flags the process as a kernel "
+                      "thread, which has no command line and whose name Linux keeps whole, such "
+                      "as `kworker/R-nvme-wq`. Tux reads only that flag there.", section)
         self.assertEqual(system.PROCESS_LINE.pattern, r"([0-9]+) (.{1,15})")
+        self.assertEqual(system.KERNEL_THREAD_LINE.pattern, r"([0-9]+) (.{16,63})")
 
     def test_what_it_needs_of_ssh_and_what_marks_the_conversation(self):
         text = (ROOT / "docs" / "SKILLS.md").read_text()

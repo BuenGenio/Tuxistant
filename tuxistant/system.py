@@ -25,6 +25,11 @@ STOPPED_EARLY = ("Counting stopped after a few seconds, so the real numbers are 
 SAID_HERE = 4           # services and processes said, of each
 LIST_UNITS = ("list-units", "--type=service", "--no-legend", "--plain", "--no-pager")
 PROCESS_LINE = re.compile(r"([0-9]+) (.{1,15})")     # a pid and a name of up to 15 characters
+# A pid and a kernel thread's name, which Linux keeps whole, up to 63 characters, where it keeps
+# 15 of a user process's: kworker/R-nvme-wq or kworker/u8:3-events_power_efficient.
+KERNEL_THREAD_LINE = re.compile(r"([0-9]+) (.{16,63})")
+PROC = Path("/proc")
+PF_KTHREAD = 0x00200000     # the flag in /proc/<pid>/stat that Linux sets on a kernel thread
 
 
 def _tool(*command: str) -> str:
@@ -258,6 +263,27 @@ def _services_here(name: str) -> tuple[list, int, bool]:
     return found, read, whole
 
 
+def _kernel_thread(pid: str) -> bool:
+    """Whether Linux flags pid as a kernel thread in its /proc/<pid>/stat: False for one that is
+    gone or can't be read. Only the flags are read, after the name in parentheses, which may
+    hold a ) itself, and never the command line, which a kernel thread doesn't have."""
+    try:
+        status = (PROC / pid / "stat").read_bytes()
+        return bool(int(status[status.rindex(b")") + 1:].split()[6]) & PF_KTHREAD)
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def _pid_and_name(line: str) -> bool:
+    """Whether a line of pgrep's is a pid and a process's own name as Linux keeps it: up to 15
+    characters for a user process's, or up to 63 for a kernel thread's, which Linux keeps whole
+    and which has no command line, so no argument can be in it."""
+    if PROCESS_LINE.fullmatch(line):
+        return True
+    thread = KERNEL_THREAD_LINE.fullmatch(line)
+    return thread is not None and _kernel_thread(thread[1])
+
+
 def _processes_here(name: str) -> tuple[list[str], int] | None:
     """Each process pgrep -f matches: by its command line, or by its own name where it has none,
     as a kernel thread or a zombie. Each is said by its pid and its own name as pgrep -l gives
@@ -265,13 +291,15 @@ def _processes_here(name: str) -> tuple[list[str], int] | None:
     command line itself: another program's arguments may hold a password or a token, as in
     mysql -pS3cret, and what Tux says is heard, sent to the speech server and kept in History.
     A line is read only as a pid and a name of up to 15 characters, as long as Linux keeps a
-    process's own name, so a pgrep whose -l gives more, such as the whole command line, gets
-    that line counted, not said."""
+    user process's own name, or of up to 63 for a process Linux flags as a kernel thread, whose
+    name it keeps whole. So a pgrep whose -l gives more for any other process, such as its whole
+    command line, gets that line counted, not said. Lines are split at newlines only, as pgrep
+    ends each with one, and any other line break in a name is said as an escape."""
     code, output = _read("pgrep", "-l", "-i", "-f", "--", _pattern(name))
     if code not in (0, 1):
         return None
     lines = [line for line in output.split("\n") if line]
-    rows = [line for line in lines if PROCESS_LINE.fullmatch(line)]
+    rows = [line for line in lines if _pid_and_name(line)]
     return rows, len(lines) - len(rows)
 
 

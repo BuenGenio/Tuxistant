@@ -1,5 +1,6 @@
 """Facts about this computer and its folders."""
 import asyncio
+import contextlib
 import json
 import os
 import re
@@ -131,6 +132,7 @@ def _own_name(command_line: str) -> str:
     return command_line.split(" ")[0].rpartition("/")[2][:15]
 
 
+@contextlib.contextmanager
 def listed(services="", user="", processes=(), codes=(0, 0, None)):
     """A stand-in for _read: systemctl lists these services for the system and for you, and
     pgrep, given its pattern, finds those of these processes whose command line it matches in
@@ -138,8 +140,11 @@ def listed(services="", user="", processes=(), codes=(0, 0, None)):
     as a kernel thread's or a zombie's is, and lists each as pgrep would: by its pid and its
     command line with -a, or its own name where it has none, by its pid and its own name with
     -l, by its pid alone otherwise. Each process is (pid, command line) or (pid, command line,
-    own name), whose own name is otherwise its program's. codes are the exit codes of the three,
-    None for pgrep's own: 0 with what it found, 1 with none."""
+    own name), whose own name is otherwise its program's. One with an empty command line is a
+    kernel thread, as its /proc/<pid>/stat says in a stand-in for _kernel_thread, and Linux
+    keeps its own name whole, up to 63 characters, where it keeps 15 of any other's. codes are
+    the exit codes of the three, None for pgrep's own: 0 with what it found, 1 with none. Gives
+    the stand-in for _read."""
     def read(*command):
         if command[0] == "systemctl":
             assert command[1:] in (LIST_UNITS, ("--user", *LIST_UNITS)), command
@@ -148,13 +153,27 @@ def listed(services="", user="", processes=(), codes=(0, 0, None)):
         assert command[-2] == "--", command
         found = []
         for pid, line, *own in processes:
-            name = (own or [_own_name(line)])[0]
+            name = (own or [_own_name(line)])[0][:15 if line else 63]
             if re.search(command[-1], line or name, re.I):
                 shown = (line or name if "-a" in command else name if "-l" in command else "")
                 found.append(f"{pid} {shown}".rstrip() + "\n")
         code = codes[2] if codes[2] is not None else 0 if found else 1
         return code, "".join(found)
-    return mock.patch.object(system, "_read", side_effect=read)
+    threads = {str(pid) for pid, line, *_ in processes if not line}
+    with mock.patch.object(system, "_read", side_effect=read) as reading, \
+            mock.patch.object(system, "_kernel_thread", side_effect=threads.__contains__):
+        yield reading
+
+
+@contextlib.contextmanager
+def pgrep_prints(output, code=0, threads=()):
+    """A stand-in for _read whose systemctl lists nothing and whose pgrep prints output, whatever
+    it is asked, and for _kernel_thread, whose kernel threads are these pids. Gives the latter."""
+    with mock.patch.object(system, "_read", side_effect=lambda *command: (
+            (0, "") if command[0] == "systemctl" else (code, output))), \
+            mock.patch.object(system, "_kernel_thread",
+                              side_effect=set(threads).__contains__) as kernel_thread:
+        yield kernel_thread
 
 
 # How a process is said to match, as pgrep -f matches one with no command line by its name.
@@ -178,6 +197,10 @@ class Running(unittest.TestCase):
         no_ssh.REACHED.clear()
         self.addCleanup(lambda: self.assertEqual(no_ssh.REACHED, [],
                                                  "systemctl or pgrep was started"))
+        # A long line is checked against this computer's /proc, whose pid may be anything here:
+        # each test that gives one gives a stand-in too.
+        self.enterContext(mock.patch.object(system, "_kernel_thread", side_effect=AssertionError(
+            "a test read this computer's /proc/<pid>/stat")))
 
     def test_the_real_systemctl_and_pgrep_are_refused(self):
         for command in (("/nonexistent/systemctl", *system.LIST_UNITS),
@@ -210,7 +233,7 @@ class Running(unittest.TestCase):
                                "process's command line has php-fpm in it.")
 
     def test_a_process_by_any_part_of_its_command_line(self):
-        """Linux keeps 15 characters of a process's own name, but its command line has it all,
+        """Linux keeps 15 characters of a user process's own name, but its command line has it all,
         and a script's name is in its interpreter's command line: whatever has the name in it,
         in any case and with or without - _ . or a space, is found, a later word too, and said by
         its pid and its own name as pgrep -l gives them."""
@@ -271,9 +294,12 @@ class Running(unittest.TestCase):
 
     def test_a_process_with_no_command_line_is_said_as_matched_by_its_name(self):
         """A kernel thread or a zombie has an empty command line, and pgrep -f then matches its
-        own name instead: what is said claims no command line for it."""
+        own name instead: what is said claims no command line for it. Linux keeps a kernel
+        thread's name whole, and pgrep -l prints it so, as kworker/R-nvme-wq, 17 characters."""
         here = [(90, "", "watchdogd"), (1500, "/usr/sbin/watchdog -c /etc/watchdog.conf"),
-                (164, "", "kworker/R-nvme-wq"[:15]), (2, "", "kthreadd")]
+                (164, "", "kworker/R-nvme-wq"), (2, "", "kthreadd"),
+                (406, "", "jbd2/nvme0n1p11-8"),
+                (77, "", "kworker/u8:3-events_power_efficient")]
         with listed(processes=here):
             text, _ = said("watchdog")
         self.assertEqual(text, "On this computer, no service systemd lists has watchdog in its "
@@ -284,36 +310,66 @@ class Running(unittest.TestCase):
             self.assertEqual(said("nvme")[0], "On this computer, no service systemd lists has "
                                               "nvme in its name, and these processes have nvme in "
                                               "their command line, or in their name where they "
-                                              "have none: 164 kworker/R-nvme-.")
+                                              "have none: 164 kworker/R-nvme-wq; and 406 "
+                                              "jbd2/nvme0n1p11-8.")
+        with listed(processes=here):
+            self.assertEqual(said("power_efficient")[0],
+                             "On this computer, no service systemd lists has power_efficient in "
+                             "its name, and these processes have power_efficient in their "
+                             "command line, or in their name where they have none: 77 "
+                             "kworker/u8:3-events_power_efficient.")
         with listed(processes=here):
             self.assertEqual(said("firefox")[0], "No service systemd lists here, and no "
                                                  "process's command line, has firefox in it.")
 
-    def test_only_a_pid_and_a_name_as_long_as_linux_keeps_is_said(self):
-        """Whatever pgrep prints: one whose -l gives the whole command line, or a line that is
-        something else, is counted, not said, so no password in it is heard."""
-        def pgrep_prints(output, code=0):
-            return mock.patch.object(system, "_read", side_effect=lambda *command: (
-                (0, "") if command[0] == "systemctl" else (code, output)))
-        for output, sentence in (
+    def test_only_a_pid_and_a_name_of_15_or_a_kernel_thread_s_is_said(self):
+        """Whatever pgrep prints: a line is said only as a pid and a name of up to 15 characters,
+        as Linux keeps a user process's own name, or of up to 63 for a process its /proc says is
+        a kernel thread, whose name Linux keeps whole. One whose -l gives the whole command line,
+        a longer name for anything else, or a line that is something else, is counted, not said,
+        so no password in it is heard."""
+        for output, threads, sentence in (
+                # 57 characters after the pid, not a kernel thread's: as an old pgrep -lf gives.
                 ("4100 /opt/app/bin/worker --db-password=S3cr3tP4ss --queue jobs\n90 watchdogd\n",
-                 "these processes have worker in their command line, or in their name where "
-                 "they have none: 90 watchdogd, and pgrep listed 1 process in a way I couldn't "
-                 "read."),
+                 (), "these processes have worker in their command line, or in their name where "
+                     "they have none: 90 watchdogd, and pgrep listed 1 process in a way I "
+                     "couldn't read."),
                 ("4100 /opt/app/bin/worker --db-password=S3cr3tP4ss\n4300 mysql -pS3cret shop\n",
-                 "pgrep listed 2 processes in a way I couldn't read."),
-                ("4101 a-name-of-sixteen\n4102\n4103 \nx 12\n 4104 x\n",
-                 "pgrep listed 5 processes in a way I couldn't read."),
+                 (), "pgrep listed 2 processes in a way I couldn't read."),
+                ("4101 sixteen-chars-xy\n4102\n4103 \nx 12\n 4104 x\n",
+                 (), "pgrep listed 5 processes in a way I couldn't read."),
                 ("4105 fifteen-chars-x\n4106 Web Content\n",
+                 (), "these processes have worker in their command line, or in their name where "
+                     "they have none: 4105 fifteen-chars-x; and 4106 Web Content."),
+                # A kernel thread's name, whole, up to 63 characters, and not one more.
+                ("244 kworker/R-nvme-wq\n77 kworker/u8:3-events_power_efficient\n"
+                 f"5 {'k' * 63}\n6 {'k' * 64}\n",
+                 ("244", "77", "5", "6"),
                  "these processes have worker in their command line, or in their name where "
-                 "they have none: 4105 fifteen-chars-x; and 4106 Web Content.")):
-            with self.subTest(output), pgrep_prints(output):
+                 f"they have none: 244 kworker/R-nvme-wq; 77 kworker/u8:3-events_power_efficient; "
+                 f"and 5 {'k' * 63}, and pgrep listed 1 process in a way I couldn't read."),
+                # The same, from a process that is gone, or isn't a kernel thread, when Tux looks.
+                ("244 kworker/R-nvme-wq\n", (), "pgrep listed 1 process in a way I couldn't "
+                                                "read.")):
+            with self.subTest(output), pgrep_prints(output, threads=threads) as kernel_thread:
                 found, text = system.here_said("worker")
                 self.assertTrue(found)
                 self.assertEqual(text, "On this computer, no service systemd lists has worker in "
                                        f"its name, and {sentence}")
                 for secret in ("S3cr3tP4ss", "S3cret", "--", "sixteen"):
                     self.assertNotIn(secret, text)
+        # Looked up by the pid on its line, as the one in the last line here.
+        kernel_thread.assert_called_once_with("244")
+
+    def test_lines_are_split_at_newlines_only(self):
+        """pgrep ends each line with a newline. Any other line break is part of a name, which a
+        process can give itself, so it is said in that row, as an escape."""
+        with pgrep_prints("4108 tab\x0bname\u2028x\n4109 form\x0cfeed\x85\n"):
+            text, _ = said("worker")
+        self.assertEqual(text, "On this computer, no service systemd lists has worker in its "
+                               "name, and these processes have worker in their command line, or "
+                               "in their name where they have none: 4108 tab\\u000bname\\u2028x; "
+                               "and 4109 form\\u000cfeed\\u0085.")
 
     def test_nothing_found_is_said_as_what_was_read(self):
         with listed("nginx.service loaded active running x\n", processes=[(1, "/sbin/init")]):
@@ -421,6 +477,38 @@ class Running(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     system.running({"name": name}, None)
                 read.assert_not_called()
+
+
+class KernelThreads(unittest.TestCase):
+    """How Tux tells a kernel thread, whose long name it says, from any other process: by the
+    flag Linux sets in /proc/<pid>/stat, and nothing else of it."""
+
+    def test_the_flag_in_proc_and_nothing_else(self):
+        with tempfile.TemporaryDirectory() as folder:
+            proc = Path(folder)
+            for pid, line in (
+                    # As Linux 7.2 gives them, flags 0x4208060 and 0x400000.
+                    ("244", "244 (kworker/R-nvme-wq) I 2 0 0 0 -1 69238880 0 0 0 0 0 0 0 0 0 "
+                            "-20 1 0 39 0 0\n"),
+                    ("4100", "4100 (worker) S 1 4100 4100 0 -1 4194304 235 0 0 0\n"),
+                    # A name, which any program gives itself, with a ) and spaces in it.
+                    ("4101", "4101 (a) I 2 0 0) S 1 4101 4101 0 -1 4194304 1 0 0 0\n"),
+                    ("4102", "4102 (b) 1 2 3 4) I 2 0 0 0 -1 2097152 0 0\n"),
+                    ("4103", "4103 (x) S 1\n"), ("4104", "not a stat line\n")):
+                (proc / pid).mkdir()
+                (proc / pid / "stat").write_text(line)
+            (proc / "4105").mkdir()
+            (proc / "4105" / "cmdline").write_text("")
+            with mock.patch.object(system, "PROC", proc):
+                for pid, thread in (("244", True), ("4100", False), ("4101", False),
+                                    ("4102", True), ("4103", False), ("4104", False),
+                                    ("4105", False), ("4106", False)):
+                    with self.subTest(pid):
+                        self.assertIs(system._kernel_thread(pid), thread)
+        # This test's own process, as Linux itself gives it.
+        self.assertIs(system._kernel_thread(str(os.getpid())), False)
+        self.assertEqual(system.PROC, Path("/proc"))
+        self.assertEqual(system.PF_KTHREAD, 0x00200000)
 
 
 class Folders(unittest.TestCase):
