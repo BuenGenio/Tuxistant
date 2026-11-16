@@ -63,6 +63,65 @@
   });
   selectTab(shownOS);
 
+  // Sections: accordions. The page arrives with every section open, which is how it stays without
+  // script. Here the first stays open, the rest close, and a link into one opens it. A closed panel
+  // is hidden until found where the browser can do that, so find in page still reaches its text.
+  const HIDDEN = 'onbeforematch' in document.body ? 'until-found' : true;
+  const FOLD_MS = 300;    // a little longer than the 280 ms fold in style.css
+  const folding = new WeakMap();
+  const toggleOf = section => section.querySelector('.acc-toggle');
+  const panelOf = section => document.getElementById(toggleOf(section).getAttribute('aria-controls'));
+  const isOpen = section => toggleOf(section).getAttribute('aria-expanded') === 'true';
+  function setOpen(section, open, animate = !reducedMotion) {
+    const panel = panelOf(section);
+    clearTimeout(folding.get(section));
+    toggleOf(section).setAttribute('aria-expanded', open);
+    section.classList.toggle('acc-instant', !animate);
+    if (open) {
+      panel.hidden = false;
+      if (animate) void panel.offsetHeight;     // unfold from the closed height, not from nothing
+      section.classList.remove('is-closed');
+    } else {
+      // Safari doesn't focus a clicked button, so focus could be left inside the folded panel.
+      if (panel.contains(document.activeElement)) toggleOf(section).focus();
+      section.classList.add('is-closed');
+      if (animate) folding.set(section, setTimeout(() => { panel.hidden = HIDDEN; }, FOLD_MS));
+      else panel.hidden = HIDDEN;
+    }
+  }
+  // Opens the section a link points into and returns its target. It opens at once, not unfolding:
+  // with the panels below still folded the page is too short to scroll the target to the top.
+  function reveal(hash) {
+    let target = null;
+    try { target = hash.length > 1 && document.getElementById(decodeURIComponent(hash.slice(1))); }
+    catch { /* a malformed hash names nothing */ }
+    const section = target && target.closest('.acc');
+    if (!section || isOpen(section)) return null;
+    setOpen(section, true, false);
+    return target;
+  }
+  const accordions = [...document.querySelectorAll('.acc')];
+  accordions.forEach((section, index) => {
+    toggleOf(section).addEventListener('click', () => setOpen(section, !isOpen(section)));
+    panelOf(section).addEventListener('beforematch', () => setOpen(section, true, false));
+    if (index) setOpen(section, false, false);
+  });
+  document.addEventListener('click', event => {
+    const link = event.target.closest?.('a[href^="#"]');
+    if (link) reveal(link.hash);      // before the browser follows it, so it lands on open text
+  });
+  addEventListener('hashchange', () => reveal(location.hash)?.scrollIntoView());
+  reveal(location.hash)?.scrollIntoView();
+  document.documentElement.classList.add('has-acc');
+
+  // A section's download is the hero's: the visitor's own system when that has a release. On a
+  // system without one it still downloads for Linux, so it says so rather than promising more.
+  const ownRelease = os && S.releases[os];
+  for (const link of document.querySelectorAll('[data-cta="download"]')) {
+    if (ownRelease?.url) link.href = ownRelease.url;
+    else if (os) link.textContent = fill(S.dlFor, { os: OS_NAMES.linux });
+  }
+
   // Language: the choice is remembered, so / stops following the browser.
   const language = document.getElementById('lang');
   language.addEventListener('change', () => {
@@ -120,6 +179,10 @@
     else if (delta < -6) header.classList.remove('is-hidden');
   }, { passive: true });
   addEventListener('hashchange', () => { graceUntil = performance.now() + 900; });
+  // Following an in-page link scrolls before hashchange fires, so its grace starts on the click.
+  document.addEventListener('click', event => {
+    if (event.target.closest?.('a[href^="#"]')) graceUntil = performance.now() + 900;
+  }, true);
   header.addEventListener('focusin', () => header.classList.remove('is-hidden'));
 
   // Hero: the real theme shaders, drawn with the uniforms the desktop blob uses.

@@ -169,6 +169,136 @@ class BuiltSite(unittest.TestCase):
         for page in self.pages:
             self.assertIn('tabindex="0"', self.ticker(page)[1][0][0], page)
 
+    # Accordion sections, each ending with a call to action.
+    ACC_SECTIONS = {    # section: its title, its prompt, and the label of each action in order
+        "examples": ("examplesTitle", "ctaExamples", ["ctaDownload"]),
+        "preview": ("previewTitle", "ctaPreview", ["ctaDownload", "releaseNotes"]),
+        "versions": ("versionsTitle", "ctaVersions", ["ctaReleases"]),
+    }
+
+    @staticmethod
+    def element_tree(html):
+        """The page as nested dicts: tag, attributes, element children and text."""
+        from html.parser import HTMLParser
+        void = {"meta", "link", "br", "img", "input", "source", "hr", "path", "use", "circle"}
+
+        class Builder(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.root = {"tag": "#root", "attrs": {}, "children": [], "text": ""}
+                self.stack = [self.root]
+
+            def handle_starttag(self, tag, attrs):
+                node = {"tag": tag, "attrs": dict(attrs), "children": [], "text": ""}
+                self.stack[-1]["children"].append(node)
+                if tag not in void:
+                    self.stack.append(node)
+
+            def handle_endtag(self, tag):
+                if tag not in void:
+                    while self.stack.pop()["tag"] != tag:
+                        pass
+
+            def handle_data(self, data):
+                for node in self.stack:
+                    node["text"] += data
+
+        builder = Builder()
+        builder.feed(html)
+        return builder.root
+
+    @staticmethod
+    def find_all(node, test):
+        found = [node] if test(node) else []
+        for child in node["children"]:
+            found += BuiltSite.find_all(child, test)
+        return found
+
+    def accordions(self, page):
+        tree = self.element_tree(page.read_text())
+        by_id = {node["attrs"]["id"]: node for node in self.find_all(tree, lambda n: "id" in n["attrs"])}
+        sections = self.find_all(tree, lambda n: n["tag"] == "section"
+                                 and "acc" in n["attrs"].get("class", "").split())
+        return sections, by_id
+
+    def test_every_section_after_the_ticker_is_an_accordion_that_arrives_open(self):
+        for page in self.pages:
+            strings = self.strings(page)
+            html = page.read_text()
+            sections, by_id = self.accordions(page)
+            self.assertEqual([s["attrs"]["id"] for s in sections], list(self.ACC_SECTIONS), page)
+            self.assertLess(html.index('<div class="ticker">'), html.index('class="section acc wrap"'), page)
+            ids = re.findall(r'\sid="([^"]+)"', html)
+            self.assertEqual(len(ids), len(set(ids)), "ids are unique")
+            for section in sections:
+                name = section["attrs"]["id"]
+                headings = self.find_all(section, lambda n: n["tag"] == "h2")
+                self.assertEqual(len(headings), 1, (page, name))
+                heading = headings[0]
+                self.assertEqual(section["attrs"]["aria-labelledby"], heading["attrs"]["id"], (page, name))
+                # The toggle is a real button inside the heading, so the outline keeps the heading.
+                [toggle] = heading["children"]
+                self.assertEqual(toggle["tag"], "button", (page, name))
+                self.assertEqual(toggle["attrs"].get("type"), "button", (page, name))
+                self.assertEqual(toggle["text"], strings[self.ACC_SECTIONS[name][0]], (page, name))
+                # Open until script closes it, so a page without script shows everything.
+                self.assertEqual(toggle["attrs"].get("aria-expanded"), "true", (page, name))
+                panel = by_id[toggle["attrs"]["aria-controls"]]
+                self.assertIn(panel, self.find_all(section, lambda n: True), (page, name))
+                self.assertNotIn("hidden", panel["attrs"], (page, name))
+                self.assertEqual(section["children"][-1], panel, "everything but the heading folds")
+            self.assertNotIn("is-closed", html, "only app.js closes a section")
+
+    def test_every_section_ends_with_a_call_to_action_in_its_language(self):
+        releases = json.loads((ROOT / "website/src/releases.json").read_text())
+        notes = self.build.release_in(releases, releases["linux"]["version"])["page"]
+        hrefs = {"ctaDownload": releases["linux"]["url"], "releaseNotes": notes,
+                 "ctaReleases": "https://github.com/BuenGenio/Tuxistant/releases"}
+        for page in self.pages:
+            strings = self.strings(page)
+            sections, _ = self.accordions(page)
+            for section in sections:
+                name = section["attrs"]["id"]
+                _, prompt, actions = self.ACC_SECTIONS[name]
+                node = section      # follow the last element down: it must reach the call to action
+                while "acc-cta" not in node["attrs"].get("class", "").split():
+                    self.assertTrue(node["children"], (page, name, "has no call to action at its end"))
+                    node = node["children"][-1]
+                self.assertEqual(node["children"][0]["tag"], "p", (page, name))
+                self.assertEqual(node["children"][0]["text"], strings[prompt], (page, name))
+                links = self.find_all(node, lambda n: n["tag"] == "a")
+                self.assertEqual([link["text"] for link in links], [strings[key] for key in actions], (page, name))
+                self.assertEqual([link["attrs"]["href"] for link in links], [hrefs[key] for key in actions], (page, name))
+                self.assertIn("btn-cta", links[0]["attrs"]["class"].split(), "the first action is a button")
+        for key in ("ctaExamples", "ctaPreview", "ctaVersions", "ctaDownload", "ctaReleases"):
+            labels = [self.strings(page)[key] for page in self.pages]
+            self.assertTrue(all(label.strip() for label in labels), key)
+            self.assertEqual(len(set(labels)), 5, f"{key}: each language has its own words")
+
+    def test_every_in_page_link_lands_on_something(self):
+        for page in self.pages:
+            html = page.read_text()
+            for target in re.findall(r'href="#([^"]*)"', html):
+                self.assertRegex(html, rf'\sid="{re.escape(target)}"', (page, target))
+            self.assertIn('href="#versions"', html, "the hero links the versions section")
+
+    def test_the_accordion_folds_only_with_script_and_respects_motion_and_print(self):
+        css = (self.dist / "style.css").read_text()
+        app = (self.dist / "app.js").read_text()
+        block = css[css.index("Accordion sections and their calls to action: start"):
+                    css.index("Accordion sections and their calls to action: end")]
+        self.assertRegex(block, r"\.acc-chev \{[^}]*display: none;", "no chevron without script")
+        self.assertIn(".has-acc .acc-chev { display: block; }", block)
+        self.assertIn(".acc.is-closed .acc-panel { grid-template-rows: 0fr; }", block)
+        self.assertRegex(block, r"@media \(prefers-reduced-motion: reduce\) \{\s*\.acc-panel, \.acc-chev \{ transition: none; \}")
+        self.assertRegex(block, r"@media print \{\s*\.acc \.acc-panel, \.acc \.acc-panel\[hidden\] "
+                                r"\{ display: block; content-visibility: visible; \}")
+        self.assertIn("classList.add('has-acc')", app)
+        self.assertIn("animate = !reducedMotion", app, "the fold is instant for reduced motion")
+        for opened_by in ("addEventListener('hashchange', () => reveal(location.hash)",
+                          "reveal(location.hash)?.scrollIntoView();", "reveal(link.hash)", "'beforematch'"):
+            self.assertIn(opened_by, app, "a link, a hash or find in page opens its section")
+
 
     def test_the_main_download_stays_on_the_newest_stable_release(self):
         releases = json.loads((ROOT / "website/src/releases.json").read_text())

@@ -295,6 +295,47 @@ def apply_upcoming(path, languages, releases):
         strings["localPreview"] = upcoming["banner"][code]
 
 
+# Accordion sections. Every section after the ticker arrives open, which is how it stays without
+# script; app.js closes all but the first and opens the one a link points into. The heading keeps
+# its place in the outline: the toggle is a button inside the h2, and the h2 sits alone in its own
+# box so fitHeadings() in app.js measures the room left beside the chevron.
+ACC_CHEVRON = ('<svg class="acc-chev" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+               '<path d="M6 9l6 6 6-6"/></svg>')
+
+
+def acc_open(name, title):
+    return (f'<section class="section acc wrap" id="{name}" aria-labelledby="{name}-title">'
+            f'<div class="acc-head"><div class="acc-fit"><h2 id="{name}-title">'
+            f'<button class="acc-toggle" type="button" id="{name}-toggle" aria-expanded="true" '
+            f'aria-controls="{name}-panel">{esc(title)}</button></h2></div>{ACC_CHEVRON}</div>'
+            f'<div class="acc-panel" id="{name}-panel"><div class="acc-inner">')
+
+
+def acc_close(prompt, *actions):
+    """The section's call to action, its last element: a line asking, and what to do about it."""
+    return (f'<div class="acc-cta"><p>{esc(prompt)}</p><div class="acc-actions">{"".join(actions)}</div></div>'
+            '</div></div></section>')
+
+
+def cta_download(strings, releases):
+    """The newest stable download, as the hero's button offers it. app.js points it at the visitor's
+    own system when that has a release, and otherwise says it is for Linux."""
+    url = releases["linux"]["url"] or "#download"
+    return f'<a class="btn btn-cta" href="{esc(url)}" data-cta="download">{esc(strings["ctaDownload"])}</a>'
+
+
+def cta_notes(strings, releases):
+    """A quieter link beside the download: the release notes of the version it downloads."""
+    page = release_in(releases, releases["linux"]["version"])["page"]
+    return f'<a class="acc-more" href="{esc(page)}">{esc(strings["releaseNotes"])}</a>'
+
+
+def cta_releases(strings, releases):
+    """Every release on GitHub: the folder above the newest stable release's own page."""
+    page = release_in(releases, releases["linux"]["version"])["page"].rsplit("/tag/", 1)[0]
+    return f'<a class="btn btn-cta btn-cta-alt" href="{esc(page)}">{esc(strings["ctaReleases"])}</a>'
+
+
 def page(code, strings, languages, releases, detect, policy):
     caps_a, caps_b = caps_html(strings)
     tabs, panels = panels_html(strings)
@@ -361,25 +402,22 @@ def page(code, strings, languages, releases, detect, policy):
     </div>
   </section>
   <div class="wrap"><div class="ticker">{ticker_html(strings)}</div></div>
-  <section class="section wrap" aria-labelledby="examples-title">
-    <h2 id="examples-title">{esc(strings['examplesTitle'])}</h2>
+  {acc_open('examples', strings['examplesTitle'])}
     <div class="tabs" role="tablist" aria-labelledby="examples-title">{tabs}</div>
     {panels}
-  </section>
-  <section class="section wrap" id="preview" aria-labelledby="preview-title">
-    <h2 id="preview-title">{esc(strings['previewTitle'])}</h2>
+  {acc_close(strings['ctaExamples'], cta_download(strings, releases))}
+  {acc_open('preview', strings['previewTitle'])}
     <p class="lead">{esc(strings['previewLead'])}</p>
     <ul class="caps caps-row">{preview_caps_html(strings)}</ul>
-  </section>
-  <section class="section wrap" id="versions" aria-labelledby="versions-title">
-    <h2 id="versions-title">{esc(strings['versionsTitle'])}</h2>
+  {acc_close(strings['ctaPreview'], cta_download(strings, releases), cta_notes(strings, releases))}
+  {acc_open('versions', strings['versionsTitle'])}
     <table class="versions">
       <thead><tr><th scope="col">{esc(strings['colSystem'])}</th><th scope="col">{esc(strings['colVersion'])}</th><th scope="col">{esc(strings['colStatus'])}</th><th scope="col" class="needs">{esc(strings['colNeeds'])}</th></tr></thead>
       <tbody>{versions_html(strings, releases)}</tbody>
     </table>
     <h3 class="sub" id="releases-title">{esc(strings['releasesTitle'])}</h3>
     <ol class="releases" aria-labelledby="releases-title">{releases_html(code, strings, releases)}</ol>
-  </section>
+  {acc_close(strings['ctaVersions'], cta_releases(strings, releases))}
   <section class="wrap">
     <div class="support">
       <div><h2>{esc(strings['donateTitle'])}</h2><p>{esc(strings['donateText'])}</p></div>

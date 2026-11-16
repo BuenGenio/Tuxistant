@@ -351,3 +351,99 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   .ticker-list { flex: 0 1 auto; flex-wrap: wrap; justify-content: center; gap: 8px 26px; min-width: 0; animation: none; }
   .ticker-list[aria-hidden="true"] { display: none; }
 }
+
+/* ==== Accordion sections and their calls to action: start ==================================== */
+/* Each section after the ticker folds under its heading and ends with a call to action. Without
+   script every section stays open and shows no chevron, since nothing could fold it. The fold
+   animates the panel's one grid row between 0fr and 1fr; reduced motion and print skip it. */
+.acc { padding-block: 0; }
+.wrap:has(> .ticker) + .acc { margin-block-start: 6px; }
+.acc + .acc .acc-head { border-block-start: 1px solid var(--line); }
+.acc-head { position: relative; display: flex; align-items: center; gap: 12px; min-height: 54px; padding-block: 8px; }
+.acc-fit { flex: 1 1 0; min-width: 0; }     /* the h2's own box, so fitHeadings measures the room beside the chevron */
+.acc-toggle {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+:root:not(.has-acc) .acc-toggle { cursor: default; }
+.acc-toggle::after { content: ""; position: absolute; inset: 0 -8px; border-radius: 12px; }    /* the whole row folds, chevron included */
+.acc-toggle:focus-visible { outline: none; }
+.acc-toggle:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; }
+.acc-chev {
+  flex: none;
+  display: none;
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 280ms cubic-bezier(.2, .7, .2, 1);
+}
+.has-acc .acc-chev { display: block; }
+.acc:not(.is-closed) .acc-chev { transform: rotate(180deg); }
+.acc-head:hover .acc-chev { border-color: var(--accent); stroke: var(--accent); }
+
+.acc-panel { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 280ms cubic-bezier(.2, .7, .2, 1); }
+.acc-panel[hidden]:not([hidden="until-found"]) { display: none; }
+.acc.is-closed .acc-panel { grid-template-rows: 0fr; }
+/* Clips while folding. It reaches 6px past the text, so focus rings at the edges still show. */
+.acc-inner { min-height: 0; overflow: hidden; margin-inline: -6px; padding-inline: 6px; }
+.acc-instant .acc-panel, .acc-instant .acc-chev { transition: none; }
+
+.acc-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-block: 14px 16px;      /* margins, not padding: padding would stay showing when folded */
+  padding-block: 12px;
+  padding-inline: 16px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+.acc-cta p { margin: 0; font-weight: 650; }
+.acc-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.btn-cta {
+  min-height: 44px;
+  padding-inline: 18px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(100deg, var(--brand-1), var(--brand-2));
+  color: #08090f;
+  font-size: 0.98rem;
+  font-weight: 750;
+}
+.btn-cta:hover { box-shadow: 0 0 0 2px var(--text); }
+.btn-cta-alt { background: var(--text); color: var(--bg); }
+.btn-cta-alt:hover { box-shadow: 0 0 0 2px var(--accent); }
+.acc-more { font-size: 0.9rem; font-weight: 600; }
+
+@media (max-width: 560px) {
+  .acc-cta { flex-direction: column; align-items: stretch; padding-inline: 12px; text-align: center; }
+  .acc-actions { justify-content: center; }
+  .acc-actions .btn-cta { flex: 1 1 auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .acc-panel, .acc-chev { transition: none; }
+}
+@media print {
+  .acc .acc-panel, .acc .acc-panel[hidden] { display: block; content-visibility: visible; }
+  .acc .acc-chev, .acc .acc-cta { display: none; }
+}
+/* ==== Accordion sections and their calls to action: end ====================================== */
