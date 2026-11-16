@@ -210,6 +210,17 @@ class Finding(Goa):
         self.assertTrue(any("CHARSET UTF-8" in command for command in server.commands))
 
 
+    async def test_a_thai_word_made_plain_is_still_found(self):
+        """NFKC makes Thai's ำ two characters, so the server found the mail by the word and
+        the hiding's text, made plain, no longer held it."""
+        receipt = message("ใบเสร็จรับเงิน", ACME, "ยอดชำระ 150 บาท ขอบคุณค่ะ")
+        await self.mailbox(gmail(inbox=[(message("Hello", ACME), 900), (receipt, 3)]))
+        self.says = ["You paid 150 baht."]
+        said, _ = await self.ask("ยอดชำระ")
+        self.assertTrue(said.startswith("You paid 150 baht."), said)
+        self.assertIn("150 บาท", self.read(0))
+
+
 class Unchanged(Goa):
     """Nothing in the mailbox changes, and it is never downloaded."""
 

@@ -179,8 +179,8 @@ def _stands(chars: str, read: str) -> bool:
 
 
 def shown(token: str, read: str | None) -> str:
-    """"whole", "part" (a run of at least three of its characters, or half if that is more) or
-    "no"."""
+    """"whole", "part" (a run of at least three of its characters, or half if that is more,
+    from its start, its middle or its end, as "913" is of "[hidden] 913") or "no"."""
     if read is None:
         return "no"
     read, chars = _plain(read), _letters(token)
@@ -188,7 +188,7 @@ def shown(token: str, read: str | None) -> str:
         return "whole"
     least = max(3, (len(chars) + 1) // 2)
     return "part" if any(_stands(chars[i:j], read) for i in range(len(chars))
-                         for j in range(i + least, len(chars))) else "no"
+                         for j in range(i + least, len(chars) + 1)) else "no"
 
 
 # ---- the mail -------------------------------------------------------------------------------
@@ -199,7 +199,10 @@ CODES = ("4829", "482913", "48291375", "KQ7X9B", "kq7x9b", "A7K2Q9XB", "KQWXBT",
          "KQW 9XB", "ABC-123", "4 8 2 9 1 3", "K Q 7 X 9 B",
          "４８２９１３", "ＫＱ７Ｘ９Ｂ",
          "\U0001d7d2\U0001d7d6\U0001d7d0\U0001d7d7\U0001d7cf\U0001d7d1",
-         "٤٨٢٩١٣")
+         "٤٨٢٩١٣",
+         # Groups whose last is one or two digits, which a dash and a number after them could
+         # make the start of a range.
+         "482 91", "48-29-13")
 BODIES = ("Your Acme verification code is {C}.", "{C} is your Acme code.",
           "Use {C} to sign in to Acme.", "Hi,\n\nEnter this on the page:\n\n{C}\n\nThanks",
           "Your one-time passcode: {C}\nIt expires soon.", "Your Acme PIN is {C}.",
@@ -215,7 +218,11 @@ BODIES = ("Your Acme verification code is {C}.", "{C} is your Acme code.",
           # Before a word that starts with a currency's letters, as a brand or a name may.
           "{C} Audible verification code", "{C} audio verification code",
           "To sign in, enter {C}\nAudrey\nAcme", "Sign in with {C} Ronald",
-          "{C} Cadence Bank verification code")
+          "{C} Cadence Bank verification code",
+          # Glued by a dash to the minutes after it, as an HTML template's &mdash; is, and after
+          # a number of one or two digits and a dash, neither of which is a range.
+          "Your Acme code is {C}—10 minutes left.", "Your Acme code is {C}–5 min.",
+          "Your Acme code is 12–{C}.", "To sign in, use 1–{C}.")
 # Every mark a code can be glued to the next word or the last by, and the words.
 GLUES = ("-‐‑‒–—―−⸺﹘﹣－⁃˗➖"
          "〜〰־⸗⸚⹀︱︲\u00ad"
@@ -227,7 +234,11 @@ GLUES = ("-‐‑‒–—―−⸺﹘﹣－⁃˗➖"
          " \n\u202a\u202c\u202e\u2061\u2063\u2066\u2068\u2069\u061c\ue000\x1f")
 AFTER = ("Verification ends soon", "DO NOT SHARE IT", "SMS. Thanks", "10 minutes left",
          "2FA is on", "Acme team", "请勿泄露", "5分钟内有效", "Audible may ask again",
-         "Ronald, Acme support")
+         "Ronald, Acme support",
+         # A name that is a currency's code but in capitals, or starts like one, or is one's
+         # name in the singular, which 0.5.0 didn't count.
+         "Ron, Acme IT", "Ron\nAcme", "Aud", "Rubén, Acme support", "Audífonos Acme",
+         "Dollar Bank")
 BEFORE = ("Your code", "Verification", "PIN", "Step 10", "验证码")
 HTML = ("<p>Your Acme verification code is <b>{C}</b>.</p>",
         "<p>Your Acme code is</p><table><tr>{CELLS}</tr></table>",
@@ -250,7 +261,15 @@ ORDINARY = ("12 March 2026", "12/03/2026", "2026-03-12", "12-Mar-2026", "10:30",
             # Ranges written with an en dash, as an HTML template writes them, and times.
             "10:30–11:00", "14:00–18:00", "12–15 March", "10–20%", "10am-12pm",
             # Prices and dates in Chinese, Japanese and Korean, and the wide marks NFKC changes.
-            "12800円", "3000元", "128000원", "2026年3月12日", "１２８，０００", "２０２６／０３／１２")
+            "12800円", "3000元", "128000원", "2026年3月12日", "１２８，０００", "２０２６／０３／１２",
+            # Years and times with an en dash, and ranges to three digits.
+            "2026–2027", "2024–2025", "2pm–4pm", "9am–5pm", "6–120", "10–100%", "12·50", "12…15",
+            # Counters, and currencies of more than one character or ten thousand of one,
+            # written straight after a number.
+            "1500ポイント", "1500积分", "1500포인트", "1500개", "1205号室", "5000美元", "1250港币",
+            "3500万円", "1500만원", "1250달러", "1250ドル", "1500บาท",
+            # A currency's name in the singular, or its sign, after the price.
+            "1500 Euro", "1500 €")
 FRAMES = (("Your booking with Acme", "Hello,\n\nIt is {N}.\n\nThanks"),
           ("Your order from Acme",
            "Hello,\n\nIt is {N}.\n\nLog in to your account to see your order."),
@@ -266,6 +285,8 @@ FRAMES = (("Your booking with Acme", "Hello,\n\nIt is {N}.\n\nThanks"),
           ("Your Acme booking: {N}", "Log in to your account to see it."),
           # After a word for a code, as a booking's confirmation code is.
           ("Your Acme booking", "Your booking code is HMX4K2.\n\nIt is {N}."),
+          # And not after "is", which made 0.5.0 hide a year or a time too.
+          ("Your Acme booking", "Your booking code is HMX4K2.\n\nWe hold {N} for you."),
           ("Message from Acme", "認証コード：482913\n有効期限：{N}"),
           # Under a subject whose word for a code is also a number's, a QR code's or a barcode's:
           # "your order number", "booking number", "about your QR code", "your QR e-ticket".
@@ -273,6 +294,14 @@ FRAMES = (("Your booking with Acme", "Hello,\n\nIt is {N}.\n\nThanks"),
           ("[Acme] 예약번호 안내", "Hello,\n\nIt is {N}.\n\nThanks"),
           ("Acme QRコードのご案内", "Hello,\n\nIt is {N}.\n\nThanks"),
           ("Acme 您的二维码电子票", "Hello,\n\nIt is {N}.\n\nThanks"))
+# Passwords with a mark in them that smart punctuation or a wide keyboard writes: each long
+# enough that the half after the mark, shown, counts as part of it.
+PASSWORDS = ("Blue…Horseshoe", "Blue‥Horseshoe", "Blue—Horseshoe", "Blue–Horseshoe",
+             "Blue·Horseshoe", "Blue•Horseshoe", "Blue，Horseshoe", "Blue．Horseshoe",
+             "Blue／Horseshoe")
+PASSWORD_BODIES = ("The wifi password is {P} for the guests.", "Your new Acme password: {P}",
+                   "Your temporary password is {P}. Change it after you sign in.",
+                   "Passwort: {P}\nViele Grüße", "密码：{P}")
 # The booking above as an HTML template writes it, with each en dash a character reference.
 BOOKING = "<p>Your booking code is <b>HMX4K2</b>.</p><p>It is {N}.</p>"
 
@@ -314,6 +343,12 @@ def corpus() -> list[dict]:
                                                   for i in range(0, len(letters), 2))))
             add("code", f"html {shape[:30]!r} | {code!r}", "Message from Acme", None, [code],
                 markup)
+    for password in PASSWORDS:
+        for body in PASSWORD_BODIES:
+            add("code", f"password {body[:16]!r} | {password!r}", "Message from Acme",
+                body.replace("{P}", password), [password])
+        add("code", f"html password | {password!r}", "Message from Acme", None, [password],
+            f"<p>The wifi password is <b>{html.escape(password)}</b> for the guests.</p>")
     for number in ORDINARY:
         for subject, body in FRAMES:
             add("ordinary", f"{subject[:24]!r} {body[:30]!r} | {number!r}",
@@ -337,7 +372,7 @@ TIMES = re.compile(r"\d{1,2}(?:am|pm)(?:[-–]\d{1,2}(?:am|pm))?")     # "2pm-4p
 # What this version hides on purpose that 0.5.0 read out, as CHANGELOG and docs/CONTRACT.md step 5
 # say: in a mail that talks of signing in, every number in either part and letters with digits,
 # but for a time; whatever a subject that names a code reaches in the text; a postcode, or a
-# range such as 2024–25, on a line of its own; two groups of three beside a word for a secret,
+# range such as 0900–1730, on a line of its own; two groups of three beside a word for a secret,
 # but not an amount; and a year or a time straight after a colon there, as NFKC makes "：" one.
 def meant_to_hide(m: dict, number: str) -> bool:
     whole = f"{m['subject']}\n{index_text(m)}"
@@ -380,6 +415,14 @@ class AgainstFiveOh(unittest.TestCase):
             Path(__file__).read_text(encoding="utf-8").splitlines(), 1) for char in line
             if char != " " and unicodedata.category(char) in ("Cc", "Cf", "Co", "Cn", "Zs", "Mn")]
         self.assertEqual(unseen, [])
+
+    def test_a_code_shown_in_part_counts_from_either_end(self):
+        """Without its last characters, "[hidden] 913" read as nothing of "482 913" shown."""
+        self.assertEqual(shown("482 913", "Your [hidden] 913 is what to type"), "part")
+        self.assertEqual(shown("482 913", "Your 482 [hidden] is what to type"), "part")
+        self.assertEqual(shown("KQ7X9B", "Your code [hidden] X9B"), "part")
+        self.assertEqual(shown("Blue…Horseshoe", "The password is [hidden] Horseshoe"), "part")
+        self.assertEqual(shown("482913", "Your code is [hidden]."), "no")
 
     def test_there_are_enough_mails(self):
         self.assertGreater(sum(1 for m, *_ in self.read if m["kind"] != "ordinary"), 400)

@@ -201,17 +201,18 @@ SPACE = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u2800\u3000]")
 # round each value, private use, and the rest of Unicode's default ignorables, which Python can't
 # look up, such as variation selectors and Hangul fillers. Any of these beside a code would keep
 # it from being alone on its line, while the model still reads the code. What stands inside a
-# word (INSIDE_WORDS, as 0.5.0 had it) or attaches to the character before it (IGNORABLE, as a
-# keycap's variation selector does) is taken out. The rest is a space, as clean() made it for
-# 0.5.0, so a code ends there: taken out, "\u2068482913\u2069Verification" was one word and the
-# code was shown, and "482 913\u206610 minutes" showed 482. "482\u2066913" is the code in two
-# groups it reads as.
+# word (INSIDE_WORDS, as 0.5.0 had it) is taken out, and so is one of IGNORABLE where a mark
+# follows it, as a keycap's variation selector does in "4\ufe0f\u20e3". The rest is a space,
+# a run of them one, as clean() made it for 0.5.0, so a code ends there: taken out,
+# "\u2068482913\u2069Verification" or "482913\ufe0fVerification" was one word and the code was
+# shown, and "482 913\u206610 minutes" showed 482. "482\u2066913" is the code in two groups it
+# reads as, and so is "\u2068482\u2069\u2068913\u2069", which as two spaces was no code at all.
 UNSEEN_KINDS = frozenset(("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"))
 INSIDE_WORDS = frozenset("\u00ad\u200b\u200c\u200d\u200e\u200f\u2060\ufeff")
 IGNORABLE = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0f"
                        "\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
                        "\U000e0000-\U000e0fff]")
-CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]+")
 MARKS = frozenset(("Mn", "Me"))    # a keycap or an accent on a letter or digit of a code
 UNESCAPES = 4
 # Each alternative is looked for from every place in a mail, so none may read on to the end of a
@@ -219,35 +220,46 @@ UNESCAPES = 4
 # did, and 16,000 "é" took a second and a half, holding the event loop. Each starts with one of
 # the letters in the lookahead first, so that no other place is looked at further: 40,000 Arabic
 # letters took 20 ms to look through, and a mail is looked through several times. Here and in
-# the patterns below, such a lookahead names every character a match can start with.
+# the patterns below, such a lookahead names every character a match can start with. Each word
+# for a password is in it whole, so that "密码" is found as that and not as 码 (see
+# PASSWORD_WORD): found as 码, a password after it and a colon was never taken.
+PASSWORDS = (r"passwort\w*|kennwort\w*|contrase[ñn]a\w*|senha\w*|has[łl][oa]\w*|mot de passe"
+             r"|wachtwoord\w*|lösenord\w*|passord\w*|adgangskode\w*|kodeord\w*|şifre\w*|hesl[oa]\w*"
+             r"|jelsz[óa]\w*|mật khẩu|kata sandi|पासवर्ड|סיסמ\w*")
+
+
 def _secret_words(short: str, cjk: str) -> re.Pattern:
     starts = "".join(sorted({word[0] for word in cjk.split("|")}))
     return re.compile(
-        rf"(?=[A-Za-zÀ-ÿкпر{starts}])(?:"
+        rf"(?=[A-Za-zÀ-ÿ\u043a\u043f\u0631\u015f\u03ba\u0915\u092a\u05e7\u05e1{starts}])(?:"
         rf"(?<![A-Za-z])(?:{short})(?![A-Za-z])"
         r"|(?<![A-Za-zÀ-ÿ])(?!post|bar|zip)[A-Za-zÀ-ÿ]{0,40}codes?(?![A-Za-z])|c[oó]dig\w*|codic\w*"
-        r"|(?<![A-Za-z])k[oó]d\w*|код\w*|парол\w*"
-        r"|passwort\w*|kennwort\w*|contrase[ñn]a\w*|senha\w*|(?<![A-Za-z])clave\w*|has[łl][oa]\w*"
-        rf"|mot de passe|wachtwoord\w*|رمز|{cjk})", re.I)
+        r"|(?<![A-Za-z])k[oó]d\w*|(?<![A-Za-zÀ-ÿ])[A-Za-zÀ-ÿ]{0,30}kod(?:e[nr]?)?(?![A-Za-z])"
+        rf"|код\w*|парол\w*|(?<![A-Za-z])clave\w*|{PASSWORDS}|mã (?:xác|otp)|कोड|קוד|κωδικ\w*"
+        rf"|رمز|{cjk})", re.I)
 
 
 NAMING = r"pass(?:words?|phrases?|codes?|wd)|pwd|pins?|otp"
-SECRET_WORD = _secret_words(NAMING + "|pass|keys?|tokens?", "コード|パスワード|暗証|码|碼|코드|번호")
+SECRET_WORD = _secret_words(NAMING + "|pass|keys?|tokens?",
+                            "密码|密碼|비밀번호|認証番号|確認番号|口令|コード|パスワード|暗証|码|碼|코드"
+                            "|번호|รหัสผ่าน|รหัส")
 # A word for a secret in one part of a mail that counts for the other (see _passed). A bare
 # "pass", "key" or "token" names one only beside it: "Your Acme pass" is a boarding pass, and
 # "Your room key is at the desk" has nothing to do with the order number in the subject. Nor do
-# 码, 번호 or コード alone, which also mean a number, a QR code or a barcode: "您的订单号码" is
-# "your order number", and 전화번호 a phone number. Across parts only a word that names a secret,
-# such as 验证码 or 인증번호, counts.
+# 码, 번호, コード or รหัส alone, which also mean a number, a QR code, a barcode or a postcode:
+# "您的订单号码" is "your order number", and 전화번호 a phone number. Across parts only a word that
+# names a secret, such as 验证码 or 인증번호, counts.
 CROSS_WORD = _secret_words(NAMING, "验证码|驗證碼|校验码|校驗碼|动态码|動態碼|密码|密碼|認証コード"
-                                   "|確認コード|ワンタイム|パスワード|暗証|인증번호|비밀번호|인증 ?코드"
-                                   "|보안 ?코드")
-# A password is whatever follows "is" or a colon, even a plain word.
-PASSWORD_WORD = re.compile(
-    r"(?:pass(?:words?|phrases?|wd)?|pwd|парол\w*|passwort\w*|kennwort\w*|contrase[ñn]a\w*"
-    r"|senha\w*|clave\w*|has[łl][oa]\w*|mot de passe|wachtwoord\w*|パスワード|密码|密碼|비밀번호)", re.I)
-GIVEN = re.compile(r"[^.!?\n]{0,60}?(?:\b(?i:is|are|was|will be|(?:changed|set|reset) to)\b\s*:?"
-                   r"|[:=])\s*(\S{3,})")
+                                   "|確認コード|認証番号|確認番号|口令|ワンタイム|パスワード|暗証"
+                                   "|인증번호|비밀번호|인증 ?코드|보안 ?코드")
+# A password is whatever follows a colon or "is", even a plain word: the English "is", or that of
+# a language above that writes a space round it, "Ihr Passwort ist", "Vaše heslo je" or "Mật khẩu
+# là". Not that of one that writes none, as Japanese, Chinese, Korean or Thai do, where the
+# password would take the rest of the line with it.
+PASSWORD_WORD = re.compile(rf"(?:pass(?:words?|phrases?|wd)?|pwd|парол\w*|clave\w*|{PASSWORDS}"
+                           r"|パスワード|密码|密碼|비밀번호|รหัสผ่าน)", re.I)
+GIVEN = re.compile(r"[^.!?\n]{0,60}?(?:\b(?i:is|are|was|will be|(?:changed|set|reset) to|ist"
+                   r"|lautet|est|es|é|è|är|er|je|jest|là|adalah|היא|הוא)\b\s*:?|[:=])\s*(\S{3,})")
 # What a secret looks like, next to the word for one.
 # A hyphen-minus joins a number to the rest of a reference, as in "48213-2" or "10482913-ABCDEF",
 # when a digit, a slash, a short group of capitals or what the first pass hid of the rest follows
@@ -258,28 +270,41 @@ GIVEN = re.compile(r"[^.!?\n]{0,60}?(?:\b(?i:is|are|was|will be|(?:changed|set|r
 JOINED = rf"-(?:[\d/_]|{re.escape(HIDDEN)}|(?-i:[A-Z0-9]{{1,6}})(?!\w))"
 # A letter or digit that makes a code standing next to it part of a longer word. Chinese, Japanese,
 # Korean, Thai, Lao, Myanmar and Khmer write a code with no space round it, "验证码是482913，",
-# "認証コードは482913です" or "รหัส 482913ใช้ได้", so their letters don't count, but for the units and
-# currencies written straight after a number, which are part of it: "12800円", "2026年3月12日".
-# One class, as an alternative in each lookaround made the hiding three times slower.
+# "認証コードは482913です" or "รหัส 482913ใช้ได้", so their letters don't count. One class, as an
+# alternative in each lookaround made the hiding three times slower.
 SPACELESS = ((0x0e00, 0x0eff), (0x1000, 0x109f), (0x1780, 0x17ff), (0x2e80, 0x9fff),
              (0xac00, 0xd7af), (0xf900, 0xfaff))
-UNITS = "円元圆块원年月日년월일"
 
 
-def _letters_of(blocks: tuple, but: str) -> str:
-    """The insides of a character class: the characters of these blocks but their digits and
-    these."""
+def _letters_of(blocks: tuple, kept=lambda char: not char.isdecimal()) -> str:
+    """The insides of a character class: the characters of these blocks that are kept, by
+    default all but their digits."""
     runs = []
     for low, high in blocks:
-        kept = [code for code in range(low, high + 1)
-                if chr(code) in but or chr(code).isdecimal()]
+        left = [code for code in range(low, high + 1) if not kept(chr(code))]
         runs += [f"\\u{start:04x}-\\u{end:04x}" for start, end in
-                 zip([low, *(code + 1 for code in kept)], [*(code - 1 for code in kept), high])
+                 zip([low, *(code + 1 for code in left)], [*(code - 1 for code in left), high])
                  if start <= end]
     return "".join(runs)
 
 
-WORD_CHAR = rf"[^\W{_letters_of(SPACELESS, UNITS)}]"
+WORD_CHAR = rf"[^\W{_letters_of(SPACELESS)}]"
+# What those languages write straight after a number is part of it, though, when it is a unit, a
+# counter or a currency: "12800円", "2026年3月12日", "1500ポイント", "1250美元", "1205号室",
+# "1200개", "1500만원" or "1500บาท". Only after it, as before a code 号 ends 認証番号 and 호 ends
+# 인증번호. A character that is one by itself counts alone (UNITS), and a longer word only whole,
+# as its first letter can start a word written straight after a code, as です, を, 입니다 or
+# ใช้ได้ are: 유 of 유로 starts 유효, "valid", and 만 of 만원 means "only".
+UNITS = ("円元圓圆块角万萬亿億年月日时時分秒个個件名人位枚张張份点號号室泊期階层層次回台岁歳"
+         "원년월일개명건점회호층박번엔")
+UNIT = (rf"[{UNITS}]|美元|美金|[欧歐]元|港[币幣元]|[韩韓]元|英[镑鎊]|澳元|加元|[积積]分|ドル|ユーロ"
+        r"|ポイント|ポンド|ウォン|バーツ|달러|유로|파운드|포인트|위안|[만억] ?원|บาท|ກີບ|ကျပ်|រៀល")
+# Nor do they put a space after a password, so one written in ASCII ends where their letters
+# start again, or a bracket (see MADE_MARKS): "パスワード：Abc12345です。有効期限は2026年3月12日です。"
+# gives Abc12345 (see _given). Not at their punctuation, as a wide comma or full stop can stand
+# inside a password: "Blue，Horseshoe" is one.
+BEYOND = re.compile(
+    f"[{_letters_of(SPACELESS, lambda char: unicodedata.category(char)[0] in 'LM')}\u3014]")
 IN_WORD = "[!#$%^&*+=-]"   # what else a code of letters and digits may hold, "Tr0ub4dor-3"
 SPACED = (rf"(?<!{WORD_CHAR})(?<![.,/-])(?:[A-Za-z0-9] ){{3,13}}[A-Za-z0-9]"   # K Q 7 X 9 B
           rf"(?!{WORD_CHAR}|[/-])")
@@ -295,14 +320,15 @@ GROUPED = (rf"(?<!{WORD_CHAR})(?<![.,/-])(?!{AMOUNT})"
            rf"(?!{WORD_CHAR}|/|{JOINED}|[.,]\d)")
 SHAPED = re.compile(
     rf"(?<![A-Za-z0-9.,/])(?<!\d-)\d(?:[ -]?\d){{3,11}}"                  # 482913, 482 913
-    rf"(?!{WORD_CHAR}|/|{JOINED}|[.,]\d)"
+    rf"(?!{WORD_CHAR}|{UNIT}|/|{JOINED}|[.,]\d)"
     rf"|(?<!{WORD_CHAR})(?<![@./])(?=(?:{WORD_CHAR}|{IN_WORD}){{0,23}}\d)"
     rf"(?=(?:{WORD_CHAR}|{IN_WORD}){{0,23}}[A-Za-z])(?:{WORD_CHAR}|{IN_WORD}){{4,24}}"
     rf"(?!{WORD_CHAR}|@)"
     rf"|(?<!{WORD_CHAR})(?:[A-Z]{{2,6}}(?:-[A-Z0-9]{{2,6}}){{1,3}}|[A-Z]{{5,10}}"   # KQW-XBT, KQWXB
     rf"|[A-Z]{{3}} [A-Z]{{3}})(?!{WORD_CHAR})"                                      # KQW XBT
     rf"|{SPACED}|{GROUPED}")
-NOT_A_SECRET = re.compile(r"\d+(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)|(?:19|20)\d\d", re.I)
+SUFFIX = "(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)"     # an ordinal's, a time's or a size's
+NOT_A_SECRET = re.compile(rf"\d+{SUFFIX}|(?:19|20)\d\d", re.I)
 JUST_GIVEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)      # "code is 2048" is no year
 # A mail that talks of signing in: there, any number of the right length may be the code. A space
 # is a space, a hyphen or neither, and a * any letters after. A mail server is asked for the same
@@ -312,19 +338,23 @@ SIGN_IN_WORDS = ("sign in", "signing in", "log in", "logging in", "verif*", "aut
 SIGN_IN_TALK = re.compile(r"\b(?=[slvaoe2t])(?:" + "|".join(
     re.escape(word).replace(r"\ ", "[- ]?").replace(r"\*", r"\w*") for word in SIGN_IN_WORDS)
     + r")\b", re.I)
-# A currency's name ends a word, or "482913 Audible" and "482913\nRonald" were amounts.
-MONEY = (r"\s*(?:(?:pounds|euros|dollars|gbp|eur|usd|chf|pln|uah|rub|czk|sek|nok|dkk|huf|ron|aud"
-         r"|cad|nzd|jpy|cny|inr|hkd|sgd|zar|brl|mxn)(?![A-Za-z])|%)")
+# A price, with its currency after it on its line: a code in capitals, as "1500 RON", a name as
+# 0.5.0 had them, "1250 pounds" or "1500 Euro", or a sign, "1500 €". Each ends a word, so a sign
+# that starts the next price, "€10", is none, and only 0.5.0's three codes count in small letters,
+# or "482913 Audible", "482913\nRonald", "482913\nRon", "482913 Rubén" and "482913$Verification"
+# were amounts, and so was "482913\nEuro Bank" as long as a line end was a space to it.
+MONEY = (r"[ \t]*(?:(?:pounds|euros?|dollars|gbp|eur|usd|(?-i:CHF|PLN|UAH|RUB|CZK|SEK|NOK|DKK"
+         r"|HUF|RON|AUD|CAD|NZD|JPY|CNY|INR|HKD|SGD|ZAR|BRL|MXN))(?!\w)|[%€£$¥₩₹₽₴](?!\w)|บาท)")
 NUMBER = re.compile(rf"(?=\d)(?<!{WORD_CHAR})(?<![.,/£$€])(?<!\d-)"
-                    rf"(?:\d{{3}}[ -]\d{{3}}(?!{WORD_CHAR}|/|{JOINED})"
-                    rf"|\d{{4,8}}(?!{WORD_CHAR}|/|{JOINED}|[.,]\d|{MONEY})"
-                    rf"|\d(?: \d){{3,7}}(?!{WORD_CHAR}|/|{JOINED}|[.,]\d|{MONEY}))", re.I)
+                    rf"(?:\d{{3}}[ -]\d{{3}}(?!{WORD_CHAR}|{UNIT}|/|{JOINED})"
+                    rf"|\d{{4,8}}(?!{WORD_CHAR}|{UNIT}|/|{JOINED}|[.,]\d|{MONEY})"
+                    rf"|\d(?: \d){{3,7}}(?!{WORD_CHAR}|{UNIT}|/|{JOINED}|[.,]\d|{MONEY}))", re.I)
 # A line that is nothing but a code, give or take the punctuation a template, html2text or the
 # plain part of an HTML mail puts round one: "*482913*" for a bold code, "482913." or "482913。",
 # "(KQ7X9B)", "`482913`" for code, "- 482913" or "+ 482913" for an item of a list (a bullet is a
 # space to the hiding: see DOTS), "| 482913 |" for a table's cell, "# 482913", or an arrow
 # pointing at it.
-AROUND = (r"""[ \t*_"'“”‘’‹›«»()\[\]{}<>.,:;!?`|#=~/\-\u3001\u3002\u2215"""
+AROUND = (r"""[ \t*_"'“”‘’‹›«»()\[\]{}<>.,:;!?`|#=~/\-\u3001\u3002\u3014\u3015\u2215"""
           r"\u2190-\u21ff\u2794-\u27bf\u2b05-\u2b07\u25b6\u25ba\u25c0\u25c4]*+")
 ALONE = re.compile(
     rf"^(?:\+[ \t])?{AROUND}((?:\d[ -]?){{4,12}}"
@@ -353,20 +383,30 @@ MIXED = re.compile(r"(?=[A-Za-z0-9])(?:"
 # "482913–10 minutes left", is hidden as it would be before a space, and one joined by a
 # non-breaking hyphen, as templates write "482&#8209;913" to keep it on one line, is the code in
 # two groups it is. Made hyphens, every dash joined a code to the number or capitals after it,
-# as a reference's parts are joined (see JOINED), and the code reached the model. Between two
-# numbers of one or two digits it is a range, and a slash to the hiding, as a date's is: made a
-# space, "12–15 March" and "14:00–18:00" were codes in two groups, which no code is written as.
+# as a reference's parts are joined (see JOINED), and the code reached the model.
 DASH = "\u2013"
 DASHES = frozenset("\u2212\u02d7\u2796\u2043")
-SHORT_RANGE = re.compile(r"(?<=\d)(?<!\d\d\d)\u2013(?=\d\d?(?!\d))")
 # The dots and bullets that stand between the groups of a code, as in "482·913", or before an
 # item of a list, such as ●, ■, ▪ or ◦, are made a middle dot, which the hiding reads as a space,
 # so a code after one is alone on its line. Made hyphens, they glued a code to the word after it:
-# "use 482913•Verification". The model reads the dot, as "Blume·42" is one password.
+# "use 482913•Verification". The model reads the dot, as "Blume·42" is one password, and an
+# ellipsis the same way (see MADE_MARKS).
 DOT = "\u00b7"
 DOTS = frozenset("\u00b7\u2027\u30fb\u2022\u2219\u2023\u204c\u204d\u22c5\u25a0\u25aa\u25ab"
                  "\u25cf\u25e6\u2981\u29bf\u2e31")
-APART = {ord(DASH): " ", ord(DOT): " "}
+ELLIPSIS = "\u22ef"
+APART = {ord(DASH): " ", ord(DOT): " ", ord(ELLIPSIS): " "}
+# Between two numbers, though, any of these is a range's dash, a decimal's dot or a time's where
+# no code is written that way, and a slash to the hiding, as a date's is (see _ranged): made a
+# space, "12–15 March", "14:00–18:00", "2024–25", "2pm–4pm" and "£12·50" were codes in two groups.
+# Never where a number is part of a longer one, of letters and digits or of a chain, though:
+# "482 91–10", "A7K2Q9—10 minutes left", "12–482 913", "12–15KQ7X9B" and "48–29–13" are codes,
+# and "1–800–555–0199" is a phone number. A number may end as an ordinal, a time or a size does,
+# "1st–3rd", "2pm–4pm" or "10–20kg".
+GAPS = f"[ \\-{DASH}{DOT}{ELLIPSIS}]"     # what stands between the groups of a number to the hiding
+RANGE = re.compile(rf"(?=\d)(?<!{WORD_CHAR})(?<!\d{GAPS})((\d{{1,4}})(?i:{SUFFIX})?)"
+                   rf"([{DASH}{DOT}{ELLIPSIS}])"
+                   rf"(?=(\d{{1,4}})(?i:{SUFFIX})?(?!{WORD_CHAR}|{GAPS}\d))")
 SPELT = re.compile(     # a run of lines of one character each, as one to an HTML block makes
     r"^[ \t]*[A-Za-z0-9][ \t]*(?:\n\s*[A-Za-z0-9][ \t]*){3,}$", re.M)
 # The end of a text that was cut short, read backwards: its last word, which the cut may have gone
@@ -514,10 +554,17 @@ def terms(question: str) -> list[Term]:
         if _asked(words, place, named):
             stem, then = _stem(word)
             found.setdefault(stem, (word, Term(
-                stem, re.compile(rf"\b{re.escape(stem)}{then}", re.I),
-                re.compile(rf"\b{re.escape(word)}", re.I), word)))
+                stem, re.compile(rf"\b{_either(stem)}{then}", re.I),
+                re.compile(rf"\b{_either(word)}", re.I), word)))
     longest = sorted(found.values(), key=lambda pair: -len(pair[0]))[:MAX_TERMS]
     return [term for word, term in found.values() if (word, term) in longest]
+
+
+def _either(word: str) -> str:
+    """A word as asked and as it reads once a mail is made plain (see _visible), where NFKC makes
+    Thai's ำ ํา: hidden, "ยอดชำระ" was "ยอดชําระ", and the mail it is in was no longer found."""
+    plain = unicodedata.normalize("NFKC", word.translate(MADE_MARKS))
+    return re.escape(word) if plain == word else f"(?:{re.escape(word)}|{re.escape(plain)})"
 
 
 def _likes(stem: str) -> list[str]:
@@ -609,7 +656,7 @@ def _spans(seen: str, talk: bool = False, look: bool = True,
         if PASSWORD_WORD.fullmatch(word[0]):
             given = GIVEN.match(seen, word.end(), word.end() + SECRET_REACH)
             if given:
-                spans.append(given.span(1))
+                spans.append(_given(seen, given))
         before = max(0, word.start() - SECRET_BEFORE)
         if not DIGIT.search(text, before, word.start()):
             continue    # only saves time: a stranger's mail can hold ten thousand words for a
@@ -620,12 +667,20 @@ def _spans(seen: str, talk: bool = False, look: bool = True,
     spans += _shaped(text, ends, lead)
     talk = talk or (look and SIGN_IN_TALK.search(text))
     found = [*ALONE.finditer(text)]
-    if talk:    # "1st 2nd", "9am 5pm" and "2pm-4pm" are no code
-        found += [*NUMBER.finditer(text), *(mixed for mixed in MIXED.finditer(text) if not all(
-            map(NOT_A_SECRET.fullmatch, re.split(r"[\s-]+", mixed[0]))))]
+    if talk:
+        found += [*NUMBER.finditer(text),
+                  *(mixed for mixed in MIXED.finditer(text) if not _ordinary(mixed[0]))]
     spans += [one.span(one.lastindex or 0) for one in found
               if not YEAR.fullmatch(one[one.lastindex or 0].strip())]
     return sorted(spans)
+
+
+def _given(seen: str, given: re.Match) -> tuple[int, int]:
+    """Where a password given after "is" or a colon stands: up to the next space, or for one that
+    starts in ASCII, up to where Chinese, Japanese, Korean or Thai letters start (see BEYOND)."""
+    start, end = given.span(1)
+    beyond = BEYOND.search(seen, start + 1, end) if seen[start].isascii() else None
+    return start, beyond.start() if beyond else end
 
 
 def _shaped(text: str, ends: list[int], lead: int = 0) -> list[tuple[int, int]]:
@@ -655,9 +710,15 @@ def _shaped(text: str, ends: list[int], lead: int = 0) -> list[tuple[int, int]]:
             for match in matches:
                 since = marks[bisect.bisect_right(marks, match.start()) - 1]
                 before = text[max(since, match.start() - 6):match.start()]
-                if not NOT_A_SECRET.fullmatch(match[0]) or JUST_GIVEN.search(before):
+                if not _ordinary(match[0]) or JUST_GIVEN.search(before):
                     found.append(match.span())
     return found
+
+
+def _ordinary(found: str) -> bool:
+    """Whether what is shaped like a code is a year, a time, an ordinal or a size, or a few of
+    them: "2024", "1st 2nd", "9am 5pm" or "2pm-4pm" are no code."""
+    return all(map(NOT_A_SECRET.fullmatch, re.split(r"[\s-]+", found)))
 
 
 def _normal(text: str, limit: int) -> tuple[str, bool]:
@@ -682,37 +743,46 @@ def _normal(text: str, limit: int) -> tuple[str, bool]:
 # "验证码：482913，5分钟", the small full stop, "…" or the wide low line: made those, they glued a
 # code to the number or the word beside it, as a decimal's or a reference's parts are glued. So
 # before NFKC sees them, a comma, a full stop or a slash is made one NFKC leaves alone and no
-# pattern reads as a joiner, "、", "。" or "∕", which the model reads as the mark it was; the two
-# dashes are dashes (see DASH), and the rest spaces. Made spaces, the commas joined the number
-# after a code to it, and "验证码：482913，5分钟" lost its 5.
+# pattern reads as a joiner, "、", "。" or "∕", which the model reads as those, so "128，000"
+# reaches it as "128、000"; the two dashes are dashes (see DASH), an ellipsis a midline one, "⋯",
+# which the model reads as one and the hiding as a space (see APART), and the low lines spaces.
+# Made spaces, the commas joined the number after a code to it, and "验证码：482913，5分钟" lost its
+# 5, and an ellipsis split a password, "Sunny…Day", in two. A wide bracket is made one NFKC
+# leaves alone too, "〔", so that a password in ASCII ends at it as at the Japanese after it
+# (see BEYOND): "パスワード：482913（2026年3月12日まで）".
 MADE_MARKS = {**dict.fromkeys(map(ord, "\ufe10\ufe50\uff0c"), "\u3001"),
               **dict.fromkeys(map(ord, "\ufe52\uff0e"), "\u3002"), ord("\uff0f"): "\u2215",
-              **dict.fromkeys(map(ord, "\u2024\u2025\u2026\ufe19\ufe30\ufe33\ufe34\ufe4d\ufe4e"
-                                       "\ufe4f\uff3f"), " "),
-              **dict.fromkeys(map(ord, "\ufe63\uff0d"), DASH)}
+              **dict.fromkeys(map(ord, "\u2024\u2025\u2026\ufe19\ufe30"), ELLIPSIS),
+              **dict.fromkeys(map(ord, "\ufe33\ufe34\ufe4d\ufe4e\ufe4f\uff3f"), " "),
+              **dict.fromkeys(map(ord, "\ufe63\uff0d"), DASH),
+              **dict.fromkeys(map(ord, "\ufe59\uff08"), "\u3014"),
+              **dict.fromkeys(map(ord, "\ufe5a\uff09"), "\u3015")}
 
 
 def _visible(text: str, read: bool = True, limit: int = CLEANED_CHARS) -> tuple[str, bool]:
     """One pass of _seen, and whether NFKC grew the text past the limit (see _normal): the wide
     and styled forms of letters and digits made plain, character references read unless told
-    not to, every line end made a line feed, and every character in UNSEEN_KINDS made a space
-    but a tab and a line feed, or taken out where it stands inside a word (see INSIDE_WORDS),
-    and what IGNORABLE matches taken out, as is a mark on a letter or digit that has no form of
-    its own with the mark. "&#x2028;" is a line end once it is read. Every dash, and what stands
-    for one, is made an en dash (see DASH), a dot or a bullet a middle dot (see DOTS), and a mark
-    NFKC would make a full stop, a comma, a slash, a hyphen or a low line of is changed first
-    (see MADE_MARKS)."""
+    not to, every line end made a line feed, and each run of characters in UNSEEN_KINDS made a
+    space but a tab and a line feed, or taken out where it stands inside a word (see
+    INSIDE_WORDS); what IGNORABLE matches taken out before a mark, as in a keycap, and a space
+    elsewhere, and a mark on a letter or digit that has no form of its own with the mark taken
+    out. "&#x2028;" is a line end once it is read. Every dash, and what stands for one, is made
+    an en dash (see DASH), a dot or a bullet a middle dot (see DOTS), and a mark NFKC would make
+    a full stop, a comma, a slash, a hyphen, an ellipsis, a bracket or a low line of is changed
+    first (see MADE_MARKS)."""
     text, grown = _normal(text.translate(MADE_MARKS), limit)
     text = LINE_END.sub("\n", html.unescape(text) if read else text)
     if text.isascii():
         return CONTROL.sub(" ", text), grown
-    changed, marks = {}, []     # each character looked at once, not each time it comes
+    changed, marks, ignorable = {}, [], []  # each character looked at once, not each time it comes
     for char in set(text):
         kind = unicodedata.category(char)
-        if char in INSIDE_WORDS or IGNORABLE.match(char):
+        if char in INSIDE_WORDS:
             changed[ord(char)] = None
+        elif IGNORABLE.match(char):
+            ignorable.append(char)
         elif kind in UNSEEN_KINDS and char not in "\t\n":
-            changed[ord(char)] = " "
+            changed[ord(char)] = "\x00"     # a space, once runs of them are one
         elif (kind == "Pd" or char in DASHES) and char not in ("-", DASH):
             changed[ord(char)] = DASH
         elif char in DOTS:
@@ -720,17 +790,40 @@ def _visible(text: str, read: bool = True, limit: int = CLEANED_CHARS) -> tuple[
         elif kind in MARKS:
             marks.append(char)
     text = text.translate(changed)
+    if ignorable:
+        run = f"[{re.escape(''.join(sorted(ignorable)))}]+"
+        glued = rf"(?=[{re.escape(''.join(sorted(marks)))}])" if marks else "(?!)"
+        text = re.sub(run, "\x00", re.sub(run + glued, "", text))
+    if "\x00" in text:
+        text = re.sub("\x00+", " ", text)
     if marks:   # on an ASCII letter or any digit, once what no one sees is out from between
         text = re.sub(rf"(?<=[A-Za-z\d])[{re.escape(''.join(sorted(marks)))}]+", "", text)
     return text, grown
 
 
 def _apart(text: str) -> str:
-    """A text as the hiding reads it, made plain: every dash but the hyphen-minus a space, but
-    for a range's, between two numbers of one or two digits, which is a slash (see DASH), and
-    every dot a space (see DOTS). Each is one character for one, so what is hidden in this is
-    hidden in the text."""
-    return SHORT_RANGE.sub("/", text).translate(APART)
+    """A text as the hiding reads it, made plain: every dash but the hyphen-minus, every dot and
+    every ellipsis a space (see DASH and DOTS), but between two numbers where no code is written
+    that way, where it is a slash (see RANGE). Each is one character for one, so what is hidden
+    in this is hidden in the text."""
+    if DASH in text or DOT in text or ELLIPSIS in text:
+        text = RANGE.sub(_ranged, text)
+    return text.translate(APART)
+
+
+def _ranged(found: re.Match) -> str:
+    """A dash, a dot or an ellipsis between two numbers a slash where no code is written that way
+    (see RANGE): from a number of one or two digits, as days, minutes, pence and hours such as
+    2pm are, to one of up to three, "6–120"; or from a year to a later one, whole or its last two
+    digits, "2024–2025" or "2024–25", but not "2025—10 minutes left". Any other stays as it was."""
+    first, start, mark, end = found.groups()
+    if len(start) <= 2:
+        ranged = len(end) <= 3
+    else:
+        ranged = bool(YEAR.fullmatch(start)) and (
+            len(end) == 2 and int(end) > int(start[2:])
+            or bool(YEAR.fullmatch(end)) and int(end) > int(start))
+    return first + ("/" if ranged else mark)
 
 
 def _seen(text: str, limit: int = CLEANED_CHARS) -> tuple[str, bool]:

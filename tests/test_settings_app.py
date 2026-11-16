@@ -1308,6 +1308,14 @@ class Inner(unittest.TestCase):
         wait(lambda: [r.get_title() for r in page.problem_rows] == ["coins.yml"],
              "the problems a reload found, with the window open")
 
+    def test_21_a_the_mail_skills_page_shows_what_its_permissions_dont_say(self):
+        """Mail search without Thunderbird sends the question's words to each account's server,
+        which no permission of its own says, so the page shows it beside them."""
+        shown = texts_of(open_skill(self.win, "org.tuxistant.mail").permissions)
+        self.assertIn("Read your mail", shown)
+        self.assertIn(sa.ALSO_DOES["org.tuxistant.mail"][0], shown)
+        self.assertIn(sa.ALSO_DOES["org.tuxistant.mail"][1], shown)
+
     def test_21_a_a_built_in_skill_shows_what_the_model_is_given(self):
         from tuxistant.skills import Skills
         dialog = open_skill(self.win, "org.tuxistant.weather")

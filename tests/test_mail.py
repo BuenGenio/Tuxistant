@@ -104,6 +104,7 @@ SPLIT_ACROSS = (("Sign in to Acme", "Hi, enter 482913 on the page to continue.")
                 ("Acme 482913", "Your password reset for Acme."),
                 ("Acme: KQ7X9B", "Here is your Acme PIN. Thanks, the Acme team"),
                 ("Acme 482913", "Use it as your Acme passcode."),
+                ("【Acme】認証番号のお知らせ", "482913を入力してください。"),
                 ("Acme: 482913", "This is the code you asked for. Don't share it."),
                 # Codes of letters only, in groups or with a space between each, which the word
                 # for one hides by their shape, not as sign-in talk does: from the other field.
@@ -182,7 +183,44 @@ GLUED = ("Hello from Acme. To sign in, use 482913•Verification ends in 10 minu
          "Sign in with 482913 Audible app.", "482913 audio verification code",
          "To sign in, use 482913 Audible may ask again.",
          "To sign in, use 482913\nRonald, Acme support",
-         "Use 482913 Audible will never ask for it. Sign in now")
+         "Use 482913 Audible will never ask for it. Sign in now",
+         # Before a name that is a currency's code, or starts like one: only a code in capitals
+         # makes a price, and only a whole word, "Rubén" being no RUB.
+         "To log in, use 482913\nRon", "To sign in, use 482913 — Ron, Acme IT.",
+         "To sign in, enter 482913\nRon\nAcme", "Sign in with 482913 Ron",
+         "482913 Ron's verification code", "To sign in, enter 482913\nRubén, Acme support",
+         "Sign in with 482913 Audífonos Acme", "To sign in, enter 482913 Európa Bank, Budapest",
+         # Before a name on the next line: a price's currency stands on its line.
+         "To sign in, enter 482913\nEuro Bank, Acme support",
+         # Before the next price, which a currency's sign starts, or glued to a word by one.
+         "To sign in, enter 482913\n€10 off your next order.",
+         "To sign in, use 482913$Verification ends soon.",
+         # A dash between a code and a number of one or two digits, which is no range: the code
+         # is part of a longer number, of letters and digits or of a chain, or the number after
+         # it has more digits than a range's end.
+         "Your Acme code is 12–482913.", "To sign in, use 1–482913.",
+         "To sign in, use A7K2Q9—10 minutes left.", "Your Acme code is 482 91–10 minutes left.",
+         "Your Acme code is 48 29 13—10 minutes left.",
+         "Your Acme code is 48-29-13—10 minutes left.", "Your Acme code is 12–482 913.",
+         "Your Acme code is 48–29–13.", "Your Acme code is <b>48&#8209;29&#8209;13</b>.",
+         "Your Acme code is 4–8–2–9–1–3.", "Your Acme code is 2031—10 minutes left.",
+         "Your Acme code is 2031–2026.",
+         "Your Acme code is below.\n\n12–15\u200bKQ7X9B",
+         # Glued by a variation selector or a vowel separator, which no one sees.
+         "To sign in, use 482913\u180eVerification ends soon.",
+         "To sign in, use 482913\ufe0fVerification ends soon.",
+         "Hello from Acme. Your code\u180e482913 is what to type.",
+         # After the word for a code, whose last letter is also a unit's: 号 and 호 count only
+         # after a number. Before a word whose first letter starts a longer unit's, 유효 ("valid")
+         # as 유로 does: those count only whole.
+         "인증번호KQ7X9B입니다", "認証番号KQ7X9Bを入力してください", "認証コードKQ7X9B",
+         "인증번호 482913유효시간 3분",
+         # Words for a code in more languages.
+         "認証番号は482913です。", "確認番号：482913", "动态口令：482913",
+         "รหัส 482913ใช้ได้ภายใน 5 นาที", "รหัสยืนยันของคุณคือ 482913 ใช้ได้",
+         "Din engångskod är 482913", "Din engangskode er 482913", "Din adgangskode er KQ7X9B",
+         "Mã xác nhận của bạn là 482913", "सत्यापन कोड 482913", "קוד האימות שלך הוא 482913",
+         "Ο κωδικός σας είναι 482913")
 # Codes a second word for a code is joined to. Matches can't overlap, so "code=482" took the
 # first half of the code after the first word, and 913 was shown.
 TWICE_NAMED = ("Your Acme code below.\n\ncode=482 913\n\nThanks",
@@ -196,7 +234,8 @@ GROUPS = ("Your Acme code is KQW 9XB.", "Your Acme code is KQ7 XQB. Thanks",
           "Hello from Acme.\n\nKQW 9XB\n\nThanks", "Hello from Acme.\n*KQ7 XQB*\nThanks",
           "Sign in with KQW 9XB within 10 minutes.")
 # The codes in these mails, as the model would read them, and what is left of one half hidden.
-SHOWN_CODES = (*DASHED_CODES, "482913", "KQ7X9B",
+SHOWN_CODES = (*DASHED_CODES, "482913", "KQ7X9B", "A7K2Q9", r"\b2031\b", r"482\W{0,3}91\b",
+               r"4\W{0,3}8\W{0,3}2\W{0,3}9\W{0,3}1\W{0,3}3",
                r"KQ\W{0,3}W\W{0,3}X\W{0,3}B\W{0,3}T", r"K\W{0,3}Q\W{0,3}7\W{0,3}X\W{0,3}9\W{0,3}B",
                r"48\W{0,3}29\W{0,3}13", r"\b482\b", r"\b913\b", r"\bX9B\b",
                r"\b(?:KQW|KQ7|9XB|XQB|XBT)\b")
@@ -210,7 +249,9 @@ DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nTha
            "Hello from Acme.\n\u25cf 482913\nThanks", "Hello from Acme.\n\u25aa KQ7X9B\nThanks",
            "Hello from Acme.\n\u25e6 482913.\nThanks", "Hello from Acme.\n\u25a0 482913\nThanks",
            # Ended by a full stop of Chinese or Japanese, or a wide one, which is made that.
-           "Hello from Acme.\n482913．\nThanks", "Hello from Acme.\nKQ7X9B。\nThanks")
+           "Hello from Acme.\n482913．\nThanks", "Hello from Acme.\nKQ7X9B。\nThanks",
+           # In wide brackets, which are made ones NFKC leaves alone.
+           "Hello from Acme.\n（482913）\nThanks")
 # Bodies built to be slow to hide: a word for a code over and over, and runs of letters that
 # the word for one may end.
 SLOW_TO_HIDE = ("码!" * 10_000, "pin!" * 5000, "é" * 16_000, "×" * 16_000, "À" * 16_000,
@@ -526,6 +567,16 @@ class Finding(Base):
         said, _ = await self.ask("Что с моим паспортом?")
         self.assertIn("It was received. That's from an email from post.example", said)
 
+    async def test_a_thai_word_made_plain_is_still_found(self):
+        """NFKC makes Thai's ำ two characters, so a word with it in the question no longer
+        matched the mail once it was made plain and hidden, and the mail went unfound."""
+        self.index({"subject": "ใบเสร็จรับเงิน", "author": "Acme <account@acme.example>",
+                    "body": "ยอดชำระ 150 บาท ขอบคุณค่ะ"})
+        self.says = ["You paid 150 baht."]
+        said, _ = await self.ask("ยอดชำระ")
+        self.assertIn("You paid 150 baht. That's from an email from acme.example", said)
+        self.assertIn("150 บาท", self.read())
+
     def test_a_percent_sign_is_only_a_percent_sign(self):
         self.assertEqual(mail._likes("50%_\\"), ["%50\\%\\_\\\\%"])
 
@@ -628,6 +679,11 @@ class Secrets(Base):
                 ("Acme\nYour Acme account:\n" + "\n".join(f"\ue000{c}" for c in "KQ7X9B")
                  + "\nThanks", "Q"),
                 ("Acme\nYour Acme account:\n\n482\u2066917\n\nThanks, Acme", "917"),
+                # Each group in an isolate of its own, as a Fluent template fills in each value:
+                # two of them together are one space, as one would be.
+                ("Hi\n\u2068482\u2069\u2068913\u2069\nThanks", "913"),
+                ("Hi\n\u2068KQ7\u2069\u2068X9B\u2069\nThanks", "X9B"),
+                ("Hi\n\x1f482\x1f\x1f913\x1f\nThanks", "913"),
                 ("Acme\nYour Acme account:\n\n\u034f482917\ufe0f\n\nThanks", "482917"),
                 ("Acme\nYour Acme account:\n\n\u3164KQ7X9B\u2800\n\nThanks", "KQ7X9B"),
                 ("Acme\nYour Acme account:\n\n" + "".join(f"{c}\ufe0f\u20e3" for c in "482917")
@@ -655,7 +711,10 @@ class Secrets(Base):
                 ("Acme\nYour Acme code is 482⁃913.", "913"),
                 ("Acme\nYour Acme code is 482˗913.", "913"),
                 ("Acme\nYour Acme code is 482➖913.", "913"),
+                # A chain of dashes is no range: a phone number, or a code, alone on its line.
+                ("Call us\n1–800–555–0199\nThanks", "0199"),
                 ("Acme\nYour Acme code is 482・913.", "913"),
+                ("Acme\nYour Acme code is 482…913.", "913"),
                 # Alone on its line with punctuation round it.
                 ("Acme\nHere it is:\n*482913*\nThanks", "482913"),
                 ("Acme\nHere it is:\n482913.\nThanks", "482913"),
@@ -678,6 +737,33 @@ class Secrets(Base):
                 ("Wifi\nThe wifi password is Sunny\u2011Day\u2011Seven", "Seven"),
                 ("Wifi\nThe wifi password is Blume·42", "42"),
                 ("Wifi\nThe wifi password is Blume•42", "42"),
+                # And with an ellipsis in it, as smart punctuation writes three dots.
+                ("Wifi\nThe wifi password is Sunny…Day for the guests.", "Day"),
+                ("Wifi\nYour new Acme password: Blue‥Horse", "Horse"),
+                # After a word for a password in more languages, or a CJK one before a colon.
+                ("初始密码\n您的初始密码：kXqWbTzP，请登录后修改。", "kXqWbTzP"),
+                ("初始密码\n您的初始密码： sunshine", "sunshine"),
+                ("임시\n임시 비밀번호: kXqWbTzP", "kXqWbTzP"), ("臨時\n臨時密碼：kXqWbTzP", "kXqWbTzP"),
+                ("パスワード\nパスワード：Abc12345です。", "Abc12345"),
+                ("Hesap\nŞifreniz: sunshine", "sunshine"),
+                ("Konto\nDitt nya lösenord är Sommar2026x", "Sommar2026x"),
+                ("Konto\nDitt nye passord er Sommar2026x", "Sommar2026x"),
+                ("Účet\nVaše nové heslo: kolobezka", "kolobezka"),
+                ("Fiók\nAz új jelszava: almafakert", "almafakert"),
+                ("Tài khoản\nMật khẩu mới: hoamai", "hoamai"),
+                ("Akun\nKata sandi baru Anda: matahari", "matahari"),
+                ("บัญชี\nรหัสผ่านใหม่ของคุณคือ Tr0ub4dor", "Tr0ub4dor"),
+                ("บัญชี\nรหัสผ่าน: sunshine", "sunshine"),
+                ("Konto\nDin adgangskode: sommerfugl", "sommerfugl"),
+                # A plain word after "is" in those languages, as after the English one.
+                ("Konto\nIhr neues Passwort ist sonnenschein", "sonnenschein"),
+                ("Cuenta\nTu nueva contraseña es girasol", "girasol"),
+                ("Konto\nDitt nya lösenord är sommarregn", "sommarregn"),
+                ("Konto\nDin nye adgangskode er sommerfugl", "sommerfugl"),
+                ("Účet\nVaše nové heslo je kolobezka", "kolobezka"),
+                ("Konto\nTwoje nowe hasło jest pierniczek", "pierniczek"),
+                ("Tài khoản\nMật khẩu mới của bạn là hoamai", "hoamai"),
+                ("Akun\nKata sandi baru Anda adalah matahari", "matahari"),
                 # A code with a space between each character, glued to the Chinese before it.
                 ("验证\n您的验证码是K Q 7 X 9 B，请勿泄露。", "K"),
                 ("Код подтверждения\nВаш код 482913", "482913"),
@@ -741,6 +827,12 @@ class Secrets(Base):
                 ("Free cancellation expires on 3 March. Total: CHF 450 for two nights.", "CHF 450"),
                 ("Your subscription expires on 3 May. Price: 500 UAH a month.", "500 UAH"),
                 ("Your plan expires on 3 May. Price: 1500 UAH a year.", "1500 UAH"),
+                ("Your plan expires on 3 May. Price: 1500 RON a year.", "1500 RON"),
+                # A currency's name, or its sign after the price.
+                ("Log in to see your invoice. Total: 1500 Euro", "1500 Euro"),
+                ("Connectez-vous pour payer. Total : 1500 € TTC", "1500 €"),
+                ("Sign in to pay 4500 ¥ or 1500 ₹.", "4500 ¥ or 1500 ₹"),
+                ("Log in to see your order. ยอดรวม 1500 บาท", "1500 บาท"),
                 ("This offer is valid for one trip. Your train: ICE 578 to Berlin.", "ICE 578"),
                 ("Verify your seats. Flights BAW 123 and EZY 812.", "BAW 123 and EZY 812"),
                 ("Discount code applied: you save 125 000.50 a year.", "125 000.50"),
@@ -761,11 +853,46 @@ class Secrets(Base):
                  "Check-in 14:00–18:00, 12–15 March 2026."),
                 ("Use discount code SPRING10 for 10–20% off", "10–20% off"),
                 ("Your verification code is 482913. It is 10:30–11:00.", "10:30–11:00"),
+                # And from a year to a later one, from one or two digits to three, and between
+                # two times, whatever the words before it; and times or ordinals in two groups.
+                ("Your Acme member code is ABC123. Valid for the 2026–2027 season.",
+                 "2026–2027 season"),
+                ("Use promo code SPRING10 for the 2024–25 academic year.", "2024–25 academic"),
+                ("Hotel Alpenblick\n2024–2025\nThanks", "2024–2025"),
+                ("Your booking code is HMX4K2. Delivery 2pm–4pm, or call 9am–5pm.",
+                 "Delivery 2pm–4pm, or call 9am–5pm."),
+                ("Your booking code is HMX4K2. Delivery is 2pm–4pm.", "is 2pm–4pm."),
+                ("Your access code is 482913. Ages 6–120, and 10–100% off.",
+                 "Ages 6–120, and 10–100% off."),
+                ("Your booking code is HMX4K2. Open 9am 5pm on the 1st–3rd.",
+                 "Open 9am 5pm on the 1st–3rd."),
+                ("Your booking code is HMX4K2. Delivery is 1st–3rd May, 10–20kg.",
+                 "is 1st–3rd May, 10–20kg."),
+                # And a dot or an ellipsis between such numbers, which is no code's either.
+                ("Your booking code is HMX4K2. It is £12·50, from 12…15 May.",
+                 "£12·50, from 12⋯15 May."),
                 # A price or a date in Chinese, Japanese or Korean, which glue a unit to a number.
                 ("Log in to see your order. 合計 12800円 (税込)", "12800円"),
                 ("Log in to see your order. 总计3000元。", "3000元"),
                 ("주문번호: 20261234\n결제금액: 128000원", "128000원"),
                 ("認証コード：482913\n有効期限：2026年3月12日", "2026年3月12日"),
+                # A counter, a currency of more than one character, or ten thousand of one.
+                ("주문번호: 20261234\n1500포인트 적립", "1500포인트"),
+                ("订单号码：10482913\n本次获得1500积分", "1500积分"),
+                ("クーポンコード：SPRING10\n1500ポイント進呈", "1500ポイント"),
+                ("会员号码：12345678\n积分余额：12500分", "12500分"),
+                ("주문번호: 20261234\n수량 1200개", "1200개"),
+                ("Log in to see it. Room 1205号室", "1205号室"), ("Log in: ราคา1500บาท", "1500บาท"),
+                ("Booking code: HMX4K2. ราคา 1500บาท", "1500บาท"),
+                ("Log in to see your order. 合计 1250美元（含税）", "1250美元"),
+                ("Log in to see your order. 物件価格 3500万円", "3500万円"),
+                ("Log in to see your order. 결제금액 1500만원", "1500만원"),
+                ("Log in to see your order. 총 1250달러", "1250달러"),
+                ("Log in to see your order. 合計 1250ドル", "1250ドル"),
+                # What follows a password in ASCII after a word for one in Japanese.
+                ("パスワード：Abc12345です。有効期限は2026年3月12日です。", "有効期限は2026年3月12日です"),
+                ("ワンタイムパスワード：482913。有効期限は10分です。", "有効期限は10分です"),
+                ("ワンタイムパスワード：482913（2026年3月12日まで）", "2026年3月12日まで"),
                 # The number after a wide comma, and a date in wide digits alone on its line.
                 ("您的验证码是：482913，5分钟内有效。", "、5分钟内有效"),
                 ("您的快递已到柜。取件码：5821，3号柜，请及时领取。", "、3号柜"),
@@ -981,12 +1108,13 @@ class Secrets(Base):
     def test_every_mark_nfkc_makes_punctuation_of_is_changed_first(self):
         """NFKC made "，" a comma, so "482913，5分钟" read as a decimal and the code reached the
         model, and "＿" a low line, which is part of a word. MADE_MARKS is every character NFKC
-        makes nothing but these five marks of, which is slow to find at import. Each is made a
-        mark that NFKC leaves alone and no pattern takes for a joiner, a dash or a space: made a
-        space, the wide comma joined the 5 of "5分钟" to the code before it."""
+        makes nothing but these five marks of, which is slow to find at import, and the wide
+        brackets, which a password in ASCII ends at (see mail.BEYOND). Each is made a mark that
+        NFKC leaves alone and no pattern takes for a joiner, a dash or a space: made a space, the
+        wide comma joined the 5 of "5分钟" to the code before it."""
         made = {char for char in map(chr, range(sys.maxunicode + 1))
                 if char not in ".,/-_" and unicodedata.normalize("NFKC", char)
-                and not unicodedata.normalize("NFKC", char).strip(".,/-_")}
+                and not unicodedata.normalize("NFKC", char).strip(".,/-_")} | set("（）﹙﹚")
         self.assertEqual(set(map(chr, mail.MADE_MARKS)), made)
         for mark in mail.MADE_MARKS.values():
             self.assertEqual(unicodedata.normalize("NFKC", mark), mark)
