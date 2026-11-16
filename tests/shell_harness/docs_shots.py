@@ -41,7 +41,9 @@ TURNS = [
      ["file.find"]),
     ("How do you say thank you in Ukrainian?", "Dyakuyu.", ["translate.text"]),
     ("Which folder is the biggest?", "Videos, at 41 gigabytes.", ["disk.folders"]),
-    ("Is docker running?", "Yes, docker is running.", ["system.running"]),
+    ("Is docker running?", "On this computer, systemd lists docker.service, active (running), "
+     "and these processes have docker in their command line: 1187 /usr/bin/dockerd -H fd://.",
+     ["system.running"]),
     ("Where's my phone?", "Ringing your Pixel now.", ["phone.ring"]),
 ]
 HISTORY = [{"id": i, "ts": 1793800000.0 - i * 2700, "heard": heard, "reply": reply, "status": "ok",

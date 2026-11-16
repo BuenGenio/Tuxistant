@@ -1,6 +1,6 @@
 id: org.tuxistant.system
 name: This computer
-description: Tells you about this computer, such as how long it has been on and its IP address
+description: Tells you about this computer, such as how long it has been on and its IP address. Says what docker and systemd list about a name on your server, and what runs on this computer, in their own words, and doesn't judge whether an app works
 version: 1.0.0
 permissions:
   files_read: true    # your IP address and Wi-Fi name are private, so a web search after them asks

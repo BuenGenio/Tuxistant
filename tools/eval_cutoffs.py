@@ -203,7 +203,8 @@ class NoHome:
         return []
 
 
-MADE_UP_SERVER = (b"@docker\nlocalai|localai/localai:latest|Up 3 days\n"
+MADE_UP_SERVER = (b"@docker.service\nactive\n@exit 0\n"
+                  b"@docker\nlocalai|localai/localai:latest|Up 3 days\n"
                   b"searxng|searxng/searxng:latest|Up 3 days (healthy)\n@exit 0\n"
                   b"@systemd\nnginx.service loaded active running nginx\n"
                   b"systemd-journald.service loaded active running Journal\n@exit 0\n")

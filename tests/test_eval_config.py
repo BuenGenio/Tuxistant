@@ -420,7 +420,8 @@ class EveryActionIsCutOff(unittest.TestCase):
         self.assertEqual(no_ssh.REACHED, [], "ssh was started")
         self.assertEqual(result, {APP_SAYS: True})
         self.assertEqual([said.text for said in session.after],
-                         ["Yes, on your server I see the docker container localai, up 3 days."])
+                         ["On your server, docker lists localai, Up 3 days. None of the 2 "
+                          "services systemd lists has localai in its name."])
 
     def test_eval_flows_installs_them_first_and_leaves_them_alone(self):
         """Read and never imported, as importing it would run it."""

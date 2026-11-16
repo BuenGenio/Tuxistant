@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import serverstatus
 from .files import _size, _tilde, resolve
-from .gate import Session, shown
+from .gate import APP_SAYS, Session, Speak, shown
 
 TOOL_TIMEOUT_S = 5
 SCAN_LIMIT_S = 12       # someone is waiting to hear the answer
@@ -22,26 +22,9 @@ POWER = Path("/sys/class/power_supply")
 SERVICE_NAME = re.compile(r"[a-z0-9][a-z0-9@._+-]{0,63}")
 STOPPED_EARLY = ("Counting stopped after a few seconds, so the real numbers are higher and the "
                  "order may change.")
-OWN_NAME_CHARS = 15     # of a process's own name, all Linux keeps
-# What runs a script, as in "python3 /usr/bin/wsdd", by its own name. A script whose #! line is
-# "#!/usr/bin/env php" is named after the script only until env runs php, so these are the
-# interpreters such a script is found under. Others, such as deno or java -jar, aren't read.
-INTERPRETER = re.compile(r"python[0-9.]*|perl[0-9.]*|ruby[0-9.]*|node|nodejs|php[0-9.]*|"
-                         r"lua[0-9.]*|luajit|tclsh[0-9.]*|(ba|da|z|k|mk)?sh", re.I)
-FAMILY = {"nodejs": "node", "luajit": "lua", "bash": "sh", "dash": "sh", "zsh": "sh", "ksh": "sh",
-          "mksh": "sh"}
-# Each one's options: those whose argument is the rest of the word or else the next word, those
-# whose argument can only be the rest of the word, and those that take code or a module rather
-# than a script, as in "sh -c nginx", "perl -E ..." or "python3 -m http.server".
-OPTIONS = {"python": ("QWX", "", "cm"), "perl": ("IMm", "0CDdilx", "eE"),
-           "ruby": ("CEIr", "0FKTWilx", "e"), "node": ("Cr", "", "ep"),
-           "php": ("cdzSt", "", "BERar"), "lua": ("l", "", "e"), "sh": ("oO", "", "cs")}
-# Long options whose argument is the next word: any other is a word of its own, as --name=value.
-LONG_ARGUMENT = {"--require", "--import", "--loader", "--experimental-loader", "--conditions",
-                 "--env-file", "--title", "--rcfile", "--init-file", "--check-hash-based-pycs",
-                 "-encoding"}
-LONG_CODE = {"--eval", "--print"}       # node's -e and -p
-SCRIPT = r"(\.(py|pl|rb|js|php|lua|tcl|sh))?"
+SAID_HERE = 4           # services and processes said, of each
+COMMAND_CHARS = 80      # of a process's command line said
+LIST_UNITS = ("list-units", "--type=service", "--no-legend", "--plain", "--no-pager")
 
 
 def _tool(*command: str) -> str:
@@ -230,108 +213,92 @@ def about_server(args: dict, config) -> bool:
     return _from_the_server(args, config) or _named_server(args, config)
 
 
-def _on_the_server(args: dict, config, session, missed_here: str | None = None) -> dict:
-    """serverstatus's one fixed command, said by the app. The name is matched here, never sent."""
-    return serverstatus.running(args, config, session if session is not None else Session(),
-                                missed_here, _maybe_another(args, config))
+def _on_the_server(args: dict, config, session, here: str | None = None) -> dict:
+    """serverstatus's one fixed command, said by the app. The name is matched here, never sent.
+    here is what this computer lists, when it was asked first."""
+    return serverstatus.running(args, config, session, here, _maybe_another(args, config))
 
 
-def _any_dashes(name: str) -> str:
-    """A pattern for pgrep that takes name with or without - or _ between its letters, as the
-    model says localai for the local-ai process that LocalAI's image runs. systemctl takes only
-    the exact name of a unit."""
-    letters = [re.sub(r"([.+])", r"\\\1", c) for c in name if c not in "-_"]
-    return "[-_]?".join(letters)
-
-
-def _process_here(name: str) -> bool:
-    """A program run under its own name. pgrep -x sees a process's own name, of which Linux
-    keeps only 15 characters, so it is looked for in the command line too: as its first word,
-    alone or after a folder, and before a space or a colon, as in php-fpm's "php-fpm: master
-    process", or as the script an interpreter runs, as in "python3 /usr/bin/wsdd", read from
-    the command line word by word. A later word, as in "man nginx", is no program of that
-    name."""
-    pattern = _any_dashes(name)
-    first = f"^([^ ]*/)?{pattern}{SCRIPT}( |:|$)"
-    if any(_tool("pgrep", "-i", how, "--", wanted).strip()
-           for how, wanted in (("-x", pattern), ("-f", first))):
-        return True
-    # Those with the name as a word, or after a folder, somewhere in their command line.
-    found = _tool("pgrep", "-i", "-f", "--", f"(^|[ /]){pattern}{SCRIPT}( |$)").split()
-    return any(_runs_script(pid, pattern) for pid in found if pid.isdigit())
-
-
-def _runs_script(pid: str, pattern: str) -> bool:
-    """Whether the process runs a script called that: the first word after its interpreter's
-    options. Its own name is the interpreter's, as with "python3 /usr/bin/wsdd" or a script
-    whose #! line runs one through env, or the script's own, cut at 15 characters, as with a
-    script started by its #! line, which names its interpreter, any one, by its path."""
-    own, argv = _process(pid)
-    script = _script(argv)
-    if script is None:
-        return False
-    called = script.rpartition("/")[2]
-    if not re.fullmatch(f"{pattern}{SCRIPT}", called, re.I):
-        return False
-    return (bool(INTERPRETER.fullmatch(own)) and _family(argv[0]) is not None
-            or own.casefold() == called[:OWN_NAME_CHARS].casefold())
-
-
-def _process(pid: str) -> tuple[str, list[str]]:
-    """A process's own name and its command line, word by word, or nothing once it has gone."""
+def _read(*command: str) -> tuple[int | None, str]:
+    """A tool that reads: its exit code and output, or None for one that couldn't run or took
+    too long. Unlike _tool, it tells an empty list from no list."""
     try:
-        own = Path(f"/proc/{pid}/comm").read_text(errors="replace").removesuffix("\n")
-        line = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
-    except OSError:
-        return "", []
-    return own, line.removesuffix("\0").split("\0") if line else []
+        done = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              errors="replace", timeout=TOOL_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+    return done.returncode, done.stdout
 
 
-def _family(word: str) -> str | None:
-    """Which interpreter the first word of a command line is, as python for /usr/bin/python3."""
-    called = word.rpartition("/")[2]
-    if not INTERPRETER.fullmatch(called):
+def _pattern(name: str) -> str:
+    """name as pgrep's extended regular expression, under serverstatus's match rule: with any of
+    -, _, . or a space between its letters, so localai finds the local-ai process that LocalAI's
+    image runs. pgrep -i takes any case. A + is itself; nothing else in a name is special."""
+    return "[-_. ]*".join("[+]" if c == "+" else c for c in serverstatus.squeezed(name))
+
+
+def _services_here(name: str) -> tuple[list, bool]:
+    """The services systemd lists here, the system's and yours, that have name in theirs, and
+    whether both lists were read whole."""
+    found, whole = [], True
+    for scope in ([], ["--user"]):
+        code, output = _read("systemctl", *scope, *LIST_UNITS)
+        if code != 0:
+            whole = False
+            continue
+        listing = serverstatus.units(output.splitlines(), False)
+        found += [unit for unit in listing.rows if serverstatus.matches(name, unit)]
+        whole = whole and not listing.odd
+    return found, whole
+
+
+def _processes_here(name: str) -> list[str] | None:
+    """Each process whose command line has name in it, as pgrep -a gives it, its pid first, or
+    None when pgrep didn't list them."""
+    code, output = _read("pgrep", "-a", "-i", "-f", "--", _pattern(name))
+    if code not in (0, 1):
         return None
-    family = re.match(r"[a-z]*", called.casefold())[0]
-    return FAMILY.get(family, family)
+    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def _script(argv: list[str]) -> str | None:
-    """The script a command line runs: the first word after the interpreter's options and their
-    arguments, or None when an option gives it code or a module to run instead. An interpreter
-    not in OPTIONS, named on a #! line, has only its options before the script."""
-    takes, joined, code = OPTIONS.get(_family(argv[0]) if argv else None, ("", "", ""))
-    words = iter(argv[1:])
-    for word in words:
-        if word == "--":
-            return next(words, None)
-        if word.partition("=")[0] in LONG_CODE:
-            return None
-        if word in LONG_ARGUMENT:
-            next(words, None)
-        elif len(word) < 2 or word[0] not in "-+":     # "-" too: what it reads on stdin
-            return word
-        elif not word.startswith("--"):
-            for at, letter in enumerate(word[1:], 2):
-                if letter in code:
-                    return None
-                if letter in takes or letter in joined:
-                    if letter in takes and at == len(word):
-                        next(words, None)
-                    break
-    return None
+def _process(line: str) -> str:
+    """A process as said: its pid and the first characters of its command line."""
+    pid, _, command_line = line.partition(" ")
+    cut = "…" if len(command_line) > COMMAND_CHARS else ""
+    return f"{pid} {command_line[:COMMAND_CHARS]}{cut}"
 
 
-def _here_by_name(name: str) -> bool:
-    active = any(_tool("systemctl", *scope, "is-active", "--", name).strip() == "active"
-                 for scope in ([], ["--user"]))
-    return active or _process_here(name)
+def here_said(name: str) -> tuple[bool, str]:
+    """What this computer lists with name in it, relayed: the services as systemd gives them and
+    the processes as pgrep does, and whether there was any."""
+    units, whole = _services_here(name)
+    processes = _processes_here(name)
+    if not units and whole and processes == []:
+        return False, f"No running service here, and no process's command line, has {name} in it."
+    said = []
+    if units:
+        said.append("systemd lists " + serverstatus.said_rows(
+            [serverstatus.said_row(unit) for unit in units], SAID_HERE))
+    elif whole:
+        said.append(f"no service systemd lists has {name} in its name")
+    if processes:
+        said.append(f"these processes have {name} in their command line: "
+                    + serverstatus.said_rows([_process(p) for p in processes], SAID_HERE))
+    elif processes == []:
+        said.append(f"no process's command line has {name} in it")
+    else:
+        said.append("pgrep didn't list the processes")
+    text = f"On this computer, {', and '.join(said)}."
+    if not whole:
+        text += " I couldn't read all of systemd's list here."
+    return bool(units or processes), text
 
 
 def running(args: dict, config, session=None) -> dict:
-    """Whether a service or program is up, here or on the server. Here, a name goes no further
-    than these two read-only tools, and this needs the real system, which the shell sandbox
-    hides."""
+    """What lists a service or program by that name, here or on the server, relayed and said by
+    the app: a command line is any program's text. Here, a name goes no further than these
+    read-only tools, and this needs the real system, which the shell sandbox hides."""
+    session = session if session is not None else Session()
     if _from_the_server(args, config):
         return _on_the_server(args, config, session)
     name, on = _said(args.get("name")), _said(args.get("on"))
@@ -340,7 +307,8 @@ def running(args: dict, config, session=None) -> dict:
     settings_here = on_server(args, config)
     if settings_here and not _maybe_another(args, config):
         on = ""
-    if not SERVICE_NAME.fullmatch(name):
+    name = name.removesuffix(".service")
+    if not SERVICE_NAME.fullmatch(name) or len(serverstatus.squeezed(name)) < 2:
         if _named_server(args, config):     # such as fd00::5, which no program here is called
             return _on_the_server(args, config, session)
         if not _here(on):
@@ -348,25 +316,20 @@ def running(args: dict, config, session=None) -> dict:
             raise ValueError(f"{ONLY_TWO} {SETTINGS_HERE}" if settings_here else
                              _only_two(config))
         raise ValueError("Say which program or service to check.")
-    found = _here_by_name(name)
+    found, said = here_said(name)
+    session.tainted = True      # what runs here is yours, whatever comes after
     if not found and _named_server(args, config):
         # A label such as plex, or docker for docker.lan, may be a program after all, so the
-        # answer says it isn't here. A host with a dot or an address is no program's name.
-        return _on_the_server(args, config, session, None if "." in name else name)
+        # answer says what is here first. A host with a dot or an address is no program's name.
+        return _on_the_server(args, config, session, None if "." in name else said)
     if not _here(on):
-        # Another computer, which can't be asked: a plain yes or no would be about the wrong
-        # one. What this computer runs is said all the same, and raising skips files_read.
-        if session is not None:
-            session.tainted = True
-        if settings_here:
-            said = f"{name} is" if found else f"no service or process called {name} is"
-            raise ValueError(f"{ONLY_TWO} The server in Settings is this computer, and {said} "
-                             "running on it.")
-        only = _only_two(config)
-        raise ValueError(f"{only} On this computer, {name} is running." if found else
-                         f"{only} No service or process called {name} is running on this "
-                         "computer.")
-    return {"name": name, "running": found}
+        # Another computer, which can't be asked: what this computer lists is said all the same,
+        # after a sentence that says it is this one.
+        only = f"{ONLY_TWO} {SETTINGS_HERE}" if settings_here else _only_two(config)
+        said = f"{only} {said}"
+    session.after.append(Speak(shown(said, serverstatus.MAX_SAID_CHARS),
+                               serverstatus.voice(config)))
+    return {APP_SAYS: True}
 
 
 def _says_tailscale(config) -> bool:
