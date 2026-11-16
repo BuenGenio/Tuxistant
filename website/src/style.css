@@ -219,7 +219,8 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   border-block: 1px solid var(--line);
 }
 .ticker:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
-.marks { position: absolute; width: 0; height: 0; }
+/* The two hidden sprites: the ticker's marks and the release chips' icons. */
+.marks, .feat-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .ticker-label { flex: none; margin: 0; color: var(--muted); font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
 .ticker-view {
   --gap: 30px;
@@ -280,7 +281,8 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .lead { margin: 4px 0 10px; color: var(--muted); font-size: 0.94rem; }
 .caps-row { flex-direction: row; flex-wrap: wrap; gap: 7px; }
 
-/* Releases, newest first: one line each on a wide screen, two on a phone. */
+/* Releases, newest first: the version, date and channel, then a chip for each thing it added, which
+   wrap onto as many lines as they need. On a phone the chips start on a line of their own. */
 .sub { margin: 16px 0 4px; font-size: 1.05rem; font-weight: 700; }
 /* Each row is a subgrid of the list, so the columns line up and are only as wide as their contents. */
 .releases { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); margin: 0; padding: 0; list-style: none; font-size: 0.94rem; }
@@ -295,12 +297,42 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 }
 .rel-version { font-weight: 700; }
 .rel-when { color: var(--muted); font-variant-numeric: tabular-nums; }
-.rel-added { color: var(--muted); }
 .chan { justify-self: start; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 0.74rem; font-weight: 700; white-space: nowrap; }
 .chan-stable { color: var(--now); }
 .chan-preview { color: var(--soon); }
 .chan-planned { color: var(--accent); border-style: dashed; border-color: var(--accent); }
 .is-planned .rel-version { color: var(--muted); }
+/* Release chips: what each release added, one chip per feature, most impact first. A label that
+   wraps still stays a rounded box, though the build keeps each one short enough for a phone. */
+.rel-added { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.feat {
+  display: inline-flex;
+  align-items: baseline;    /* the label's baseline is the chip's, so the row lines up with the version */
+  gap: 5px;
+  max-width: 100%;
+  padding-block: 2px;
+  padding-inline: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 0.95em;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.3;
+}
+.feat span { min-width: 0; overflow-wrap: break-word; }
+.feat-icon {
+  flex: none;
+  align-self: center;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+[dir="rtl"] .feat-icon.is-mirrored { transform: scaleX(-1); }
+.is-planned .feat { border-style: dashed; background: none; }
 
 /* Only in a local preview build. */
 .local-preview { margin: 8px 0 0; padding: 5px 12px; border: 1px dashed var(--accent); border-radius: 10px; color: var(--accent); font-size: 0.84rem; text-align: center; }
@@ -340,6 +372,7 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   .caps-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .caps-row .cap span { overflow-wrap: anywhere; }     /* a long word, such as Configurações, at 320 px */
   .rel-added { grid-column: 1 / -1; }
+  .feat { font-size: 0.8rem; }
   .support { flex-direction: column; align-items: stretch; }
 }
 
@@ -350,40 +383,4 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   .ticker-view { flex: none; max-width: 100%; overflow: visible; -webkit-mask-image: none; mask-image: none; }
   .ticker-list { flex: 0 1 auto; flex-wrap: wrap; justify-content: center; gap: 8px 26px; min-width: 0; animation: none; }
   .ticker-list[aria-hidden="true"] { display: none; }
-}
-
-/* Release chips: what each release added, one chip per feature, most impact first. The list keeps
-   the rel-added class, so the release row above places it, and a wrapped chip stays a rounded box. */
-.feat-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
-.rel-added { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; margin: 0; padding: 0; list-style: none; }
-.feat {
-  display: inline-flex;
-  align-items: baseline;    /* the label's baseline is the chip's, so the row lines up with the version */
-  gap: 5px;
-  max-width: 100%;
-  padding-block: 2px;
-  padding-inline: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: 0.95em;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 0.84rem;
-  line-height: 1.3;
-}
-.feat span { min-width: 0; overflow-wrap: break-word; }
-.feat-icon {
-  flex: none;
-  align-self: center;
-  width: 15px;
-  height: 15px;
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-[dir="rtl"] .feat-icon.is-mirrored { transform: scaleX(-1); }
-.is-planned .feat { border-style: dashed; background: none; }
-@media (max-width: 860px) {
-  .feat { font-size: 0.8rem; }
 }

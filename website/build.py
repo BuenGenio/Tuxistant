@@ -237,27 +237,33 @@ FEATURE_ICONS = {
     "calendar": '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
     "news": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8.5h10M7 12.5h4M7 16h4M14 12.5h3V16h-3z"/>',
 }
-FEATURE_MIRRORED = {"dictation", "news"}     # lines of writing, which run the other way right to left
-FEATURE_LABEL_LENGTH = (2, 60)     # characters: a chip, not a sentence
+# The icons with lines of writing, left-aligned on a page or a list, which run the other way right
+# to left, so the Arabic page mirrors them.
+FEATURE_MIRRORED = {"dictation", "news", "recipe"}
+# Characters: a chip, not a sentence. About 40 Latin characters fit one line at 360 px.
+FEATURE_LABEL_LENGTH = (2, 40)
 
 
 def feature_sprite_html(releases):
-    """Every icon the release chips use, drawn once in a sprite the chips point at."""
+    """Every icon the release chips use, drawn once in a sprite the chips point at. Its size is set
+    here as well as in the stylesheet, so without the stylesheet it takes no room."""
     used = dict.fromkeys(feature["icon"] for entry in releases["history"] for feature in entry["features"])
     symbols = "".join(f'<symbol id="feat-{icon}" viewBox="0 0 24 24">{FEATURE_ICONS[icon]}</symbol>'
                       for icon in used)
-    return f'<svg class="feat-sprite" aria-hidden="true" focusable="false">{symbols}</svg>'
+    return f'<svg class="feat-sprite" width="0" height="0" aria-hidden="true" focusable="false">{symbols}</svg>'
 
 
 def features_html(code, entry):
-    """What a release added, one chip each, in the order releases.json gives: most impact first."""
+    """What a release added, one chip each, in the order releases.json gives: most impact first.
+    role="list" because WebKit drops a list's role when it has no bullets."""
     chips = []
     for feature in entry["features"]:
         icon = feature["icon"]
         mirrored = " is-mirrored" if icon in FEATURE_MIRRORED else ""
-        chips.append(f'<li class="feat"><svg class="feat-icon{mirrored}" aria-hidden="true" focusable="false">'
-                     f'<use href="#feat-{icon}"/></svg><span>{esc(feature["label"][code])}</span></li>')
-    return f'<ul class="rel-added">{"".join(chips)}</ul>'
+        chips.append(f'<li class="feat"><svg class="feat-icon{mirrored}" width="15" height="15" '
+                     f'aria-hidden="true" focusable="false"><use href="#feat-{icon}"/></svg>'
+                     f'<span>{esc(feature["label"][code])}</span></li>')
+    return f'<ul class="rel-added" role="list">{"".join(chips)}</ul>'
 
 
 def releases_html(code, strings, releases):
@@ -339,7 +345,7 @@ def check_features(where, entry, languages):
             raise SystemExit(f"{where}: each feature is an icon and a label, not {feature!r}")
         label = feature.get("label") if isinstance(feature.get("label"), dict) else {}
         name = f"{where}: {label.get('en', feature)!r}"
-        if feature.get("icon") not in FEATURE_ICONS:
+        if not isinstance(feature.get("icon"), str) or feature["icon"] not in FEATURE_ICONS:
             raise SystemExit(f"{name} needs an icon from FEATURE_ICONS, not {feature.get('icon')!r}")
         if set(feature) != {"icon", "label"}:
             raise SystemExit(f"{name} has only an icon and a label, not {sorted(set(feature) - {'icon', 'label'})}")
@@ -350,7 +356,7 @@ def check_features(where, entry, languages):
             if not isinstance(text, str) or text != text.strip() or not shortest <= len(text) <= longest:
                 raise SystemExit(f"{name} in {code} needs {shortest} to {longest} characters, not {text!r}")
             if text[0].lower() != text[0].upper() and not text[0].isupper():
-                raise SystemExit(f"{name} in {code} starts with a capital letter: {text!r}")
+                raise SystemExit(f"{name} in {code} must start with a capital letter, not {text!r}")
 
 
 def apply_upcoming(path, languages, releases):

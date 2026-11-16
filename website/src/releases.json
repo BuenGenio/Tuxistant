@@ -22,11 +22,11 @@
       "channel": "stable",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.5.0",
       "features": [
-        {"icon": "recipe", "label": {"en": "Recipe skills in YAML", "es": "Habilidades receta en YAML", "pt": "Habilidades receita em YAML", "zh": "YAML 配方技能", "ar": "مهارات الوصفات بلغة YAML"}},
+        {"icon": "recipe", "label": {"en": "Recipe skills in YAML", "es": "Habilidades de receta en YAML", "pt": "Habilidades de receita em YAML", "zh": "YAML 配方技能", "ar": "مهارات الوصفات بلغة YAML"}},
         {"icon": "followup", "label": {"en": "Follow-up questions", "es": "Preguntas de seguimiento", "pt": "Perguntas de acompanhamento", "zh": "追问", "ar": "أسئلة المتابعة"}},
         {"icon": "dictation", "label": {"en": "Hands-free dictation", "es": "Dictado manos libres", "pt": "Ditado sem as mãos", "zh": "免手持听写", "ar": "إملاء دون استخدام اليدين"}},
-        {"icon": "settings", "label": {"en": "A page for every skill in Settings", "es": "Una página para cada habilidad en Configuración", "pt": "Uma página para cada habilidade em Configurações", "zh": "设置中每个技能的独立页面", "ar": "صفحة لكل مهارة في الإعدادات"}},
-        {"icon": "consent", "label": {"en": "Agreement before anything goes to the cloud", "es": "Tu acuerdo antes de enviar nada a la nube", "pt": "Seu acordo antes de enviar algo para a nuvem", "zh": "任何内容发往云端前先征得同意", "ar": "موافقة قبل إرسال أي شيء إلى السحابة"}}
+        {"icon": "settings", "label": {"en": "A page for every skill in Settings", "es": "Configuración por habilidad", "pt": "Configurações por habilidade", "zh": "设置中每个技能的独立页面", "ar": "صفحة لكل مهارة في الإعدادات"}},
+        {"icon": "consent", "label": {"en": "Cloud only after you agree", "es": "La nube solo si aceptas", "pt": "Nuvem só se você aceitar", "zh": "须经你同意才使用云端", "ar": "السحابة فقط بعد موافقتك"}}
       ]
     },
     {
@@ -35,9 +35,9 @@
       "channel": "preview",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.4.0",
       "features": [
-        {"icon": "apps", "label": {"en": "Opens apps", "es": "Abre apps", "pt": "Abre apps", "zh": "打开应用", "ar": "يفتح التطبيقات"}},
-        {"icon": "settings", "label": {"en": "Opens Settings pages", "es": "Abre páginas de Configuración", "pt": "Abre páginas de Configurações", "zh": "打开设置页面", "ar": "يفتح صفحات الإعدادات"}},
-        {"icon": "shield", "label": {"en": "Home questions kept out of fact lookups", "es": "Preguntas sobre tu casa fuera de las búsquedas de datos", "pt": "Perguntas sobre sua casa fora das buscas de fatos", "zh": "关于你家的问题不进入事实查询", "ar": "أسئلة منزلك خارج البحث عن المعلومات"}}
+        {"icon": "apps", "label": {"en": "Opening apps", "es": "Abrir apps", "pt": "Abrir apps", "zh": "打开应用", "ar": "فتح التطبيقات"}},
+        {"icon": "settings", "label": {"en": "Opening Settings pages", "es": "Abrir páginas de Configuración", "pt": "Abrir páginas de Configurações", "zh": "打开设置页面", "ar": "فتح صفحات الإعدادات"}},
+        {"icon": "shield", "label": {"en": "Home questions out of fact lookups", "es": "Tu casa fuera de las búsquedas de datos", "pt": "Sua casa fora das buscas de fatos", "zh": "关于你家的问题不进入事实查询", "ar": "أسئلة منزلك خارج البحث عن المعلومات"}}
       ]
     },
     {

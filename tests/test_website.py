@@ -25,13 +25,21 @@ def load_build():
 def releases_shown(html):
     """Each row of the releases list: version, the rest of the row, and its chips as (icon, label)."""
     rows = re.findall(r'<li class="release[^"]*"><span class="rel-version">(.*?)</span>(.*?)'
-                      r'<ul class="rel-added">(.*?)</ul></li>', html)
-    return [(version, rest, chips_shown(chips)) for version, rest, chips in rows]
+                      r'<ul class="rel-added" role="list">(.*?)</ul></li>', html)
+    return [(version, rest, [(icon, label) for _, icon, label in chips_shown(chips)])
+            for version, rest, chips in rows]
 
 
 def chips_shown(chips):
-    return re.findall(r'<li class="feat"><svg class="feat-icon[^"]*" aria-hidden="true" focusable="false">'
-                      r'<use href="#feat-([\w-]+)"/></svg><span>([^<]*)</span></li>', chips)
+    """Each chip as (the icon's classes, icon, label)."""
+    return re.findall(r'<li class="feat"><svg class="(feat-icon[^"]*)" width="15" height="15" aria-hidden="true" '
+                      r'focusable="false"><use href="#feat-([\w-]+)"/></svg><span>([^<]*)</span></li>', chips)
+
+
+def chips_in(html):
+    """Every chip on a page, as chips_shown gives them."""
+    return [chip for chips in re.findall(r'<ul class="rel-added" role="list">(.*?)</ul>', html)
+            for chip in chips_shown(chips)]
 
 
 def chips_for(entry, code):
@@ -221,6 +229,30 @@ class BuiltSite(unittest.TestCase):
                 # Every chip, in the order releases.json gives, which is most impact first.
                 self.assertEqual(chips, chips_for(entry, code), (page, entry["version"]))
 
+    def test_icons_with_writing_are_mirrored_right_to_left(self):
+        mirrored = self.build.FEATURE_MIRRORED
+        self.assertTrue(mirrored <= set(self.build.FEATURE_ICONS))
+        for page in self.pages:
+            chips = chips_in(page.read_text())
+            self.assertTrue(chips, page)
+            for classes, icon, _ in chips:
+                self.assertEqual("is-mirrored" in classes.split(), icon in mirrored, (page, icon))
+        self.assertTrue(any(icon in mirrored for _, icon, _ in chips), "the test sees a mirrored icon")
+        css = (self.dist / "style.css").read_text()
+        self.assertRegex(css, r'\[dir="rtl"\] \.feat-icon\.is-mirrored \{ transform: scaleX\(-1\); \}')
+
+    def test_a_chip_label_is_escaped(self):
+        entry = {"features": [{"icon": "mail", "label": {"en": 'Q&A <b>"x"'}}]}
+        shown = self.build.features_html("en", entry)
+        self.assertIn("<span>Q&amp;A &lt;b&gt;&quot;x&quot;</span>", shown)
+        self.assertNotIn("<b>", shown)
+
+    def test_chip_icons_take_their_size_without_the_stylesheet(self):
+        for page in self.pages:
+            html = page.read_text()
+            self.assertIn('<svg class="feat-sprite" width="0" height="0" aria-hidden="true"', html, page)
+            self.assertEqual(len(re.findall(r'<svg class="feat-icon', html)), len(chips_in(html)), page)
+
     def test_mail_search_leads_what_0_3_0_added(self):
         """The owner's call: Mail search comes first in 0.3.0, with a capital."""
         rows = {re.sub(r"<[^>]+>", "", version): chips
@@ -230,7 +262,7 @@ class BuiltSite(unittest.TestCase):
     def test_each_chip_icon_is_drawn_once_in_one_hidden_sprite(self):
         for page in self.pages:
             html = page.read_text()
-            sprites = re.findall(r'<svg class="feat-sprite" aria-hidden="true" focusable="false">(.*?)</svg>',
+            sprites = re.findall(r'<svg class="feat-sprite" width="0" height="0" aria-hidden="true" focusable="false">(.*?)</svg>',
                                  html, re.S)
             self.assertEqual(len(sprites), 1, page)
             symbols = re.findall(r'<symbol id="feat-([\w-]+)" viewBox="0 0 24 24">', sprites[0])
@@ -265,6 +297,14 @@ class BuiltSite(unittest.TestCase):
             "an empty label": lambda entry: entry["features"][1]["label"].update(es=""),
             "a small letter first": lambda entry: entry["features"][0]["label"].update(pt="habilidades receita"),
             "a sentence, not a chip": lambda entry: entry["features"][0]["label"].update(en="Recipe skills " * 5 + "in YAML"),
+            "one character past a phone's line": lambda entry: entry["features"][0]["label"].update(en="A" * 41),
+            "a label with a space at the end": lambda entry: entry["features"][1]["label"].update(en="Follow-up questions "),
+            "a number as a label": lambda entry: entry["features"][1]["label"].update(en=5),
+            "a number for every label": lambda entry: entry["features"][1].update(label=5),
+            "a list as the icon": lambda entry: entry["features"][0].update(icon=["mail"]),
+            "a key besides icon and label": lambda entry: entry["features"][0].update(note="x"),
+            "a line where a feature belongs": lambda entry: entry["features"].append("Mail search"),
+            "features as one dict": lambda entry: entry.update(features=entry["features"][0]),
             "no features": lambda entry: entry.update(features=[]),
             "a line instead of features": lambda entry: entry.update(added=entry.pop("features")),
         }
@@ -272,6 +312,18 @@ class BuiltSite(unittest.TestCase):
             with self.subTest(slip), contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     self.build.check_releases(broken(change), languages)
+        longest = self.build.FEATURE_LABEL_LENGTH[1]
+        self.assertEqual(longest, 40, "about one line in a chip at 360 px")
+        at_the_limit = broken(lambda entry: entry["features"][0]["label"].update(en="A" * longest))
+        self.build.check_releases(at_the_limit, languages)
+
+    def test_a_small_letter_first_is_named_as_the_slip(self):
+        languages = self.build.load_languages()
+        releases = json.loads((ROOT / "website/src/releases.json").read_text())
+        releases["history"][0]["features"][0]["label"]["pt"] = "habilidades de receita"
+        with self.assertRaises(SystemExit) as stop:
+            self.build.check_releases(releases, languages)
+        self.assertIn("must start with a capital letter", str(stop.exception))
 
     def test_every_language_tags_the_preview_claims_as_english_does(self):
         english = [status for status, _ in self.strings(self.pages[0])["previewCaps"]]
