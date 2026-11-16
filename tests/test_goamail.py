@@ -451,17 +451,38 @@ class Secrets(Goa):
         """Every tag was a space, so a code a template wrote in spans, which a browser and
         Thunderbird's index join, reached the model as digit pairs, and a year-like code glued
         past a tag to the minutes after it as a year. Only between two digits is a tag joined:
-        anywhere else it could glue a label to its code."""
+        anywhere else it is mail.JOIN, a space to this version's own rules, as joined it could glue
+        a label to its code, and nothing to 0.5.0's, as in Thunderbird's index (see
+        test_pairs_of_letters_and_digits_two_to_a_tag_are_hidden)."""
         self.assertEqual(goamail._untagged("<p>Use <span>48</span><span>29</span><wbr>13</p>"),
-                         " Use  482913 ")
+                         f" Use {mail.JOIN}482913 ")
         self.assertEqual(goamail._untagged("<span>Your code is</span><span>482913</span>"),
-                         " Your code is  482913 ")
+                         f"{mail.JOIN}Your code is{mail.JOIN}482913{mail.JOIN}")
         await self.all_hidden([
             message(f"About your Acme account, part {n}", ACME, None, html=page)
             for n, page in enumerate((
                 "<p>To sign in, use <span>48</span><span>29</span><span>13</span> on the page.</p>",
                 "<p>To sign in, use <b>48</b><b>29</b><b>13</b> on the page.</p>",
                 "<p>To sign in, use <b>2005</b>10 minutes left</p>"))])
+
+    async def test_pairs_of_letters_and_digits_two_to_a_tag_are_hidden(self):
+        """Thunderbird's index joins "<span>KQ</span><span>7X</span><span>9B</span>" into
+        KQ7X9B, which 0.5.0 hid alone on its line, and Online Accounts read it as "KQ 7X 9B",
+        which nothing hid. Where an inline tag stood is now mail.JOIN, which 0.5.0's rules, run
+        first, read as nothing: one beside a space is that space, and one written in the mail
+        is a space too, so a stranger can't glue a code to a word with it."""
+        self.assertEqual(goamail._unhtml("<p>Hi <b>you</b></p><div><span>KQ</span><span>7X</span>"
+                                         " <b>9B</b>\x00x</div>"),
+                         f"Hi you\nKQ{mail.JOIN}7X 9B x")
+        message_ = message("About your Acme account", ACME, "To sign in, use 482913\x00CAD team.")
+        self.assertNotIn(mail.JOIN, goamail._read({b"HEADER": message_.split(b"\r\n\r\n")[0],
+                                                   b"TEXT": text_of(message_)})[1])
+        await self.all_hidden([
+            message(f"About your Acme account, part {n}", ACME, None, html=page)
+            for n, page in enumerate((
+                "<p>Use this to sign in:</p><div><span>KQ</span><span>7X</span>"
+                "<span>9B</span></div>",
+                "<p>Your Acme code:</p><p><b>A7</b><b>K2</b><b>Q9</b><b>XB</b></p>"))])
 
     async def test_a_code_in_two_groups_of_three_is_hidden_with_a_group_of_letters(self):
         """Only groups that both held a digit were hidden."""

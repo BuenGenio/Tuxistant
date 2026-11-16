@@ -6,9 +6,10 @@ prices, phone and order numbers, repeated, split by inline tags, in forms NFKC c
 a word for a code in every language the list has; and ordinary years, ranges, prices, phone and
 order numbers after every word for "is" and a colon, on a line of their own, and after a password
 in quotes. Each mail is read by 0.5.0 (test_mail_differential's copy, which agrees with the 0.5.0
-tag on every one of these mails) and by both of this version's paths. No code 0.5.0 hid may reach
-the model and no ordinary number 0.5.0 read out whole may be hidden, but for what docs/CONTRACT.md
-step 5 and docs/ROADMAP.md say ("documented" below).
+tag on every one of these mails) and by both of this version's paths. Nothing 0.5.0 hid may reach
+the model, in any of these mails, as 0.5.0's rules run too (tuxistant/mail_floor.py), and no
+ordinary number 0.5.0 read out whole may be hidden, but for what docs/CONTRACT.md step 5 and
+docs/ROADMAP.md say ("documented" below).
 
 Every mail is made up. What no one sees is written as an escape.
 """
@@ -22,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_mail_differential import (  # noqa: E402
-    index_text, old_read, online_read, report, shown, thunderbird_read)
+    floor_broken, index_text, old_read, online_read, report, shown, thunderbird_read)
 
 # ---- glue --------------------------------------------------------------------------------------
 DASHES = "".join(chr(c) for c in range(0x10000) if unicodedata.category(chr(c)) == "Pd") \
@@ -53,16 +54,11 @@ AFTER_CONTEXTS = (("code word, no talk", "Message from Acme", "Your Acme code is
                   ("german", "Nachricht von Acme", "Dein Acme-Code lautet {X}."))
 BEFORE_CONTEXTS = (("code word after", "Message from Acme", "Hello. {X} is your Acme code."),
                    ("own line", "Message from Acme", "Hello,\n\n{X}\n\nThe Acme team"))
-# A currency's code, name or sign after a code, which docs/ROADMAP.md says reads as an amount
-# where only a space, or a character no one sees, or nothing stands between.
-CURRENCY = re.compile("(?:EUR|USD|GBP|CAD|CHF|SEK|JPY|Euro|Pounds)\\b|[%$£¥€"
-                      "₹฿₺]|R\\$")
-SPACE_LIKE = set(SPACES) | set(UNSEEN) | {""}
 
 
 def _nfkc_glue(glue: str) -> bool:
-    """A symbol NFKC makes letters, $, % or @ of, such as №, ™ or a wide $: docs/ROADMAP.md says
-    a code glued by one to a word is read out, as no sender writes one."""
+    """A symbol NFKC makes letters, $, % or @ of, such as №, ™ or a wide $, which glues a code to
+    the word before it too."""
     return bool(re.search("[A-Za-z$%@]", unicodedata.normalize("NFKC", glue)))
 
 
@@ -228,6 +224,7 @@ def corpus() -> list[dict]:
     mails = []
 
     def add(family, kind, why, subject, plain, tokens, html_=None, cte="8bit", documented=False):
+        """documented: an ordinary number that docs/CONTRACT.md step 5 says is hidden."""
         mails.append({"family": family, "kind": kind, "why": why, "subject": subject,
                       "plain": plain, "html": html_, "cte": cte, "tokens": tokens,
                       "documented": documented})
@@ -237,38 +234,29 @@ def corpus() -> list[dict]:
 
     for family, glues in GLUES:
         for glue in glues:
-            given_up = _nfkc_glue(glue)
             for code in ("482913", "2005") if glue in FEW_GLUES else ("482913",):
                 for word in AFTER:
-                    documented = given_up or glue in SPACE_LIKE and bool(CURRENCY.match(word))
                     for context, subject, body in AFTER_CONTEXTS:
                         x = code + glue + word
                         add(f"glued after by {family}, {context}", "code",
                             f"{code!r} {name(glue)} {word!r}", subject.replace("{X}", x),
-                            body.replace("{X}", x), [code], documented=documented)
-            if glue in FEW_GLUES or given_up:
+                            body.replace("{X}", x), [code])
+            if glue in FEW_GLUES or _nfkc_glue(glue):
                 for word in BEFORE:
                     for context, subject, body in BEFORE_CONTEXTS:
                         x = word + glue + "482913"
                         add(f"glued before by {family}, {context}", "code",
                             f"{word!r} {name(glue)}", subject, body.replace("{X}", x),
-                            ["482913"], documented=given_up)
+                            ["482913"])
     for shape in HTML_AFTER:
         for glue in HTML_GLUES:
-            unseen = re.sub("<[^>]*>", "", html.unescape(glue)).strip(" \xa0\u2009") == "" \
-                or html.unescape(glue) in UNSEEN
             for word in HTML_WORDS:
                 for code in ("482913", "2005", "KQ7X9B"):
                     for cte in ("8bit", "qp"):
                         add("html", "code", f"{cte} {shape[:24]!r} {code} {glue!r} {word!r}",
                             "Message from Acme", None, [code],
                             shape.replace("{C}", code).replace("{G}", glue)
-                            .replace("{W}", html.escape(word)), cte,
-                            documented=unseen and bool(CURRENCY.match(word))
-                            # a year glued past a tag by a character no one sees to the
-                            # number after it, which reads as one number, "200510"
-                            or code == "2005" and glue in ("&#8288;", "&zwnj;", "&shy;")
-                            and word[0].isdigit())
+                            .replace("{W}", html.escape(word)), cte)
     for parts in SPLITS:
         for inline in INLINE:
             for shape in SPLIT_SHAPES:
@@ -277,9 +265,7 @@ def corpus() -> list[dict]:
                     for cte in ("8bit", "qp"):
                         add("split by inline tags", "code", f"{cte} {inline!r} {parts!r}",
                             "Message from Acme", None, ["".join(parts)],
-                            shape.replace("{S}", split), cte,
-                            # pairs of letters and digits, "KQ 7X 9B" (docs/ROADMAP.md)
-                            documented=len(parts) > 2 and not "".join(parts).isdigit())
+                            shape.replace("{S}", split), cte)
     for lead in LEAD_INS:
         for code in ("2005", "1987", "2031"):
             for follow in FOLLOWERS:
@@ -298,10 +284,8 @@ def corpus() -> list[dict]:
             for join in JOINS:
                 for context, body in (("talk", "To sign in, use {X}."),
                                       ("code word", "Your Acme code is {X}.")):
-                    documented = join in SPACE_LIKE and bool(CURRENCY.match(number))
                     add(f"beside a number, {context}", "code", f"{code!r} {name(join)} {number!r}",
-                        "Message from Acme", body.replace("{X}", code + join + number), [code],
-                        documented=documented)
+                        "Message from Acme", body.replace("{X}", code + join + number), [code])
                     add(f"beside a number, {context}", "code", f"{number!r} {name(join)} {code!r}",
                         "Message from Acme", body.replace("{X}", number + join + code), [code])
     for shape in REPEATS:
@@ -384,16 +368,13 @@ class InEveryContext(unittest.TestCase):
         self.assertGreater(sum(1 for m, *_ in self.read if m["kind"] != "ordinary"), 15_000)
         self.assertGreater(sum(1 for m, *_ in self.read if m["kind"] != "code"), 2000)
 
-    def test_no_code_hidden_by_0_5_0_reaches_the_model(self):
-        shown_now = defaultdict(list)
-        for m, old, tb, goa in self.read:
-            code = m["tokens"][0]
-            if m["kind"] != "ordinary" and shown(code, old) == "no" and not m["documented"]:
-                for path, read in (("Thunderbird", tb), ("Online Accounts", goa)):
-                    if shown(code, read) != "no":
-                        shown_now[f"{path}, {m['family']}"].append(f"{m['why']}: {read!r}")
-        if shown_now:
-            self.fail(report(shown_now, "codes 0.5.0 hid that reach the model"))
+    def test_no_piece_0_5_0_hid_reaches_the_model(self):
+        """With no exceptions: a code glued to an amount or a currency by a character no one sees,
+        or by a symbol NFKC makes letters of, a year glued past a tag to the number after it, and
+        pairs of letters and digits two to a tag, which this version's own rules show, included."""
+        broken = floor_broken(self.read)
+        if broken:
+            self.fail(report(broken, "pieces 0.5.0 hid that reach the model"))
 
     def test_no_ordinary_number_0_5_0_read_out_is_hidden(self):
         hidden_now = defaultdict(list)

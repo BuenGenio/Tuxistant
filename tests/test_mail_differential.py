@@ -1,6 +1,6 @@
-"""Mail search against 0.5.0: no code 0.5.0 hid reaches the model on either path, and no ordinary
-number 0.5.0 read out is hidden, but for what CHANGELOG and docs/CONTRACT.md step 5 say is hidden
-on purpose.
+"""Mail search against 0.5.0: nothing 0.5.0 hid reaches the model on either path, as 0.5.0's rules
+run too (tuxistant/mail_floor.py), and no ordinary number 0.5.0 read out is hidden, but for what
+CHANGELOG and docs/CONTRACT.md step 5 say is hidden on purpose.
 
 0.5.0's hiding, as it ran on Thunderbird's mail, is kept here as it was (the OLD_ names), so the
 check needs no copy of 0.5.0. Every mail is made up, from a few thousand made of codes in the
@@ -11,17 +11,20 @@ Online Accounts, from the mail as an IMAP server sends it (goamail._read, mail._
 """
 import base64
 import email.header
+import hashlib
 import html
 import quopri
+import random
 import re
 import sys
 import unicodedata
 import unittest
 from collections import defaultdict
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tuxistant import goamail, mail  # noqa: E402
+from tuxistant import goamail, mail, mail_floor  # noqa: E402
 from tuxistant.webfetch import clean  # noqa: E402
 
 # ---- 0.5.0's hiding, from tuxistant/mail.py at the 0.5.0 tag ---------------------------------
@@ -88,6 +91,18 @@ def old_hide(text: str) -> str:
             out += [text[at:max(start, at)], mail.HIDDEN]
             at = end
     return "".join(out) + text[at:]
+
+
+def old_tokens(text: str) -> list[str]:
+    """What 0.5.0's _hide took out of a text: one piece for each [hidden] it put in."""
+    text = OLD_UNSEEN.sub("", OLD_SPACE.sub(" ", text))
+    pieces = []
+    for start, end in old_spans(text):
+        if pieces and start < pieces[-1][1]:
+            pieces[-1][1] = max(pieces[-1][1], end)
+        else:
+            pieces.append([start, end])
+    return [text[start:end] for start, end in pieces]
 
 
 def old_read(subject: str, text: str) -> str:
@@ -168,14 +183,17 @@ def _edge(char: str) -> str:
     return "0-9" if char.isdigit() else "A-Za-z0-9"
 
 
+def _standing(chars: str) -> str:
+    return (f"(?<![{_edge(chars[0])}])" + r"[^A-Za-z0-9\n]{0,3}".join(map(re.escape, chars))
+            + f"(?![{_edge(chars[-1])}])")
+
+
 def _stands(chars: str, read: str) -> bool:
     """The characters in order, at most three others between any two, and nothing of their kind
     either side: "482913", "482 913", "4-8-2-9-1-3" and "K Q W X B T" all stand, and so does
     482913 in "482913Verification", as the model reads a run of digits glued to a word apart from
     it. A digit stops only at a digit, a letter at a letter or a digit."""
-    return bool(re.search(f"(?<![{_edge(chars[0])}])"
-                          + r"[^A-Za-z0-9\n]{0,3}".join(map(re.escape, chars))
-                          + f"(?![{_edge(chars[-1])}])", read))
+    return bool(re.search(_standing(chars), read))
 
 
 def shown(token: str, read: str | None) -> str:
@@ -189,6 +207,38 @@ def shown(token: str, read: str | None) -> str:
     least = max(3, (len(chars) + 1) // 2)
     return "part" if any(_stands(chars[i:j], read) for i in range(len(chars))
                          for j in range(i + least, len(chars) + 1)) else "no"
+
+
+def times_shown(token: str, read: str | None) -> int:
+    """How many times a token stands whole in what the model reads (see _stands), or for one with
+    no letter or digit in ASCII, as 0.5.0 hid a word in Japanese after "パスワード：", how many
+    times it is there as written, but for punctuation at either end."""
+    if read is None:
+        return 0
+    read, chars = _plain(read), _letters(token)
+    if chars:
+        return len(re.findall(_standing(chars), read))
+    core = re.sub(r"^[\W_]+|[\W_]+$", "", _plain(token))
+    return read.count(core) if core else 0
+
+
+def floor_broken(read: list) -> dict:
+    """Of (mail, 0.5.0's read, Thunderbird's, Online Accounts'), each piece 0.5.0 took out of a
+    mail's subject or text, as Thunderbird's index holds them, that either path shows: more often
+    than 0.5.0 did, or in part where 0.5.0 showed no part of it, as an order number 10482913 that
+    0.5.0 hid has a part that a code 482 913 beside it, which it showed, has too. Through Online
+    Accounts the mail is read as its server sends it, so an HTML mail is not what the index
+    holds, and still 0.5.0's pieces count."""
+    found = defaultdict(list)
+    for m, old, *now in read:
+        for token in old_tokens(m["subject"]) + old_tokens(index_text(m)):
+            before = times_shown(token, old)
+            unseen = bool(_letters(token)) and shown(token, old) == "no"
+            for path, seen in zip(("Thunderbird", "Online Accounts"), now):
+                if times_shown(token, seen) > before or unseen and shown(token, seen) != "no":
+                    found[f"{path}, {m.get('family', m['kind'])}"].append(
+                        f"{m['why']}: {token!r} in {seen!r}")
+    return found
 
 
 # ---- the mail -------------------------------------------------------------------------------
@@ -392,10 +442,9 @@ def meant_to_hide(m: dict, number: str) -> bool:
                 or own_line or beside or given or (m["kind"] == "both" and mixed))
 
 
-# And the one code docs/SECURITY.md says still gets through: pairs of letters and digits,
-# "KQ 7X 9B", as an HTML mail with two characters to a tag reads through Online Accounts.
-def meant_to_show(m: dict, read: str | None) -> bool:
-    return m["html"] is not None and "<span>KQ</span>" in m["html"]
+def once(text: str) -> str:
+    """0.5.0 wrote [hidden] once for each of the secrets that overlapped, and mail_floor once."""
+    return re.sub(rf"(?:{re.escape(mail.HIDDEN)})+", mail.HIDDEN, text)
 
 
 def report(found: dict, what: str) -> str:
@@ -432,16 +481,70 @@ class AgainstFiveOh(unittest.TestCase):
         self.assertGreater(sum(1 for m, *_ in self.read if m["kind"] != "ordinary"), 400)
         self.assertGreater(sum(1 for m, *_ in self.read if m["kind"] != "code"), 400)
 
-    def test_no_code_hidden_by_0_5_0_reaches_the_model(self):
-        shown_now = defaultdict(list)
-        for m, old, tb, goa in self.read:
-            code = m["tokens"][0]
-            if m["kind"] != "ordinary" and shown(code, old) == "no":
-                for path, read in (("Thunderbird", tb), ("Online Accounts", goa)):
-                    if shown(code, read) != "no" and not meant_to_show(m, read):
-                        shown_now[path].append(f"{m['why']}: {read!r}")
-        if shown_now:
-            self.fail(report(shown_now, "codes 0.5.0 hid that reach the model"))
+    def test_a_piece_0_5_0_hid_counts_as_shown_whole_or_in_part(self):
+        """Its other places in the mail, which 0.5.0 showed, don't count; one more does."""
+        self.assertEqual(old_tokens("Your code is 482913. Use 482913 now."), ["482913", "482913"])
+        self.assertEqual(old_tokens("Your Acme PIN is 2047, expires in 2047 days"), ["2047"])
+        self.assertEqual(times_shown("2047", "Your Acme PIN is [hidden], in 2047 days"), 1)
+        self.assertEqual(times_shown("ご登録時", "パスワード:ご登録時に"), 1)
+        broken = floor_broken([({"subject": "Acme", "plain": "Your PIN is 2047, in 2047 days",
+                                 "html": None, "why": "", "kind": "code"},
+                                "Acme\nYour PIN is [hidden], in 2047 days",
+                                "Acme\nYour PIN is [hidden], in [hidden] days",
+                                "Acme\nYour PIN is 2047, in 2047 days")])
+        self.assertEqual(list(broken), ["Online Accounts, code"])
+        self.assertEqual(floor_broken([({"subject": "Acme", "plain": "Your code is 482 913",
+                                         "html": None, "why": "", "kind": "code"},
+                                        "Acme\nYour code is [hidden]",
+                                        "Acme\nYour code is [hidden] 913", None)]).keys(),
+                         {"Thunderbird, code"})
+
+    def test_no_piece_0_5_0_hid_reaches_the_model(self):
+        """In any mail, a code, a password or anything else 0.5.0 hid, on either path, with no
+        exceptions: 0.5.0's rules run too (see mail_floor)."""
+        broken = floor_broken(self.read)
+        if broken:
+            self.fail(report(broken, "pieces 0.5.0 hid that reach the model"))
+
+    def test_the_floor_is_0_5_0s_hiding(self):
+        """mail_floor holds 0.5.0's rules as they were: the same patterns as the copy here, the
+        same source, and what it hides, read as 0.5.0 read a text, is what 0.5.0 hid, with what no
+        one sees and the glue that stands for an inline tag put in anywhere."""
+        for name in ("SPACE", "UNSEEN", "SECRET_WORD", "PASSWORD_WORD", "GIVEN", "SHAPED",
+                     "NOT_A_SECRET", "JUST_GIVEN", "SIGN_IN_TALK", "NUMBER", "ALONE", "YEAR"):
+            floor, old = getattr(mail_floor, name), globals()["OLD_" + name]
+            self.assertEqual((floor.pattern, floor.flags), (old.pattern, old.flags), name)
+        source = Path(mail_floor.__file__).read_text(encoding="utf-8")
+        block = source[source.index("# ---- tuxistant/mail.py at v0.5.0"):
+                       source.index("# ---- end of 0.5.0")].split("\n", 1)[1]
+        self.assertEqual(hashlib.sha256(block.encode()).hexdigest(),
+                         "5cfb2962deaab766dc5addf7e0e5b5d0d90761246cc328467dfa76c45449a0e3")
+        rng, odd = random.Random(5), ("\u200b", "\u00ad", "\ufeff", "\u00a0", mail.JOIN)
+        for m, *_ in self.read:
+            for text in (m["subject"], index_text(m)):
+                for glue in ("", mail.JOIN):
+                    marked = "".join(char + (rng.choice(odd) if rng.random() < 0.05 else "")
+                                     for char in text)
+                    floor = mail_floor.hidden(marked, glue)
+                    read = mail_floor._gone(glue).sub("", mail_floor.SPACE.sub(" ", floor))
+                    self.assertEqual(once(read), once(old_hide(marked.replace(glue, "")
+                                                               if glue else marked)), marked)
+
+    def test_the_floor_takes_nothing_from_this_versions_own_rules(self):
+        """What this version's own rules hide with the floor gone, they hide with it there, on
+        both paths: the mail they read has the floor's [hidden] in it, where a word that said it
+        talks of signing in may have stood."""
+        with mock.patch.object(mail_floor, "spans", lambda text, glue="": []):
+            alone = [(thunderbird_read(m["subject"], index_text(m)), online_read(m))
+                     for m, *_ in self.read]
+        lost = defaultdict(list)
+        for (m, _old, *now), before in zip(self.read, alone):
+            for token in m["tokens"]:
+                for path, seen, without in zip(("Thunderbird", "Online Accounts"), now, before):
+                    if shown(token, without) == "no" and shown(token, seen) != "no":
+                        lost[path].append(f"{m['why']}: {seen!r}")
+        if lost:
+            self.fail(report(lost, "tokens hidden without the floor but shown with it"))
 
     def test_no_ordinary_number_0_5_0_read_out_is_hidden(self):
         hidden_now = defaultdict(list)

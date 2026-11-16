@@ -19,7 +19,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.mail_index import ACCOUNT, NEVER, PROVIDER, SAMPLE, SENT, SENT_MAIL, build  # noqa: E402
-from tuxistant import mail, realtime, research, websearch  # noqa: E402
+from tuxistant import mail, mail_floor, realtime, research, websearch  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 from tuxistant.realtime import RealtimeError  # noqa: E402
@@ -271,7 +271,7 @@ DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nTha
 # word for one may end, a ligature NFKC makes 18 characters of, and runs of what no one sees that
 # a keycap's mark could follow.
 SLOW_TO_HIDE = ("码!" * 10_000, "pin!" * 5000, "é" * 16_000, "×" * 16_000, "À" * 16_000,
-                "\ufdfa" * 20_000, "\ufe0f" * 20_000, "\u3164" * 20_000)
+                "\ufdfa" * 20_000, "\ufe0f" * 20_000, "\u3164" * 20_000, "\U000e0020" * 20_000)
 # A code only the second pass hides, once the lines are joined: "Your Acme code is 482 913".
 SPLIT_LINES = "Your Acme code is\n482\n913\nThanks, the team"
 
@@ -819,6 +819,12 @@ class Secrets(Base):
                 ("חשבון\nהשתמש בקוד האבטחה 1234567 עבור חשבון Acme", "1234567"),
                 ("חשבון\nהקודים שלך: 482913, 559102", "559102"),
                 ("חשבון\nקודי האימות שלך: 482913", "482913"),
+                # And with each of the other letters that can stand before it: "to", "that",
+                # "from" and "as".
+                ("חשבון\nלקוד האימות 482913 תוקף של 10 דקות", "482913"),
+                ("חשבון\nודא שהקוד 482913 לא נמסר לאיש", "482913"),
+                ("חשבון\nהתעלם מהקוד 482913 אם לא ביקשת אותו", "482913"),
+                ("חשבון\nכקוד אימות, הזן 482913", "482913"),
                 # The Arabic "is" that goes with رمز, and the English ones in capitals.
                 ("حساب\nرمز المرور الخاص بك هو shamsilyawm", "shamsilyawm"),
                 ("Code\nرمز التحقق الخاص بك هو 2047", "2047"),
@@ -977,6 +983,11 @@ class Secrets(Base):
                 ("初始密码：“abc12345”，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
                 ("临时密码：‘abc12345’，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
                 ("仮パスワード：“Abc12345”有効期限は2026年3月12日です。", "有効期限は2026年3月12日です。"),
+                ("初始密码：„abc12345“，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
+                ("初始密码：‚abc12345‘，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
+                ("初始密码：‹abc12345›，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
+                ("初始密码：『abc12345』，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
+                ("初始密码：《abc12345》，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
                 ("パスワード：«Abc12345»有効期限は2026年3月12日です。", "有効期限は2026年3月12日です。"),
                 # A sentence about the password that ends before a colon, and a number glued to a
                 # counter after one, which says how long or when.
@@ -1008,6 +1019,80 @@ class Secrets(Base):
                 *((f"{sample['subject']}\n{sample['body']}", sample["body"][-25:])
                   for sample in SAMPLE if sample["subject"] != "One time code")):
             self.assertIn(kept, mail._hide(text), text[:50])
+
+    def test_what_0_5_0_hid_is_hidden_on_both_paths(self):
+        """0.5.0's rules run too (see mail_floor), on Thunderbird's mail and on a mail read
+        through Online Accounts. A password after another language's word for "is" and a colon,
+        a code before a currency's code in capitals or glued to an amount by a character no one
+        sees, and a year given as a code after "is" in a later sentence than the word for one:
+        the last three only those rules hide, and they are still hidden."""
+        cases = (("Votre mot de passe est temporaire : soleil", "soleil"),
+                 ("Tu contraseña es provisional: girasol", "girasol"),
+                 ("Sua senha é provisória: girassol", "girassol"),
+                 ("Ihr Passwort (bitte ändern Sie es nach der ersten Anmeldung): sonnenschein",
+                  "sonnenschein"),
+                 ("Hello from Acme. To sign in, use 482913 CAD team.", "482913"),
+                 ("To sign in, use 482913\u2063EUR 49.99 at ACME SHOP.", "482913"),
+                 ("Your Acme booking code is HMX4K2. The season is 2026.", "2026"))
+
+        def both(text):
+            return (mail._secret_free("Acme", text)[1],
+                    mail._kept(mail.terms("Acme"), "Acme <account@acme.example>", "Acme", text,
+                               False, glue=mail.JOIN)[2])
+
+        for text, secret in cases:
+            self.assertNotIn(secret, mail_floor.hidden(text), text)
+            for read in both(text):
+                self.assertNotIn(secret, read, text)
+                self.assertIn(mail.HIDDEN, read, text)
+        with mock.patch.object(mail_floor, "spans", lambda text, glue="": []):
+            for text, secret in cases[4:]:
+                for read in both(text):
+                    self.assertIn(secret, read, text)
+
+    def test_0_5_0s_rules_are_quick_over_mail_built_to_be_slow(self):
+        """They looked for "code" from each letter of a run of "é" to its end, and for a code
+        after each word for one on its own: 20,000 characters of either took seconds. A text
+        with a word of more than 100 such letters or more than 500 words for a secret is hidden
+        whole, and one just short of that as 0.5.0 hid it."""
+        from tests.test_mail_differential import old_hide
+        for hostile in ("é" * 20_000, "码!" * 10_000, ("é" * 101 + " ") * 196, "码!" * 501):
+            started = time.monotonic()
+            self.assertEqual(mail_floor.hidden(hostile), mail.HIDDEN)
+            self.assertLess(time.monotonic() - started, 0.25)
+        for near in (("é" * 100 + " ") * 3 + "Your code is 482913.", "码!" * 500 + " 482913"):
+            self.assertEqual(mail_floor.hidden(near), old_hide(near))
+            self.assertNotIn("482913", mail_floor.hidden(near))
+
+    def test_a_mail_whose_0_5_0_pieces_cost_too_much_to_find_still_talks_of_signing_in(self):
+        """Hidden in the text as it came, as such a mail's are, "valid" of "Your password is
+        valid for one day" went, and with it the talk that hides a code with a space between
+        each digit far from the word for one. The text is one that making plain changes, as a
+        plain one is read where it stands."""
+        text = ("Your password is valid for one day." + " Thanks\u00a0for being with us." * 8
+                + " Reference 4 8 2 9 1 3 is yours.")
+        with mock.patch.object(mail, "FLOOR_WORK", 0):
+            body = mail._secret_free("Acme", text)[1]
+        self.assertNotIn("valid", body)
+        self.assertNotIn("4 8 2 9 1 3", body)
+        self.assertEqual(mail._secret_free("Acme", text)[1], body)
+
+    def test_a_year_range_on_the_line_after_a_colon_is_read_out(self):
+        """A year is a code given right after a colon on its own line only: "Season:" over
+        "2024–2025" lost the range wherever a word for a code or a password came before it, as
+        the lines are joined for the second pass, where it stands right after the colon. 0.5.0
+        hid the first year of it after its own words, so that still is."""
+        for text, kept, gone in (
+                ("كلمة المرور: Abc123\nالموسم:\n2024–2025", "2024–2025", "Abc123"),
+                ("Your booking code is HMX4K2.\nSeason:\n2024–25", "–25", "HMX4K2"),
+                ("Your Acme password: Sunny7\nSeason:\n\n\n\n\n\n2024–2025\nThanks",
+                 "2024–2025", "Sunny7")):
+            for read in (mail._secret_free("Acme", text)[1], mail._shown(text, mail.BODY_CHARS)):
+                self.assertIn(kept, read, text)
+                self.assertNotIn(gone, read, text)
+        for text, gone in (("كلمة المرور: Abc123\nالموسم: 2024–2025", "2024"),
+                           ("קוד האימות שלך: 2005—10 דקות", "2005")):
+            self.assertNotIn(gone, mail._secret_free("Acme", text)[1], text)
 
     def test_what_it_costs(self):
         """A booking's code is beside the word for a secret, and goes the same way."""

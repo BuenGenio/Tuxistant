@@ -105,11 +105,18 @@ SKIPPED_HTML = re.compile(r"(?i)<(script|style|head)\b")
 CLOSER = {name: re.compile(rf"(?i)</{name}\s*>") for name in ("script", "style", "head")}
 BREAK = re.compile(r"(?i)<br\s*/?>|</(?:p|div|tr|li|h\d|table|blockquote)\s*>")
 TAG = re.compile(r"<[^>]*>")
-# Inline tags between two digits, which a browser and Thunderbird's index join: made spaces,
-# "<span>48</span><span>29</span><span>13</span>" read "48 29 13", which no sender wrote. A tag
-# holds no "<", so each is looked for no further than the next one.
-INLINE = re.compile(r"(?i)(?<=\d)(?:</?(?:a|b|big|code|em|font|i|mark|s|small|span|strong|sub"
-                    r"|sup|tt|u|wbr)\b[^<>]*>)+(?=\d)")
+# Inline tags, which a browser and Thunderbird's index join what stands either side of. Between
+# two digits they are taken out: made spaces, "<span>48</span><span>29</span><span>13</span>"
+# read "48 29 13", which no sender wrote. Anywhere else they are mail.JOIN, which 0.5.0's rules
+# read as nothing, as they read Thunderbird's index, and this version's own as a space, as a
+# label joined to its code would hide it no more: "<span>Your code is</span><span>482913</span>".
+# So "<span>KQ</span><span>7X</span><span>9B</span>" is KQ7X9B to 0.5.0's rules, as it was in
+# Thunderbird. A tag holds no "<", so each is looked for no further than the next one.
+INLINE_TAG = (r"</?(?:a|b|big|code|em|font|i|mark|s|small|span|strong|sub|sup|tt|u|wbr)\b"
+              r"[^<>]*>")
+INLINE = re.compile(rf"(?i)(?<=\d)(?:{INLINE_TAG})+(?=\d)")
+JOINED = re.compile(rf"(?i)(?:{INLINE_TAG})+")
+SPACING = re.compile(rf"[\s{mail.JOIN}]+")    # what str.split splits on, and the joins
 
 
 class Account(NamedTuple):
@@ -579,8 +586,15 @@ def _decoded(part) -> str:
 
 
 def _unhtml(text: str) -> str:
-    text = _untagged(BREAK.sub("\n", _skipped(text)))
-    return "\n".join(" ".join(line.split()) for line in html.unescape(text).splitlines())
+    """HTML as text, with each line's spaces made one and mail.JOIN where an inline tag stood
+    (see INLINE). One beside a space is that space."""
+    text = _untagged(BREAK.sub("\n", _skipped(text.replace(mail.JOIN, " "))))
+    return "\n".join(_spaced(line) for line in html.unescape(text).splitlines())
+
+
+def _spaced(line: str) -> str:
+    return SPACING.sub(lambda run: " " if run[0].strip(mail.JOIN) else mail.JOIN,
+                       line).strip(" " + mail.JOIN)
 
 
 def _skipped(text: str) -> str:
@@ -606,7 +620,7 @@ def _untagged(text: str) -> str:
     one in turn read on to the end of the text every time, so nothing past the last ">" is
     looked at."""
     end = text.rfind(">") + 1
-    return TAG.sub(" ", INLINE.sub("", text[:end + 1])) + text[end + 1:]
+    return TAG.sub(" ", JOINED.sub(mail.JOIN, INLINE.sub("", text[:end + 1]))) + text[end + 1:]
 
 
 def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
@@ -621,7 +635,7 @@ def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
             continue
         kind = part.get_content_type()
         if kind == "text/plain" and plain is None:
-            plain = (_decoded(part), fetched_cut and part is leaves[-1])
+            plain = (_decoded(part).replace(mail.JOIN, " "), fetched_cut and part is leaves[-1])
         elif kind == "text/html" and marked is None:
             marked = (_decoded(part), fetched_cut and part is leaves[-1])
     text, cut = plain if plain and plain[0].strip() else (
@@ -723,7 +737,8 @@ def _hidden(stems: list[mail.Term], message, found: dict, body: str, every: bool
     """mail._kept of one mail, or None."""
     try:
         return mail._kept(stems, _author(message), _subject(message), body, every,
-                          _subject_cut(message, found.get(b"HEADER", b"")), cut, talking)
+                          _subject_cut(message, found.get(b"HEADER", b"")), cut, talking,
+                          mail.JOIN)
     except Exception:
         return None
 

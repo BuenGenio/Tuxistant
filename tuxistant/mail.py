@@ -15,7 +15,9 @@ The inbox is also where every other account sends its sign-in codes and password
 holds one is still found and read, but the secret itself is hidden first, from the search, from
 the model and so from what is said: whatever stands where a code or a password would, beside the
 word for one. Hiding too much costs a number in an answer. Holding back the whole mail, which
-this once did, told the user that their hotel booking didn't exist.
+this once did, told the user that their hotel booking didn't exist. 0.5.0's rules for that run
+first, unchanged (see mail_floor), so whatever 0.5.0 hid is hidden still; the rules here hide
+more, as well as they can.
 
 Junk and Trash are skipped, as that is where hostile mail lands. What gets past them can still be
 a lie. Among mails that hold as many of the question's words, one from an address that first
@@ -36,6 +38,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
+from . import mail_floor
 from .gate import Speak
 from .knowledge import FILLER
 from .realtime import RealtimeError
@@ -67,6 +70,7 @@ TALK_REACH = 20         # how far before a cut its rest is read from, for words 
 GROWTH = 18             # the most characters NFKC makes of one, as it does of U+FDFA
 PIECE = 1000            # how much of a text that may grow that far is made plain at a time
 REST_CHARS = 50_000     # and how much of that rest: past it, a mail is taken to talk of signing in
+FLOOR_WORK = 4_000_000  # pieces 0.5.0 hides in one text, times its length, looked for made plain
 TRIED = 3               # mails shown to the model, best first
 CHECKED = 6             # the best few have their senders looked up, which can cost a scan each
 MAX_CHECKED = 30        # and more of the best, so that six strangers can't fill every place
@@ -194,6 +198,10 @@ SENT_MAIL = 60          # and the folders of mail the user sent
 # rather than too little: a promo code and a booking's reference go too. A code can come one
 # character to a line, as one to an HTML block does, or one to a table cell, with a space between:
 # either way it is read as the code it is.
+# Where goamail._unhtml took out an inline HTML tag that a browser and Thunderbird's index join
+# what stands either side of: 0.5.0's rules read it as nothing (see _secret_free), and these as a
+# space, as a control character is one to them.
+JOIN = "\x00"
 # Every line end str.splitlines knows, as HTML's lines are split on in goamail._unhtml.
 LINE_END = re.compile(r"\r\n|[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 SPACE = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u2800\u3000]")
@@ -371,7 +379,6 @@ SUFFIXED = re.compile(rf"\d+{SUFFIX}", re.I)
 # "code is 2048", "Code: 2048" or "Ihr Code lautet 2048" is no year: after a colon or a word for
 # "is" that GIVEN knows, looked for this far back (see _just_given).
 JUST_GIVEN = re.compile(rf"(?:\b(?:{IS})|[:=])\s*$")
-JUST_GIVEN_THEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)    # 0.5.0's, across sentences
 SENTENCE_END = re.compile(r"[.!?](?=\s)|\u3002")     # NFKC has made the wide ! and ? plain
 GIVEN_BACK = 12
 # A mail that talks of signing in: there, any number of the right length may be the code. A space
@@ -702,16 +709,17 @@ def _searched(author: str) -> str:
     return NO_REPLY.sub(" ", ADDRESS_END.sub(r"\1", author.removesuffix(INDEX_TAIL)))
 
 
-def _spans(seen: str, talk: bool = False, look: bool = True,
-           lead: int = 0) -> list[tuple[int, int]]:
+def _spans(seen: str, talk: bool = False, look: bool = True, lead: int = 0,
+           joined: bool = False) -> list[tuple[int, int]]:
     """Where a secret may stand in a mail, as the model reads it: see SECRET_WORD. It is looked
     for as the hiding reads the text (see _apart), but for a password given after "is" or a
     colon, which is whatever the model reads there, dashes and dots in it too: "Sunny—Day—7".
     talk: take it that the mail talks of signing in, as one cut short may have done so past the
     cut. look: whether to look for that talk here as well, which a caller that already has
     needn't. lead: how far from its start the text is in reach of a word for a secret that
-    stands before it, in the other part of the mail (see _passed)."""
-    spans, ends, text = [], [], _apart(seen)
+    stands before it, in the other part of the mail (see _passed). joined: the text's lines are
+    joined, as the model reads them (see _ranged)."""
+    spans, ends, text = [], [], _apart(seen, joined)
     for word in SECRET_WORD.finditer(text):
         ends.append(word.end())
         if PASSWORD_WORD.fullmatch(word[0]):
@@ -796,12 +804,12 @@ def _shaped(text: str, ends: list[int], lead: int = 0) -> list[tuple[int, int]]:
 
 
 def _just_given(text: str, since: int, at: int) -> bool:
-    """Whether a colon or a word for "is" stands right before at, looked for back to since: the
-    English "is" or a colon as 0.5.0 had them, the others only in the sentence of the word for a
-    code that since ends, so "Ihr Buchungscode ist HMX4K2. Die Saison ist 2026." keeps its year."""
+    """Whether a colon or a word for "is" stands right before at, looked for back to since, in
+    the sentence of the word for a code that since ends, so "Ihr Buchungscode ist HMX4K2. Die
+    Saison ist 2026." keeps its year. Across sentences, 0.5.0's own rules still take an English
+    "is" or a colon (see mail_floor)."""
     back = max(since, at - GIVEN_BACK)
-    return bool(JUST_GIVEN_THEN.search(text, back, at) or JUST_GIVEN.search(text, back, at)
-                and not SENTENCE_END.search(text, since, at))
+    return bool(JUST_GIVEN.search(text, back, at) and not SENTENCE_END.search(text, since, at))
 
 
 def _ordinary(found: str) -> bool:
@@ -895,28 +903,30 @@ def _visible(text: str, read: bool = True, limit: int = CLEANED_CHARS) -> tuple[
     return text, grown
 
 
-def _apart(text: str) -> str:
+def _apart(text: str, joined: bool = False) -> str:
     """A text as the hiding reads it, made plain: every dash but the hyphen-minus, every dot and
     every ellipsis a space (see DASH and DOTS), but between two numbers where no code is written
     that way, where it is a slash (see RANGE). Each is one character for one, so what is hidden
-    in this is hidden in the text."""
+    in this is hidden in the text. joined: its lines are joined (see _ranged)."""
     if DASH in text or DOT in text or ELLIPSIS in text:
         ends = []   # of the words for a secret, looked for once and only if a year needs them
-        text = RANGE.sub(lambda found: _ranged(found, ends), text)
+        text = RANGE.sub(lambda found: _ranged(found, ends, joined), text)
     return text.translate(APART)
 
 
-def _ranged(found: re.Match, ends: list) -> str:
+def _ranged(found: re.Match, ends: list, joined: bool = False) -> str:
     """A dash, a dot or an ellipsis between two numbers a slash where no code is written that way
     (see RANGE): from a number of one or two digits, as days, minutes, pence and hours such as
     2pm are, to one of up to three, "6–120"; or from a year to a later one, whole or its last two
     digits, "2024–2025", "2024–25" or "1999–00", but not "2025—10 minutes left", nor from a year
-    given as a code (see _given_year), "Your PIN is 2005—10 minutes left".
-    Any other stays as it was."""
+    given as a code (see _given_year), "Your PIN is 2005—10 minutes left". That is looked for only
+    where the lines are still there, as the first pass reads them: joined, as the model reads
+    them, "Season:\\n2024–25" was "Season: 2024–25", and the range was hidden after a word for a
+    code all the same. Any other stays as it was."""
     first, start, mark, end = found.groups()
     if len(start) <= 2:
         ranged = len(end) <= 3
-    elif not YEAR.fullmatch(start) or _given_year(found.string, found.start(), ends):
+    elif not YEAR.fullmatch(start) or not joined and _given_year(found.string, found.start(), ends):
         ranged = False
     elif len(end) == 2:
         ranged = int(end) > int(start[2:]) or int(end) == (int(start) + 1) % 100
@@ -926,10 +936,13 @@ def _ranged(found: re.Match, ends: list) -> str:
 
 
 def _given_year(text: str, at: int, ends: list) -> bool:
-    """Whether a year at at is given as a code: right after a colon or a word for "is", within
-    reach of a word for a secret before it, as _shaped has it. Anywhere, "Season:\\n2024–25" on
-    a line of its own was a code. ends: those words' ends, filled the first time they are needed."""
-    if not JUST_GIVEN.search(text, max(0, at - GIVEN_BACK), at):
+    """Whether a year at at is given as a code: right after a colon or a word for "is" on its
+    line, within reach of a word for a secret before it, as _shaped has it. Anywhere,
+    "Season:\\n2024–25" on a line of its own was a code, and so it was after a word for a code
+    on the line before the colon. ends: those words' ends, filled the first time they are
+    needed."""
+    line = text.rfind("\n", 0, at) + 1
+    if not JUST_GIVEN.search(text, max(line, at - GIVEN_BACK), at):
         return False
     if not ends:
         ends += [-1, *(word.end() for word in SECRET_WORD.finditer(text))]
@@ -977,8 +990,12 @@ def _talks(rest: str | None) -> bool:
     inside the words count as they would before the cut. A rest that NFKC grows past twice
     REST_CHARS, as only ligatures do, is taken to talk of signing in rather than read."""
     first, grown = _made_plain(rest or "", 2 * REST_CHARS)
-    return grown or any(SIGN_IN_TALK.search(_apart(text))
-                        for text in (first, _plain(_joined(first))))
+    return grown or _talking(first)
+
+
+def _talking(plain: str) -> bool:
+    """Whether a text made plain talks of signing in, as it is and with its lines joined."""
+    return any(SIGN_IN_TALK.search(_apart(text)) for text in (plain, _plain(_joined(plain))))
 
 
 def _plain(text: str) -> str:
@@ -999,7 +1016,7 @@ def _joined(text: str) -> str:
     return clean(URL.sub(" ", text), len(text))
 
 
-def _hide(text: str, cut: bool = False, talk: bool | None = None) -> str:
+def _hide(text: str, cut: bool = False, talk: bool | None = None, joined: bool = False) -> str:
     """A mail's text with whatever may be a sign-in code or a password taken out. Odd spaces
     are made plain first, as the model would read "482\u00a0913" as the code it is, and a code
     spelt out one character to a line is put on a line of its own, as the model would read it.
@@ -1013,19 +1030,21 @@ def _hide(text: str, cut: bool = False, talk: bool | None = None) -> str:
     _uncut would end it, as part of a code may be too short to hide. Secrets are looked for in
     all of it, so a word for a code in what goes still hides the code before it, and one that
     runs past that end is hidden whole. A text that NFKC grew too far is cut there (see
-    _normal), and taken to talk of signing in."""
+    _normal), and taken to talk of signing in. joined: its lines are joined (see _ranged)."""
     text, grown = _made_plain(text)
     cut = cut or grown
-    return _hidden(text, cut, cut if talk is None else talk or grown)
+    return _hidden(text, cut, cut if talk is None else talk or grown, joined=joined)
 
 
-def _hidden(text: str, cut: bool, talk: bool, look: bool = True, lead: int = 0) -> str:
-    """_hide, of a text already made plain (see _spans for look and lead). Secrets that overlap,
-    as "482913" and "482913-it" do, are one [hidden]. They are looked for with every dash a space
-    (see _apart and _spans), and cut from the text as it is."""
+def _hidden(text: str, cut: bool, talk: bool, look: bool = True, lead: int = 0,
+            joined: bool = False, floor=()) -> str:
+    """_hide, of a text already made plain (see _spans for look, lead and joined), and of what
+    else is in floor (see _floored). Secrets that overlap, as "482913" and "482913-it" do, are one
+    [hidden]. They are looked for with every dash a space (see _apart and _spans), and cut from
+    the text as it is."""
     stop = len(_uncut(_apart(text))) if cut else len(text)
     out, at = [], 0
-    for start, end in _spans(text, talk, look, lead):
+    for start, end in sorted([*_spans(text, talk, look, lead, joined), *floor]):
         if start >= stop:
             break
         if end > at:
@@ -1096,7 +1115,7 @@ def _rest_talks(db: sqlite3.Connection, docid, length: int) -> bool:
 
 def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
           subject_cut: bool = False, body_cut: bool = False,
-          talk_past: bool = False) -> tuple | None:
+          talk_past: bool = False, glue: str = "") -> tuple | None:
     """(author, subject, body) with secrets hidden, as the model will read them, if the mail is
     about the question as the model will read it. A mail found only by its code is not found,
     and nor is one found only by digits that the second pass hides once the lines are joined, or
@@ -1105,12 +1124,12 @@ def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
     searched = _searched(author)
     if not _about(stems, searched, subject, body, every):
         return None
-    subject, body = _secret_free(subject, body, subject_cut, body_cut, talk_past)
+    subject, body = _secret_free(subject, body, subject_cut, body_cut, talk_past, glue)
     return (author, subject, body) if _about(stems, searched, subject, body, every) else None
 
 
 def _secret_free(subject: str, body: str, subject_cut: bool = False, body_cut: bool = False,
-                 talk_past: bool = False) -> tuple[str, str]:
+                 talk_past: bool = False, glue: str = "") -> tuple[str, str]:
     """(subject, body) with secrets hidden by both passes, as the model will read them. The
     caller says which of the two was cut short where it was read, and whether the body talks of
     signing in past that cut (see _hide). A subject is cut only by a hostile header, so it is
@@ -1120,33 +1139,88 @@ def _secret_free(subject: str, body: str, subject_cut: bool = False, body_cut: b
     The model reads the subject and the text together, so whether a mail talks of signing in is
     decided for the whole of it: "Sign in to Acme" over "Enter 482913 on the page" hides the
     number, and so does a word for a secret in the subject, as in "Your Acme code" over a number
-    on its own, or near the top of the text, as in "Acme 482913" over "Here is your code."."""
-    (subject, grown), (body, body_grown) = _made_plain(subject), _made_plain(body)
+    on its own, or near the top of the text, as in "Acme 482913" over "Here is your code.".
+
+    What 0.5.0's rules hide is hidden too, in the first pass (see _floored), with the glue that
+    goamail puts where an inline HTML tag stood (see JOIN)."""
+    (subject, grown, floor, talked), (body, body_grown, body_floor, body_talked) = \
+        _floored(subject), _floored(body, glue)
     subject_cut, body_cut = subject_cut or grown, body_cut or body_grown
     texts, talk = _passed([subject, body], [subject_cut, body_cut],
-                          talk_past or grown or body_grown, subject_cut)
+                          talk_past or grown or body_grown or talked or body_talked, subject_cut,
+                          floors=(floor, body_floor))
     seen = [_plain(_joined(text[:CLEANED_CHARS])) for text in texts]    # as _shown reads them
     (subject, body), _ = _passed(seen, [len(text) > CLEANED_CHARS for text in texts], talk,
-                                 subject_cut)
+                                 subject_cut, True)
     return subject, body
 
 
-def _passed(texts: list[str], cuts: list[bool], talk: bool,
-            subject_cut: bool) -> tuple[list[str], bool]:
+def _passed(texts: list[str], cuts: list[bool], talk: bool, subject_cut: bool,
+            joined: bool = False, floors: tuple = ((), ())) -> tuple[list[str], bool]:
     """One pass of hiding over a mail's [subject, body], made plain as that pass reads them,
     with sign-in talk anywhere in the mail counting for all of it (see _secret_free), and whether
     there was any. A word for a secret in one counts for the other (see CROSS_WORD) as that talk,
     and as a word for one would that stood right before it, as the model reads "Subject: ..."
     and then the text: so "Your Acme code" over "Enter KQW-XBT" hides the letters as it would in
     one line. One in the subject reaches the first SECRET_REACH characters of the text, and one
-    near the top of the text (see NAMED_CHARS) the whole subject."""
+    near the top of the text (see NAMED_CHARS) the whole subject. joined: the texts' lines are
+    joined (see _ranged). floors: what else to hide in each (see _floored)."""
     apart = [_apart(text) for text in texts]
     talk = talk or any(SIGN_IN_TALK.search(text) for text in apart)
     named = CROSS_WORD.search(apart[1][:NAMED_CHARS]), CROSS_WORD.search(apart[0])
     return [_hidden(texts[0], cuts[0], bool(talk or subject_cut or named[0]), False,
-                    len(texts[0]) if named[0] else 0),
+                    len(texts[0]) if named[0] else 0, joined, floors[0]),
             _hidden(texts[1], cuts[1], bool(talk or named[1]), False,
-                    SECRET_REACH if named[1] else 0)], talk
+                    SECRET_REACH if named[1] else 0, joined, floors[1])], talk
+
+
+def _floored(text: str, glue: str = "") -> tuple[str, bool, list[tuple[int, int]], bool]:
+    """(a mail's subject or text made plain, whether NFKC grew it too far (see _made_plain), where
+    in that what 0.5.0's rules hide in the text as it came stands, whether it talks of signing
+    in). 0.5.0's rules read the text as it came (see mail_floor), and what they hide is found in
+    the text made plain (see _placed), so the rules here read the whole of it, as they did
+    without them, and what either hides is hidden. A mail whose pieces would cost too much to
+    find, as a stranger's can be built to, has them hidden in the text as it came instead, and
+    is made plain after that: whether it talks of signing in is then read from it as it was, as
+    0.5.0 could hide a word of that talk as a password, "Your password is valid for a day"."""
+    plain, grown = _made_plain(text)
+    spans = mail_floor.spans(text, glue)
+    if not spans:
+        return plain, grown, [], False
+    placed = spans if plain == text else _placed(text, plain, spans)
+    if placed is not None:
+        return plain, grown, placed, False
+    talked = _talking(plain)
+    plain, again = _made_plain(mail_floor.put(text, spans))
+    return plain, grown or again, [], talked
+
+
+def _placed(text: str, plain: str, spans: list) -> list[tuple[int, int]] | None:
+    """Where in plain, the text made plain, each piece of text these spans hold stands, made
+    plain itself: at the same count of that piece before it, or everywhere it stands if making
+    the text plain changed how many there are. A piece that isn't there at all is shown nowhere,
+    as "8209" of "482&#8209;913" isn't. None if looking would cost too much (see FLOOR_WORK)."""
+    pieces = {text[start:end] for start, end in spans}
+    if len(pieces) * (len(text) + len(plain)) > FLOOR_WORK:
+        return None
+    where, placed = {}, []
+    for piece in pieces:
+        made = _made_plain(piece)[0].strip()
+        where[piece] = made, _starts(text, piece), _starts(plain, made) if made else []
+    for start, end in spans:
+        made, raw, found = where[text[start:end]]
+        ats = found if len(raw) != len(found) else [found[bisect.bisect_left(raw, start)]]
+        placed += [(at, at + len(made)) for at in ats]
+    return sorted(placed)
+
+
+def _starts(text: str, piece: str) -> list[int]:
+    """Every place a piece starts in a text, overlapping or not."""
+    found, at = [], text.find(piece)
+    while at >= 0:
+        found.append(at)
+        at = text.find(piece, at + 1)
+    return found
 
 
 def _about(stems: list[Term], author: str, subject: str, body: str, every: bool = False) -> bool:
@@ -1377,7 +1451,7 @@ def _shown(text: str, limit: int) -> str:
     stands for, so cutting after hiding also keeps the text within the limit. Only a hostile mail
     grows past CLEANED_CHARS, and it loses what that cut may have split."""
     cut = len(text) > CLEANED_CHARS
-    return _fit(_hide(_joined(text[:CLEANED_CHARS]), cut), limit)
+    return _fit(_hide(_joined(text[:CLEANED_CHARS]), cut, joined=True), limit)
 
 
 async def _note(question: str, mail: Mail, config, seconds: float) -> str:

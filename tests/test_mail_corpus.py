@@ -2,8 +2,9 @@
 can stand between its groups or glue it to the word before or after, every encoding, and ordinary
 mail with dates, ranges, prices, counters, phone and order numbers, each read by 0.5.0 (the copy
 kept in test_mail_differential, which agrees with the 0.5.0 tag on every one of these mails) and by
-both of this version's paths. No code 0.5.0 hid may reach the model, and no ordinary number 0.5.0
-read out may be hidden, but for what docs/CONTRACT.md step 5 and docs/ROADMAP.md say.
+both of this version's paths. Nothing 0.5.0 hid may reach the model, in any of these mails, as
+0.5.0's rules run too (tuxistant/mail_floor.py), and no ordinary number 0.5.0 read out may be
+hidden, but for what docs/CONTRACT.md step 5 and docs/ROADMAP.md say.
 
 Every mail is made up. What no one sees is written as an escape here, as in test_mail_differential.
 """
@@ -17,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_mail_differential import (  # noqa: E402
-    index_text, meant_to_hide, meant_to_show, old_read, online_read, report, shown,
+    floor_broken, index_text, meant_to_hide, old_read, online_read, report, shown,
     thunderbird_read)
 from tuxistant import mail  # noqa: E402
 
@@ -249,26 +250,7 @@ def corpus() -> list[dict]:
     return mails
 
 
-# ---- what docs/ROADMAP.md and CONTRACT.md step 5 say is read out or hidden on purpose -------
-CAPITALS = re.compile(r"(?-i:[A-Z]{3})\b")      # a currency's code in capitals: "482913 CAD team"
-SIGN = re.compile(r"[%€£$¥₩₹₽₴]|บาท")
-SPACE_LIKE = set(SPACES) | set(UNSEEN) | {""}
-
-
-def given_up(m: dict) -> bool:
-    """A code before a currency's code in capitals, or glued to an amount by a character no one
-    sees, which the model reads as a space, or straight to a currency's sign, as no sender writes
-    a code; and pairs of letters and digits in HTML (see meant_to_show)."""
-    if m["html"] is not None and meant_to_show(m, None):
-        return True
-    if m["after"] is None or m["after"][0] not in SPACE_LIKE:
-        return False
-    word = m["after"][1]
-    if CAPITALS.match(word) and word[:3] not in ("DO ", "ACM"):
-        return True
-    return bool(SIGN.match(word)) or word.lower().startswith(("eur", "usd", "gbp", "pounds"))
-
-
+# ---- what docs/ROADMAP.md and CONTRACT.md step 5 say is hidden on purpose ----------------
 def meant(m: dict, number: str) -> bool:
     """As test_mail_differential has it, and a range of three digits and three or four and four
     after a word for a code, a number glued to Chinese, Japanese or Korean in a mail that talks of
@@ -296,16 +278,14 @@ class Systematically(unittest.TestCase):
         self.assertGreater(sum(1 for m, *_ in self.read if m["kind"] != "ordinary"), 4000)
         self.assertGreater(sum(1 for m, *_ in self.read if m["kind"] != "code"), 800)
 
-    def test_no_code_hidden_by_0_5_0_reaches_the_model(self):
-        shown_now = defaultdict(list)
-        for m, old, tb, goa in self.read:
-            code = m["tokens"][0]
-            if m["kind"] != "ordinary" and shown(code, old) == "no" and not given_up(m):
-                for path, read in (("Thunderbird", tb), ("Online Accounts", goa)):
-                    if shown(code, read) != "no":
-                        shown_now[f"{path}, {m['family']}"].append(f"{m['why']}: {read!r}")
-        if shown_now:
-            self.fail(report(shown_now, "codes 0.5.0 hid that reach the model"))
+    def test_no_piece_0_5_0_hid_reaches_the_model(self):
+        """A code, a password or anything else 0.5.0 hid in any of these mails, with no
+        exceptions: a code before a currency's code in capitals, "482913 CAD team", or glued to
+        an amount by a character no one sees, and pairs of letters and digits that an HTML mail
+        writes two to a tag, all of which this version's own rules show, included."""
+        broken = floor_broken(self.read)
+        if broken:
+            self.fail(report(broken, "pieces 0.5.0 hid that reach the model"))
 
     def test_no_ordinary_number_0_5_0_read_out_is_hidden(self):
         hidden_now = defaultdict(list)
