@@ -1,4 +1,5 @@
-"""Refuses ssh, docker and systemctl while switched on, started any of the ways listed here.
+"""Refuses ssh, docker and systemctl while switched on, started any of the ways listed here,
+and the programs that start ssh themselves by its name: scp, sftp, slogin, sshpass and autossh.
 
 An audit hook sees each start before it happens: subprocess.Popen, which subprocess.run and a
 Popen imported by name both start through, os.posix_spawn, os.exec* and os.system. A start is
@@ -10,7 +11,8 @@ $(...) still runs inside them, and are taken out of a word as a shell takes them
 and eval "ssh x" are ssh; single quotes do, so RemoteCommand's exec sh -c '...' is one word,
 whose docker is a level further down. os.spawn* and pty.spawn fork first and start the program
 in the child, where a refusal only ends the child, so every os.fork and os.forkpty is refused
-while it is on. It can't see a script given on stdin, as sh with input=, which is in no word.
+while it is on. It can't see a script given on stdin, as sh with input=, which is in no word,
+or another program that starts ssh itself, such as git or rsync with a host in its words.
 ssh reads ~/.ssh/config from the home in the passwd file whatever HOME says, so a ProxyCommand
 or Match exec of the developer's would run. An audit hook can't be taken out again, so this one
 stays for the whole run and does nothing while off."""
@@ -20,7 +22,7 @@ import re
 import shlex
 import sys
 
-REFUSED = {"ssh", "docker", "systemctl"}
+REFUSED = {"ssh", "scp", "sftp", "slogin", "sshpass", "autossh", "docker", "systemctl"}
 REACHED = []        # what was refused, for the test to check
 # Where each event has the program and its words: os.system has only a command line.
 WATCHED = {"subprocess.Popen": (0, 1), "os.posix_spawn": (0, 1), "os.exec": (0, 1),
@@ -53,7 +55,7 @@ def _split(text: str) -> list[str]:
 
 
 def refused(words: list[str]) -> bool:
-    """Whether a start with these words runs ssh, docker or systemctl. A shell takes double
+    """Whether a start with these words runs one of REFUSED. A shell takes double
     quotes out of a word, so "/usr/bin/ssh" and s"s"h are ssh to it."""
     return any(os.path.basename(piece.replace('"', "")) in REFUSED
                for word in words for piece in (word, *_split(word)))

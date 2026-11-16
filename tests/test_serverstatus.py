@@ -30,6 +30,8 @@ from tuxistant.skills import Skills, leaves_home
 ROOT = Path(__file__).resolve().parent.parent
 HOST = "myserver.example"
 CONFIG = {**DEFAULTS, "server": f"{HOST}:8080"}
+# What podman-docker's docker says on its error output, which INNER sends with the list.
+PODMAN_SAYS = b"Emulate Docker CLI using podman. Create /etc/containers/nodocker to quiet msg.\n"
 FULL = (b"@docker\n"
         b"localai-api-1|localai/localai:latest-gpu|Up 3 days\n"
         b"searxng|searxng/searxng:latest|Up 2 hours (unhealthy)\n"
@@ -47,7 +49,8 @@ REAL_THIS_COMPUTER = serverstatus._this_computer
 REAL_RUN = serverstatus._run
 # What INNER must be, word for word: anything added before a read would run on your server with
 # no click, and RemoteCommand runs it on this computer.
-PINNED_INNER = ('export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T="timeout 8"; '
+PINNED_INNER = ('export LC_ALL=C PATH="$PATH:/usr/local/bin:/usr/local/sbin"; '
+                'T=; timeout 8 true >/dev/null 2>&1 && T="timeout 8"; '
                 'D=1; $T systemctl is-active --quiet docker.service 2>/dev/null || '
                 '{ $T systemctl is-active --quiet docker.socket 2>/dev/null && D=; }; '
                 '$T systemctl --user is-active --quiet docker.service 2>/dev/null || '
@@ -137,7 +140,11 @@ class NoRealSsh(Case):
                 ("by os.system", lambda: os.system("/nonexistent/ssh x")),
                 ("by os.posix_spawn", lambda: os.posix_spawn("/nonexistent/systemctl",
                                                              ["systemctl"], nowhere)),
-                ("by os.execv", lambda: os.execv("/nonexistent/ssh", ["ssh", HOST]))):
+                ("by os.execv", lambda: os.execv("/nonexistent/ssh", ["ssh", HOST])),
+                # Each starts the real ssh itself, which reads the developer's ssh_config.
+                ("scp", lambda: subprocess.run(["scp", f"{HOST}:/f", "-"], env=nowhere)),
+                ("sftp in a script", lambda: subprocess.run(["sh", "-c", f"sftp {HOST}"],
+                                                            env=nowhere))):
             with self.subTest(how):
                 with self.assertRaises(AssertionError):
                     start()
@@ -214,6 +221,15 @@ class NoRealSsh(Case):
                         serverstatus.read(HOST)
                 self.assertEqual(REACHED, [reached])
                 REACHED.clear()
+
+    def test_programs_that_start_ssh_themselves_are_refused(self):
+        """A read that fetched a file with scp or sftp would start the real ssh."""
+        for words in (["scp", "x:/f", "-"], ["/usr/bin/sftp", "x"], ["slogin", "x"],
+                      ["sshpass", "-V"], ["autossh", "-M", "0", "x"],
+                      ["sh", "-c", "scp x:/f /tmp/f"], ["sh", "-c", 'cd / && "sftp" x']):
+            with self.subTest(words):
+                self.assertTrue(no_ssh.refused(words))
+        self.assertFalse(no_ssh.refused(["git", "status"]))
 
     def test_other_programs_still_start(self):
         done = subprocess.run([sys.executable, "-c", "print('ok')"], capture_output=True)
@@ -720,9 +736,14 @@ class Filtering(Case):
                            "and ")
         config = {**CONFIG, "server": "plex.lan:8080"}
         for answer, sentence in (
-                (refused + services, services_only + "I couldn't check docker there."),
-                (silent + services, services_only + "I couldn't check docker there."),
+                (refused + services,
+                 services_only + "your user isn't allowed to use docker there."),
+                (silent + services, services_only + "docker didn't answer there."),
                 (b"@docker\n@exit 300\n" + services, services_only + "docker is stopped there."),
+                # docker not on the PATH ssh gets: it may be elsewhere, as Synology's is, or the
+                # containers may be podman's, k3s's or LXC's, so a no names the list unread.
+                (b"@docker\n@exit 127\n" + services,
+                 services_only + "I couldn't find docker there."),
                 # Plex from its .deb, in an LXC box that wasn't booted with systemd
                 (containers + no_systemd, containers_only + "I couldn't read its system services."),
                 (containers + b"@systemd\n@exit 127\n",
@@ -743,19 +764,10 @@ class Filtering(Case):
         self.assertEqual(text, "Nothing called plex is running on your server. On your server, 2 "
                                "docker containers are running: sonarr and radarr. There are 3 "
                                "system services running: nginx, smbd and cups.")
-        # A plain Plex box with no docker: no container can be running, so the no is true.
-        for args, start in (({"name": "plex", "on": "my server"},
-                             "Nothing called plex is running on your server. "),
-                            ({"name": "plex"}, "Your server answered, and nothing called plex is "
-                                               "running there or on this computer. ")):
-            with self.subTest(args, docker="missing"):
-                text = asked(args, config, answer=(0, b"@docker\n@exit 127\n" + services, b""))[1]
-                self.assertEqual(text, start + "Docker isn't installed on your server. There are 3 "
-                                               "system services running: nginx, smbd and cups.")
         self.assertEqual(said({"name": "jellyfin"}, config,
                               (0, b"@docker\n@exit 127\n" + services, b""))[0],
-                         "I don't see jellyfin among the services running on your server, and "
-                         "docker isn't installed there.")
+                         "I don't see jellyfin among the services running on your server, and I "
+                         "couldn't find docker there.")
 
     def test_the_server_s_label_said_as_the_server_names_what_matches_it_first(self):
         """"Is Plex running on my Plex server?" on plex.lan: the label is said as the server, so
@@ -849,10 +861,11 @@ class Filtering(Case):
 
     def test_nothing_called_it_is_never_said_beside_what_matches_it(self):
         """Whatever the server is called and however the name is asked after, and never when
-        docker or systemd couldn't be read, as what wasn't read may have it, unless docker
-        isn't there to run anything. "I don't see it on your server" names no list, so it needs
-        both read too. Looked for here first, the label gets "Not really" or "Partly" only for
-        something called it exactly: the server answered, and nas-backup isn't called nas."""
+        docker or systemd couldn't be read, as what wasn't read may have it, a docker not found
+        included, or when docker's list was podman's of the ssh user alone. "I don't see it on
+        your server" names no list, so it needs both read too. Looked for here first, the label
+        gets "Not really" or "Partly" only for something called it exactly: the server answered,
+        and nas-backup isn't called nas."""
         refused = b"@docker\npermission denied while trying to connect\n@exit 1\n"
         services = b"@systemd\nnginx.service loaded active running x\n@exit 0\n"
         # What has the label inside its name, but doesn't start with it
@@ -874,7 +887,9 @@ class Filtering(Case):
                    refused + b"@systemd\n@exit 1\n", refused + near, b"@docker\n@exit 300\n" + near,
                    b"@docker\n@exit 127\n" + near, b"@docker\nCannot connect\n@exit 1\n" + near,
                    b"@docker\ncomplex|img|Up 1 day\n@exit 0\n@systemd\n@exit 127\n",
-                   sick + services, sick + b"@systemd\n@exit 1\n")
+                   sick + services, sick + b"@systemd\n@exit 1\n",
+                   b"@docker\n" + PODMAN_SAYS + b"complex|img|Up 1 day\n@exit 0\n" + services,
+                   b"@docker\n" + PODMAN_SAYS + b"@exit 0\n" + near)
         nothing = re.compile(r"(?:I checked the server in Settings, \S+ )?(?:Nothing called (.+?) "
                              r"is running on your server|Your server answered, and nothing called "
                              r"(.+?) is running there or on this computer)\.")
@@ -894,8 +909,8 @@ class Filtering(Case):
                         if said_no := nothing.match(text):
                             self.assertFalse(serverstatus._seen(found, said_no[1] or said_no[2])
                                              [1], text)
-                            self.assertTrue(found["docker"] is not None or found["docker_missing"],
-                                            text)
+                            self.assertIsNotNone(found["docker"], text)
+                            self.assertFalse(found["podman"], text)
                             self.assertIsNotNone(found["systemd"], text)
                         for no in re.finditer(r"I don't see (.+?) on your server", text):
                             if " among " not in no[1]:
@@ -917,17 +932,22 @@ class Filtering(Case):
         self.assertIn("searxng, up 2 hours (unhealthy)", said({"name": "searx ng"})[0])
 
     def test_a_near_match_beside_a_list_not_read_says_which_one_it_couldn_t_check(self):
-        """nas.lan with the user outside the docker group, or docker stopped, and homebridge
-        running: Home Assistant usually runs in docker, which wasn't read, so "I don't see home
-        assistant on your server" beside homebridge would be a no for what may be there. So
-        for plex beside a complex-backup service on plex.lan, with or without an on."""
+        """nas.lan with the user outside the docker group, docker stopped, not answering or not
+        found, and homebridge running: Home Assistant usually runs in docker, which wasn't read,
+        so "I don't see home assistant on your server" beside homebridge would be a no for what
+        may be there. So for plex beside a complex-backup service on plex.lan, with or without
+        an on."""
         homebridge = (b"@systemd\nhomebridge.service loaded active running x\n"
                       b"nginx.service loaded active running x\n@exit 0\n")
         backup = b"@systemd\ncomplex-backup.service loaded active running x\n@exit 0\n"
         here = "Your server answered, and nothing called plex is running on this computer. "
         for docker, why in ((b"@docker\npermission denied while trying to connect\n@exit 1\n",
-                             "I couldn't check docker there"),
-                            (b"@docker\n@exit 300\n", "docker is stopped there")):
+                             "your user isn't allowed to use docker there"),
+                            (b"@docker\nCannot connect to the Docker daemon\n@exit 1\n",
+                             "docker didn't answer there"),
+                            (b"@docker\n@exit 300\n", "docker is stopped there"),
+                            (b"@docker\nsh: docker: not found\n@exit 127\n",
+                             "I couldn't find docker there")):
             for server, args, start, services, seen in (
                     ("nas.lan", {"name": "home assistant", "on": "my server"}, "", homebridge,
                      ("home assistant", "homebridge")),
@@ -966,7 +986,11 @@ class Filtering(Case):
         answered = "Your server answered, and nothing called nas is running on this computer. "
         for answer, sentence in (
                 (refused + services, "I don't see nas among the services running on your server, "
-                                     "and I couldn't check docker there."),
+                                     "and your user isn't allowed to use docker there."),
+                # Synology's docker, off the PATH ssh gets: not found isn't none there.
+                (b"@docker\nsh: docker: not found\n@exit 127\n" + services,
+                 "I don't see nas among the services running on your server, and I couldn't find "
+                 "docker there."),
                 (refused + b"@systemd\n@exit 1\n",
                  f"I couldn't check for nas on your server. {serverstatus.DOCKER_REFUSED} I "
                  "couldn't read your server's system services."),
@@ -988,7 +1012,12 @@ class Filtering(Case):
                      answer=(0, refused + services, b""))[1]
         self.assertEqual(text, "Your server answered, and nothing called diskstation is running on "
                                "this computer. I don't see diskstation among the services running "
-                               "on your server, and I couldn't check docker there.")
+                               "on your server, and your user isn't allowed to use docker there.")
+        # Plex in Synology's Container Manager, asked after on "my server".
+        text = asked({"name": "plex", "on": "my server"}, config,
+                     answer=(0, b"@docker\nsh: docker: not found\n@exit 127\n" + services, b""))[1]
+        self.assertEqual(text, "I don't see plex among the services running on your server, and I "
+                               "couldn't find docker there.")
         # All up, it is a yes; called nas exactly, that decides; asked after on "my server", nas
         # is a program there.
         paused = b"@docker\nnas-backup|restic/restic|Up 1 day (Paused)\n@exit 0\n" + services
@@ -1002,6 +1031,43 @@ class Filtering(Case):
                  "Not really: on your server I see the docker container nas-backup, paused.")):
             with self.subTest(args=args, answer=answer[8:40]):
                 self.assertEqual(asked(args, config, answer=(0, answer, b""))[1], sentence)
+
+    def test_podman_s_docker_is_said_to_show_only_your_user_s_containers(self):
+        """podman-docker's docker ps is a rootless podman ps, which doesn't list what root runs:
+        anything but a yes says so, and the label gets no flat no."""
+        services = b"@systemd\nnginx.service loaded active running x\n@exit 0\n"
+        none = b"@docker\n" + PODMAN_SAYS + b"@exit 0\n" + services
+        some = (b"@docker\n" + PODMAN_SAYS + b"web|nginx|Up 1 day\nnextcloud-db|mariadb|Up 2 days\n"
+                b"redis|redis|Up 1 day (Paused)\n@exit 0\n" + services)
+        podman = serverstatus.PODMAN
+        plex = {**CONFIG, "server": "plex.lan:8080"}
+        no_plex = "I don't see plex among the docker containers or services running on your server."
+        for args, config, answer, sentence in (
+                ({"on": "my server"}, CONFIG, none,
+                 f"No docker containers are running on your server. {podman} There is 1 system "
+                 "service running: nginx."),
+                ({"name": "nextcloud", "on": "my server"}, CONFIG, none,
+                 "I don't see nextcloud among the docker containers or services running on your "
+                 f"server. {podman}"),
+                ({"name": "nextcloud", "on": "my server"}, CONFIG, some,
+                 "Yes, on your server I see the docker container nextcloud-db, up 2 days."),
+                ({"name": "redis", "on": "my server"}, CONFIG, some,
+                 f"Not really: on your server I see the docker container redis, paused. {podman}"),
+                ({"name": "nextcloud app", "on": "my server"}, CONFIG, some,
+                 "I don't see nextcloud app on your server, but I see the docker container "
+                 f"nextcloud-db, up 2 days. {podman}"),
+                ({"name": "plex", "on": "my server"}, plex, none, f"{no_plex} {podman}"),
+                ({"name": "plex"}, plex, none, "Your server answered, and nothing called plex is "
+                                               f"running on this computer. {no_plex} {podman}"),
+                ({"name": "my plex"}, plex, none, f"No docker containers are running on your "
+                                                  f"server. {podman} There is 1 system service "
+                                                  "running: nginx.")):
+            with self.subTest(args=args, answer=answer[90:120]):
+                self.assertEqual(asked(args, config, answer=(0, answer, b""))[1], sentence)
+        # Without the shim's note, as with /etc/containers/nodocker, it can't be told.
+        self.assertEqual(said(answer=(0, none.replace(PODMAN_SAYS, b""), b""))[0],
+                         "No docker containers are running on your server. There is 1 system "
+                         "service running: nginx.")
 
     def test_a_name_not_there(self):
         text, _, _ = said({"name": "jellyfin"})
@@ -1112,11 +1178,11 @@ class Errors(Case):
         no_docker = (b"@docker\n@exit 127\n@systemd\nnginx.service loaded active running x\n"
                      b"@exit 0\n")
         text = said(answer=(0, no_docker, b""))[0]
-        self.assertTrue(text.startswith("Docker isn't installed on your server."), text)
-        self.assertIn("There is 1 system service running: nginx.", text)
+        self.assertEqual(text, "I couldn't find docker on your server. There is 1 system service "
+                               "running: nginx.")
         self.assertEqual(said({"name": "x1"}, answer=(0, no_docker, b""))[0],
-                         "I don't see x1 among the services running on your server, and docker "
-                         "isn't installed there.")
+                         "I don't see x1 among the services running on your server, and I "
+                         "couldn't find docker there.")
         down = (b"@docker\nCannot connect to the Docker daemon at unix:///var/run/docker.sock.\n"
                 b"@exit 1\n@systemd\n@exit 0\n")
         self.assertEqual(said(answer=(0, down, b""))[0], "Docker on your server didn't answer me.")
@@ -1126,7 +1192,9 @@ class Errors(Case):
         no_systemd = b"@docker\nweb|nginx|Up 1 minute\n@exit 0\n@systemd\n@exit 127\n"
         self.assertIn("doesn't use systemd", said(answer=(0, no_systemd, b""))[0])
         neither = b"@docker\n@exit 127\n@systemd\n@exit 127\n"
-        self.assertEqual(said(answer=(0, neither, b""))[0], serverstatus.NEITHER)
+        self.assertEqual(said(answer=(0, neither, b""))[0], "I couldn't find docker or systemd on "
+                                                            "your server, so I can't tell what's "
+                                                            "running there.")
         unread = b"@docker\nweb|nginx|Up 1 minute\n@exit 0\n@systemd\n@exit 1\n"
         self.assertEqual(said(answer=(0, unread, b""))[0],
                          "On your server, 1 docker container is running: web. I couldn't read "
@@ -1163,7 +1231,7 @@ class Errors(Case):
         for answer, why in (
                 (refused, f"{serverstatus.DOCKER_REFUSED} Your server doesn't use systemd, so I "
                           "can't list its services."),
-                (no_docker, "Docker isn't installed on your server. I couldn't read your "
+                (no_docker, "I couldn't find docker on your server. I couldn't read your "
                             "server's system services.")):
             with self.subTest(why):
                 self.assertEqual(said({"name": "jellyfin"}, answer=(0, answer, b""))[0],
@@ -1304,6 +1372,8 @@ printf '%s\\n' "$*" >> {log}/timeout
 shift
 exec "$@"
 """
+# What podman-docker's /usr/bin/docker says first, unless /etc/containers/nodocker is there.
+PODMAN_NOTE = f"echo \"{PODMAN_SAYS.decode().strip()}\" >&2\n"
 DOCKER_CALL = ["ps", "--format", "{{.Names}}|{{.Image}}|{{.Status}}"]
 SYSTEMCTL_CALL = ["list-units", "--type=service", "--state=running", "--no-legend", "--plain",
                   "--no-pager"]
@@ -1324,10 +1394,11 @@ BWRAP = shutil.which("bwrap", path="/usr/bin:/bin")
 INSERTED = "docker version >/dev/null; "    # by test_a_call_before_the_read_is_seen, a read
 
 
-def _sandbox(folder: str, *read_only: str) -> list[str]:
+def _sandbox(folder: str, *read_only: str, local_bin: str | None = None) -> list[str]:
     """bwrap with /usr, the folder, any read-only ones and nothing else: no /run, so no docker or
-    D-Bus socket, no network, and no home with an ~/.ssh in it. Empty where bwrap can't run,
-    which leaves the dead sockets."""
+    D-Bus socket, no network, and no home with an ~/.ssh in it. With local_bin, that folder is
+    all /usr/local holds, as /usr/local/bin: INNER adds it to PATH, and what this computer has
+    there must stay out of reach. Empty where bwrap can't run, which leaves the dead sockets."""
     if not BWRAP:
         return []
     argv = [BWRAP, "--unshare-all", "--die-with-parent", "--ro-bind", "/usr", "/usr"]
@@ -1340,6 +1411,8 @@ def _sandbox(folder: str, *read_only: str) -> list[str]:
              "--dev", "/dev", "--tmpfs", "/tmp", "--bind", folder, folder]
     for path in read_only:
         argv += ["--ro-bind", path, path]
+    if local_bin and os.path.isdir("/usr/local"):
+        argv += ["--tmpfs", "/usr/local", "--ro-bind", local_bin, "/usr/local/bin"]
     argv.append("--")
     try:
         works = subprocess.run([*argv, "/bin/sh", "-c", "true"], timeout=10,
@@ -1366,9 +1439,11 @@ def _no_bwrap() -> str | None:
 
 class RemoteCommand(Case):
     """What goes over ssh, run here by a shell as the server's would, with stand-ins for docker
-    and systemctl first and alone on PATH: never the real ones. It runs only once it is the
-    pinned read-only command, in a sandbox with no /run where bwrap works, and with dead docker
-    and D-Bus sockets, as /usr/bin/docker named by its path would get past the stand-ins."""
+    and systemctl first on PATH: never the real ones. INNER adds /usr/local/bin and sbin after
+    them, which the sandbox replaces with a folder of stand-ins, and without one the tests skip
+    where this computer has a docker or systemctl there. It runs only once it is the pinned
+    command, in a sandbox with no /run where bwrap works, and with dead docker and D-Bus
+    sockets, as /usr/bin/docker named by its path would get past the stand-ins."""
 
     def setUp(self):
         super().setUp()
@@ -1384,13 +1459,20 @@ class RemoteCommand(Case):
         for name in ("sh", "true"):
             os.symlink(shutil.which(name, path="/usr/bin:/bin"), os.path.join(self.bin, name))
         self.env = {"PATH": self.bin, "HOME": folder.name, **DEAD_SOCKETS}
-        self.sandbox = _sandbox(folder.name)
+        self.local_bin = os.path.join(folder.name, "local-bin")     # /usr/local/bin there
+        os.mkdir(self.local_bin)
+        self.sandbox = _sandbox(folder.name, local_bin=self.local_bin)
+        if "/usr/local/bin" not in self.sandbox and any(
+                os.path.exists(os.path.join(where, name)) for name in ("docker", "systemctl")
+                for where in ("/usr/local/bin", "/usr/local/sbin")):
+            self.skipTest("no sandbox to keep the docker or systemctl in /usr/local out of reach")
 
-    def fake(self, name: str, script: str, service=0, socket=0, user_service=3, user_socket=3):
-        """A stand-in on PATH; for systemctl, docker.service and docker.socket are up or not by
-        the exit codes given, for the system and for the user, who has no docker of their own
-        unless one is given."""
-        path = os.path.join(self.bin, name)
+    def fake(self, name: str, script: str, service=0, socket=0, user_service=3, user_socket=3,
+             where: str | None = None):
+        """A stand-in on PATH, or in where; for systemctl, docker.service and docker.socket are up
+        or not by the exit codes given, for the system and for the user, who has no docker of
+        their own unless one is given."""
+        path = os.path.join(where or self.bin, name)
         with open(path, "w") as file:
             file.write(script.format(log=shlex.quote(self.log), service=service, socket=socket,
                                      user_service=user_service, user_socket=user_socket))
@@ -1543,6 +1625,35 @@ class RemoteCommand(Case):
         if why := _no_bwrap():
             self.skipTest(why)
         self.assertTrue(self.sandbox, "bwrap works here, but the tests run without the sandbox")
+        if os.path.isdir("/usr/local"):
+            self.assertIn("/usr/local/bin", self.sandbox, "this computer's /usr/local is reached")
+
+    def test_a_docker_in_usr_local_bin_is_found(self):
+        """Synology's DSM keeps docker there, which a command over ssh doesn't have on its PATH
+        there, so INNER adds it, after what PATH has."""
+        if "/usr/local/bin" not in self.sandbox:
+            self.skipTest("no sandbox to put a stand-in at /usr/local/bin")
+        self.fake("systemctl", FAKE_SYSTEMCTL)
+        self.fake("docker", FAKE_DOCKER, where=self.local_bin)
+        for shell in SHELLS:
+            with self.subTest(shell):
+                found = self.read(shell)
+                self.assertEqual([c["name"] for c in found["docker"]], ["web", "plex"])
+                self.assertEqual(self.calls("docker"), [DOCKER_CALL])
+        # What PATH has comes first: a stand-in there, not the one in /usr/local/bin.
+        self.fake("docker", "#!/bin/sh\nprintf 'first|img|Up 1 day\\n'\n")
+        self.assertEqual([c["name"] for c in self.read()["docker"]], ["first"])
+
+    def test_podman_s_docker_is_told_apart_by_what_it_says(self):
+        """podman-docker's docker says so on its error output, which the read keeps: its podman
+        ps lists only the ssh user's containers, not root's."""
+        self.fake("systemctl", FAKE_SYSTEMCTL, service=3, socket=3)
+        self.fake("docker", FAKE_DOCKER.replace("#!/bin/sh\n", "#!/bin/sh\n" + PODMAN_NOTE))
+        found = self.read()
+        self.assertEqual([c["name"] for c in found["docker"]], ["web", "plex"])
+        self.assertTrue(found["podman"])
+        self.fake("docker", FAKE_DOCKER)
+        self.assertFalse(self.read()["podman"])
 
     def test_docker_missing_with_or_without_a_real_timeout(self):
         self.fake("systemctl", FAKE_SYSTEMCTL)
@@ -1708,15 +1819,28 @@ class Docs(Case):
                 self.assertIn("podman's pause process running for your user", text)
                 self.assertRegex(text, r"a rootless one whose user `?docker\.socket`? still "
                                        r"listens|a rootless one whose user socket still listens")
+                # podman's shim writes its storage the first time, and sees only your user's;
+                # a docker pointed at podman's socket starts its API service.
+                self.assertNotIn("read-only command", text)
+                self.assertNotIn("starts no service there", text)
+                self.assertIn("creates podman's container storage", text)
+                self.assertIn("lists only your user's containers, not root's", text)
+                self.assertIn("starts podman's API service for your user for a few seconds", text)
         self.assertIn("systemctl --user is-active --quiet docker.socket", serverstatus.INNER)
+        skills = " ".join(self.skills().split())
+        self.assertIn("What limits it instead is a fixed command that reads, apart from what "
+                      "podman's shim sets up", skills)
+        self.assertIn(f'"{serverstatus.PODMAN}"', skills)
 
     def test_what_was_not_read_is_described_as_it_is_said(self):
         skills = " ".join(self.skills().split())
         for answer, clause in (
                 (b"@docker\npermission denied\n@exit 1\n@systemd\n@exit 0\n",
-                 "and I couldn't check docker there"),
+                 "and your user isn't allowed to use docker there"),
+                (b"@docker\nCannot connect to the Docker daemon\n@exit 1\n@systemd\n@exit 0\n",
+                 "and docker didn't answer there"),
                 (b"@docker\n@exit 300\n@systemd\n@exit 0\n", "and docker is stopped there"),
-                (b"@docker\n@exit 127\n@systemd\n@exit 0\n", "and docker isn't installed there"),
+                (b"@docker\n@exit 127\n@systemd\n@exit 0\n", "and I couldn't find docker there"),
                 (b"@docker\n@exit 0\n@systemd\n@exit 1\n",
                  "and I couldn't read its system services"),
                 (b"@docker\n@exit 0\n@systemd\n@exit 127\n", "and it doesn't use systemd")):
@@ -1724,6 +1848,19 @@ class Docs(Case):
                 self.assertTrue(said({"name": "jellyfin"}, answer=(0, answer, b""))[0]
                                 .endswith(f", {clause}."))
                 self.assertIn(f'"{clause}"', skills)
+        # Each is said, so the changelog's "and why" is so.
+        changelog = " ".join((ROOT / "CHANGELOG.md").read_text().split())
+        for clause in ("your user isn't allowed to use docker there", "docker didn't answer there",
+                       "docker is stopped there", "I couldn't find docker there"):
+            self.assertIn(f'"{clause}"', changelog)
+        # Not found is only what sh's 127 says: docker may be elsewhere, or containers podman's.
+        for path in ("docs/SKILLS.md", "CHANGELOG.md"):
+            with self.subTest(path):
+                text = " ".join((ROOT / path).read_text().split())
+                for wrong in ("docker isn't installed", "or docker not installed",
+                              "where no container can run", "I couldn't check docker there"):
+                    self.assertNotIn(wrong, text)
+                self.assertIn("under podman, k3s or LXC", text)
 
     def test_what_it_needs_of_ssh_and_what_marks_the_conversation(self):
         text = self.skills()
@@ -1792,6 +1929,30 @@ class Docs(Case):
                               "systemd read", text.replace("With", "with"))
                 self.assertIn("a `plex` container that keeps restarting", text)
                 self.assertIn("what matches the whole name is said first in its part", text)
+
+    def test_the_label_looked_for_here_first_is_described_as_it_starts(self):
+        """Only the label asked after as a program starts "Your server answered": docker for
+        docker.lan asks for the whole list, which starts with the no from here."""
+        text = asked({"name": "docker"}, {**CONFIG, "server": "docker.lan:8080"})[1]
+        self.assertTrue(text.startswith("Nothing called docker is running on this computer. On "
+                                        "your server"), text)
+        changelog = " ".join((ROOT / "CHANGELOG.md").read_text().split())
+        self.assertNotIn('every answer but a yes starts with "Your server answered"', changelog)
+        self.assertIn('Looked for here first, the label gets an answer that starts with "Your '
+                      'server answered" unless it is a yes or something there is called the '
+                      'label exactly', changelog)
+        self.assertIn('a label that is a word such as docker, for `docker.lan`, asks for the whole '
+                      'list, which starts "Nothing called docker is running on this computer"',
+                      changelog)
+
+    def test_a_word_no_name_there_has_is_described_as_it_is_said(self):
+        """"plex media server" beside a plex container: media is in no name there."""
+        plex = b"@docker\nplex|lscr.io/linuxserver/plex|Up 1 day\n@exit 0\n@systemd\n@exit 0\n"
+        text = said({"name": "plex media server", "on": "my server"},
+                    {**CONFIG, "server": "nas.lan:8080"}, (0, plex, b""))[0]
+        self.assertEqual(text, "I don't see plex media server on your server, but I see the docker "
+                               "container plex, up 1 day.")
+        self.assertIn(f'"plex media server" gets "{text}"', " ".join(self.skills().split()))
 
     def test_restarting_and_partly_are_described_as_they_are_said(self):
         nextcloud = (b"@docker\nnextcloud|nextcloud|Restarting (1) 1 second ago\n"

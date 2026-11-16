@@ -1,10 +1,13 @@
 """What runs on your own server: its docker containers and systemd services, read over ssh.
 
-One fixed, read-only command goes to the host of the server in Settings, and nothing the model
+One fixed command that reads goes to the host of the server in Settings, and nothing the model
 wrote goes with it: a name to look for is matched here, once the answer is back. The command
-starts no service there, not even a docker you stopped that its socket would start again, a
-rootless one whose user socket still listens included, though where docker is podman's shim,
-podman ps leaves podman's pause process running for your user. The login opens a session there
+starts no docker there, not even one you stopped that its socket would start again, a
+rootless one whose user socket still listens included. Where docker is podman's shim, docker ps
+is a rootless podman ps: the first time, it creates podman's container storage for your user,
+it leaves podman's pause process running for your user, and it lists only your user's
+containers, not root's. A docker pointed at podman's socket starts podman's API service for
+your user for a few seconds, though no containers. The login opens a session there
 as any ssh does, which starts your user services if nothing else keeps them running, and what
 the server runs for any login with that key, such as an authorized_keys command=, a
 ForceCommand or ~/.ssh/rc, runs too, before the command or in its place. ssh takes the port and
@@ -44,8 +47,11 @@ MAX_NAME_CHARS = 40
 # listens would start it again, and with it every container set to restart, so it is asked only
 # when the service is up or no socket waits for it, for the system and then for the user, as a
 # rootless docker's socket is the user's: with no user manager to ask, both of those fail and
-# change nothing. No "!": csh expands it even in quotes.
-INNER = ("export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T=\"timeout 8\"; "
+# change nothing. Synology's DSM keeps docker in /usr/local/bin, which a command over ssh
+# doesn't have on its PATH there, so that is added, after what is there. No "!": csh expands it
+# even in quotes.
+INNER = ("export LC_ALL=C PATH=\"$PATH:/usr/local/bin:/usr/local/sbin\"; "
+         "T=; timeout 8 true >/dev/null 2>&1 && T=\"timeout 8\"; "
          "D=1; $T systemctl is-active --quiet docker.service 2>/dev/null || "
          "{ $T systemctl is-active --quiet docker.socket 2>/dev/null && D=; }; "
          "$T systemctl --user is-active --quiet docker.service 2>/dev/null || "
@@ -95,12 +101,16 @@ HOST_KEY_CHANGED = ("Your server's ssh host key has changed since this computer 
 CANT_CONNECT = "I couldn't connect to your server over ssh. It may be off, or out of reach from here."
 TIMED_OUT = "Your server took too long to answer, so I stopped."
 UNREADABLE = "Your server answered, but not in a way I could read."
-NEITHER = "Your server has neither docker nor systemd, so I can't tell what's running there."
+NEITHER = "I couldn't find docker or systemd on your server, so I can't tell what's running there."
 BAD_NAME = "Say the name of one program or service, in a word or two."
 DOCKER_REFUSED = ("Your user on the server isn't allowed to use docker, so I can't list its "
                   "containers.")
 DOCKER_STOPPED = "Docker is stopped on your server, so I didn't start it."
 OVER_SSH = "Yes, I reached your server over ssh."
+PODMAN = "Docker there is podman, so I see only your user's containers."
+# What podman-docker's docker says on its error output each time, unless /etc/containers/nodocker
+# is there: a rootless podman ps sees only the ssh user's containers.
+PODMAN_SHIM = "Emulate Docker CLI using podman."
 
 # "@" as in wg-quick@wg0, which a service here may be called too
 NAME = re.compile(r"[a-z0-9][a-z0-9 ._@-]{0,%d}" % (MAX_NAME_CHARS - 1))
@@ -389,7 +399,10 @@ def _services(lines: list[str]) -> list[str]:
 
 def read(host: str) -> dict:
     """What runs on host, or Unanswered. "docker" and "systemd" are lists, or None when that
-    one isn't there, with why in "docker_missing" or "systemd_missing"."""
+    one wasn't read, with why in "docker_missing" or "systemd_missing" for one not found, as
+    sh's 127 says. A docker not found may be on another PATH, or the containers podman's, so it
+    is no sign that none run. "podman" is a docker list from podman's shim, of your user's
+    containers alone."""
     code, output, errors = _run(command(host), _env())
     if code == 255:
         raise Unanswered(_ssh_failed(errors))
@@ -403,8 +416,11 @@ def read(host: str) -> dict:
         result[f"{part}_missing"] = status == NOT_FOUND
     result["docker_stopped"] = sections.get("docker", (None,))[0] == STOPPED
     # docker's own complaint, read only to pick a sentence
+    docker_lines = sections.get("docker", (0, []))[1]
     result["docker_refused"] = result["docker"] is None and any(
-        "permission denied" in line.casefold() for line in sections.get("docker", (0, []))[1])
+        "permission denied" in line.casefold() for line in docker_lines)
+    result["podman"] = result["docker"] is not None and any(
+        line.startswith(PODMAN_SHIM) for line in docker_lines)
     if result["docker"] is None and result["systemd"] is None and (
             result["docker_missing"] and result["systemd_missing"]):
         raise Unanswered(NEITHER)
@@ -484,7 +500,7 @@ def _plural(count: int, one: str) -> str:
 
 def _docker_unread(found: dict) -> str:
     if found["docker_missing"]:
-        return "Docker isn't installed on your server."
+        return "I couldn't find docker on your server."
     if found["docker_stopped"]:
         return DOCKER_STOPPED
     return DOCKER_REFUSED if found["docker_refused"] else "Docker on your server didn't answer me."
@@ -539,6 +555,8 @@ def _everything(found: dict, first: set = frozenset()) -> str:
                         f"{_listed(again, SAID_CONTAINERS)}.")
         if paused := named(_paused):
             said.append(f"Paused, so not running: {_listed(paused, SAID_CONTAINERS)}.")
+    if found["podman"]:
+        said.append(PODMAN)
     services = found["systemd"]
     if services is None:
         said.append("Your server doesn't use systemd, so I can't list its services."
@@ -633,21 +651,33 @@ def _deciding(matches: list[Match]) -> list[Match]:
 def _start(matches: list[Match], plainly: bool = False) -> str:
     """plainly leaves out "Not really" and "Partly", for what isn't called the name and may not
     be what was asked after."""
-    ups = [m.up for m in _deciding(matches)]
-    if all(ups):
+    if _all_up(matches):
         return "Yes, on your server I see"
     if plainly:
         return "On your server I see"
-    return "Partly: on your server I see" if any(ups) else "Not really: on your server I see"
+    return ("Partly: on your server I see" if any(m.up for m in _deciding(matches))
+            else "Not really: on your server I see")
+
+
+def _all_up(matches: list[Match]) -> bool:
+    return all(m.up for m in _deciding(matches))
 
 
 def _no_docker(found: dict) -> str:
-    """Why docker's containers weren't read, after an "and"."""
+    """Why docker's containers weren't read, after an "and". Not found is all sh's 127 says:
+    docker may be on another PATH there, or the containers podman's."""
     if found["docker_missing"]:
-        return "docker isn't installed there"
+        return "I couldn't find docker there"
     if found["docker_stopped"]:
         return "docker is stopped there"
-    return "I couldn't check docker there"
+    if found["docker_refused"]:
+        return "your user isn't allowed to use docker there"
+    return "docker didn't answer there"
+
+
+def _podman(found: dict) -> str:
+    """After a sentence that isn't a yes: root's containers weren't seen."""
+    return f" {PODMAN}" if found["podman"] else ""
 
 
 def _one(found: dict, name: str, matches: list[Match], whole: bool,
@@ -656,7 +686,8 @@ def _one(found: dict, name: str, matches: list[Match], whole: bool,
     may have it."""
     seen = [m.said for m in matches]
     if seen and whole:
-        return f"{_start(matches, plainly)} {_listed(seen, SAID_MATCHES)}."
+        said = f"{_start(matches, plainly)} {_listed(seen, SAID_MATCHES)}."
+        return said if _all_up(matches) else said + _podman(found)
     if found["docker"] is None and found["systemd"] is None:
         return f"I couldn't check for {name} on your server. {_everything(found)}"
     if found["docker"] is None:
@@ -670,7 +701,8 @@ def _one(found: dict, name: str, matches: list[Match], whole: bool,
         no = f"I don't see {name} on your server"
     else:
         no = f"I don't see {name} among the docker containers or services running on your server"
-    return f"{no}, but I see {_listed(seen, SAID_MATCHES)}." if seen else f"{no}."
+    no = f"{no}, but I see {_listed(seen, SAID_MATCHES)}." if seen else f"{no}."
+    return no + _podman(found)
 
 
 def _on_a_server(args: dict, host: str) -> bool:
@@ -689,14 +721,15 @@ def _the_list_answers(found: dict, name: str, host: str, matches: list[Match], w
                       program: bool) -> bool:
     """The server's own name: what runs there, unless something there is what was asked after.
     Asked after as a program, anything that matches all of it is, and the list, which then says
-    no first, answers only once docker and systemd were both read, or docker isn't there to
-    run anything: otherwise the answer says which one couldn't be checked, as for any name.
-    Said as the server, as "my nas" beside nas-backup, only something called exactly that is."""
+    no first, answers only once docker and systemd were both read, and docker's list wasn't
+    podman's of your user alone: otherwise the answer says what it couldn't check, as for any
+    name. Said as the server, as "my nas" beside nas-backup, only something called exactly that
+    is."""
     if not names_host(name, host):
         return False
     if program:
-        return not whole and (found["docker"] is not None or found["docker_missing"]) and (
-            found["systemd"] is not None)
+        return (not whole and found["docker"] is not None and not found["podman"]
+                and found["systemd"] is not None)
     return not any(m.exact for m in matches)
 
 
