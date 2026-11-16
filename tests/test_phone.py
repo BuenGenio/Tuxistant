@@ -35,7 +35,7 @@ GALAXY = device()
 PIXEL = device("Pixel 8")
 TAB = device("Galaxy Tab S9", "tablet")
 STRANGER = device("Neighbour's Galaxy", paired=False)       # same network, never paired
-STORMSHADOW = device("stormshadow", "desktop", paired=False)
+SANDPIPER = device("sandpiper", "desktop", paired=False)
 
 
 class Bus:
@@ -90,11 +90,11 @@ class PhoneTest(unittest.TestCase):
 
 class Devices(PhoneTest):
     def test_the_list_is_what_the_contract_says(self):
-        self.bus(GALAXY, device("stormshadow", "desktop", connected=False))
+        self.bus(GALAXY, device("sandpiper", "desktop", connected=False))
         self.assertEqual(phone.devices(), [
             {"id": "galaxy_s23_ultra", "name": "Galaxy S23 Ultra", "type": "phone",
              "connected": True, "paired": True},
-            {"id": "stormshadow", "name": "stormshadow", "type": "desktop", "connected": False,
+            {"id": "sandpiper", "name": "sandpiper", "type": "desktop", "connected": False,
              "paired": True}])
 
     def test_no_gsconnect_is_an_empty_list(self):
@@ -122,7 +122,7 @@ class Devices(PhoneTest):
 
 class Choosing(PhoneTest):
     def test_the_ways_people_say_it(self):
-        self.bus(GALAXY, STORMSHADOW)
+        self.bus(GALAXY, SANDPIPER)
         for asked in ("my phone", "galaxy", "the samsung", "Galaxy S23 Ultra", "GALAXY S23", "s23",
                       "Galaxy S 23", "my samsung phone", "the user's phone", "your phone", "phone",
                       "  my   galaxy ", "samsung galaxy", "ultra", "", None, "default"):
@@ -130,7 +130,7 @@ class Choosing(PhoneTest):
                 self.assertEqual(self.picked(asked), "Galaxy S23 Ultra")
 
     def test_an_invented_name_reaches_nothing(self):
-        bus = self.bus(GALAXY, STORMSHADOW)
+        bus = self.bus(GALAXY, SANDPIPER)
         for asked in ("nokia", "iphone", "pixel", "galaxy s24", "galaxy a23", "s2", "laxy",
                       "galaxy note", "john's phone", "phone 2", "x" * 5000, 7, True, ["nokia"]):
             with self.subTest(asked):
@@ -198,7 +198,7 @@ class Choosing(PhoneTest):
         self.assertEqual(self.picked("galaxy"), "Galaxy S23 Ultra")
 
     def test_a_phone_that_is_not_connected_is_said_so(self):
-        self.bus(device(connected=False), STORMSHADOW)
+        self.bus(device(connected=False), SANDPIPER)
         for asked in (None, "galaxy"):
             self.assertEqual(self.refused(asked), "Galaxy S23 Ultra isn't connected right now.")
 
@@ -220,9 +220,9 @@ class Choosing(PhoneTest):
         self.assertEqual(self.refused("galaxy"), "Galaxy S23 Ultra isn't connected right now.")
 
     def test_a_computer_that_is_not_paired_is_said_so(self):
-        self.bus(GALAXY, STORMSHADOW)
-        self.assertEqual(self.refused("stormshadow"),
-                         "stormshadow isn't paired with this computer.")
+        self.bus(GALAXY, SANDPIPER)
+        self.assertEqual(self.refused("sandpiper"),
+                         "sandpiper isn't paired with this computer.")
 
     def test_nothing_around(self):
         self.bus()
@@ -254,7 +254,7 @@ class Sending(PhoneTest, unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patcher.stop)
         self.file = self.home / "SA100-2024.pdf"
         self.file.write_bytes(b"x" * 2500)
-        self.phone = self.bus(GALAXY, STORMSHADOW)
+        self.phone = self.bus(GALAXY, SANDPIPER)
 
     def resolving_to(self, path):
         patcher = mock.patch.object(phone.files, "resolve", create=True, return_value=path)
@@ -466,7 +466,7 @@ class Ringing(PhoneTest, unittest.IsolatedAsyncioTestCase):
         return result
 
     async def test_it_rings_without_a_card(self):
-        bus = self.bus(GALAXY, STORMSHADOW)
+        bus = self.bus(GALAXY, SANDPIPER)
         self.assertEqual(await self.ring(), {"ringing": "Galaxy S23 Ultra"})
         self.assertEqual(bus.activated, [(bus.path(GALAXY), "ring", "[]")])
 

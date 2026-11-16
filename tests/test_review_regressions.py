@@ -62,7 +62,7 @@ class ConnectFailures(Case):
         self.assertEqual(rig.history.recent()[0]["status"], "error")
 
     async def test_addresses_only_the_network_stack_refuses(self):
-        for server in ("stormshadow..lan:8080", ".host:8080", "a" * 64 + ":8080", "myhost:99999",
+        for server in ("sandpiper..lan:8080", ".host:8080", "a" * 64 + ":8080", "myhost:99999",
                        "host:80a0"):
             with self.subTest(server):
                 await self.ended_with_error(self.rig(1, server=server))
@@ -411,7 +411,7 @@ class Server(unittest.TestCase):
         self.assertEqual(_urls("host:1"), ("http://host:1", "ws://host:1"))
 
     def test_what_idna_or_the_port_parser_would_raise_on(self):
-        for bad in ("stormshadow..lan:8080", ".host:8080", "a" * 64 + ":1", "a." * 130 + "b",
+        for bad in ("sandpiper..lan:8080", ".host:8080", "a" * 64 + ":1", "a." * 130 + "b",
                     "host:99999", "host:0", "ftp://host", "host\n:1", ""):
             with self.subTest(bad):
                 self.assertIsNone(clean_server(bad))
@@ -420,7 +420,7 @@ class Server(unittest.TestCase):
 class ConfigRules(Case):
     def config(self):
         config = Config(self.folder / "config.json")
-        config.values.update(server="stormshadow:8080", api_key="the-key")
+        config.values.update(server="sandpiper:8080", api_key="the-key")
         return config
 
     def test_set_validates_the_server(self):
@@ -437,8 +437,8 @@ class ConfigRules(Case):
 
     def test_setting_the_same_server_keeps_the_key(self):
         config = self.config()
-        config.set("server", "http://stormshadow:8080/")
-        self.assertEqual((config["server"], config["api_key"]), ("stormshadow:8080", "the-key"))
+        config.set("server", "http://sandpiper:8080/")
+        self.assertEqual((config["server"], config["api_key"]), ("sandpiper:8080", "the-key"))
 
 
 class Listener:

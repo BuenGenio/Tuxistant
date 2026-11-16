@@ -449,8 +449,8 @@ class Local(Case):
         self.assertEqual(self.clicks.asked, [])
 
     async def test_failures_to_reach_the_model_are_sentences(self):
-        for error, heard in ((RealtimeError("Cannot reach the server at stormshadow:8080"),
-                              "Cannot reach the server at stormshadow:8080."),
+        for error, heard in ((RealtimeError("Cannot reach the server at sandpiper:8080"),
+                              "Cannot reach the server at sandpiper:8080."),
                              (AuthError(), "The server rejected the API key."),
                              (RealtimeError("Server error: HTTP 500"), "Server error: HTTP 500.")):
             with self.subTest(heard):

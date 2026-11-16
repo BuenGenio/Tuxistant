@@ -185,7 +185,7 @@ class Refusals(unittest.TestCase):
         self.refused("http://no-such-name.example/")
 
     def test_the_servers_this_install_talks_to(self):
-        for url in ("http://tuxserver:8080/v1/models", "http://STORMSHADOW/",
+        for url in ("http://tuxserver:8080/v1/models", "http://SANDPIPER/",
                     "http://tuxserver./", "http://translator.lan:5000/translate",
                     "http://searx.lan:8888/search"):
             with self.subTest(url):

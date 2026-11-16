@@ -79,7 +79,7 @@ class Rig(unittest.IsolatedAsyncioTestCase):
         self.searx = FakeSearx(self, results=self.results())
         self.web = Web(self, {f"site{n}.example": [PUBLIC] for n in range(1, 9)})
         self.config = {**DEFAULTS, "api_key": KEY, "search_server": self.searx.server,
-                       "server": "stormshadow:8080"}
+                       "server": "sandpiper:8080"}
         self.skills = Skills(config=self.config)
         self.brain = Brain()
         patcher = mock.patch.object(realtime, "_request", self.brain)
@@ -308,7 +308,7 @@ class HostilePage(Rig):
 class Guarded(Rig):
     def results(self):
         return [hit(1, url=f"http://127.0.0.1:{self.loopback()}/secret"),
-                hit(2, url="http://stormshadow:8080/v1/models"),
+                hit(2, url="http://sandpiper:8080/v1/models"),
                 hit(3, url="http://169.254.169.254/latest/meta-data/"), hit(4)]
 
     def loopback(self):
@@ -484,10 +484,10 @@ class Honest(Rig):
 
     async def test_the_model_being_down_is_a_sentence(self):
         def down(*_):
-            raise RealtimeError("Cannot reach the server at stormshadow:8080")
+            raise RealtimeError("Cannot reach the server at sandpiper:8080")
         with mock.patch.object(realtime, "_request", down):
             self.assertEqual((await self.ask()),
-                             {"error": "Cannot reach the server at stormshadow:8080"})
+                             {"error": "Cannot reach the server at sandpiper:8080"})
 
     async def test_losing_the_model_part_way_keeps_what_it_said(self):
         replies = iter(["Fifty kilometres."])
@@ -604,11 +604,11 @@ class Clock(Rig):
         pages' address."""
         self.said(await self.ask())
         self.web.dialled.clear()
-        self.web.names["stormshadow"] = [PUBLIC]
+        self.web.names["sandpiper"] = [PUBLIC]
         real = self.web.resolve
 
         def slow(host, port):
-            if host == "stormshadow":
+            if host == "sandpiper":
                 time.sleep(0.3)
             return real(host, port)
         with mock.patch.object(webfetch, "_resolve", slow):

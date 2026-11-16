@@ -40,14 +40,14 @@ with mock.patch.dict(os.environ):
 
 class Logic(unittest.TestCase):
     def test_clean_server(self):
-        self.assertEqual(sa.clean_server(" stormshadow:8080 "), "stormshadow:8080")
-        self.assertEqual(sa.clean_server("http://stormshadow:8080/"), "stormshadow:8080")
+        self.assertEqual(sa.clean_server(" sandpiper:8080 "), "sandpiper:8080")
+        self.assertEqual(sa.clean_server("http://sandpiper:8080/"), "sandpiper:8080")
         self.assertEqual(sa.clean_server("ws://10.0.0.5"), "10.0.0.5")
         self.assertEqual(sa.clean_server("[::1]:8080"), "[::1]:8080")
         self.assertEqual(sa.clean_server("https://ai.example.com:8443/"),
                          "https://ai.example.com:8443")
         for bad in ("", "   ", "two words", "host:99999", "host:port", "http://host/v1/realtime",
-                    "stormshadow..lan:8080", ".host", "a" * 64):
+                    "sandpiper..lan:8080", ".host", "a" * 64):
             self.assertIsNone(sa.clean_server(bad), bad)
 
     def test_voices_group_by_accent_in_order(self):

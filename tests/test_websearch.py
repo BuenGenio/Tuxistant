@@ -81,10 +81,10 @@ class Clicks:
 
 class Where(unittest.TestCase):
     def test_empty_means_the_host_of_the_voice_server_on_our_port(self):
-        self.assertEqual(websearch._base({"search_server": "", "server": "stormshadow:8080"}),
-                         "http://stormshadow:8888")
-        self.assertEqual(websearch._base({"search_server": "", "server": "stormshadow"}),
-                         "http://stormshadow:8888")
+        self.assertEqual(websearch._base({"search_server": "", "server": "sandpiper:8080"}),
+                         "http://sandpiper:8888")
+        self.assertEqual(websearch._base({"search_server": "", "server": "sandpiper"}),
+                         "http://sandpiper:8888")
         self.assertEqual(websearch._base({"search_server": "", "server": "https://tux.example:9"}),
                          "https://tux.example:8888")
 

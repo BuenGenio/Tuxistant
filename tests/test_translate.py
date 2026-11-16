@@ -156,8 +156,8 @@ class Server(unittest.TestCase):
         self.assertEqual(self.base(translate_server="https://lt.lan"), "https://lt.lan")
 
     def test_otherwise_it_is_on_the_host_of_the_server(self):
-        for server, base in (("stormshadow:8080", "http://stormshadow:5000"),
-                             ("stormshadow", "http://stormshadow:5000"),
+        for server, base in (("sandpiper:8080", "http://sandpiper:5000"),
+                             ("sandpiper", "http://sandpiper:5000"),
                              ("10.0.0.2:8080", "http://10.0.0.2:5000"),
                              ("[::1]:8080", "http://[::1]:5000"), ("[::1]", "http://[::1]:5000"),
                              ("https://box.lan:8443", "https://box.lan:5000")):
@@ -578,7 +578,7 @@ class SomeoneElsesServer(Translating):
     def setUp(self):
         super().setUp()
         self.translator()
-        self.skills.config = {**self.skills.config, "server": "stormshadow:8080"}
+        self.skills.config = {**self.skills.config, "server": "sandpiper:8080"}
 
     def test_private_text_does_not_leave_without_a_card(self):
         session = Session()
