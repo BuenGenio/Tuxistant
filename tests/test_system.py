@@ -1,6 +1,7 @@
 """Facts about this computer and its folders."""
 import asyncio
 import json
+import re
 import sys
 import tempfile
 import time
@@ -119,8 +120,9 @@ class Tailscale(unittest.TestCase):
 
 
 class Running(unittest.TestCase):
-    def outputs(self, service="", user="", process=""):
-        return mock.patch.object(system, "_tool", side_effect=[service, user, process])
+    def outputs(self, service="", user="", process="", command_line=""):
+        return mock.patch.object(system, "_tool",
+                                 side_effect=[service, user, process, command_line])
 
     def test_a_service(self):
         with mock.patch.object(system, "_tool", return_value="active\n"):
@@ -136,8 +138,34 @@ class Running(unittest.TestCase):
             self.assertTrue(system.running({"name": "firefox"}, None)["running"])
 
     def test_not_running(self):
-        with self.outputs("inactive\n", "inactive\n", ""):
+        with self.outputs("inactive\n", "inactive\n", "", ""):
             self.assertFalse(system.running({"name": "firefox"}, None)["running"])
+
+    def test_a_name_longer_than_linux_keeps_is_found_by_its_command_line(self):
+        """Linux keeps 15 characters of a process's own name, all that pgrep -x sees: at-spi2-
+        registryd is at-spi2-registr there. Its command line has it whole."""
+        command_lines = ["/usr/libexec/at-spi2-registryd --use-gnome-session",
+                         "/usr/bin/python3 /opt/evolution-addressbook-factory-helper.py",
+                         "gnome-text-editor"]
+        comms = [line.split()[0].rpartition("/")[2][:15] for line in command_lines]
+
+        def tool(*command):
+            if command[0] == "systemctl":
+                return "inactive\n"
+            how, pattern = command[2], command[-1]
+            found = comms if how == "-x" else command_lines
+            match = re.fullmatch if how == "-x" else re.search
+            return "".join("1\n" for line in found if match(pattern, line, re.I))
+        for name, here in (("at-spi2-registryd", True), ("gnome-text-editor", True),
+                           ("gnometexteditor", True), ("at-spi2-registry", False),
+                           ("evolution-addressbook-factory", False), ("libexec", False)):
+            with self.subTest(name), mock.patch.object(system, "_tool", side_effect=tool):
+                self.assertEqual(system.running({"name": name}, None)["running"], here)
+        # Asked about another computer, what is said of this one is so too.
+        with mock.patch.object(system, "_tool", side_effect=tool), \
+                self.assertRaises(ValueError) as raised:
+            system.running({"name": "at-spi2-registryd", "on": "my work laptop"}, None)
+        self.assertIn("On this computer, at-spi2-registryd is running.", str(raised.exception))
 
     def test_a_name_cannot_become_an_option_or_a_command(self):
         for name in ("", "-h", "--user", "a b", "a;rm", "$(x)", "a/b", "x" * 80, "../x"):

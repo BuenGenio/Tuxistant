@@ -224,10 +224,19 @@ def _any_dashes(name: str) -> str:
     return "[-_]?".join(letters)
 
 
+def _process_here(name: str) -> bool:
+    """A process of that name. Linux keeps only 15 characters of a process's own name, all that
+    pgrep -x sees, so it is looked for as the first word of a command line too, alone or after a
+    folder, as /usr/libexec/evolution-addressbook-factory, whose own name is evolution-addre."""
+    pattern = _any_dashes(name)
+    return any(_tool("pgrep", "-i", how, "--", wanted).strip()
+               for how, wanted in (("-x", pattern), ("-f", f"^([^ ]*/)?{pattern}( |$)")))
+
+
 def _here_by_name(name: str) -> bool:
     active = any(_tool("systemctl", *scope, "is-active", "--", name).strip() == "active"
                  for scope in ([], ["--user"]))
-    return active or bool(_tool("pgrep", "-i", "-x", "--", _any_dashes(name)).strip())
+    return active or _process_here(name)
 
 
 def running(args: dict, config, session=None) -> dict:
