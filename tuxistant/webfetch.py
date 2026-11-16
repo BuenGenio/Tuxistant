@@ -141,9 +141,9 @@ def clean(text: str, limit: int) -> str:
     text = TAG.sub(" ", html.unescape(text[:limit * 4])).replace("<", " ").replace(">", " ")
     if text.isascii():  # its hidden characters are its controls, and looking at each is slow
         text = " ".join(text.translate(ASCII_HIDDEN).split())
-    else:
-        text = " ".join("".join(" " if unicodedata.category(c) in HIDDEN_CATEGORIES else c
-                                for c in text).split())
+    else:   # each character looked at once, not each time it comes
+        hidden = {ord(c): " " for c in set(text) if unicodedata.category(c) in HIDDEN_CATEGORIES}
+        text = " ".join(text.translate(hidden).split())
     return text if len(text) <= limit else text[:limit].rsplit(" ", 1)[0]
 
 

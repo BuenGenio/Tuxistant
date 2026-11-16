@@ -64,6 +64,8 @@ SECRET_REACH = 160      # how far after the word for a secret the secret itself 
 SECRET_BEFORE = 60      # and how far before it: "482913 is your code"
 NAMED_CHARS = 300       # how far down a mail's text a word for a secret names one in its subject
 TALK_REACH = 20         # how far before a cut its rest is read from, for words the cut split
+GROWTH = 18             # the most characters NFKC makes of one, as it does of U+FDFA
+PIECE = 1000            # how much of a text that may grow that far is made plain at a time
 REST_CHARS = 50_000     # and how much of that rest: past it, a mail is taken to talk of signing in
 TRIED = 3               # mails shown to the model, best first
 CHECKED = 6             # the best few have their senders looked up, which can cost a scan each
@@ -209,13 +211,17 @@ MARKS = frozenset(("Mn", "Me"))    # a keycap or an accent on a letter or digit 
 UNESCAPES = 4
 # Each alternative is looked for from every place in a mail, so none may read on to the end of a
 # run of letters from each of them: "[A-Za-zÀ-ÿ]*code" after a lookbehind for ASCII letters only
-# did, and 16,000 "é" took a second and a half, holding the event loop.
+# did, and 16,000 "é" took a second and a half, holding the event loop. Each starts with one of
+# the letters in the lookahead first, so that no other place is looked at further: 40,000 Arabic
+# letters took 20 ms to look through, and a mail is looked through several times. Here and in
+# the patterns below, such a lookahead names every character a match can start with.
 SECRET_WORD = re.compile(
+    r"(?=[A-Za-zÀ-ÿкпコパ暗码碼코번ر])(?:"
     r"(?<![A-Za-z])(?:pass(?:words?|phrases?|codes?|wd)?|pwd|pins?|otp|keys?|tokens?)(?![A-Za-z])"
     r"|(?<![A-Za-zÀ-ÿ])(?!post|bar|zip)[A-Za-zÀ-ÿ]{0,40}codes?(?![A-Za-z])|c[oó]dig\w*|codic\w*"
     r"|(?<![A-Za-z])k[oó]d\w*|код\w*|парол\w*"
     r"|passwort\w*|kennwort\w*|contrase[ñn]a\w*|senha\w*|(?<![A-Za-z])clave\w*|has[łl][oa]\w*"
-    r"|mot de passe|wachtwoord\w*|コード|パスワード|暗証|码|碼|코드|번호|رمز", re.I)
+    r"|mot de passe|wachtwoord\w*|コード|パスワード|暗証|码|碼|코드|번호|رمز)", re.I)
 # A password is whatever follows "is" or a colon, even a plain word.
 PASSWORD_WORD = re.compile(
     r"(?:pass(?:words?|phrases?|wd)?|pwd|парол\w*|passwort\w*|kennwort\w*|contrase[ñn]a\w*"
@@ -225,14 +231,15 @@ GIVEN = re.compile(r"[^.!?\n]{0,60}?(?:\b(?i:is|are|was|will be|(?:changed|set|r
 # What a secret looks like, next to the word for one.
 # A hyphen may stand right before or after one, as every dash is made one: "code—482913—". A
 # lookahead looks no further than the match it guards can reach.
+SPACED = r"(?<![\w.,/-])(?:[A-Za-z0-9] ){3,13}[A-Za-z0-9](?![\w/-])"     # K Q 7 X 9 B
+GROUPED = (r"(?<![\w.,/-])(?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3} (?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3}"
+           r"(?![\w/]|-[\w/])")                                   # KQ7 X9B
 SHAPED = re.compile(
     r"(?<![A-Za-z0-9.,/])\d(?:[ -]?\d){3,11}(?![\w/]|-[\w/]|[.,]\d)"  # 482913, 482 913, 4 8 2 9 1 3
     r"|(?<![\w@./])(?=[\w!#$%^&*+=-]{0,23}\d)(?=[\w!#$%^&*+=-]{0,23}[A-Za-z])"
     r"[\w!#$%^&*+=-]{4,24}(?![\w@])"
     r"|\b[A-Z]{2,6}(?:-[A-Z0-9]{2,6}){1,3}\b|\b[A-Z]{5,10}\b"     # KQW-XBT, KQWXB
-    r"|(?<![\w.,/-])(?:[A-Za-z0-9] ){3,13}[A-Za-z0-9](?![\w/-])"   # K Q 7 X 9 B
-    r"|(?<![\w.,/-])(?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3} (?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3}"
-    r"(?![\w/]|-[\w/])")                                           # KQ7 X9B
+    rf"|{SPACED}|{GROUPED}")
 NOT_A_SECRET = re.compile(r"\d+(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)|(?:19|20)\d\d", re.I)
 JUST_GIVEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)      # "code is 2048" is no year
 # A mail that talks of signing in: there, any number of the right length may be the code. A space
@@ -240,17 +247,17 @@ JUST_GIVEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)      # "code is 2048" is no 
 # words, about the rest of a mail it cut short (see goamail._talking).
 SIGN_IN_WORDS = ("sign in", "signing in", "log in", "logging in", "verif*", "authenti*", "one time",
                  "single use", "expire", "expires", "valid for", "2fa", "two factor", "two step")
-SIGN_IN_TALK = re.compile(r"\b(?:" + "|".join(
+SIGN_IN_TALK = re.compile(r"\b(?=[slvaoe2t])(?:" + "|".join(
     re.escape(word).replace(r"\ ", "[- ]?").replace(r"\*", r"\w*") for word in SIGN_IN_WORDS)
     + r")\b", re.I)
 MONEY = r"\s*(?:pounds|euros|dollars|gbp|eur|usd|%)"
-NUMBER = re.compile(r"(?<![\w.,/£$€])\d{3}[ -]\d{3}(?![\w/]|-[\w/])"
+NUMBER = re.compile(r"(?=\d)(?:(?<![\w.,/£$€])\d{3}[ -]\d{3}(?![\w/]|-[\w/])"
                     rf"|(?<![\w.,/£$€])\d{{4,8}}(?![\w/]|-[\w/]|[.,]\d|{MONEY})"
-                    rf"|(?<![\w.,/£$€])\d(?: \d){{3,7}}(?![\w/]|-[\w/]|[.,]\d|{MONEY})", re.I)
+                    rf"|(?<![\w.,/£$€])\d(?: \d){{3,7}}(?![\w/]|-[\w/]|[.,]\d|{MONEY}))", re.I)
 # A line that is nothing but a code, give or take the punctuation a template, html2text or the
 # plain part of an HTML mail puts round one: "*482913*" for a bold code, "482913.", "(KQ7X9B)",
-# "`482913`" for code, "- 482913" or "+ 482913" for an item of a list (a bullet is made a hyphen:
-# see DASHES), "| 482913 |" for a table's cell, "# 482913", or an arrow pointing at it.
+# "`482913`" for code, "- 482913" or "+ 482913" for an item of a list (a bullet is made a space:
+# see DOTS), "| 482913 |" for a table's cell, "# 482913", or an arrow pointing at it.
 AROUND = (r"""[ \t*_"'“”‘’‹›«»()\[\]{}<>.,:;!?`|#=~/\-"""
           r"\u2190-\u21ff\u2794-\u27bf\u2b05-\u2b07\u25b6\u25ba\u25c0\u25c4]*+")
 ALONE = re.compile(
@@ -259,14 +266,25 @@ ALONE = re.compile(
     r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9])"
     rf"{AROUND}$", re.M)
 # In a mail that talks of signing in, letters and digits together are hidden as numbers are:
-# "Use KQ7X9B to sign in".
-MIXED = re.compile(r"(?<![\w@./-])(?=[A-Za-z0-9-]{0,13}\d)(?=[A-Za-z0-9-]{0,13}[A-Za-z])"
-                   r"[A-Za-z0-9-]{5,14}(?![\w@/-])")
+# "Use KQ7X9B to sign in", and so are they in groups or with a space between each, "KQ7 X9B" or
+# "K Q 7 X 9 B", as long as a letter is among them (NUMBER has those of digits only). The bounds
+# on the lookaheads only keep each look short. Without them it is still linear, as the lookbehind
+# keeps it from starting again inside a run of letters and digits.
+MIXED = re.compile(r"(?=[A-Za-z0-9-])(?:"
+                   r"(?<![\w@./-])(?=[A-Za-z0-9-]{0,13}\d)(?=[A-Za-z0-9-]{0,13}[A-Za-z])"
+                   r"[A-Za-z0-9-]{5,14}(?![\w@/-])"
+                   rf"|(?=(?:[A-Za-z0-9] ){{0,13}}\d(?![\w/-]))"
+                   rf"(?=(?:[A-Za-z0-9] ){{0,13}}[A-Za-z](?![\w/-])){SPACED}"
+                   rf"|(?=[0-9]{{0,2}}[A-Za-z]|[A-Za-z0-9]{{3}} [0-9]{{0,2}}[A-Za-z]){GROUPED})")
 # Every dash is a hyphen to the model, and to the hiding: a code joined by a non-breaking hyphen,
 # as templates write "482&#8209;913" to keep it on one line, is the code it is. So are the other
-# minus signs, and the dots and bullets that stand between the groups of a code as a dash would,
-# as in "482·913", and a bullet before an item of a list.
-DASHES = frozenset("\u2212\u02d7\u2796\u00b7\u2027\u2043\u30fb\u2022\u2219")
+# minus signs.
+DASHES = frozenset("\u2212\u02d7\u2796\u2043")
+# The dots and bullets that stand between the groups of a code, as in "482·913", or before an
+# item of a list, are spaces. Made hyphens, they glued a code to the word after it, and a code
+# joined to a word by a hyphen is taken for part of a reference: "use 482913•Verification"
+# reached the model as "482913-Verification".
+DOTS = frozenset("\u00b7\u2027\u30fb\u2022\u2219")
 SPELT = re.compile(     # a run of lines of one character each, as one to an HTML block makes
     r"^[ \t]*[A-Za-z0-9][ \t]*(?:\n\s*[A-Za-z0-9][ \t]*){3,}$", re.M)
 # The end of a text that was cut short, read backwards: its last word, which the cut may have gone
@@ -494,10 +512,13 @@ def _searched(author: str) -> str:
     return NO_REPLY.sub(" ", ADDRESS_END.sub(r"\1", author.removesuffix(INDEX_TAIL)))
 
 
-def _spans(text: str, talk: bool = False, look: bool = True) -> list[tuple[int, int]]:
+def _spans(text: str, talk: bool = False, look: bool = True,
+           lead: int = 0) -> list[tuple[int, int]]:
     """Where a secret may stand in a mail: see SECRET_WORD. talk: take it that the mail talks of
     signing in, as one cut short may have done so past the cut. look: whether to look for that
-    talk here as well, which a caller that already has needn't."""
+    talk here as well, which a caller that already has needn't. lead: how far from its start the
+    text is in reach of a word for a secret that stands before it, in the other part of the
+    mail (see _passed)."""
     spans, ends = [], []
     for word in SECRET_WORD.finditer(text):
         ends.append(word.end())
@@ -507,64 +528,101 @@ def _spans(text: str, talk: bool = False, look: bool = True) -> list[tuple[int, 
                 spans.append(given.span(1))
         before = max(0, word.start() - SECRET_BEFORE)
         if not DIGIT.search(text, before, word.start()):
-            continue    # a stranger's mail can hold ten thousand words for a code and no number
+            continue    # only saves time: a stranger's mail can hold ten thousand words for a
+            # code and no number, and each would look for numbers before it, finding none
         for number in NUMBER.finditer(text, before, word.start()):
             if not YEAR.fullmatch(number[0]):
                 spans.append(number.span())
-    spans += _shaped(text, ends)
+    spans += _shaped(text, ends, lead)
     talk = talk or (look and SIGN_IN_TALK.search(text))
     found = [*ALONE.finditer(text)]
-    if talk:
-        found += [*NUMBER.finditer(text), *(mixed for mixed in MIXED.finditer(text)
-                                            if not NOT_A_SECRET.fullmatch(mixed[0]))]
+    if talk:    # "1st 2nd" and "9am 5pm" are no code
+        found += [*NUMBER.finditer(text), *(mixed for mixed in MIXED.finditer(text) if not all(
+            map(NOT_A_SECRET.fullmatch, mixed[0].split())))]
     spans += [one.span(one.lastindex or 0) for one in found
               if not YEAR.fullmatch(one[one.lastindex or 0].strip())]
     return sorted(spans)
 
 
-def _shaped(text: str, ends: list[int]) -> list[tuple[int, int]]:
+def _shaped(text: str, ends: list[int], lead: int = 0) -> list[tuple[int, int]]:
     """What is shaped like a secret within SECRET_REACH after any of these ends of a word for
-    one. Reaches that overlap are looked through once, as one: looked through word by word, a
-    stranger's "码!" ten thousand times over was ten thousand words and took a second for each
-    mail, on the event loop. A year counts as one only right after "is" or a colon, looked for
-    back to the end of the nearest word before it, as it was in that word's own reach."""
-    found, at = [], 0
+    one, or within lead of the start of the text. Reaches that overlap are looked through once,
+    as one: looked through word by word, a stranger's "码!" ten thousand times over was ten
+    thousand words and took a second for each mail, on the event loop. Matches can't overlap,
+    so one that takes in the end of a later word for a secret is looked for again from that end
+    as well: "code=482" took the first half of "code=482 913", and 913 was shown. A year counts
+    as one only right after "is" or a colon, looked for back to the end of the nearest word
+    before it, as it was in that word's own reach."""
+    reaches, at = [(0, lead)] if lead else [], 0
     while at < len(ends):
         start = end = ends[at]
         while at < len(ends) and ends[at] <= end:
             end, at = ends[at] + SECRET_REACH, at + 1
+        reaches.append((start, end))
+    marks, found = [0, *ends] if lead else ends, []
+    for start, end in reaches:
         for shaped in SHAPED.finditer(text, start, end):
-            since = ends[bisect.bisect_right(ends, shaped.start()) - 1]
-            before = text[max(since, shaped.start() - 6):shaped.start()]
-            if not NOT_A_SECRET.fullmatch(shaped[0]) or JUST_GIVEN.search(before):
-                found.append(shaped.span())
+            matches = [shaped]
+            for inner in ends[bisect.bisect_right(ends, shaped.start()):
+                              bisect.bisect_left(ends, shaped.end())]:
+                again = SHAPED.search(text, inner, inner + SECRET_REACH)
+                if again and again.start() <= shaped.end():
+                    matches.append(again)
+            for match in matches:
+                since = marks[bisect.bisect_right(marks, match.start()) - 1]
+                before = text[max(since, match.start() - 6):match.start()]
+                if not NOT_A_SECRET.fullmatch(match[0]) or JUST_GIVEN.search(before):
+                    found.append(match.span())
     return found
 
 
-def _visible(text: str, read: bool = True) -> str:
-    """One pass of _seen: the wide and styled forms of letters and digits made plain, character
-    references read unless told not to, every line end made a line feed, and every character in
-    UNSEEN_KINDS or IGNORABLE taken out but a tab and a line feed, as is a mark on a letter or
-    digit that has no form of its own with the mark. "&#x2028;" is a line end once it is read.
-    Every dash, and what stands for one, is made a hyphen (see DASHES)."""
-    text = unicodedata.normalize("NFKC", text)
+def _normal(text: str, limit: int) -> tuple[str, bool]:
+    """NFKC of a text, and whether it grew past the limit, or past its own length if that is
+    more, where it is then cut. NFKC makes U+FDFA 18 characters: 20,000 of them in a stranger's
+    mail grew to 360,000, made in one call that held the event loop and then read by every
+    pattern, and a few such mails ran a search out of time. So a text that could grow that far
+    is made plain a piece at a time, and no further than the limit, and whole once it fits."""
+    room = max(limit, len(text))
+    if len(text) * GROWTH <= room or unicodedata.is_normalized("NFKC", text):
+        return unicodedata.normalize("NFKC", text), False
+    pieces, size = [], 0
+    for at in range(0, len(text), PIECE):
+        pieces.append(unicodedata.normalize("NFKC", text[at:at + PIECE]))
+        size += len(pieces[-1])
+        if size > room:
+            return "".join(pieces)[:room], True
+    return unicodedata.normalize("NFKC", text), False
+
+
+def _visible(text: str, read: bool = True, limit: int = CLEANED_CHARS) -> tuple[str, bool]:
+    """One pass of _seen, and whether NFKC grew the text past the limit (see _normal): the wide
+    and styled forms of letters and digits made plain, character references read unless told
+    not to, every line end made a line feed, and every character in UNSEEN_KINDS or IGNORABLE
+    taken out but a tab and a line feed, as is a mark on a letter or digit that has no form of
+    its own with the mark. "&#x2028;" is a line end once it is read. Every dash, and what stands
+    for one, is made a hyphen (see DASHES), and a dot or a bullet a space (see DOTS)."""
+    text, grown = _normal(text, limit)
     text = LINE_END.sub("\n", html.unescape(text) if read else text)
     if text.isascii():
-        return CONTROL.sub("", text)
-    out, after = [], False
-    for char in text:
+        return CONTROL.sub("", text), grown
+    changed, marks = {}, []     # each character looked at once, not each time it comes
+    for char in set(text):
         kind = unicodedata.category(char)
-        if (kind in UNSEEN_KINDS and char not in "\t\n") or IGNORABLE.match(char) or (
-                after and kind in MARKS):
-            continue
-        if kind == "Pd" or char in DASHES:
-            char = "-"
-        out.append(char)
-        after = char.isdecimal() or (char.isascii() and char.isalnum())
-    return "".join(out)
+        if (kind in UNSEEN_KINDS and char not in "\t\n") or IGNORABLE.match(char):
+            changed[ord(char)] = None
+        elif (kind == "Pd" or char in DASHES) and char != "-":
+            changed[ord(char)] = "-"
+        elif char in DOTS:
+            changed[ord(char)] = " "
+        elif kind in MARKS:
+            marks.append(char)
+    text = text.translate(changed)
+    if marks:   # on an ASCII letter or any digit, once what no one sees is out from between
+        text = re.sub(rf"(?<=[A-Za-z\d])[{re.escape(''.join(sorted(marks)))}]+", "", text)
+    return text, grown
 
 
-def _seen(text: str) -> str:
+def _seen(text: str, limit: int = CLEANED_CHARS) -> tuple[str, bool]:
     """A mail's text as the model reads it, with its lines kept. clean() reads character
     references and turns hidden characters into spaces before it joins the lines, so "&#52;" or
     U+2066 beside a code on a line of its own would reach the model with no line left to be
@@ -572,15 +630,21 @@ def _seen(text: str) -> str:
     left to read: what is still "&#38;#52;" after a few rounds loses its ampersands. What the
     last round read is made plain too, as "&#xFF1C;" read is a wide "<" that NFKC, later, would
     make a real one after clean() had taken every "<" out; a wide "&" made plain goes the same
-    way. Nothing done after this may change the text any more."""
+    way. Nothing done after this may change the text any more. Also whether NFKC grew it past
+    the limit in any round, as references can be to a ligature (see _normal)."""
+    grew = False
     for _ in range(UNESCAPES):
-        seen = _visible(text)
+        seen, grown = _visible(text, limit=limit)
+        grew |= grown
         if seen == text:
-            return text
+            return text, grew
         text = seen
-    while (seen := _visible(text.replace("&", " "), read=False)) != text:
+    while True:
+        seen, grown = _visible(text.replace("&", " "), read=False, limit=limit)
+        grew |= grown
+        if seen == text:
+            return text, grew
         text = seen
-    return text
 
 
 def _uncut(text: str) -> str:
@@ -597,17 +661,20 @@ def _talks(rest: str | None) -> bool:
     reads it (_joined, then _plain again). So "sign\nin", "&#115;ign in", a soft hyphen or a tag
     inside the words count as they would before the cut. A rest that NFKC grows past twice
     REST_CHARS, as only ligatures do, is taken to talk of signing in rather than read."""
-    rest = unicodedata.normalize("NFKC", rest or "")
-    if len(rest) > 2 * REST_CHARS:
-        return True
-    first = _plain(rest)
-    return bool(SIGN_IN_TALK.search(first) or SIGN_IN_TALK.search(_plain(_joined(first))))
+    first, grown = _made_plain(rest or "", 2 * REST_CHARS)
+    return grown or bool(SIGN_IN_TALK.search(first) or SIGN_IN_TALK.search(_plain(_joined(first))))
 
 
 def _plain(text: str) -> str:
     """A mail's text made what the model is shown, with its lines kept and a code spelt out one
     character to a line put on a line of its own (see _hide)."""
-    return SPELT.sub(lambda run: "".join(run[0].split()), SPACE.sub(" ", _seen(text)))
+    return _made_plain(text)[0]
+
+
+def _made_plain(text: str, limit: int = CLEANED_CHARS) -> tuple[str, bool]:
+    """_plain, cut where NFKC grew it past the limit, and whether it did (see _normal)."""
+    seen, grown = _seen(text, limit)
+    return SPELT.sub(lambda run: "".join(run[0].split()), SPACE.sub(" ", seen)), grown
 
 
 def _joined(text: str) -> str:
@@ -629,15 +696,18 @@ def _hide(text: str, cut: bool = False, talk: bool | None = None) -> str:
     past the cut, unless the caller looked there and says whether they were (talk). It ends where
     _uncut would end it, as part of a code may be too short to hide. Secrets are looked for in
     all of it, so a word for a code in what goes still hides the code before it, and one that
-    runs past that end is hidden whole."""
-    return _hidden(_plain(text), cut, cut if talk is None else talk)
+    runs past that end is hidden whole. A text that NFKC grew too far is cut there (see
+    _normal), and taken to talk of signing in."""
+    text, grown = _made_plain(text)
+    cut = cut or grown
+    return _hidden(text, cut, cut if talk is None else talk or grown)
 
 
-def _hidden(text: str, cut: bool, talk: bool, look: bool = True) -> str:
-    """_hide, of a text already made plain (see _spans for look)."""
+def _hidden(text: str, cut: bool, talk: bool, look: bool = True, lead: int = 0) -> str:
+    """_hide, of a text already made plain (see _spans for look and lead)."""
     stop = len(_uncut(text)) if cut else len(text)
     out, at = [], 0
-    for start, end in _spans(text, talk, look):
+    for start, end in _spans(text, talk, look, lead):
         if start >= stop:
             break
         if end > at:
@@ -647,13 +717,14 @@ def _hidden(text: str, cut: bool, talk: bool, look: bool = True) -> str:
 
 
 def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[int],
-          limit: int, deadline: list) -> list[tuple]:
+          limit: int, deadline: list, hidden: dict) -> list[tuple]:
     """The newest mails holding every one of the words, or enough of them to be about it (see
     _about). SQLite finds the letters anywhere, so "rent" also brings "current": only a mail
     _ranked would keep counts towards the limit, or a busy mailbox would fill it with others.
-    Secrets are hidden before the words are looked for, so a code can't be searched for. The
-    plus sign keeps SQLite off the index on deleted, so it walks the one on date, newest
-    first."""
+    Secrets are hidden before the words are looked for, so a code can't be searched for (see
+    _kept), and a mail that both searches find is hidden once: hidden holds what each came to,
+    by its id, as a stranger's mail can be slow to hide. The plus sign keeps SQLite off the
+    index on deleted, so it walks the one on date, newest first."""
     fields, clauses, values = ("t.c1subject", "t.c3author", "t.c0body"), [], []
     for term in stems:
         likes = _likes(term.stem)
@@ -672,15 +743,17 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
             if time.monotonic() > deadline[0]:  # a stranger's mail can be slow to read
                 break
             author, subject, body, length = _text(row[3]), _text(row[4]), _text(row[5]), row[6]
-            if _about(stems, _searched(author), subject, body, every):
-                cut = isinstance(length, int) and length > SCAN_CHARS
-                talk_past = cut and _rest_talks(db, row[0], length)
-                if time.monotonic() > deadline[0]:
-                    break
-                kept = _kept(stems, author, subject, body, every, body_cut=cut,
-                             talk_past=talk_past)
-                if kept:
-                    rows.append((*row[:3], *kept))
+            searched = _searched(author)
+            if _about(stems, searched, subject, body, every):
+                if row[0] not in hidden:
+                    cut = isinstance(length, int) and length > SCAN_CHARS
+                    talk_past = cut and _rest_talks(db, row[0], length)
+                    if time.monotonic() > deadline[0]:
+                        break
+                    hidden[row[0]] = _secret_free(subject[:SCAN_CHARS], body,
+                                                  len(subject) > SCAN_CHARS, cut, talk_past)
+                if _about(stems, searched, *hidden[row[0]], every):
+                    rows.append((*row[:3], author, *hidden[row[0]]))
             if len(rows) == limit or time.monotonic() > deadline[0]:
                 break
     except sqlite3.OperationalError as e:
@@ -709,36 +782,51 @@ def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
     about the question as the model will read it. A mail found only by its code is not found,
     and nor is one found only by digits that the second pass hides once the lines are joined, or
     "thanks 48" would find "Your Acme code is\\n482\\n913\\nThanks" and "thanks 47" wouldn't. So
-    both passes are made here, and the ranking reads what the model reads. The caller says which
-    of the subject and the body was cut short where it was read, and whether the body talks of
+    both passes are made first (see _secret_free), and the ranking reads what the model reads."""
+    searched = _searched(author)
+    if not _about(stems, searched, subject, body, every):
+        return None
+    subject, body = _secret_free(subject, body, subject_cut, body_cut, talk_past)
+    return (author, subject, body) if _about(stems, searched, subject, body, every) else None
+
+
+def _secret_free(subject: str, body: str, subject_cut: bool = False, body_cut: bool = False,
+                 talk_past: bool = False) -> tuple[str, str]:
+    """(subject, body) with secrets hidden by both passes, as the model will read them. The
+    caller says which of the two was cut short where it was read, and whether the body talks of
     signing in past that cut (see _hide). A subject is cut only by a hostile header, so it is
-    taken to.
+    taken to. One that NFKC grew too far to read whole is cut, and taken to talk of signing in
+    (see _normal).
 
     The model reads the subject and the text together, so whether a mail talks of signing in is
     decided for the whole of it: "Sign in to Acme" over "Enter 482913 on the page" hides the
     number, and so does a word for a secret in the subject, as in "Your Acme code" over a number
     on its own, or near the top of the text, as in "Acme 482913" over "Here is your code."."""
-    searched = _searched(author)
-    if not _about(stems, searched, subject, body, every):
-        return None
-    texts, talk = _passed([_plain(subject), _plain(body)], [subject_cut, body_cut], talk_past,
-                          subject_cut)
+    (subject, grown), (body, body_grown) = _made_plain(subject), _made_plain(body)
+    subject_cut, body_cut = subject_cut or grown, body_cut or body_grown
+    texts, talk = _passed([subject, body], [subject_cut, body_cut],
+                          talk_past or grown or body_grown, subject_cut)
     seen = [_plain(_joined(text[:CLEANED_CHARS])) for text in texts]    # as _shown reads them
     (subject, body), _ = _passed(seen, [len(text) > CLEANED_CHARS for text in texts], talk,
                                  subject_cut)
-    return (author, subject, body) if _about(stems, searched, subject, body, every) else None
+    return subject, body
 
 
 def _passed(texts: list[str], cuts: list[bool], talk: bool,
             subject_cut: bool) -> tuple[list[str], bool]:
     """One pass of hiding over a mail's [subject, body], made plain as that pass reads them,
-    with sign-in talk anywhere in the mail counting for all of it (see _kept), and whether
-    there was any. A word for a secret in one counts as that talk for the other: in the text
-    only near its top (see NAMED_CHARS)."""
+    with sign-in talk anywhere in the mail counting for all of it (see _secret_free), and whether
+    there was any. A word for a secret in one counts for the other as that talk, and as a word
+    for one would that stood right before it, as the model reads "Subject: ..." and then the
+    text: so "Your Acme code" over "Enter KQW-XBT" hides the letters as it would in one line.
+    One in the subject reaches the first SECRET_REACH characters of the text, and one near the
+    top of the text (see NAMED_CHARS) the whole subject."""
     talk = talk or any(SIGN_IN_TALK.search(text) for text in texts)
     named = SECRET_WORD.search(texts[1][:NAMED_CHARS]), SECRET_WORD.search(texts[0])
-    return [_hidden(texts[0], cuts[0], bool(talk or subject_cut or named[0]), look=False),
-            _hidden(texts[1], cuts[1], bool(talk or named[1]), look=False)], talk
+    return [_hidden(texts[0], cuts[0], bool(talk or subject_cut or named[0]), False,
+                    len(texts[0]) if named[0] else 0),
+            _hidden(texts[1], cuts[1], bool(talk or named[1]), False,
+                    SECRET_REACH if named[1] else 0)], talk
 
 
 def _about(stems: list[Term], author: str, subject: str, body: str, every: bool = False) -> bool:
@@ -929,9 +1017,9 @@ def find(stems: list[Term]) -> list[Mail]:
             raise NoThunderbird(NO_INDEX)
         try:
             db.set_progress_handler(lambda: time.monotonic() > deadline[0], 10_000)
-            skipped, sent = _folders(db)
-            rows = _rows(db, stems, True, skipped, ALL_HITS, deadline)
-            rows += _rows(db, stems, False, skipped, ANY_HITS, deadline)
+            skipped, sent, hidden = *_folders(db), {}
+            rows = _rows(db, stems, True, skipped, ALL_HITS, deadline, hidden)
+            rows += _rows(db, stems, False, skipped, ANY_HITS, deadline, hidden)
             scored = _ranked(rows, stems, sent)
             deadline[0] = time.monotonic() + LOOKUP_S
             return _settled(db, scored, skipped, sent)

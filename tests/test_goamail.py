@@ -24,10 +24,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests import imap_fake  # noqa: E402
 from tests.imap_fake import TOKEN, USER, Box, PrivateBus, Server, message  # noqa: E402
 from tests.mail_index import build  # noqa: E402
-from tests.test_mail import (ASKED, CONFIG, DASHED, DASHED_CODES, DRESSED, GROWN,  # noqa: E402
-                             IN_PARTS, INTO_WORD_AFTER, LONE_DIGIT, LONG, ORDER, ORDER_NUMBERS,
-                             SPLIT_ACROSS, TALK_PAST, WIDE_CODE, WIDE_SPELT, WIDE_TOKENS,
-                             WORD_AFTER, Base, escaped, straddling)
+from tests.test_mail import (ASKED, CONFIG, DASHED, DRESSED, GLUED,  # noqa: E402
+                             GROWN, IN_PARTS, INTO_WORD_AFTER, LONE_DIGIT, LONG, ORDER,
+                             ORDER_NUMBERS, SHOWN_CODES, SPLIT_ACROSS, TALK_PAST, TWICE_NAMED,
+                             WIDE_CODE, WIDE_SPELT, WIDE_TOKENS, WORD_AFTER, Base, escaped,
+                             straddling)
 from tuxistant import goamail, mail, research  # noqa: E402
 from tuxistant.gate import Session  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
@@ -418,6 +419,15 @@ class Secrets(Goa):
                                         "Your code is KQ7&#8209;X9B.",
                                         "<b>482913</b>.", "<strong>KQ7X9B</strong>!")))])
 
+    async def test_a_code_glued_to_a_word_or_named_twice_is_hidden(self):
+        """A dot made a hyphen glued a code to the word after it, and a code taken in half by a
+        second word for one joined to it showed the other half."""
+        await self.all_hidden([
+            *(message(f"About your Acme account {n}", ACME, text)
+              for n, text in enumerate(GLUED + TWICE_NAMED)),
+            message("About your Acme account, page", ACME, None,
+                    html="<p>Your Acme code below.</p><p>code=482 913</p><p>Thanks</p>")])
+
     async def all_hidden(self, mails):
         """Each of these mails is shown to the model with its code hidden."""
         await self.mailbox(gmail(inbox=[(raw, 1 + n / 100) for n, raw in enumerate(mails)]))
@@ -427,7 +437,7 @@ class Secrets(Goa):
         self.assertEqual(len(self.model), len(mails))
         for call in range(len(mails)):
             self.assertIn(mail.HIDDEN, self.read(call))
-            for code in (*DASHED_CODES, "482913", "KQ7X9B"):
+            for code in SHOWN_CODES:
                 self.assertNotRegex(self.read(call), code)
 
     async def test_asking_for_one_is_refused_before_any_account_is_asked(self):
