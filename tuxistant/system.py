@@ -23,12 +23,25 @@ SERVICE_NAME = re.compile(r"[a-z0-9][a-z0-9@._+-]{0,63}")
 STOPPED_EARLY = ("Counting stopped after a few seconds, so the real numbers are higher and the "
                  "order may change.")
 OWN_NAME_CHARS = 15     # of a process's own name, all Linux keeps
-# What runs a script, as in "python3 /usr/bin/wsdd", for pgrep's extended regular expressions,
-# with the options before the script, though not -c, -e or -m, which take code or a module: in
-# "sh -c nginx", nginx isn't a script. pgrep -i matches either case, so neither case is there.
-INTERPRETER = (r"(python[0-9.]*|perl[0-9.]*|ruby[0-9.]*|node|nodejs|(ba|da|z)?sh)"
-               r"( -[abdf-ln-zABDF-LN-Z]+)* ")
-SCRIPT = r"(\.(py|pl|rb|js|sh))?"
+# What runs a script, as in "python3 /usr/bin/wsdd", by its own name. A script whose #! line is
+# "#!/usr/bin/env php" is named after the script only until env runs php, so these are the
+# interpreters such a script is found under. Others, such as deno or java -jar, aren't read.
+INTERPRETER = re.compile(r"python[0-9.]*|perl[0-9.]*|ruby[0-9.]*|node|nodejs|php[0-9.]*|"
+                         r"lua[0-9.]*|luajit|tclsh[0-9.]*|(ba|da|z|k|mk)?sh", re.I)
+FAMILY = {"nodejs": "node", "luajit": "lua", "bash": "sh", "dash": "sh", "zsh": "sh", "ksh": "sh",
+          "mksh": "sh"}
+# Each one's options: those whose argument is the rest of the word or else the next word, those
+# whose argument can only be the rest of the word, and those that take code or a module rather
+# than a script, as in "sh -c nginx", "perl -E ..." or "python3 -m http.server".
+OPTIONS = {"python": ("QWX", "", "cm"), "perl": ("IMm", "0CDdilx", "eE"),
+           "ruby": ("CEIr", "0FKTWilx", "e"), "node": ("Cr", "", "ep"),
+           "php": ("cdzSt", "", "BERar"), "lua": ("l", "", "e"), "sh": ("oO", "", "cs")}
+# Long options whose argument is the next word: any other is a word of its own, as --name=value.
+LONG_ARGUMENT = {"--require", "--import", "--loader", "--experimental-loader", "--conditions",
+                 "--env-file", "--title", "--rcfile", "--init-file", "--check-hash-based-pycs",
+                 "-encoding"}
+LONG_CODE = {"--eval", "--print"}       # node's -e and -p
+SCRIPT = r"(\.(py|pl|rb|js|php|lua|tcl|sh))?"
 
 
 def _tool(*command: str) -> str:
@@ -235,23 +248,78 @@ def _process_here(name: str) -> bool:
     """A program run under its own name. pgrep -x sees a process's own name, of which Linux
     keeps only 15 characters, so it is looked for in the command line too: as its first word,
     alone or after a folder, and before a space or a colon, as in php-fpm's "php-fpm: master
-    process", or as the script an interpreter runs, as in "python3 /usr/bin/wsdd". A script
-    started by its #! line is called by its own name, cut at 15 characters, so a longer one is
-    found by that and the script after its interpreter, whichever that is. A later word, as in
-    "man nginx", is no program of that name."""
+    process", or as the script an interpreter runs, as in "python3 /usr/bin/wsdd", read from
+    the command line word by word. A later word, as in "man nginx", is no program of that
+    name."""
     pattern = _any_dashes(name)
-    first = f"^([^ ]*/)?({INTERPRETER}([^ ]*/)?)?{pattern}{SCRIPT}( |:|$)"
+    first = f"^([^ ]*/)?{pattern}{SCRIPT}( |:|$)"
     if any(_tool("pgrep", "-i", how, "--", wanted).strip()
            for how, wanted in (("-x", pattern), ("-f", first))):
         return True
-    if len(name) <= OWN_NAME_CHARS:
+    # Those with the name as a word, or after a folder, somewhere in their command line.
+    found = _tool("pgrep", "-i", "-f", "--", f"(^|[ /]){pattern}{SCRIPT}( |$)").split()
+    return any(_runs_script(pid, pattern) for pid in found if pid.isdigit())
+
+
+def _runs_script(pid: str, pattern: str) -> bool:
+    """Whether the process runs a script called that: the first word after its interpreter's
+    options. Its own name is the interpreter's, as with "python3 /usr/bin/wsdd" or a script
+    whose #! line runs one through env, or the script's own, cut at 15 characters, as with a
+    script started by its #! line, which names its interpreter, any one, by its path."""
+    own, argv = _process(pid)
+    script = _script(argv)
+    if script is None:
         return False
-    own = re.sub(r"([.+])", r"\\\1", name[:OWN_NAME_CHARS])
-    return bool(_pids("-x", own) & _pids("-f", f"^[^ ]+( -[^ ]+)* ([^ ]*/)?{pattern}( |$)"))
+    called = script.rpartition("/")[2]
+    if not re.fullmatch(f"{pattern}{SCRIPT}", called, re.I):
+        return False
+    return (bool(INTERPRETER.fullmatch(own)) and _family(argv[0]) is not None
+            or own.casefold() == called[:OWN_NAME_CHARS].casefold())
 
 
-def _pids(how: str, wanted: str) -> set[str]:
-    return set(_tool("pgrep", "-i", how, "--", wanted).split())
+def _process(pid: str) -> tuple[str, list[str]]:
+    """A process's own name and its command line, word by word, or nothing once it has gone."""
+    try:
+        own = Path(f"/proc/{pid}/comm").read_text(errors="replace").removesuffix("\n")
+        line = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
+    except OSError:
+        return "", []
+    return own, line.removesuffix("\0").split("\0") if line else []
+
+
+def _family(word: str) -> str | None:
+    """Which interpreter the first word of a command line is, as python for /usr/bin/python3."""
+    called = word.rpartition("/")[2]
+    if not INTERPRETER.fullmatch(called):
+        return None
+    family = re.match(r"[a-z]*", called.casefold())[0]
+    return FAMILY.get(family, family)
+
+
+def _script(argv: list[str]) -> str | None:
+    """The script a command line runs: the first word after the interpreter's options and their
+    arguments, or None when an option gives it code or a module to run instead. An interpreter
+    not in OPTIONS, named on a #! line, has only its options before the script."""
+    takes, joined, code = OPTIONS.get(_family(argv[0]) if argv else None, ("", "", ""))
+    words = iter(argv[1:])
+    for word in words:
+        if word == "--":
+            return next(words, None)
+        if word.partition("=")[0] in LONG_CODE:
+            return None
+        if word in LONG_ARGUMENT:
+            next(words, None)
+        elif len(word) < 2 or word[0] not in "-+":     # "-" too: what it reads on stdin
+            return word
+        elif not word.startswith("--"):
+            for at, letter in enumerate(word[1:], 2):
+                if letter in code:
+                    return None
+                if letter in takes or letter in joined:
+                    if letter in takes and at == len(word):
+                        next(words, None)
+                    break
+    return None
 
 
 def _here_by_name(name: str) -> bool:

@@ -1,5 +1,6 @@
 """Facts about this computer and its folders."""
 import asyncio
+import contextlib
 import json
 import re
 import sys
@@ -119,25 +120,43 @@ class Tailscale(unittest.TestCase):
                 config.set("say_tailscale_address", "yes")
 
 
-def pgrep(processes: list[tuple[str, str]]):
+def _argv(command_line) -> list[str]:
+    """A command line given as its words, or as one string of words split at its spaces."""
+    return command_line.split(" ") if isinstance(command_line, str) else list(command_line)
+
+
+def pgrep(processes: list[tuple]):
     """A stand-in for _tool with these processes, each (its own name, its command line), and
     every service inactive: pgrep -x matches the whole of a process's own name, pgrep -f any of
-    its command line, and each prints the PIDs it found, one a line."""
+    its command line, its words joined by spaces, and each prints the PIDs it found, one a
+    line, from 100 on."""
     def tool(*command):
         if command[0] == "systemctl":
             return "inactive\n"
         assert command[:2] == ("pgrep", "-i") and command[3] == "--", command
         how, pattern = command[2], command[-1]
         match = re.fullmatch if how == "-x" else re.search
-        return "".join(f"{pid}\n" for pid, process in enumerate(processes, 100)
-                       if match(pattern, process[0 if how == "-x" else 1], re.I))
+        return "".join(f"{pid}\n" for pid, (own, line) in enumerate(processes, 100)
+                       if match(pattern, own if how == "-x" else " ".join(_argv(line)), re.I))
     return tool
 
 
+@contextlib.contextmanager
+def processes_here(processes: list[tuple]):
+    """These processes alone, as pgrep finds them and as /proc gives their own names and their
+    command lines word by word, by the PIDs pgrep printed."""
+    def process(pid: str):
+        own, line = processes[int(pid) - 100]
+        return own, _argv(line)
+    with mock.patch.object(system, "_tool", side_effect=pgrep(processes)), \
+            mock.patch.object(system, "_process", side_effect=process):
+        yield
+
+
 class Running(unittest.TestCase):
-    def outputs(self, service="", user="", process="", command_line=""):
+    def outputs(self, service="", user="", process="", command_line="", script=""):
         return mock.patch.object(system, "_tool",
-                                 side_effect=[service, user, process, command_line])
+                                 side_effect=[service, user, process, command_line, script])
 
     def test_a_service(self):
         with mock.patch.object(system, "_tool", return_value="active\n"):
@@ -199,20 +218,86 @@ class Running(unittest.TestCase):
                 (later, "gnome-text-editor", False), (later, "wsdd", False),
                 (later, "firewalld", False), (later, "tux-probe-lua-script", False),
                 (later, "charge-pulse", False)):
-            with self.subTest(name=name, processes=processes[0][0]), \
-                    mock.patch.object(system, "_tool", side_effect=pgrep(processes)):
+            with self.subTest(name=name, processes=processes[0][0]), processes_here(processes):
                 self.assertEqual(system.running({"name": name}, None)["running"], running)
         # Asked about another computer, what is said of this one is so too.
         for name in ("at-spi2-registryd", "php-fpm", "wsdd", "tux-probe-long-daemon"):
-            with self.subTest(name), mock.patch.object(system, "_tool", side_effect=pgrep(here)), \
+            with self.subTest(name), processes_here(here), \
                     self.assertRaises(ValueError) as raised:
                 system.running({"name": name, "on": "my work laptop"}, None)
             self.assertIn(f"On this computer, {name} is running.", str(raised.exception))
-        with mock.patch.object(system, "_tool", side_effect=pgrep(later)), \
-                self.assertRaises(ValueError) as raised:
+        with processes_here(later), self.assertRaises(ValueError) as raised:
             system.running({"name": "nginx", "on": "my work laptop"}, None)
         self.assertIn("No service or process called nginx is running on this computer.",
                       str(raised.exception))
+
+    def test_a_script_is_read_from_its_command_line_word_by_word(self):
+        """Each alone, as only the command line tells them apart. The interpreter's options
+        come before the script, some with an argument of their own, which is no script, and
+        some with code or a module to run instead. A script whose #! line runs its interpreter
+        through env has the interpreter's own name, so it is found under the interpreters
+        listed; one whose #! line names its interpreter by its path keeps the script's own name,
+        so it is found under any, and gets what follows the interpreter on the #! line as one
+        word, as "-w -T" for "#!/usr/bin/perl -w -T"."""
+        for own, line, name, running in (
+                ("python3", "/usr/bin/python3 -u -W ignore /usr/bin/wsdd", "wsdd", True),
+                ("python3", "python3 -u -B /usr/bin/wsdd", "wsdd", True),
+                ("python3", "python3 -X utf8 /home/me/bot.py", "bot", True),
+                ("python3", "/usr/bin/python3 -Es /usr/sbin/foo-daemon", "foo-daemon", True),
+                ("python3", "python3 -uWignore /usr/local/bin/feeds", "feeds", True),
+                ("node", "node --inspect /opt/app/bridge.js", "bridge", True),
+                ("node", "node /usr/local/bin/n8n start", "n8n", True),
+                ("node", "node --require dotenv/config /opt/app/worker.js", "worker", True),
+                ("perl", "/usr/bin/perl /usr/sbin/foo-daemon", "foo-daemon", True),
+                ("perl", "perl -Mstrict -I /opt/lib /usr/local/bin/feed-fetcher", "feed-fetcher",
+                 True),
+                ("ruby", "ruby /usr/local/bin/foo-worker", "foo-worker", True),
+                # Through env: #!/usr/bin/env php, lua5.4 or tclsh.
+                ("php", "php /usr/local/bin/mytool", "mytool", True),
+                ("php8.2", "php8.2 /usr/local/bin/queue-worker --sleep=3", "queue-worker", True),
+                ("php", "php /usr/local/bin/my-long-php-daemon-script",
+                 "my-long-php-daemon-script", True),
+                ("lua5.4", "lua5.4 /usr/local/bin/tux-probe-lua-script", "tux-probe-lua-script",
+                 True),
+                ("tclsh", "tclsh /usr/local/bin/tcltool", "tcltool", True),
+                # By its #! line, whose options are one word.
+                ("long-script-nam", ["/usr/bin/perl", "-w -T",
+                                     "/usr/local/bin/long-script-name-here"],
+                 "long-script-name-here", True),
+                ("long-python-nam", "/usr/bin/python3 -u /usr/local/bin/long-python-name-here",
+                 "long-python-name-here", True),
+                ("foo.py", "/usr/bin/python3 ./foo.py", "foo", True),
+                # An option's argument, code, a module, or a program that is no interpreter.
+                ("perl", "perl -I /usr/lib/nginx x", "nginx", False),
+                ("python3", "python3 -W ignore wsdd", "ignore", False),
+                ("node", "node -e 1 /opt/app/bridge.js", "bridge", False),
+                ("perl", "perl -E say /usr/sbin/foo-daemon", "foo-daemon", False),
+                ("python3", "celery worker --loglevel=info", "worker", False),
+                ("tux-probe-long-", "/bin/sh /usr/local/bin/tux-probe-long-daemon-wrapper "
+                                    "tux-probe-long-daemon", "tux-probe-long-daemon", False)):
+            with self.subTest(name=name, line=line), processes_here([(own, line)]):
+                self.assertEqual(system.running({"name": name}, None)["running"], running)
+        with processes_here([("php", "php /usr/local/bin/mytool")]), \
+                self.assertRaises(ValueError) as raised:
+            system.running({"name": "mytool", "on": "my work laptop"}, None)
+        self.assertIn("On this computer, mytool is running.", str(raised.exception))
+
+    def test_what_proc_gives_is_read_word_by_word(self):
+        """Its own name without the line break, and its command line split at the NULs."""
+        with tempfile.TemporaryDirectory() as folder:
+            proc = Path(folder) / "123"
+            proc.mkdir()
+            (proc / "comm").write_text("foo\n")
+            (proc / "cmdline").write_bytes(b"/usr/bin/perl\0-w -T\0/usr/sbin/foo\0")
+            real = Path
+
+            def paths(path):     # this computer's /proc is never read
+                assert str(path).startswith("/proc/"), path
+                return real(folder, str(path).removeprefix("/proc/"))
+            with mock.patch.object(system, "Path", side_effect=paths):
+                self.assertEqual(system._process("123"),
+                                 ("foo", ["/usr/bin/perl", "-w -T", "/usr/sbin/foo"]))
+                self.assertEqual(system._process("124"), ("", []))     # gone
 
     def test_a_name_cannot_become_an_option_or_a_command(self):
         for name in ("", "-h", "--user", "a b", "a;rm", "$(x)", "a/b", "x" * 80, "../x"):

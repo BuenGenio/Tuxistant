@@ -57,7 +57,8 @@ PINNED_INNER = ('export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T="timeo
                 '$T systemctl is-active --quiet docker.service 2>/dev/null; S=$?; echo @docker; '
                 'if [ $S = 0 ]; then $T docker -H unix:///var/run/docker.sock ps '
                 '--format "{{.Names}}|{{.Image}}|{{.Status}}" 2>&1; echo "@exit $?"; '
-                'elif [ $S = 3 ]; then echo "@exit 300"; else echo "@exit 301"; fi; '
+                'elif [ $S = 3 ]; then echo "@exit 300"; elif [ $S = 4 ]; then echo "@exit 302"; '
+                'else echo "@exit 301"; fi; '
                 'echo @systemd; $T systemctl list-units --type=service '
                 '--state=active,activating,reloading --no-legend --plain --no-pager 2>/dev/null; '
                 'echo "@exit $?"')
@@ -71,9 +72,12 @@ SUPPORTED = ("Full answers are for a Linux server reached over ssh where systemd
              "to dockerd, from docker-ce or docker.io, socket-activated or not. Any other setup, "
              "such as podman or its docker shim, a NAS with its own docker, rootless docker, "
              "snap's docker, a server without systemd or an unusual `PATH`, may get a sentence "
-             "saying what Tux couldn't check there instead of an answer, such as \"The system's "
-             "docker.service isn't running on your server, so I didn't ask docker.\" or \"I "
-             "couldn't find systemd on your server, so I couldn't check what's running there.\"")
+             "saying what Tux couldn't check there instead of an answer, such as \"There's no "
+             "system docker.service on your server, so I didn't ask docker.\", or with systemd "
+             "before 253, which doesn't tell a unit that isn't there from one that is stopped, "
+             "\"The system's docker.service isn't running on your server, so I didn't ask "
+             "docker.\", or \"I couldn't find systemd on your server, so I couldn't check what's "
+             "running there.\"")
 # What is read there, and so what is said, word for word in the same four.
 SCOPE = ("Only the system docker's containers and the system's own services are read there, not "
          "a rootless docker or user services of the ssh user's beside them, and what Tux says "
@@ -502,12 +506,22 @@ class Filtering(Case):
         self.assertEqual(said({"name": "redis", "on": "my server"}, answer=(0, redis, b""))[0],
                          "On your server I see the docker container immich_redis, restarting "
                          "again and again; and the docker container nextcloud-redis-1, up 2 days.")
-        # A redis container that keeps restarting, and a redis service that is up.
+        # A redis container that keeps restarting, and a redis service that is up, which may be
+        # its compose wrapper: the container decides, and the service is up, so neither.
         both = (b"@docker\nredis|redis:7|Restarting (1) 12 seconds ago\n@exit 0\n@systemd\n"
                 b"redis.service loaded active running x\n@exit 0\n")
         self.assertEqual(said({"name": "redis", "on": "my server"}, answer=(0, both, b""))[0],
-                         "Partly: on your server I see the docker container redis, restarting "
-                         "again and again; and the service redis.")
+                         "On your server I see the docker container redis, restarting again and "
+                         "again; and the service redis.")
+        # Two containers called home assistant, one of them up: "Partly".
+        two = (b"@docker\nhome-assistant|ghcr.io/home-assistant/home-assistant:stable|Up 2 days\n"
+               b"homeassistant|homeassistant/home-assistant|Restarting (1) 12 seconds ago\n"
+               b"@exit 0\n@systemd\n@exit 0\n")
+        self.assertEqual(said({"name": "home assistant", "on": "my server"},
+                              answer=(0, two, b""))[0],
+                         "Partly: on your server I see the docker container homeassistant, "
+                         "restarting again and again; and the docker container home-assistant, up "
+                         "2 days.")
 
     def test_only_what_is_called_the_name_says_yes(self):
         """A compose stack whose app is stopped, with only its database and cache up: what
@@ -545,14 +559,16 @@ class Filtering(Case):
                              b"mastodon-db-1|postgres:14|Up 2 days\n",
                  "On your server I see the docker container mastodon-sidekiq-1, up 2 days; and "
                  "the docker container mastodon-db-1, up 2 days."),
-                # Called that by its container or its unit, it is a yes.
+                # Called that by its container, it is a yes.
                 ("nextcloud", b"nextcloud|nextcloud:29|Up 2 days\n"
                               b"nextcloud-cron|nextcloud:29|Up 2 days\n",
                  "Yes, on your server I see the docker container nextcloud, up 2 days; and the "
                  "docker container nextcloud-cron, up 2 days."),
+                # By its unit, beside a container that matches all of the name, it is no yes:
+                # the unit may be that container's compose wrapper.
                 ("nginx", b"nginx-proxy|jwilder/nginx-proxy|Up 1 day\n",
-                 "Yes, on your server I see the service nginx; and the docker container "
-                 "nginx-proxy, up 1 day.")):
+                 "On your server I see the service nginx; and the docker container nginx-proxy, "
+                 "up 1 day.")):
             answer = b"@docker\n" + docker + b"@exit 0\n" + services
             if name == "postgres":
                 answer = answer.replace(b"nginx.service", b"postgresql.service")
@@ -1233,6 +1249,28 @@ class Filtering(Case):
             with self.subTest(name):
                 self.assertTrue(said({"name": name})[0].startswith(TWO))
 
+    def test_docker_s_own_daemon_is_docker(self):
+        """dockerd is what docker.service runs, so no unit or container is called it: by any of
+        its names it gets the whole list, which starts with what docker said, as docker does.
+        "daemon" or "engine" alone is a name like any other."""
+        refused = (b"@docker\npermission denied while trying to connect to the Docker daemon "
+                   b"socket\n@exit 1\n@systemd\ndocker.service loaded active running Docker\n"
+                   b"@exit 0\n")
+        for name in ("docker daemon", "the docker daemon", "docker engine", "dockerd", "Dockerd",
+                     "the dockerd service", "docker"):
+            with self.subTest(name):
+                self.assertTrue(said({"name": name, "on": "my server"})[0].startswith(TWO))
+                self.assertEqual(said({"name": name, "on": "my server"},
+                                      answer=(0, refused, b""))[0],
+                                 f"{serverstatus.DOCKER_REFUSED} There is 1 system service "
+                                 "running: docker.")
+        for name in ("daemon", "engine", "the daemon"):
+            with self.subTest(name):
+                self.assertEqual(said({"name": name, "on": "my server"})[0],
+                                 f"I don't see {name.removeprefix('the ')} among the system "
+                                 "docker's containers or the system services running on your "
+                                 "server.")
+
     def test_ssh_itself_is_running_once_it_answered(self):
         """An ssh server answered, whatever it is. sshd is OpenSSH's, which Debian and Ubuntu
         call ssh.service, and which a socket starts once a connection as sshd@ or ssh@: Tailscale
@@ -1242,13 +1280,22 @@ class Filtering(Case):
         per_connection = units % (b"sshd@0-192.0.2.5:22-192.0.2.9:51234.service loaded active "
                                   b"running OpenSSH per-connection server daemon\n"
                                   b"sshd-keygen@rsa.service loaded active exited x\n")
-        # Tailscale SSH or Dropbear answers, and OpenSSH isn't running.
-        tailscale = units % b"tailscaled.service loaded active running Tailscale node agent\n"
+        # Tailscale SSH or Dropbear answers, and OpenSSH isn't running. sshguard, which often runs
+        # beside it, is no sshd.
+        tailscale = units % (b"tailscaled.service loaded active running Tailscale node agent\n"
+                             b"sshguard.service loaded active running SSHGuard\n")
         dropbear = units % b"dropbear.service loaded active running Dropbear SSH server\n"
         keygen = units % b"sshd-keygen@rsa.service loaded active exited x\n"
+        # OpenSSH listed, but running nothing: waiting to start again after a crash, or done.
+        crashing = units % (b"ssh.service loaded activating auto-restart OpenBSD Secure Shell "
+                            b"server\ntailscaled.service loaded active running x\n")
+        queued = units % b"sshd.service loaded activating auto-restart-queued OpenSSH\n"
+        exited = units % b"sshd.service loaded active exited OpenSSH server daemon\n"
         runs, no = serverstatus.SSHD_RUNS, serverstatus.NO_SSHD
+        restarts = serverstatus.SSHD_RESTARTS
         for answer, sshd in ((debian, runs), (per_connection, runs), (FULL, no), (tailscale, no),
-                             (dropbear, no), (keygen, no)):
+                             (dropbear, no), (keygen, no), (crashing, restarts),
+                             (queued, restarts), (exited, no)):
             for names, sentence in (
                     (("ssh", "the ssh server", "SSH service", "the ssh daemon"),
                      serverstatus.OVER_SSH),
@@ -1262,8 +1309,10 @@ class Filtering(Case):
                         self.assertTrue(session.tainted)
         self.assertEqual(serverstatus.SSHD_RUNS,
                          "Yes, I reached your server over ssh, and its sshd service is running.")
+        self.assertEqual(serverstatus.SSHD_RESTARTS, "I reached your server over ssh, but its sshd "
+                                                     "service keeps restarting.")
         self.assertEqual(serverstatus.NO_SSHD, "I reached your server over ssh, but I don't see an "
-                                               "sshd service among its system services.")
+                                               "sshd service running among its system services.")
         self.assertEqual(said({"name": "sshd"}, answer=(255, b"", b"Permission denied"))[0],
                          serverstatus.NO_KEY)
         # It answered over ssh, though with no systemd there nothing else could be read.
@@ -1341,6 +1390,62 @@ class Filtering(Case):
                          "Yes, on your server I see the docker container jellyfin, up 2 days; and "
                          "the service jellyfin, active.")
 
+    def test_a_compose_wrapper_that_stays_running_decides_nothing(self):
+        """The other common wrapper: Type=simple, ExecStart=docker compose up without -d, so the
+        compose CLI stays attached and the unit is active and running while a container keeps
+        restarting, is paused or has stopped, and activating while it pulls at boot. Beside
+        containers that match the whole name, a unit of that name may be such a wrapper, so it
+        decides nothing: only a container called the name exactly does."""
+        def stack(containers: bytes, unit: bytes, state=b"active running") -> bytes:
+            return (b"@docker\n" + containers + b"@exit 0\n@systemd\n" + unit
+                    + b".service loaded " + state + b" Compose stack\n@exit 0\n")
+        immich = (b"immich_server|ghcr.io/immich-app/immich-server:release|Restarting (1) 4 "
+                  b"seconds ago\nimmich_postgres|tensorchord/pgvecto-rs:pg14|Up 2 days\n"
+                  b"immich_redis|redis:6.2-alpine|Up 2 days\n")
+        rest = ("the docker container immich_server, restarting again and again; the docker "
+                "container immich_postgres, up 2 days; and the docker container immich_redis, up "
+                "2 days.")
+        jellyfin = b"jellyfin|jellyfin/jellyfin|%s\n"
+        for name, answer, sentence in (
+                ("immich", stack(immich, b"immich"),
+                 f"On your server I see the service immich; {rest}"),
+                ("immich", stack(immich, b"immich", b"activating start"),
+                 f"On your server I see the service immich, starting; {rest}"),
+                ("nextcloud", stack(b"nextcloud-app-1|nextcloud:29|Restarting (1) 4 seconds ago\n"
+                                    b"nextcloud-db-1|mariadb:11|Up 2 days\n", b"nextcloud"),
+                 "On your server I see the docker container nextcloud-app-1, restarting again and "
+                 "again; the service nextcloud; and the docker container nextcloud-db-1, up 2 "
+                 "days."),
+                # The app's container stopped, so docker ps doesn't list it.
+                ("nextcloud", stack(b"nextcloud-db-1|mariadb:11|Up 2 days\nnextcloud-redis-1|"
+                                    b"redis:7|Up 2 days\n", b"nextcloud"),
+                 "On your server I see the service nextcloud; the docker container nextcloud-db-1, "
+                 "up 2 days; and the docker container nextcloud-redis-1, up 2 days."),
+                ("paperless", stack(b"paperless-webserver-1|ghcr.io/paperless-ngx/paperless-ngx|"
+                                    b"Up 2 days (Paused)\npaperless-broker-1|redis:7|Up 2 days\n",
+                                    b"paperless"),
+                 "On your server I see the service paperless; the docker container "
+                 "paperless-webserver-1, paused; and the docker container paperless-broker-1, up "
+                 "2 days."),
+                # Called that exactly, the container decides: no yes while it isn't up, and no
+                # "Not really" either, as the unit may be a native jellyfin that is up.
+                ("jellyfin", stack(jellyfin % b"Restarting (1) 4 seconds ago", b"jellyfin"),
+                 "On your server I see the docker container jellyfin, restarting again and again; "
+                 "and the service jellyfin."),
+                ("jellyfin", stack(jellyfin % b"Up 2 days (Paused)", b"jellyfin"),
+                 "On your server I see the docker container jellyfin, paused; and the service "
+                 "jellyfin."),
+                ("jellyfin", stack(jellyfin % b"Up 2 days", b"jellyfin"),
+                 "Yes, on your server I see the docker container jellyfin, up 2 days; and the "
+                 "service jellyfin.")):
+            with self.subTest(name=name, answer=answer[8:40]):
+                self.assertEqual(said({"name": name, "on": "my server"},
+                                      answer=(0, answer, b""))[0], sentence)
+        # A unit with no container that matches the whole name beside it still decides.
+        self.assertEqual(said({"name": "jellyfin", "on": "my server"},
+                              answer=(0, stack(b"", b"jellyfin"), b""))[0],
+                         "Yes, on your server I see the service jellyfin.")
+
     def test_a_job_that_runs_now_and_a_unit_that_keeps_crashing(self):
         """A oneshot such as restic-backup.service is activating while its job runs, and only
         afterwards inactive or active and exited. A unit that keeps crashing is activating too,
@@ -1349,6 +1454,8 @@ class Filtering(Case):
                  b"restic-backup.service loaded activating start Restic backup\n"
                  b"borgmatic.service loaded activating start-pre borgmatic backup\n"
                  b"jellyfin.service loaded activating auto-restart Jellyfin\n"
+                 # systemd 254 and later, once the restart is queued
+                 b"grafana-server.service loaded activating auto-restart-queued Grafana\n"
                  b"nginx-reload.service loaded reloading reload x\n@exit 0\n")
         lines = serverstatus._sections(units.decode())["systemd"][1]
         self.assertEqual(serverstatus._services(lines),
@@ -1356,13 +1463,16 @@ class Filtering(Case):
                           serverstatus.Unit("restic-backup", "starting"),
                           serverstatus.Unit("borgmatic", "starting"),
                           serverstatus.Unit("jellyfin", "restarting"),
+                          serverstatus.Unit("grafana-server", "restarting"),
                           serverstatus.Unit("nginx-reload", "running")])
         for name, sentence in (
                 ("restic", "On your server I see the service restic-backup, starting."),
                 ("restic-backup", "Yes, on your server I see the service restic-backup, starting."),
                 ("borgmatic", "Yes, on your server I see the service borgmatic, starting."),
                 ("jellyfin", "Not really: on your server I see the service jellyfin, restarting "
-                             "again and again.")):
+                             "again and again."),
+                ("grafana-server", "Not really: on your server I see the service grafana-server, "
+                                   "restarting again and again.")):
             with self.subTest(name):
                 self.assertEqual(said({"name": name, "on": "my server"}, answer=(0, units, b""))[0],
                                  sentence)
@@ -1475,6 +1585,17 @@ class Errors(Case):
         self.assertEqual(said(answer=(0, unread, b""))[0],
                          "On your server, the system docker has 1 container running: web. I "
                          "couldn't read your server's system services.")
+        # 124 is timeout's: it took too long, as on a slow D-Bus.
+        slow = unread.replace(b"@exit 1\n", b"@exit 124\n")
+        self.assertEqual(said(answer=(0, slow, b""))[0],
+                         "On your server, the system docker has 1 container running: web. Your "
+                         "server's systemd took too long to list its services.")
+        self.assertEqual(said({"name": "x1"}, answer=(0, slow, b""))[0],
+                         "I don't see x1 among the system docker's containers running on your "
+                         "server, and its systemd took too long to list its services.")
+        self.assertEqual(said({"name": "sshd"}, answer=(0, slow, b""))[0],
+                         "I reached your server over ssh. Your server's systemd took too long to "
+                         "list its services.")
 
     def test_a_docker_systemd_does_not_run_is_not_asked(self):
         """Stopped, its socket would start it, and not the system's docker.service, it may be
@@ -1488,7 +1609,11 @@ class Errors(Case):
                  "the system's docker.service isn't running there"),
                 (301, "I couldn't ask systemd whether docker is running on your server, so I "
                       "didn't ask docker.",
-                 "I couldn't ask systemd whether docker is running there")):
+                 "I couldn't ask systemd whether docker is running there"),
+                # systemd 253 and later: there is no such unit, as with podman's shim, snap's
+                # docker, a rootless one or no docker at all.
+                (302, "There's no system docker.service on your server, so I didn't ask docker.",
+                 "there's no system docker.service there")):
             unasked = b"@docker\n@exit %d\n" % code + services
             with self.subTest(code):
                 self.assertEqual(said(answer=(0, unasked, b""))[0],
@@ -1512,7 +1637,7 @@ class Errors(Case):
         a nextcloud-php service says nothing of the containers docker wasn't asked for."""
         jellyfin = b"@docker\njellyfin|jellyfin/jellyfin|Restarting (1) 5 seconds ago\n@exit 0\n"
         for systemd, why in ((b"@systemd\n@exit 124\n",
-                              "I couldn't read your server's system services."),
+                              "Your server's systemd took too long to list its services."),
                              (b"@systemd\n@exit 1\n",
                               "I couldn't read your server's system services."),
                              (b"@systemd\n" + b"".join(b"u%d.service loaded active running x\n" % i
@@ -1526,6 +1651,7 @@ class Errors(Case):
         php = b"@systemd\nnextcloud-php.service loaded active running x\n@exit 0\n"
         for docker, why in ((b"@docker\n@exit 300\n", serverstatus.DOCKER_NOT_ACTIVE),
                             (b"@docker\n@exit 301\n", serverstatus.DOCKER_NO_SYSTEMD),
+                            (b"@docker\n@exit 302\n", serverstatus.DOCKER_NO_UNIT),
                             (b"@docker\npermission denied\n@exit 1\n",
                              serverstatus.DOCKER_REFUSED)):
             with self.subTest(why):
@@ -2038,7 +2164,7 @@ class RemoteCommand(Case):
         can't run gets 126 or 127 from sh: with docker.socket listening, docker ps would start a
         stopped docker, so any answer but active leaves it unasked."""
         self.fake("docker", FAKE_DOCKER)
-        for code in (1, 4, 124, 126, 127, 255):
+        for code in (1, 2, 5, 124, 126, 127, 255):
             with self.subTest(code):
                 self.fake("systemctl", FAKE_SYSTEMCTL, service=code, socket=0)
                 found = self.read()
@@ -2055,6 +2181,23 @@ class RemoteCommand(Case):
         self.assertEqual((found["docker_why"], found["systemd_missing"]), ("no systemd", True))
         self.never("docker")
 
+    def test_no_docker_service_on_systemd_253_or_later_is_said_so(self):
+        """From systemd 253 on, is-active gives 4 for a unit that doesn't exist, where before it
+        gave 3: a server with no docker at all, podman's shim, snap's docker or a rootless one.
+        systemd did answer, so it is said there is no such unit, and docker isn't asked."""
+        self.fake("docker", FAKE_DOCKER)
+        self.fake("systemctl", FAKE_SYSTEMCTL, service=4, socket=4)
+        for shell in SHELLS:
+            with self.subTest(shell):
+                found = self.read(shell)
+                self.assertEqual((found["docker"], found["docker_why"]), (None, "no unit"))
+                self.assertEqual(found["systemd"], SERVICES)
+                self.assertEqual(self.calls("systemctl"), [SERVICE_UP, SYSTEMCTL_CALL])
+                self.never("docker")
+                self.assertEqual(serverstatus._everything(found),
+                                 f"{serverstatus.DOCKER_NO_UNIT} There are 2 system services "
+                                 "running: nginx and restic-backup.")
+
     def test_podman_s_docker_shim_is_never_run(self):
         """podman-docker's /usr/bin/docker is a script that runs podman, and a docker may link to
         podman: a rootless podman ps would set up podman's storage for the user there and leave
@@ -2067,7 +2210,7 @@ class RemoteCommand(Case):
             else:
                 os.remove(os.path.join(self.bin, "docker"))
                 os.symlink(os.path.join(self.bin, "podman"), os.path.join(self.bin, "docker"))
-            for service, socket in ((3, 3), (3, 0), (1, 3), (124, 0)):
+            for service, socket in ((3, 3), (3, 0), (4, 4), (1, 3), (124, 0)):
                 with self.subTest(how=how, service=service, socket=socket):
                     self.fake("systemctl", FAKE_SYSTEMCTL, service=service, socket=socket)
                     found = self.read()
@@ -2324,6 +2467,7 @@ class Docs(Case):
         sentences Tux says, and what the login changes there, linger or not: it still opens a
         session and runs the PAM session and the shell's start-up files."""
         self.assertIn(f'"{serverstatus.DOCKER_NOT_ACTIVE}"', SUPPORTED)
+        self.assertIn(f'"{serverstatus.DOCKER_NO_UNIT}"', SUPPORTED)
         self.assertIn(f'"{serverstatus.NEITHER}"', SUPPORTED)
         roadmap = (ROOT / "docs" / "ROADMAP.md").read_text()
         check = next(line for line in roadmap.splitlines() if line.startswith("31. Your server"))
@@ -2349,6 +2493,8 @@ class Docs(Case):
         text = " ".join(self.skills().split())
         for answer, sentence in ((b"@docker\n@exit 300\n@systemd\n@exit 0\n",
                                   serverstatus.DOCKER_NOT_ACTIVE),
+                                 (b"@docker\n@exit 302\n@systemd\n@exit 0\n",
+                                  serverstatus.DOCKER_NO_UNIT),
                                  (b"@docker\n@exit 301\n@systemd\n@exit 0\n",
                                   serverstatus.DOCKER_NO_SYSTEMD),
                                  (b"@docker\n@exit 301\n@systemd\n@exit 127\n",
@@ -2412,10 +2558,14 @@ class Docs(Case):
                  "and docker gave me an error there"),
                 (b"@docker\n@exit 300\n@systemd\n@exit 0\n",
                  "and the system's docker.service isn't running there"),
+                (b"@docker\n@exit 302\n@systemd\n@exit 0\n",
+                 "and there's no system docker.service there"),
                 (b"@docker\n@exit 301\n@systemd\n@exit 0\n",
                  "and I couldn't ask systemd whether docker is running there"),
                 (b"@docker\n@exit 127\n@systemd\n@exit 0\n",
                  "and I couldn't find the docker command there"),
+                (b"@docker\n@exit 0\n@systemd\n@exit 124\n",
+                 "and its systemd took too long to list its services"),
                 (b"@docker\n@exit 0\n@systemd\n@exit 1\n",
                  "and I couldn't read its system services"),
                 (b"@docker\n@exit 0\n@systemd\n@exit 127\n", "and I couldn't find systemd there"),
@@ -2434,9 +2584,11 @@ class Docs(Case):
         for clause in ("your user isn't allowed to use docker there", "docker didn't answer there",
                        "docker gave me an error there",
                        "the system's docker.service isn't running there",
+                       "there's no system docker.service there",
                        "I couldn't ask systemd whether docker is running there",
                        "I couldn't find the docker command there"):
             self.assertIn(f'"{clause}"', changelog)
+        self.assertIn("or systemd too slow, unread or not found", changelog)
         for path in ("docs/SKILLS.md", "CHANGELOG.md"):
             with self.subTest(path):
                 text = " ".join((ROOT / path).read_text().split())
@@ -2496,12 +2648,19 @@ class Docs(Case):
         self.assertIn(f'a `plexmediaserver` service there gets "{sentence}", with no yes', text)
 
     def test_how_the_answer_starts_is_described_as_it_is_chosen(self):
-        """Two called redis exactly by their own names, and only one of them up: "Partly", though
-        something is called that. A container that only runs the image of that name decides
-        nothing, as Nextcloud's cron does beside an app that is stopped."""
+        """Two called home assistant exactly by their own names, and only one of them up:
+        "Partly". A redis service beside a redis container may be its compose wrapper, so only
+        the container decides, and the service is up: neither. A container that only runs the
+        image of that name decides nothing, as Nextcloud's cron does beside an app that is
+        stopped."""
+        two = (b"@docker\nhome-assistant|img|Up 2 days\nhomeassistant|img|Restarting (1) 1 second "
+               b"ago\n@exit 0\n@systemd\n@exit 0\n")
+        self.assertTrue(said({"name": "home assistant"}, answer=(0, two, b""))[0]
+                        .startswith("Partly"))
         redis = (b"@docker\nredis|redis:7|Restarting (1) 12 seconds ago\n@exit 0\n@systemd\n"
                  b"redis.service loaded active running x\n@exit 0\n")
-        self.assertTrue(said({"name": "redis"}, answer=(0, redis, b""))[0].startswith("Partly"))
+        self.assertTrue(said({"name": "redis"}, answer=(0, redis, b""))[0]
+                        .startswith("On your server I see the docker container redis, restarting"))
         cron = (b"@docker\nnextcloud-cron-1|nextcloud:29-apache|Up 2 days\n@exit 0\n@systemd\n"
                 b"@exit 0\n")
         helper = said({"name": "nextcloud"}, answer=(0, cron, b""))[0]
@@ -2521,10 +2680,19 @@ class Docs(Case):
         for path in ("docs/SKILLS.md", "CHANGELOG.md"):
             with self.subTest(path):
                 text = " ".join((ROOT / path).read_text().split())
-                self.assertIn('"Yes" when all of it is up, "Partly" when only some is, as with a '
-                              '`redis` container that keeps restarting beside a `redis` service '
-                              'that is up, and "Not really" when none of it is and nothing else '
-                              'that matches the whole name is up', text)
+                self.assertIn('a unit\'s only beside no container that matches the whole name: '
+                              '"Yes" when all of it is up, "Partly" when only some is, as with a '
+                              '`homeassistant` container that keeps restarting beside a '
+                              '`home-assistant` one that is up, and "Not really" when none of it '
+                              'is and nothing else that matches the whole name is up', text)
+                self.assertRegex(text, r"gets neither(, and so does| so) a `redis` container that "
+                                       r"keeps restarting beside a `redis` service that is up|a "
+                                       r"`redis` container that keeps restarting beside a `redis` "
+                                       r"service that is up gets neither")
+                for wrong in ('"Partly" when only some is, as with a `redis` container',
+                              "compose wrapper unit such as `immich.service` decides nothing "
+                              "beside an app that keeps restarting"):
+                    self.assertNotIn(wrong, text)
                 self.assertNotIn("even beside others that are up", text)
                 self.assertNotIn('gets "Not really" beside a `nextcloud-db` that is up', text)
                 self.assertIn('with nothing called that exactly, the answer starts "On your server '
@@ -2640,6 +2808,35 @@ class Docs(Case):
         self.assertIn("a name longer than the 15 characters Linux keeps of a process's own name",
                       skills)
 
+    def test_what_decides_nothing_is_described_as_it_is_said(self):
+        """A compose wrapper that stays running, Debian's postgresql wrapper beside its cluster,
+        and docker's own daemon, as SKILLS.md quotes them, and the changelog names the wrappers
+        that decide nothing."""
+        skills = " ".join(self.skills().split())
+        changelog = " ".join((ROOT / "CHANGELOG.md").read_text().split())
+        immich = (b"@docker\nimmich_server|ghcr.io/immich-app/immich-server:release|Restarting (1) "
+                  b"4 seconds ago\nimmich_postgres|tensorchord/pgvecto-rs:pg14|Up 2 days\n@exit 0\n"
+                  b"@systemd\nimmich.service loaded active running x\n@exit 0\n")
+        text = said({"name": "immich", "on": "my server"}, answer=(0, immich, b""))[0]
+        self.assertIn(f'a running `immich.service` gets "{text}", with no yes', skills)
+        nginx = (b"@docker\nnginx-proxy|jwilder/nginx-proxy|Up 1 day\n@exit 0\n@systemd\n"
+                 b"nginx.service loaded active running x\n@exit 0\n")
+        self.assertFalse(said({"name": "nginx"}, answer=(0, nginx, b""))[0].startswith("Yes"))
+        self.assertIn("and so does a native `nginx` beside an `nginx-proxy` container", skills)
+        postgres = (b"@docker\n@exit 0\n@systemd\npostgresql.service loaded active exited x\n"
+                    b"postgresql@16-main.service loaded active running x\n@exit 0\n")
+        text = said({"name": "postgresql", "on": "my server"}, answer=(0, postgres, b""))[0]
+        self.assertIn(f'"Is postgresql running on my server?" gets "{text}", with no yes', skills)
+        for path, said_so in (("docs/SKILLS.md", skills), ("CHANGELOG.md", changelog)):
+            with self.subTest(path):
+                self.assertIn("decides nothing", said_so)
+                self.assertRegex(said_so, r"`docker compose up -d`|a oneshot that ran it with `-d`")
+                self.assertRegex(said_so, r"runs (`docker compose up`|it) in the foreground")
+        self.assertIn('"dockerd", "the docker daemon" and "docker engine" mean the whole list too',
+                      skills)
+        self.assertIn('"Is the docker daemon running on my server?", or dockerd or docker engine, '
+                      'gets the whole list', changelog)
+
     def test_restarting_and_partly_are_described_as_they_are_said(self):
         nextcloud = (b"@docker\nnextcloud|nextcloud|Restarting (1) 1 second ago\n"
                      b"nextcloud-db|mariadb|Up 2 days (Paused)\n@exit 0\n@systemd\n@exit 0\n")
@@ -2651,9 +2848,11 @@ class Docs(Case):
     def test_ssh_and_sshd_are_described_as_they_are_said(self):
         skills = " ".join(self.skills().split())
         changelog = " ".join((ROOT / "CHANGELOG.md").read_text().split())
-        for sentence in (serverstatus.OVER_SSH, serverstatus.SSHD_RUNS, serverstatus.NO_SSHD):
+        for sentence in (serverstatus.OVER_SSH, serverstatus.SSHD_RUNS, serverstatus.SSHD_RESTARTS,
+                         serverstatus.NO_SSHD):
             self.assertIn(f'"{sentence}"', skills)
             self.assertIn(f'"{sentence}"', changelog)
+        self.assertIn("and not as another that starts with ssh, such as `sshguard`", skills)
         unread = said({"name": "sshd"},
                       answer=(0, b"@docker\n@exit 0\n@systemd\n@exit 1\n", b""))[0]
         self.assertIn(f'with the services unread, why, as "{unread}"', skills)
@@ -2688,12 +2887,33 @@ class Docs(Case):
                         "alone or after a folder and before a space or a colon",
                         "`python3 /usr/bin/wsdd` is wsdd", "started by its `#!` line",
                         "as in `man nginx` or `tail -f /var/log/nginx`, isn't a program of that "
-                        "name", "nor is what follows `-c`, `-e` or `-m`"):
+                        "name", "nor is what follows `-c`, `-e` or `-m`",
+                        "an interpreter, `python`, `perl`, `ruby`, `node`, `php`, `lua`, `tclsh` "
+                        "or a shell, runs", "`python3 -u -W ignore /usr/bin/wsdd` is wsdd too, but "
+                        "`perl -I /usr/lib/nginx x` isn't nginx",
+                        "one whose `#!` line names its interpreter by its path, any one, keeps the "
+                        "script's own name, cut at 15 characters",
+                        "so it is found under the interpreters above but not under others, such as "
+                        "`deno`, `bun` or `java -jar`"):
             self.assertIn(said_so, skills)
-        for said_so in ("before a space or a colon", "`python3 /usr/bin/wsdd` is wsdd",
-                        "started by its `#!` line", "as in `man nginx`, is no program"):
+        for said_so in ("before a space or a colon", "`python3 /usr/bin/wsdd`",
+                        "started by its `#!` line", "as in `man nginx`, is no program",
+                        "`python`, `perl`, `ruby`, `node`, `php`, `lua`, `tclsh` or a shell runs",
+                        "which names its interpreter by its path, any one, or runs one of these "
+                        "through `env`"):
             self.assertIn(said_so, changelog)
+        for text in (skills, changelog):
+            self.assertNotIn("under any interpreter", text)
         self.assertNotIn("A process is looked for by its own name and by the first word", skills)
+        # Each interpreter the docs name is one a script is found under, as env runs it.
+        def pgrep(*command):    # only the look for the name anywhere in a command line finds it
+            return "100\n" if command[-1].startswith("(^|") else ""
+        for interpreter in ("python3", "perl", "ruby", "node", "php", "lua5.4", "tclsh", "bash",
+                            "sh"):
+            with self.subTest(interpreter), mock.patch.object(system, "_tool", side_effect=pgrep), \
+                    mock.patch.object(system, "_process",
+                                      return_value=(interpreter, [interpreter, "/opt/x/tool"])):
+                self.assertTrue(system._process_here("tool"))
 
     def test_the_system_docker_is_named_as_it_is_said(self):
         """docker -H at the system's socket reads the system docker alone: a rootless docker of
