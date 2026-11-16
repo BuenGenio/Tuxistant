@@ -201,8 +201,9 @@ CODES = ("4829", "482913", "48291375", "KQ7X9B", "kq7x9b", "A7K2Q9XB", "KQWXBT",
          "\U0001d7d2\U0001d7d6\U0001d7d0\U0001d7d7\U0001d7cf\U0001d7d1",
          "٤٨٢٩١٣",
          # Groups whose last is one or two digits, which a dash and a number after them could
-         # make the start of a range.
-         "482 91", "48-29-13")
+         # make the start of a range, and a code that is a year, which a dash and the minutes
+         # after it could make one, "2005—10 minutes left".
+         "482 91", "48-29-13", "2005")
 BODIES = ("Your Acme verification code is {C}.", "{C} is your Acme code.",
           "Use {C} to sign in to Acme.", "Hi,\n\nEnter this on the page:\n\n{C}\n\nThanks",
           "Your one-time passcode: {C}\nIt expires soon.", "Your Acme PIN is {C}.",
@@ -238,7 +239,10 @@ AFTER = ("Verification ends soon", "DO NOT SHARE IT", "SMS. Thanks", "10 minutes
          # A name that is a currency's code but in capitals, or starts like one, or is one's
          # name in the singular, which 0.5.0 didn't count.
          "Ron, Acme IT", "Ron\nAcme", "Aud", "Rubén, Acme support", "Audífonos Acme",
-         "Dollar Bank")
+         "Dollar Bank",
+         # The first letter of a currency of more than one, 만 of 만원, which by itself means
+         # "only": "enter only 482913".
+         "만 입력하세요")
 BEFORE = ("Your code", "Verification", "PIN", "Step 10", "验证码")
 HTML = ("<p>Your Acme verification code is <b>{C}</b>.</p>",
         "<p>Your Acme code is</p><table><tr>{CELLS}</tr></table>",
