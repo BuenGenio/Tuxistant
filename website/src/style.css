@@ -358,7 +358,7 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .rel-added { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .feat {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;    /* the label's baseline is the chip's, so the row lines up with the version */
   gap: 5px;
   max-width: 100%;
   padding-block: 2px;
@@ -373,6 +373,7 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .feat span { min-width: 0; overflow-wrap: break-word; }
 .feat-icon {
   flex: none;
+  align-self: center;
   width: 15px;
   height: 15px;
   fill: none;
