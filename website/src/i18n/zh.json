@@ -14,7 +14,7 @@
   "dlFor": "下载 {os} 版", "dlSoon": "{os} 版即将推出", "dlPending": "{os} 预览版即将推出", "dlAll": "所有版本",
   "dlMeta": "版本 {version}，{channel}", "dlPlanned": "暂未提供",
   "examplesTitle": "它能为你做什么", "youSay": "你说", "approve": "需要你先确认",
-  "ctaExamples": "想在你自己的桌面上用它吗？", "ctaPreview": "帮我们在真实桌面上验证这些功能。", "ctaVersions": "在找旧版本或源代码？", "ctaSoon": "{os} 版即将推出。", "ctaSoonAlso": "你也在用 {os} 桌面吗？", "ctaReleases": "在 GitHub 上查看所有版本",
+  "ctaExamples": "想在你自己的桌面上用它吗？", "ctaPreview": "在你自己的桌面上试试这些功能。", "ctaVersions": "在找旧版本或源代码？", "ctaSoon": "{os} 版即将推出。", "ctaSoonAlso": "你也在用 {os} 桌面吗？", "ctaReleases": "在 GitHub 上查看所有版本",
   "examples": {
     "linux": [
       ["now", "我的磁盘还剩多少空间？", "检查磁盘并大声告诉你。"],

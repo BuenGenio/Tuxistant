@@ -37,7 +37,7 @@
       "features": [
         {"icon": "apps", "label": {"en": "Opening apps", "es": "Abrir apps", "pt": "Abrir apps", "zh": "打开应用", "ar": "فتح التطبيقات"}},
         {"icon": "settings", "label": {"en": "Opening Settings pages", "es": "Abrir páginas de Configuración", "pt": "Abrir páginas de Configurações", "zh": "打开设置页面", "ar": "فتح صفحات الإعدادات"}},
-        {"icon": "shield", "label": {"en": "Home questions kept out of fact lookups", "es": "Preguntas de casa fuera de búsquedas", "pt": "Perguntas da casa fora das buscas", "zh": "关于你家的问题不进入事实查询", "ar": "أسئلة منزلك خارج البحث عن المعلومات"}}
+        {"icon": "shield", "label": {"en": "Home questions kept out of fact lookups", "es": "Tu casa queda fuera de las búsquedas", "pt": "Perguntas sobre a casa fora das buscas", "zh": "关于你家的问题不进入事实查询", "ar": "أسئلة منزلك خارج البحث عن المعلومات"}}
       ]
     },
     {

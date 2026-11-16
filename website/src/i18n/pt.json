@@ -14,7 +14,7 @@
   "dlFor": "Baixar para {os}", "dlSoon": "Em breve no {os}", "dlPending": "Prévia para {os} em breve", "dlAll": "Todas as versões",
   "dlMeta": "Versão {version}, {channel}", "dlPlanned": "Ainda não disponível",
   "examplesTitle": "O que ele faz por você", "youSay": "Você diz", "approve": "Você aprova primeiro",
-  "ctaExamples": "Quer isso no seu próprio computador?", "ctaPreview": "Ajude a comprová-las num computador real.", "ctaVersions": "Procurando uma versão anterior ou o código-fonte?", "ctaSoon": "Em breve no {os}.", "ctaSoonAlso": "Também usa um computador com {os}?", "ctaReleases": "Todas as versões no GitHub",
+  "ctaExamples": "Quer isso no seu próprio computador?", "ctaPreview": "Experimente-as no seu próprio computador.", "ctaVersions": "Procurando uma versão anterior ou o código-fonte?", "ctaSoon": "Em breve no {os}.", "ctaSoonAlso": "Também usa um computador com {os}?", "ctaReleases": "Todas as versões no GitHub",
   "examples": {
     "linux": [
       ["now", "Quanto espaço ainda tenho no disco?", "Verifica o disco e diz em voz alta."],
@@ -42,7 +42,7 @@
   "previewCaps": [
     ["soon", "Toca, pausa e pula músicas"], ["soon", "Timers e lembretes"], ["soon", "Controla seu Home Assistant"], ["soon", "Pesquisa e investiga na web"],
     ["soon", "Responde fatos com a Wikipédia"], ["soon", "Responde com seus e-mails"], ["soon", "Suas próprias habilidades, isoladas"], ["soon", "Abre apps e páginas de Configurações"],
-    ["soon", "Habilidades receita: um arquivo YAML, sem código"], ["soon", "Receitas podem alternar Luz noturna e Não Perturbe"], ["soon", "Cada habilidade com sua página nas Configurações"], ["soon", "Endereço do Tailscale só se você ativar"], ["soon", "Ditado sem as mãos: toque duas vezes em Fn"], ["soon", "Responda ao Tux segurando Fn de novo"], ["soon", "Nuvem só se você aceitar"]
+    ["soon", "Habilidades de receita: um arquivo YAML, sem código"], ["soon", "Receitas podem alternar Luz noturna e Não Perturbe"], ["soon", "Cada habilidade com sua página nas Configurações"], ["soon", "Endereço do Tailscale só se você ativar"], ["soon", "Ditado sem as mãos: toque duas vezes em Fn"], ["soon", "Responda ao Tux segurando Fn de novo"], ["soon", "Nuvem só se você aceitar"]
   ],
   "releasesTitle": "Histórico de versões",
   "donateTitle": "Ajude a criar a próxima versão", "donateText": "Seu apoio financia as versões para macOS e Windows.",
