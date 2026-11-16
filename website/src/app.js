@@ -205,15 +205,27 @@
   // up. It stays near the top, and for a moment after every jump (the first load, a link to a
   // section, back and forward), so a jump never hides it. It has no menu of its own: the
   // language and mode lists are the browser's, and nothing scrolls under them.
+  // The scroll a jump makes is only reported with the next frame, which a busy phone, still
+  // compiling the hero's shaders, can hold back past the grace. So the first scroll within 3 s of a
+  // jump counts as the jump, and the grace starts again from there.
   const header = document.getElementById('site-header');
   let lastY = scrollY;
   let graceUntil = performance.now() + 900;
+  let jumpUntil = performance.now() + 3000;
   const showHeader = () => header.classList.remove('is-hidden');
-  const navigated = () => { graceUntil = performance.now() + 900; showHeader(); };
+  const navigated = () => {
+    graceUntil = performance.now() + 900;
+    jumpUntil = performance.now() + 3000;
+    showHeader();
+  };
   addEventListener('scroll', () => {
     const y = scrollY;
     const delta = y - lastY;
     lastY = y;
+    if (performance.now() < jumpUntil) {
+      jumpUntil = 0;
+      graceUntil = Math.max(graceUntil, performance.now() + 900);
+    }
     if (y < 96 || performance.now() < graceUntil) showHeader();
     else if (delta > 6) header.classList.add('is-hidden');
     else if (delta < -6) showHeader();

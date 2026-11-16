@@ -3,10 +3,12 @@
 //
 // usage: node site_dom.mjs INPUT.json REPORT.json (files, as a wrapper round node may print too)
 // INPUT: {"app": path to app.js, "pages": {name: tree}, "cases": [{"page", "userAgent", "platform",
-//        "steps": [null or a selector to click, ...], "probes": [selector, ...]}]}
+//        "hash" (optional, the address's #part on arrival), "steps": [null or a selector to click, ...],
+//        "probes": [selector, ...]}]}
 // A tree is ["tag", {attributes}, [children]], and a child is a tree or a string of text.
 // REPORT: one entry per case: for each step, after its click, each probe's matches as
-//         {text, attrs, parts}; or {"error"} if app.js threw.
+//         {text, attrs, parts}, and "#scrolled", what app.js last scrolled into view, as a probe's
+//         matches; or {"error"} if app.js threw.
 //
 // The DOM has what app.js uses. It gets no WebGL here, so the hero shows its still CSS drawings,
 // with the themes from the themes.js beside app.js, on a page that measures nothing.
@@ -64,6 +66,7 @@ class Element {
   set type(value) { this.setAttribute('type', value); }
   get href() { return this.getAttribute('href') ?? ''; }
   set href(value) { this.setAttribute('href', value); }
+  get hash() { const href = this.href; return href.includes('#') ? href.slice(href.indexOf('#')) : ''; }
   get hidden() { return this.hasAttribute('hidden'); }
   set hidden(value) {
     if (value) this.setAttribute('hidden', value === true ? '' : value);
@@ -112,6 +115,7 @@ class Element {
     this.listeners[type] = (this.listeners[type] || []).filter(other => other !== listener);
   }
   focus() { this.ownerDocument.activeElement = this; }
+  scrollIntoView() { this.ownerDocument.scrolledTo = this; }
 }
 
 // Selectors: tag, *, #id, .class, [attr], [attr="value"] and [attr^="value"], joined by descendant
@@ -199,12 +203,12 @@ function describe(element) {
   };
 }
 
-function run(app, themes, tree, { userAgent, platform, steps, probes }) {
+function run(app, themes, tree, { userAgent, platform, hash = '', steps, probes }) {
   const document = documentFrom(tree);
   const context = {
     document,
     navigator: { userAgent, platform },
-    location: { hash: '', href: 'http://127.0.0.1/' },
+    location: { hash, href: `http://127.0.0.1/${hash}` },
     matchMedia: media => ({ media, matches: false, addEventListener() {} }),
     localStorage: { getItem: () => null, setItem() {} },
     addEventListener() {},
@@ -226,7 +230,8 @@ function run(app, themes, tree, { userAgent, platform, steps, probes }) {
     vm.runInContext(app, context, { filename: 'app.js' });
     return steps.map(step => {
       if (step) click(document, step);
-      return Object.fromEntries(probes.map(probe => [probe, document.querySelectorAll(probe).map(describe)]));
+      return Object.fromEntries(probes.map(probe => [probe, probe === '#scrolled'
+        ? [document.scrolledTo].filter(Boolean).map(describe) : document.querySelectorAll(probe).map(describe)]));
     });
   } catch (error) {
     return { error: String(error?.stack || error) };

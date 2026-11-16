@@ -6,8 +6,9 @@
 //
 // Steps: {"wait": seconds}, {"until": theme id}, {"enter": true} and {"leave": true} for the
 // pointer on the picker, {"press": "still" | "dot:N", "by": "pointer" | "keyboard"},
-// {"focus": "still" | "dot:N"} by keyboard, {"blur": true}, and {"read": "name"}, which reports
-// what the visitor would see. It prints the reads as JSON.
+// {"focus": "still" | "dot:N"} by keyboard, {"blur": true}, {"follow": "#hash"}, a click on an
+// in-page link, {"scroll": y}, the page reporting that it scrolled to y, and {"read": "name"},
+// which reports what the visitor would see. It prints the reads as JSON.
 import fs from 'node:fs';
 import vm from 'node:vm';
 
@@ -112,6 +113,10 @@ const byId = {
   'dl-meta-text': new Element(), lang: new Element(), mode: new Element(), 'site-header': header,
   hero, tux: canvas, 'theme-name': label, dots,
 };
+// What the page and the document listen for, so a step can scroll or follow a link.
+const pageListeners = {};
+const documentListeners = {};
+const listen = into => (type, listener) => (into[type] ||= []).push(listener);
 const document = {
   documentElement: root, body: new Element(), hidden: false, dir: 'ltr',
   get activeElement() { return active; },
@@ -121,7 +126,7 @@ const document = {
   querySelectorAll: () => [],
   createElement: () => new Element(),
   createRange: () => ({ selectNodeContents() {}, getBoundingClientRect: () => ({ width: 170 }) }),
-  addEventListener() {},
+  addEventListener: listen(documentListeners),
 };
 const stored = new Map();
 const page = {
@@ -130,7 +135,7 @@ const page = {
   localStorage: { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, String(value)) },
   matchMedia: () => ({ matches: false, addEventListener() {} }),
   getComputedStyle: () => ({ backgroundColor: 'rgb(247, 248, 251)', fontSize: '40px' }),
-  addEventListener() {},
+  addEventListener: listen(pageListeners),
   performance: { now: () => clock },
   requestAnimationFrame: callback => queued.push(callback),
   ResizeObserver: class { observe() {} },
@@ -159,6 +164,14 @@ for (const step of steps) {
   if (step.enter) pick.fire('pointerenter');
   if (step.leave) pick.fire('pointerleave');
   if (step.blur) blur();
+  if (step.follow) {
+    const link = { hash: step.follow, closest: selector => (selector === 'a[href^="#"]' ? link : null) };
+    for (const listener of documentListeners.click || []) listener({ type: 'click', target: link });
+  }
+  if ('scroll' in step) {
+    page.scrollY = step.scroll;
+    for (const listener of pageListeners.scroll || []) listener({ type: 'scroll' });
+  }
   if (step.focus) focus(target(step.focus), true);
   if (step.press) {
     const button = target(step.press);
@@ -170,7 +183,8 @@ for (const step of steps) {
     const pause = pauseButton();
     reads[step.read] = {
       theme: hero.dataset.theme, label: label.textContent, inkLight: hero.classList.contains('ink-light'),
-      gl: root.classList.contains('has-gl'), pause: pause && { pressed: pause.getAttribute('aria-pressed'),
+      gl: root.classList.contains('has-gl'), headerHidden: header.classList.contains('is-hidden'),
+      pause: pause && { pressed: pause.getAttribute('aria-pressed'),
                                                                title: pause.title, label: pause.getAttribute('aria-label') },
       focused: active === pause ? 'still' : active ? 'other' : null,
       focusVisible: Boolean(active?.matches(':focus-visible')),

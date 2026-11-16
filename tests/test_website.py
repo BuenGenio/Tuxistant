@@ -458,6 +458,58 @@ class BuiltSite(unittest.TestCase):
                 self.assertEqual([t["attrs"]["aria-expanded"] for t in last[".acc-toggle"]],
                                  ["true", "false", "false"], where)
 
+    @unittest.skipUnless(shutil.which("node"), "needs Node.js")
+    def test_a_link_into_a_folded_section_opens_it_under_the_header(self):
+        """The hero's "All versions", or an address that names a section or something in one, opens
+        that section, which arrives folded, and keeps the header showing for the jump."""
+        probes = [".acc-toggle", "#site-header", "#scrolled"]
+        cases = [(None, ['.hero a[href="#versions"]'], "versions", None),
+                 ("#versions", [], "versions", "versions"),
+                 ("#releases-title", [], "versions", "releases-title"),
+                 ("#preview", [], "preview", "preview")]
+        pages = {str(page): dom_tree(page.read_text()) for page in self.pages}
+        agent, platform, _ = self.AGENTS["phone"]
+        runs = [{"page": str(page), "userAgent": agent, "platform": platform, "hash": hash_ or "",
+                 "steps": [None, *clicks], "probes": probes}
+                for page in self.pages for hash_, clicks, _, _ in cases]
+        with tempfile.TemporaryDirectory() as folder:
+            given, report = Path(folder) / "input.json", Path(folder) / "report.json"
+            given.write_text(json.dumps({"app": str(self.dist / "app.js"), "pages": pages, "cases": runs}))
+            subprocess.run(["node", str(ROOT / "tests/site_dom.mjs"), str(given), str(report)],
+                           capture_output=True, timeout=300, check=True)
+            reports = iter(json.loads(report.read_text()))
+        for page in self.pages:
+            for hash_, _, opened, scrolled in cases:
+                where = (page.relative_to(self.dist), hash_)
+                steps = next(reports)
+                self.assertNotIn("error", steps, where)
+                last = steps[-1]
+                expanded = {t["attrs"]["id"]: t["attrs"]["aria-expanded"] for t in last[".acc-toggle"]}
+                # The first section stays open, and the one the link names opens with it.
+                self.assertEqual(expanded, {f"{name}-toggle": str(name in ("examples", opened)).lower()
+                                            for name in self.ACC_SECTIONS}, where)
+                self.assertNotIn("is-hidden", last["#site-header"][0]["attrs"]["class"], where)
+                # An address opens the section and then scrolls to what it names: the browser had
+                # nothing open to scroll to. A click opens it first, and the browser follows the link.
+                self.assertEqual([s["attrs"]["id"] for s in last["#scrolled"]], [scrolled] if scrolled else [], where)
+
+    def test_the_releases_chips_fold_with_the_versions_and_come_before_its_call_to_action(self):
+        for page in self.pages:
+            html = page.read_text()
+            sections, by_id = self.accordions(page)
+            versions = next(s for s in sections if s["attrs"]["id"] == "versions")
+            inner = by_id["versions-panel"]["children"][0]
+            classes = [child["attrs"].get("class", "") for child in inner["children"]]
+            self.assertIn("releases", classes, page)
+            self.assertEqual(classes[-1], "acc-cta", page)
+            self.assertLess(classes.index("releases"), classes.index("acc-cta"), page)
+            # The icons the chips draw are in the same panel, so they fold and show with them.
+            sprite = self.find_all(versions, lambda n: n["tag"] == "symbol" and n["attrs"].get("id", "").startswith("feat-"))
+            self.assertTrue(sprite, page)
+            self.assertEqual(len(re.findall(r'<symbol id="feat-', html)), len(sprite), page)
+            # The hero, with its theme behind the title, comes before the ticker and the sections.
+            self.assertLess(html.index('id="hero"'), html.index('<div class="ticker">'), page)
+
     def test_with_no_linux_download_a_section_offers_every_release_instead(self):
         releases = json.loads((ROOT / "website/src/releases.json").read_text())
         strings = self.strings(self.pages[0])
@@ -931,6 +983,13 @@ class HeroAndHeader(unittest.TestCase):
             self.assertIn(f"addEventListener('{event}', navigated)", self.js)
         self.assertRegex(self.js, r"closest\?\.\('a\[href\^=\"#\"\]'\)\) navigated\(\)")
         self.assertIn("header.addEventListener('focusin', showHeader)", self.js)
+        # The jump's own scroll comes with the next frame, which a busy phone can hold back past
+        # the grace: the first scroll after a jump restarts it, so a late one doesn't hide the header.
+        self.assertRegex(self.js, r"const navigated = \(\) => \{\s*graceUntil = performance\.now\(\) \+ 900;\s*"
+                                  r"jumpUntil = performance\.now\(\) \+ 3000;\s*showHeader\(\);\s*\};")
+        self.assertRegex(self.js, r"lastY = y;\s*if \(performance\.now\(\) < jumpUntil\) \{\s*jumpUntil = 0;\s*"
+                                  r"graceUntil = Math\.max\(graceUntil, performance\.now\(\) \+ 900\);\s*\}\s*"
+                                  r"if \(y < 96 \|\| performance\.now\(\) < graceUntil\) showHeader\(\);")
 
     def test_the_shader_spares_a_phone(self):
         for rule in ("Math.min(devicePixelRatio || 1, 1.5", "IntersectionObserver", "'visibilitychange'",
@@ -1019,6 +1078,23 @@ class HeroScript(unittest.TestCase):
                                 capture_output=True, text=True, timeout=120)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout.strip().splitlines()[-1])     # the last line: a node shim may add one
+
+    def test_a_jump_keeps_the_header_even_when_its_scroll_comes_late(self):
+        """The scroll a link makes is reported with the next frame, which a busy phone can hold back
+        past the grace. It still counts as the jump; scrolling down after it hides the header."""
+        seen = self.play({"wait": 5}, {"follow": "#versions"}, {"wait": 1.5}, {"scroll": 1400},
+                         {"read": "landed"}, {"wait": 1.5}, {"scroll": 1460}, {"read": "down"},
+                         {"scroll": 1420}, {"read": "up"})
+        self.assertFalse(seen["landed"]["headerHidden"], "a late jump is still the jump")
+        self.assertTrue(seen["down"]["headerHidden"], "the visitor's own scroll down hides it")
+        self.assertFalse(seen["up"]["headerHidden"], "and a scroll up brings it back")
+        # The first scroll counts only once, and only soon after a jump: a scroll down long after
+        # the page arrived, with no link followed, hides the header.
+        seen = self.play({"wait": 5}, {"scroll": 1400}, {"read": "down"})
+        self.assertTrue(seen["down"]["headerHidden"])
+        seen = self.play({"wait": 5}, {"follow": "#versions"}, {"scroll": 1400}, {"wait": 1.5},
+                         {"scroll": 1460}, {"read": "down"})
+        self.assertTrue(seen["down"]["headerHidden"], "a jump's grace doesn't outlast it")
 
     def test_play_after_a_pause_by_pointer_brings_the_turns_back(self):
         """Chromium focuses a button that is clicked or tapped, and the focus stays after the
