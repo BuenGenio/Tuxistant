@@ -10,7 +10,7 @@
     ["soon", "查找你的文件"], ["soon", "把文件发送到手机"], ["now", "说话时实时翻译"], ["soon", "经你同意后执行命令"], ["soon", "在经审核的目录中分享技能"]
   ],
   "themes": { "tux": "倾听的 Tux", "orb": "光球", "waves": "波浪", "scanner": "扫描灯" },
-  "showTheme": "显示主题",
+  "showTheme": "显示主题", "pauseMotion": "暂停动画",
   "dlFor": "下载 {os} 版", "dlSoon": "{os} 版即将推出", "dlPending": "{os} 预览版即将推出", "dlAll": "所有版本",
   "dlMeta": "版本 {version}，{channel}", "dlPlanned": "暂未提供",
   "examplesTitle": "它能为你做什么", "youSay": "你说", "approve": "需要你先确认",

@@ -133,24 +133,51 @@
   header.addEventListener('focusin', showHeader);
 
   // Hero: the real theme shaders fill the hero behind the title, drawn with the uniforms the
-  // desktop uses. They take turns until the visitor picks one. Without WebGL the picker switches
-  // a still CSS drawing of each theme instead, and with reduced motion it draws one still frame.
+  // desktop uses. They take turns until the visitor picks one, and a theme keeps its turn while the
+  // pointer or the keyboard is on the picker. The pause button there, or reduced motion, draws one
+  // still frame. Without WebGL, or while the browser has taken it away, the picker switches a still
+  // CSS drawing of each theme instead.
   function startHero() {
     const hero = document.getElementById('hero');
     const canvas = document.getElementById('tux');
     const copy = hero.querySelector('.hero-copy');
     const label = document.getElementById('theme-name');
+    const pick = hero.querySelector('.pick');
     const dots = document.getElementById('dots');
-    const programs = compileThemes(canvas);
-    const themes = programs.list.length ? programs.list : window.TUX_THEMES;
+    let programs = compileThemes(canvas);
+    let themes = programs.list.length ? programs.list : window.TUX_THEMES;
     const gl = programs.list.length ? programs.gl : null;
-    if (gl) root.classList.add('has-gl');
+    let lost = false;
+    root.classList.add(gl ? 'has-gl' : 'no-gl');
 
     const SLIDE_S = 10;
     const FADE_S = 0.6;
     let current = 0;
     let slideStart = performance.now() / 1000;
     let manual = false;
+    let paused = Boolean(gl) && !reducedMotion && store.get('still') === '1';
+    const still = () => reducedMotion || paused;
+    const redraw = () => { if (gl && !lost && still()) requestAnimationFrame(() => draw(performance.now())); };
+
+    // Held: what the picker names doesn't change under the visitor's pointer or keyboard. Once
+    // they leave, the theme has at least three more seconds.
+    let hovered = false;
+    let focused = false;
+    let heldAt = 0;        // when the hold began, or 0
+    let heldFor = 0;       // seconds of this theme's turn spent held
+    function hold() {
+      const now = performance.now() / 1000;
+      if ((hovered || focused) && !heldAt) heldAt = now;
+      else if (!(hovered || focused) && heldAt) {
+        heldFor += now - heldAt;
+        heldAt = 0;
+        heldFor += Math.max(0, now - slideStart - heldFor - (SLIDE_S - 3));
+      }
+    }
+    pick.addEventListener('pointerenter', () => { hovered = true; hold(); });
+    pick.addEventListener('pointerleave', () => { hovered = false; hold(); });
+    pick.addEventListener('focusin', () => { focused = true; hold(); });
+    pick.addEventListener('focusout', event => { focused = pick.contains(event.relatedTarget); hold(); });
 
     themes.forEach((theme, index) => {
       const dot = document.createElement('button');
@@ -160,47 +187,83 @@
       dot.addEventListener('click', () => show(index, true));
       dots.append(dot);
     });
+    // Pause stops the motion and the turns: the theme shows its still frame, as with reduced motion.
+    if (gl && !reducedMotion) {
+      const pause = document.createElement('button');
+      pause.className = 'still';
+      pause.type = 'button';
+      pause.setAttribute('aria-label', S.pauseMotion);
+      pause.setAttribute('aria-pressed', paused);
+      pause.addEventListener('click', () => {
+        paused = !paused;
+        pause.setAttribute('aria-pressed', paused);
+        store.set('still', paused ? '1' : '0');
+        if (paused) redraw();
+        else {
+          slideStart = performance.now() / 1000 - 1.5;     // on from the still frame's moment
+          heldFor = 0;
+          if (heldAt) heldAt = slideStart + 1.5;
+          wake();
+        }
+      });
+      pick.append(pause);
+    }
 
     function show(index, byUser) {
       current = index;
       slideStart = performance.now() / 1000;
+      heldFor = 0;
+      if (heldAt) heldAt = slideStart;
       manual ||= Boolean(byUser);
       hero.dataset.theme = themes[index].id;
       label.textContent = S.themes[themes[index].id];
       [...dots.children].forEach((dot, i) => dot.setAttribute('aria-pressed', i === index));
       standIn();
-      if (gl && reducedMotion) requestAnimationFrame(() => draw(performance.now()));
+      redraw();
     }
 
     // Where the words sit in the hero, in CSS pixels from its top left corner, and how far down
     // a figure may reach: to the claims when they sit under the words, or the foot of the hero.
+    // The roof is the header's foot, when the hero runs on up under it.
     const title = copy.querySelector('h1');
+    const tagline = copy.querySelector('.tagline');
     const claims = hero.querySelector('.caps');
     let box = {};
     function measure() {
       const area = hero.getBoundingClientRect();
       const text = copy.getBoundingClientRect();
       const name = title.getBoundingClientRect();
+      const word = document.createRange();     // the h1 is as wide as its column: this is its ink
+      word.selectNodeContents(title);
       const below = claims.getBoundingClientRect().top >= text.bottom - 1;
-      box = { width: area.width, height: area.height,
+      box = { width: area.width, height: area.height, below,
               x: text.left - area.left + text.width / 2, y: text.top - area.top + text.height / 2,
               copyWidth: text.width, copyHeight: text.height,
-              titleTop: name.top - area.top, titleHeight: name.height, titleWidth: name.width,
+              titleTop: name.top - area.top, titleHeight: name.height, inkWidth: word.getBoundingClientRect().width,
+              taglineTop: tagline.getBoundingClientRect().top - area.top,
+              roof: Math.max(0, header.offsetHeight - area.top - scrollY),
               floor: (below ? claims.getBoundingClientRect().top : area.bottom) - area.top };
       standIn();
-      if (gl && reducedMotion) requestAnimationFrame(() => draw(performance.now()));
+      redraw();
     }
 
     // A band runs edge to edge. Anything else is centred on the words and sized to the hero, so it
     // reads as a backdrop rather than a picture beside them.
     function place(theme) {
-      const { width, height, x, y, copyWidth, copyHeight, titleTop, titleHeight, titleWidth, floor } = box;
+      const { width, height, x, y, copyWidth, copyHeight, below, titleTop, titleHeight, inkWidth,
+              taglineTop, roof, floor } = box;
       // The ribbons ride at about 0.55 of the band's height: there they cross the words.
       if (theme.kind === 'band') return { x: 0, y: 0, width, height: Math.max(y / .55, copyHeight) };
-      if (theme.aspect < .5) {      // a bar, such as the scanner: right behind the name
-        const w = Math.min(width * .96, Math.max(titleWidth * 2.3, copyWidth * 1.1, 320), 640);
+      if (theme.aspect < .5) {
+        // A bar, such as the scanner: behind the name, and clear of everything else. Beside the
+        // claims it keeps to the middle column and 12 px of each 20 px column gap of .hero-in.
+        // Its foot stays above the tagline and its top below the header: where there isn't room
+        // for both, it gets smaller, though never shorter than the name.
+        const foot = taglineTop - 4;
+        const w = Math.min(width * .96, Math.max(inkWidth * 2.3, 320), below ? 640 : copyWidth + 24,
+                           Math.max(foot - roof - 4, titleHeight + 12) / theme.aspect);
         const h = w * theme.aspect;
-        return { x: x - w / 2, y: titleTop + titleHeight / 2 - h / 2, width: w, height: h };
+        return { x: x - w / 2, y: Math.min(titleTop + titleHeight / 2 - h / 2, foot - h), width: w, height: h };
       }
       // A figure: the top third of it, where Tux's eyes are (about 0.36 down to their lower edge),
       // peeks out over the name, and its feet stay above the claims.
@@ -212,7 +275,7 @@
 
     // Without WebGL the CSS drawing of the theme takes the place its shader would.
     function standIn() {
-      if (gl || !box.width) return;
+      if ((gl && !lost) || !box.width) return;
       const spot = place(themes[current]);
       for (const [key, value] of [['left', spot.x], ['top', spot.y], ['width', spot.width], ['height', spot.height]])
         hero.style.setProperty(`--actor-${key}`, `${Math.round(value)}px`);
@@ -240,19 +303,24 @@
     }
 
     // A scripted turn: listen, think, speak, with a level shaped like speech. It hands back to
-    // listening before it starts again, so a theme the visitor keeps loops without a jump.
+    // listening before it starts again, so a theme the visitor keeps loops without a jump. A still
+    // frame is a fixed moment of listening, as the label says, at a time when Tux's eyes are open:
+    // his blinks run on the clock.
     const band = (t, from, to) => Math.min(1, Math.max(0, Math.min((t - from) / .6, (to - t) / .6)));
     function draw(nowMs) {
+      if (lost) return;
       const ratio = resize();
       const now = nowMs / 1000;
-      const age = reducedMotion ? SLIDE_S / 2 : now - slideStart;
-      if (!reducedMotion && age > SLIDE_S && !manual) {
+      const t = still() ? 2 : now;
+      const age = still() ? 1.5 : now - slideStart;
+      const turn = age - heldFor - (heldAt ? now - heldAt : 0);    // how much of its turn it has had
+      if (!still() && !manual && turn > SLIDE_S) {
         show((current + 1) % themes.length);
         return draw(nowMs);
       }
       const theme = themes[current];
       const phase = age % SLIDE_S;
-      const speech = Math.abs(Math.sin(now * 5.1) * Math.sin(now * 1.7 + 1)) * .75 + .1;
+      const speech = Math.abs(Math.sin(t * 5.1) * Math.sin(t * 1.7 + 1)) * .75 + .1;
       const listen = Math.max(band(phase, -1, 3), band(phase, SLIDE_S - .9, SLIDE_S + 3));
       const think = band(phase, 2.6, 4.2);
       const speak = band(phase, 3.8, SLIDE_S - .3);
@@ -270,11 +338,11 @@
       gl.enableVertexAttribArray(theme.position);
       gl.vertexAttribPointer(theme.position, 2, gl.FLOAT, false, 0, 0);
       const u = theme.uniforms;
-      const fade = manual || reducedMotion ? Math.min(1, age / FADE_S || 1)
-        : Math.min(1, age / FADE_S, (SLIDE_S - age) / FADE_S);
-      gl.uniform1f(u.u_time, now % 1000);
-      gl.uniform1f(u.u_level, (listen + speak > 0.05 ? speech : 0.1) * (reducedMotion ? .6 : 1));
-      gl.uniform1f(u.u_appear, reducedMotion ? 1 : Math.max(0, fade));
+      const fade = manual || still() || heldAt ? Math.min(1, age / FADE_S || 1)
+        : Math.min(1, age / FADE_S, (SLIDE_S - turn) / FADE_S);
+      gl.uniform1f(u.u_time, t % 1000);
+      gl.uniform1f(u.u_level, (listen + speak > 0.05 ? speech : 0.1) * (still() ? .6 : 1));
+      gl.uniform1f(u.u_appear, still() ? 1 : Math.max(0, fade));
       gl.uniform1f(u.u_listen, listen);
       gl.uniform1f(u.u_think, think);
       gl.uniform1f(u.u_speak, speak);
@@ -284,26 +352,53 @@
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
-    // Drawing stops while the hero is off screen or the tab is hidden.
+    // Drawing stops while nothing it draws is on screen (on a phone, once the visitor reads the
+    // claims under the words), while the tab is hidden, and while it stands still.
     let visible = true;
+    let seenFrom = 0;      // how far down the hero the screen begins
     let frame = 0;
+    function onScreen() {
+      const spot = place(themes[current]);
+      return visible && !document.hidden && seenFrom < spot.y + spot.height;
+    }
     function loop(time) {
       frame = 0;
-      if (!visible || document.hidden) return;
+      if (lost || still() || !onScreen()) return;
       draw(time);
       frame = requestAnimationFrame(loop);
     }
     function wake() {
-      if (!reducedMotion && !frame && visible && !document.hidden) frame = requestAnimationFrame(loop);
+      if (!lost && !still() && !frame && onScreen()) frame = requestAnimationFrame(loop);
     }
-    new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; wake(); }).observe(hero);
+    new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting;
+      seenFrom = entry.intersectionRect.top - entry.boundingClientRect.top;
+      wake();
+    }, { threshold: Array.from({ length: 21 }, (_, i) => i / 20) }).observe(hero);
     document.addEventListener('visibilitychange', wake);
-    if (reducedMotion) {
-      const redraw = () => requestAnimationFrame(() => draw(performance.now()));
-      appearance.addEventListener('change', redraw);
-      systemDark.addEventListener('change', redraw);
+    appearance.addEventListener('change', redraw);
+    systemDark.addEventListener('change', redraw);
+
+    // A phone may take the context away while the tab is in the background. The still drawings
+    // stand in until the browser gives it back, and then the programs are built again.
+    canvas.addEventListener('webglcontextlost', event => {
+      event.preventDefault();      // without this the browser never gives it back
+      lost = true;
+      root.classList.replace('has-gl', 'no-gl');
+      standIn();
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      const again = compileThemes(canvas);
+      if (again.list.length !== themes.length) return;
+      programs = again;
+      themes = again.list;
+      lost = false;
+      root.classList.replace('no-gl', 'has-gl');
       redraw();
-    } else wake();
+      wake();
+    });
+    redraw();
+    wake();
   }
 
   // Every theme compiled for WebGL1, with the footer that turns a band into ink on a light page.

@@ -147,6 +147,8 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
 
 #tux, .fallback { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; pointer-events: none; }
 .has-gl .fallback { display: none; }
+/* Until the script knows whether the shaders run, nothing: the still drawing would flash first. */
+.js:not(.no-gl) .fallback { visibility: hidden; }
 
 .caps { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 0; list-style: none; }
 .caps-a { grid-column: 1; grid-row: 1; align-items: flex-end; }
@@ -168,10 +170,16 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
 .tag-soon { color: var(--soon); }
 
 .pick { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 28px; margin-block-start: 4px; color: var(--muted); font-size: 0.9rem; }
+:root:not(.js) .pick { display: none; }     /* the dots and the pause button come with the script */
 .dots { display: inline-flex; }
-.dot { width: 24px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; }
-.dot::before { content: ""; display: block; width: 9px; height: 9px; margin: auto; border-radius: 50%; background: var(--line); box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 75%, transparent); }
-.dot[aria-pressed="true"]::before { background: var(--text); }
+.dot, .still { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
+/* The theme shown is a longer, darker mark, so the state doesn't rest on colour alone. */
+.dot::before { content: ""; width: 9px; height: 9px; border-radius: 999px; background: currentColor; box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 75%, transparent); }
+.dot[aria-pressed="true"]::before { width: 18px; background: var(--text); }
+.dot:hover, .still:hover { color: var(--text); }
+/* Pause, two bars; once pressed, play. */
+.still::before { content: ""; width: 9px; height: 10px; border-inline: 3px solid currentColor; }
+.still[aria-pressed="true"]::before { border: 0; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
 
 .download { margin-block-start: 12px; }
 .btn-main {
@@ -336,6 +344,12 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
   -webkit-mask-image: linear-gradient(#000 calc(100% - 72px), transparent);
   mask-image: linear-gradient(#000 calc(100% - 72px), transparent);
 }
+/* Under the header it fades in, as it fades out at the foot: a figure's top is a soft tint in the
+   glass, not a smudge cut off at the header's line. */
+main > .hero:first-child #tux, main > .hero:first-child .fallback {
+  -webkit-mask-image: linear-gradient(transparent, #000 var(--header-h), #000 calc(100% - 72px), transparent);
+  mask-image: linear-gradient(transparent, #000 var(--header-h), #000 calc(100% - 72px), transparent);
+}
 /* A calm area behind the words, soft at its edges so the theme shows all round, and a halo on
    each line, so they read on every theme in either mode. */
 .hero-copy::before {
@@ -352,6 +366,10 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
 }
 .hero-copy { --halo: 0 0 1px var(--bg), 0 0 3px var(--bg), 0 0 6px var(--bg), 0 0 12px var(--bg); }
 .hero h1, .tagline { text-shadow: var(--halo); }
+/* The scanner is the one theme that puts black right behind the name: there the name is light,
+   with a dark halo, in either mode. */
+.hero h1 { transition: color .6s, text-shadow .6s; }
+.hero[data-theme="scanner"] h1 { color: #f1f2f7; text-shadow: 0 0 1px #07080d, 0 0 3px #07080d, 0 0 6px #07080d, 0 0 12px #07080d; }
 .hero .tagline { color: var(--text); }
 /* The small lines under the button get a calm pill of their own: on a bright or busy part of a
    theme a halo isn't enough for text this size. */
@@ -431,7 +449,7 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
 /* Narrower than the claims either side can sit: they go under the words, two to a row. */
 @media (max-width: 1100px) {
   :root { --hero-h: 0px; }
-  .hero-in { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; max-width: 800px; }
+  .hero-in { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 6px; max-width: 800px; }
   .hero-copy { grid-column: 1 / -1; grid-row: auto; padding-block: 28px 18px; }
   .caps-a, .caps-b { grid-column: auto; grid-row: auto; align-items: stretch; gap: 6px; }
   .hero-copy::before { inset: 14px -16px -10px; }

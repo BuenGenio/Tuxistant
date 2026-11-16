@@ -375,6 +375,53 @@ class HeroAndHeader(unittest.TestCase):
         self.assertIn("display: none", self.rule(".has-gl .fallback"))
         for theme in self.build.THEME_ORDER:
             self.assertIn("background:", self.rule(f'.hero[data-theme="{theme}"] .fallback::before'), theme)
+        # It goes where the shader would: the script places it.
+        self.assertRegex(self.js, r"function standIn\(\) \{[^}]*place\(themes\[current\]\)[^}]*"
+                                  r"setProperty\(`--actor-\$\{key\}`")
+        for key in ("left", "top", "width", "height"):
+            self.assertIn(f"var(--actor-{key}", self.rule(".fallback::before"), key)
+
+    def test_the_still_drawing_never_flashes_before_the_script_decides(self):
+        """The page head marks the page as scripted before first paint. Until the script knows
+        whether WebGL runs, the drawing is hidden; without a script it stays."""
+        self.assertIn("document.documentElement.classList.add('js')", self.build.MODE_SCRIPT)
+        for page in self.pages:
+            head = page.read_text().split("</head>")[0]
+            self.assertIn(f"<script>{self.build.MODE_SCRIPT}</script>", head, page)
+        self.assertIn("visibility: hidden", self.rule(".js:not(.no-gl) .fallback"))
+        self.assertIn("root.classList.add(gl ? 'has-gl' : 'no-gl')", self.js)
+        # Without a script there is nothing to pick with, so no picker either.
+        self.assertIn("display: none", self.rule(":root:not(.js) .pick"))
+
+    def test_a_lost_webgl_context_brings_the_still_drawing_back(self):
+        lost = re.search(r"addEventListener\('webglcontextlost', event => \{(.*?)\n    \}\);", self.js, re.S)
+        self.assertTrue(lost)
+        for step in ("event.preventDefault()", "root.classList.replace('has-gl', 'no-gl')", "standIn()"):
+            self.assertIn(step, lost[1])
+        restored = re.search(r"addEventListener\('webglcontextrestored', \(\) => \{(.*?)\n    \}\);", self.js, re.S)
+        self.assertTrue(restored)
+        for step in ("compileThemes(canvas)", "root.classList.replace('no-gl', 'has-gl')", "wake()"):
+            self.assertIn(step, restored[1])
+
+    def test_the_scanner_bar_keeps_to_the_middle_column_and_off_the_tagline(self):
+        """Beside the claims the bar is at most the middle column plus part of the gap either
+        side, so it never runs under them. It is sized from the word's ink, not the h1's box,
+        which is as wide as the column, and its foot stays above the tagline."""
+        three = [body for selectors, body in self.rules if selectors == ".hero-in"
+                 and "grid-template-columns: minmax(0, 1fr) minmax(" in body]
+        self.assertEqual(len(three), 1)
+        column_gap = int(re.search(r"gap: \d+px (\d+)px", three[0])[1])
+        spare = int(re.search(r"below \? 640 : copyWidth \+ (\d+)", self.js)[1])
+        self.assertLessEqual(spare, 2 * column_gap - 8, "a little air between the bar and the claims")
+        measure = re.search(r"function measure\(\) \{(.*?)\n    \}", self.js, re.S)[1]
+        self.assertIn("selectNodeContents(title)", measure)
+        self.assertIn("inkWidth: word.getBoundingClientRect().width", measure)
+        self.assertIn("taglineTop: tagline.getBoundingClientRect().top - area.top", measure)
+        self.assertIn("Math.max(inkWidth * 2.3, 320)", self.js)
+        self.assertIn("const foot = taglineTop - 4;", self.js)
+        self.assertRegex(self.js, r"y: Math\.min\(titleTop \+ titleHeight / 2 - h / 2, foot - h\)")
+        # The one theme with black behind the name: there the name is light, in either mode.
+        self.assertIn("color: #f1f2f7", self.rule('.hero[data-theme="scanner"] h1'))
 
     def test_the_header_blurs_a_layer_inside_it_not_itself(self):
         for page in self.pages:
@@ -405,14 +452,67 @@ class HeroAndHeader(unittest.TestCase):
         self.assertRegex(reduced, r"\.site-header \{ transition: none")
 
     def test_the_header_hides_on_the_way_down_and_comes_back_on_the_way_up(self):
-        for rule in ("y < 96", "performance.now() + 900", "delta > 6", "delta < -6", "{ passive: true }",
-                     "'hashchange'", "'focusin'"):
-            self.assertIn(rule, self.js)
+        self.assertRegex(self.js, r"const delta = y - lastY;\s*lastY = y;")
+        self.assertRegex(self.js, r"if \(y < 96 \|\| performance\.now\(\) < graceUntil\) showHeader\(\);\s*"
+                                  r"else if \(delta > 6\) header\.classList\.add\('is-hidden'\);\s*"
+                                  r"else if \(delta < -6\) showHeader\(\);")
+        self.assertIn("const showHeader = () => header.classList.remove('is-hidden');", self.js)
+        self.assertIn("graceUntil = performance.now() + 900", self.js)
+        self.assertIn("}, { passive: true });", self.js)
+        # A grace after every jump: the first load, a link to a section, back and forward.
+        for event in ("hashchange", "popstate", "pageshow"):
+            self.assertIn(f"addEventListener('{event}', navigated)", self.js)
+        self.assertRegex(self.js, r"closest\?\.\('a\[href\^=\"#\"\]'\)\) navigated\(\)")
+        self.assertIn("header.addEventListener('focusin', showHeader)", self.js)
 
     def test_the_shader_spares_a_phone(self):
         for rule in ("Math.min(devicePixelRatio || 1, 1.5", "IntersectionObserver", "'visibilitychange'",
                      "document.hidden", "prefers-reduced-motion: reduce"):
             self.assertIn(rule, self.js)
+        # Only while some of what it draws is on screen, not just some of the hero.
+        self.assertIn("seenFrom < spot.y + spot.height", self.js)
+        self.assertIn("seenFrom = entry.intersectionRect.top - entry.boundingClientRect.top", self.js)
+
+    def test_the_motion_can_be_paused_and_holds_still_on_the_picker(self):
+        """WCAG 2.2.2: the moving backdrop behind the words has a pause button, and the turns
+        hold while the pointer or the keyboard is on the picker, so its label doesn't change
+        under the visitor."""
+        for page in self.pages:
+            code = "en" if page.parent == self.build.DIST else page.parent.name
+            label = json.loads((ROOT / "website/src/i18n" / f"{code}.json").read_text())["pauseMotion"]
+            self.assertTrue(label.strip(), page)
+            data = json.loads(re.search(r'<script type="application/json" id="strings">(.*?)</script>',
+                                        page.read_text(), re.S)[1])
+            self.assertEqual(data["pauseMotion"], label, page)
+        self.assertIn("pause.setAttribute('aria-label', S.pauseMotion)", self.js)
+        self.assertIn("pause.setAttribute('aria-pressed', paused)", self.js)
+        self.assertIn("const still = () => reducedMotion || paused;", self.js)
+        self.assertRegex(self.js, r"function loop\(time\) \{[^}]*if \(lost \|\| still\(\) \|\| !onScreen\(\)\) return;")
+        for event in ("pointerenter", "pointerleave", "focusin", "focusout"):
+            self.assertIn(f"pick.addEventListener('{event}'", self.js)
+        self.assertIn("if (!still() && !manual && turn > SLIDE_S)", self.js)
+        self.assertIn("const turn = age - heldFor - (heldAt ? now - heldAt : 0);", self.js)
+        self.assertIn("background: currentColor", self.rule('.still[aria-pressed="true"]::before'))
+
+    def test_a_still_frame_shows_tux_listening_with_his_eyes_open(self):
+        """Reduced motion and pause draw one fixed moment, not the live clock, which could land
+        in a blink. The moment is a listening one, as the label says."""
+        match = re.search(r"const t = still\(\) \? ([\d.]+) : now;", self.js)
+        self.assertTrue(match)
+        moment = float(match[1])
+        self.assertIn("gl.uniform1f(u.u_time, t % 1000)", self.js)
+        shader = (ROOT / "themes/tux/shader.glsl").read_text()
+        blinks = re.findall(r"smoothstep\(([\d.]+), ([\d.]+), abs\(mod\(u_time, ([\d.]+)\) - ([\d.]+)\)\)", shader)
+        self.assertEqual(len(blinks), 2, "the two blink clocks")
+        for _, shut_until, period, at in blinks:
+            self.assertGreater(abs(moment % float(period) - float(at)), float(shut_until), (period, at))
+        age = float(re.search(r"const age = still\(\) \? ([\d.]+) : now - slideStart;", self.js)[1])
+        self.assertTrue(0.6 < age < 2.6, "inside the listening part of a turn, past its fade")
+
+    def test_the_theme_shown_is_marked_by_shape_not_only_colour(self):
+        self.assertIn("background: var(--text)", self.rule('.dot[aria-pressed="true"]::before'))
+        self.assertIn("width: 18px", self.rule('.dot[aria-pressed="true"]::before'))
+        self.assertIn("color: var(--muted)", self.rule(".dot"))     # 3:1 and more on the page
 
 
 if __name__ == "__main__":
