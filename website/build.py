@@ -312,7 +312,7 @@ def page(code, strings, languages, releases, detect, policy):
                        f'<link rel="canonical" href="{SITE_URL}{path_for(code)}">')
     data = {k: strings[k] for k in ("dlFor", "dlSoon", "dlPending", "dlMeta", "dlPlanned",
                                     "preview", "stable", "planned", "themes", "showTheme",
-                                    "pauseMotion")}
+                                    "pauseMotion", "playMotion")}
     data["releases"] = {os_id: releases[os_id] for os_id, _ in OS_ORDER}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"

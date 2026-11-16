@@ -11,7 +11,7 @@
   --brand-1: #6fd3ff;
   --brand-2: #d96bff;
   --header-h: 56px;
-  --hero-h: min(370px, calc(64svh - var(--header-h)));
+  --hero-h: min(300px, calc(64svh - var(--header-h)));
 }
 /* Auto sets no attribute: color-scheme above already follows the system, live. */
 :root[data-mode="light"] { color-scheme: light; }
@@ -139,6 +139,7 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(300px, 440px) minmax(0, 1fr);
   align-items: center;
+  align-content: end;     /* the spare height goes above the name, where a figure peeks out, not under the picker */
   gap: 12px 20px;
   min-height: var(--hero-h);
 }
@@ -177,7 +178,8 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
 .dot::before { content: ""; width: 9px; height: 9px; border-radius: 999px; background: currentColor; box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 75%, transparent); }
 .dot[aria-pressed="true"]::before { width: 18px; background: var(--text); }
 .dot:hover, .still:hover { color: var(--text); }
-/* Pause, two bars; once pressed, play. */
+/* Pause, two bars; once pressed, play. A little apart from the dots: it is a control, not a fifth theme. */
+.still { margin-inline-start: 6px; }
 .still::before { content: ""; width: 9px; height: 10px; border-inline: 3px solid currentColor; }
 .still[aria-pressed="true"]::before { border: 0; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
 
@@ -367,9 +369,11 @@ main > .hero:first-child #tux, main > .hero:first-child .fallback {
 .hero-copy { --halo: 0 0 1px var(--bg), 0 0 3px var(--bg), 0 0 6px var(--bg), 0 0 12px var(--bg); }
 .hero h1, .tagline { text-shadow: var(--halo); }
 /* The scanner is the one theme that puts black right behind the name: there the name is light,
-   with a dark halo, in either mode. */
-.hero h1 { transition: color .6s, text-shadow .6s; }
-.hero[data-theme="scanner"] h1 { color: #f1f2f7; text-shadow: 0 0 1px #07080d, 0 0 3px #07080d, 0 0 6px #07080d, 0 0 12px #07080d; }
+   with a dark halo, in either mode. With the shader it turns as the bar fades in and out (the
+   script sets .ink-light); the still drawing goes by the theme. */
+.hero h1 { transition: color .25s, text-shadow .25s; }
+.has-gl .hero.ink-light h1,
+:root:not(.has-gl) .hero[data-theme="scanner"] h1 { color: #f1f2f7; text-shadow: 0 0 1px #07080d, 0 0 3px #07080d, 0 0 6px #07080d, 0 0 12px #07080d; }
 .hero .tagline { color: var(--text); }
 /* The small lines under the button get a calm pill of their own: on a bright or busy part of a
    theme a halo isn't enough for text this size. */

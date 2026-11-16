@@ -160,7 +160,10 @@
     const redraw = () => { if (gl && !lost && still()) requestAnimationFrame(() => draw(performance.now())); };
 
     // Held: what the picker names doesn't change under the visitor's pointer or keyboard. Once
-    // they leave, the theme has at least three more seconds.
+    // they leave, the theme has at least three more seconds. Only keyboard focus holds: Chromium
+    // also focuses a button that is clicked or tapped, and that focus stays after the pointer
+    // has gone, so play would start the motion but never the turns.
+    const byKeyboard = element => { try { return element.matches(':focus-visible'); } catch { return true; } };
     let hovered = false;
     let focused = false;
     let heldAt = 0;        // when the hold began, or 0
@@ -176,8 +179,8 @@
     }
     pick.addEventListener('pointerenter', () => { hovered = true; hold(); });
     pick.addEventListener('pointerleave', () => { hovered = false; hold(); });
-    pick.addEventListener('focusin', () => { focused = true; hold(); });
-    pick.addEventListener('focusout', event => { focused = pick.contains(event.relatedTarget); hold(); });
+    pick.addEventListener('focusin', event => { focused = byKeyboard(event.target); hold(); });
+    pick.addEventListener('focusout', event => { if (!pick.contains(event.relatedTarget)) focused = false; hold(); });
 
     themes.forEach((theme, index) => {
       const dot = document.createElement('button');
@@ -188,15 +191,21 @@
       dots.append(dot);
     });
     // Pause stops the motion and the turns: the theme shows its still frame, as with reduced motion.
+    // Its name stays put for a screen reader, which also hears pressed or not; the tooltip says what
+    // a click does next.
     if (gl && !reducedMotion) {
       const pause = document.createElement('button');
       pause.className = 'still';
       pause.type = 'button';
       pause.setAttribute('aria-label', S.pauseMotion);
-      pause.setAttribute('aria-pressed', paused);
+      const mark = () => {
+        pause.setAttribute('aria-pressed', paused);
+        pause.title = paused ? S.playMotion : S.pauseMotion;
+      };
+      mark();
       pause.addEventListener('click', () => {
         paused = !paused;
-        pause.setAttribute('aria-pressed', paused);
+        mark();
         store.set('still', paused ? '1' : '0');
         if (paused) redraw();
         else {
@@ -209,6 +218,9 @@
       pick.append(pause);
     }
 
+    // A bar is a figure much wider than tall, such as the scanner; a band runs edge to edge.
+    const isBar = theme => theme.kind !== 'band' && theme.aspect < .5;
+
     function show(index, byUser) {
       current = index;
       slideStart = performance.now() / 1000;
@@ -216,6 +228,7 @@
       if (heldAt) heldAt = slideStart;
       manual ||= Boolean(byUser);
       hero.dataset.theme = themes[index].id;
+      if (!isBar(themes[index])) hero.classList.remove('ink-light');
       label.textContent = S.themes[themes[index].id];
       [...dots.children].forEach((dot, i) => dot.setAttribute('aria-pressed', i === index));
       standIn();
@@ -254,13 +267,14 @@
               taglineTop, roof, floor } = box;
       // The ribbons ride at about 0.55 of the band's height: there they cross the words.
       if (theme.kind === 'band') return { x: 0, y: 0, width, height: Math.max(y / .55, copyHeight) };
-      if (theme.aspect < .5) {
+      if (isBar(theme)) {
         // A bar, such as the scanner: behind the name, and clear of everything else. Beside the
-        // claims it keeps to the middle column and 12 px of each 20 px column gap of .hero-in.
-        // Its foot stays above the tagline and its top below the header: where there isn't room
-        // for both, it gets smaller, though never shorter than the name.
+        // claims it keeps to the middle column and 12 px of each 20 px column gap of .hero-in,
+        // and on a phone to the 16 px gutter either side. Its foot stays above the tagline and
+        // its top below the header: where there isn't room for both, it gets smaller, though
+        // never shorter than the name.
         const foot = taglineTop - 4;
-        const w = Math.min(width * .96, Math.max(inkWidth * 2.3, 320), below ? 640 : copyWidth + 24,
+        const w = Math.min(width - 32, Math.max(inkWidth * 2.3, 320), below ? 640 : copyWidth + 24,
                            Math.max(foot - roof - 4, titleHeight + 12) / theme.aspect);
         const h = w * theme.aspect;
         return { x: x - w / 2, y: Math.min(titleTop + titleHeight / 2 - h / 2, foot - h), width: w, height: h };
@@ -340,6 +354,9 @@
       const u = theme.uniforms;
       const fade = manual || still() || heldAt ? Math.min(1, age / FADE_S || 1)
         : Math.min(1, age / FADE_S, (SLIDE_S - turn) / FADE_S);
+      // The name is light while a bar is mostly there, so it turns with the bar's fade rather than
+      // a moment after the next theme has begun.
+      hero.classList.toggle('ink-light', isBar(theme) && fade > .5);
       gl.uniform1f(u.u_time, t % 1000);
       gl.uniform1f(u.u_level, (listen + speak > 0.05 ? speech : 0.1) * (still() ? .6 : 1));
       gl.uniform1f(u.u_appear, still() ? 1 : Math.max(0, fade));

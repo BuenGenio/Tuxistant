@@ -8,6 +8,8 @@ import importlib.util
 import io
 import json
 import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -417,11 +419,30 @@ class HeroAndHeader(unittest.TestCase):
         self.assertIn("selectNodeContents(title)", measure)
         self.assertIn("inkWidth: word.getBoundingClientRect().width", measure)
         self.assertIn("taglineTop: tagline.getBoundingClientRect().top - area.top", measure)
+        self.assertIn("roof: Math.max(0, header.offsetHeight - area.top - scrollY)", measure)
         self.assertIn("Math.max(inkWidth * 2.3, 320)", self.js)
+        self.assertIn("Math.min(width - 32, ", self.js, "on a phone, inside the 16 px gutter")
+        self.assertIn("Math.max(foot - roof - 4, titleHeight + 12) / theme.aspect", self.js,
+                      "its top below the header")
         self.assertIn("const foot = taglineTop - 4;", self.js)
         self.assertRegex(self.js, r"y: Math\.min\(titleTop \+ titleHeight / 2 - h / 2, foot - h\)")
-        # The one theme with black behind the name: there the name is light, in either mode.
-        self.assertIn("color: #f1f2f7", self.rule('.hero[data-theme="scanner"] h1'))
+        # The one theme with black behind the name: there the name is light, in either mode. With
+        # the shader the script turns it with the bar's fade; the still drawing goes by the theme.
+        self.assertIn("color: #f1f2f7", self.rule(".has-gl .hero.ink-light h1"))
+        self.assertIn("color: #f1f2f7", self.rule(':root:not(.has-gl) .hero[data-theme="scanner"] h1'))
+        self.assertIn("hero.classList.toggle('ink-light', isBar(theme) && fade > .5);", self.js)
+
+    def test_on_a_wide_screen_the_spare_height_goes_above_the_name(self):
+        """Where the claims sit beside the words, the hero's minimum height leaves room over the
+        name, where a figure peeks out, and none under the picker: the ticker follows close."""
+        three = [body for selectors, body in self.rules if selectors == ".hero-in"
+                 and "grid-template-columns: minmax(0, 1fr) minmax(" in body]
+        self.assertEqual(len(three), 1)
+        self.assertIn("min-height: var(--hero-h)", three[0])
+        self.assertIn("align-content: end", three[0])
+        self.assertLessEqual(int(re.search(r"--hero-h: min\((\d+)px", self.rule(":root"))[1]), 300)
+        self.assertIn("padding-block: 16px 14px", self.rule(".hero"))
+        self.assertIn("margin-block-start: 16px", self.rule(".ticker"))
 
     def test_the_header_blurs_a_layer_inside_it_not_itself(self):
         for page in self.pages:
@@ -484,7 +505,17 @@ class HeroAndHeader(unittest.TestCase):
             data = json.loads(re.search(r'<script type="application/json" id="strings">(.*?)</script>',
                                         page.read_text(), re.S)[1])
             self.assertEqual(data["pauseMotion"], label, page)
+            play = json.loads((ROOT / "website/src/i18n" / f"{code}.json").read_text())["playMotion"]
+            self.assertTrue(play.strip(), page)
+            self.assertEqual(data["playMotion"], play, page)
         self.assertIn("pause.setAttribute('aria-label', S.pauseMotion)", self.js)
+        self.assertIn("pause.title = paused ? S.playMotion : S.pauseMotion;", self.js)
+        self.assertIn("pick.append(pause);", self.js)
+        self.assertRegex(self.js, r"store\.set\('still', paused \? '1' : '0'\);\s*if \(paused\) redraw\(\);")
+        # Only the keyboard holds by focus: a click or a tap also focuses a button in Chromium.
+        self.assertIn("pick.addEventListener('focusin', event => { focused = byKeyboard(event.target); hold(); });",
+                      self.js)
+        self.assertIn("element.matches(':focus-visible')", self.js)
         self.assertIn("pause.setAttribute('aria-pressed', paused)", self.js)
         self.assertIn("const still = () => reducedMotion || paused;", self.js)
         self.assertRegex(self.js, r"function loop\(time\) \{[^}]*if \(lost \|\| still\(\) \|\| !onScreen\(\)\) return;")
@@ -501,6 +532,7 @@ class HeroAndHeader(unittest.TestCase):
         self.assertTrue(match)
         moment = float(match[1])
         self.assertIn("gl.uniform1f(u.u_time, t % 1000)", self.js)
+        self.assertIn("Math.abs(Math.sin(t * 5.1) * Math.sin(t * 1.7 + 1))", self.js, "the level, from it too")
         shader = (ROOT / "themes/tux/shader.glsl").read_text()
         blinks = re.findall(r"smoothstep\(([\d.]+), ([\d.]+), abs\(mod\(u_time, ([\d.]+)\) - ([\d.]+)\)\)", shader)
         self.assertEqual(len(blinks), 2, "the two blink clocks")
@@ -513,6 +545,85 @@ class HeroAndHeader(unittest.TestCase):
         self.assertIn("background: var(--text)", self.rule('.dot[aria-pressed="true"]::before'))
         self.assertIn("width: 18px", self.rule('.dot[aria-pressed="true"]::before'))
         self.assertIn("color: var(--muted)", self.rule(".dot"))     # 3:1 and more on the page
+
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class HeroScript(unittest.TestCase):
+    """app.js itself, run by node on a fake page (tests/website_hero_page.mjs) whose clock and
+    animation frames move only when a step says so, as a visitor would use the hero."""
+
+    @classmethod
+    def setUpClass(cls):
+        build = load_build()
+        folder = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(folder.cleanup)
+        build.DIST = Path(folder.name) / "dist"
+        with contextlib.redirect_stdout(io.StringIO()):
+            build.main()
+        cls.dist = build.DIST
+        js = (build.DIST / "app.js").read_text()
+        cls.slide = float(re.search(r"const SLIDE_S = ([\d.]+);", js)[1])
+        cls.fade = float(re.search(r"const FADE_S = ([\d.]+);", js)[1])
+        cls.moment = float(re.search(r"const t = still\(\) \? ([\d.]+) : now;", js)[1])
+        cls.strings = json.loads((ROOT / "website/src/i18n/en.json").read_text())
+
+    def play(self, *steps):
+        result = subprocess.run(["node", str(ROOT / "tests/website_hero_page.mjs"), str(self.dist), json.dumps(steps)],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout.strip().splitlines()[-1])     # the last line: a node shim may add one
+
+    def test_play_after_a_pause_by_pointer_brings_the_turns_back(self):
+        """Chromium focuses a button that is clicked or tapped, and the focus stays after the
+        pointer has gone. That isn't the keyboard on the picker, so it must hold nothing."""
+        seen = self.play({"enter": True}, {"press": "still", "by": "pointer"}, {"wait": 1},
+                         {"press": "still", "by": "pointer"}, {"leave": True},
+                         {"wait": self.slide + 1}, {"read": "later"})["later"]
+        self.assertEqual(seen["focused"], "still", "the play button keeps focus")
+        self.assertFalse(seen["focusVisible"])
+        self.assertEqual(seen["pause"]["pressed"], "false")
+        self.assertNotEqual(seen["theme"], "tux", "the next theme has had its turn")
+
+    def test_the_keyboard_on_the_picker_holds_the_theme_until_it_leaves(self):
+        seen = self.play({"wait": .5}, {"focus": "dot:0"}, {"wait": 2 * self.slide},
+                         {"press": "still", "by": "keyboard"}, {"press": "still", "by": "keyboard"},
+                         {"wait": 2 * self.slide}, {"read": "held"},
+                         {"blur": True}, {"wait": self.slide + 1}, {"read": "left"})
+        self.assertTrue(seen["held"]["focusVisible"])
+        self.assertEqual(seen["held"]["theme"], "tux")
+        self.assertEqual(seen["left"]["theme"], "orb")
+
+    def test_pause_draws_one_still_frame_and_play_moves_on_from_it(self):
+        seen = self.play({"wait": 2}, {"read": "moving"}, {"press": "still", "by": "pointer"}, {"wait": .2},
+                         {"read": "paused"}, {"wait": 2 * self.slide}, {"read": "later"},
+                         {"press": "still", "by": "pointer"}, {"wait": 1}, {"read": "playing"})
+        self.assertNotEqual(seen["moving"]["frame"]["u_time"], self.moment)
+        paused = seen["paused"]
+        self.assertEqual(paused["frame"]["u_time"], self.moment, "drawn at once, at the still moment")
+        self.assertEqual(paused["frame"]["u_appear"], 1)
+        self.assertEqual(paused["pause"], {"pressed": "true", "title": self.strings["playMotion"],
+                                           "label": self.strings["pauseMotion"]})
+        self.assertEqual(seen["later"]["frames"], paused["frames"], "nothing more is drawn while paused")
+        self.assertEqual(seen["later"]["theme"], "tux", "and the turns stop")
+        playing = seen["playing"]
+        self.assertGreater(playing["frames"], paused["frames"])
+        self.assertEqual(playing["pause"]["title"], self.strings["pauseMotion"])
+        self.assertEqual(playing["theme"], "tux")
+
+    def test_the_name_turns_light_and_back_with_the_bar(self):
+        """It turns as the bar fades in and out, not a moment after the next theme has begun;
+        a band, as wide as the bar is, never turns it."""
+        seen = self.play({"until": "scanner"}, {"read": "arriving"}, {"wait": 1}, {"read": "shown"},
+                         {"wait": self.slide - 1 - self.fade * .4}, {"read": "going"},
+                         {"until": "tux"}, {"read": "next"}, {"until": "waves"}, {"wait": 1}, {"read": "band"})
+        self.assertTrue(seen["shown"]["gl"])
+        self.assertFalse(seen["arriving"]["inkLight"])
+        self.assertTrue(seen["shown"]["inkLight"])
+        self.assertEqual(seen["going"]["theme"], "scanner")
+        self.assertFalse(seen["going"]["inkLight"])
+        self.assertFalse(seen["next"]["inkLight"])
+        self.assertFalse(seen["band"]["inkLight"])
 
 
 if __name__ == "__main__":
