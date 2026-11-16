@@ -143,7 +143,8 @@ def _server_is_here(config) -> bool:
 
 
 def _said(value) -> str:
-    return " ".join(str(value or "").split()).casefold()
+    """As said, without an 's after a word: "the nas's docker" is the nas docker."""
+    return " ".join(w for w in map(serverstatus.bare, str(value or "").casefold().split()) if w)
 
 
 def _words(text: str) -> set[str]:

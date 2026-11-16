@@ -4,9 +4,10 @@ One fixed, read-only command goes to the host of the server in Settings, and not
 wrote goes with it: a name to look for is matched here, once the answer is back. The command
 starts nothing there, not even a docker you stopped that its socket would start again, though
 the login opens a session there as any ssh does, which starts your user services if nothing
-else keeps them running. ssh takes the port and user from ~/.ssh/config, and gets no agent, so
-the key has to work on its own. What your ssh_config runs itself, such as a ProxyCommand, still
-runs.
+else keeps them running, and what the server runs for any login with that key, such as an
+authorized_keys command=, a ForceCommand or ~/.ssh/rc, runs too, before the command or in its
+place. ssh takes the port and user from ~/.ssh/config, and gets no agent, so the key has to work
+on its own. What your ssh_config runs itself, such as a ProxyCommand, still runs.
 What the server sends is someone else's text. It is capped, each name has to look like a name,
 and the app says the answer itself, so none of it reaches a model with tools.
 """
@@ -222,10 +223,15 @@ def is_own_name(text: str, host: str) -> bool:
     return any(_same_name(text, name) for name in own_names(host))
 
 
+def bare(word: str) -> str:
+    """A word without an 's at its end, as nas in "the nas's docker" and what in "what's"."""
+    return re.sub(r"['’]s?(?=[.,?!]*$)", "", word)
+
+
 def _without(text: str, words: set) -> str:
     """text without these as words of their own: "my-nas" keeps its my."""
-    return " ".join(w for w in (w.strip(".,?!") for w in text.casefold().split())
-                    if w not in words)
+    return " ".join(w for w in (bare(w.strip(".,?!")) for w in text.casefold().split())
+                    if w and w not in words)
 
 
 def names_host(text: str, host: str) -> bool:
@@ -405,7 +411,8 @@ def _key(text: str) -> str:
 def _words(name) -> list[str]:
     """Its words, without "home" before server: a home server is a server. A unit's ".service"
     is left out, as the units listed have none."""
-    words = [w.strip(".,?!").removesuffix(".service") for w in str(name or "").casefold().split()]
+    words = [bare(w.strip(".,?!")).removesuffix(".service")
+             for w in str(name or "").casefold().split()]
     return [w for w, after in zip(words, words[1:] + [""])
             if w and not (w == "home" and after in SERVER_WORDS)]
 
@@ -572,27 +579,40 @@ def _match(name: str, *texts: str) -> str | None:
     return None
 
 
-def _seen(found: dict, name: str) -> tuple[list[str], bool, bool]:
-    """What on the server matches name, as said, whether any of it is really up, and whether
-    it matched the whole name: if nothing does, what matched some of its words."""
-    seen, up = {"whole": [], "part": []}, {"whole": False, "part": False}
+def _seen(found: dict, name: str) -> tuple[list[tuple[str, bool, bool]], bool]:
+    """What on the server matches name, each as said, whether it is called name exactly, once
+    the words around a name are gone, and whether it is really up, and whether they match the
+    whole name: if nothing does, what matched some of its words. "the plex service" is called
+    plex, but nas-backup isn't called nas, and "my home nas" is homenas."""
+    exactly = _without(name, AROUND)
+    seen = {"whole": [], "part": []}
     for c in found["docker"] or []:
-        if how := _match(name, c["name"], c["image"].rpartition("/")[2].partition(":")[0]):
-            seen[how].append(f"the docker container {c['name']}{_status(c)}")
-            up[how] = up[how] or _up(c)
+        image = c["image"].rpartition("/")[2].partition(":")[0]
+        exact = _same_name(exactly, c["name"]) or _same_name(exactly, image)
+        if how := "whole" if exact else _match(name, c["name"], image):
+            seen[how].append((f"the docker container {c['name']}{_status(c)}", exact, _up(c)))
     for s in found["systemd"] or []:
-        if how := _match(name, s):
-            seen[how].append(f"the service {s}")
-            up[how] = True
+        exact = _same_name(exactly, s)
+        if how := "whole" if exact else _match(name, s):
+            seen[how].append((f"the service {s}", exact, True))
     how = "whole" if seen["whole"] else "part"
-    return seen[how], up[how], how == "whole"
+    return seen[how], how == "whole"
+
+
+def _start(matches: list[tuple[str, bool, bool]]) -> str:
+    """Up or not by what is called the name exactly, or else by all that matches: an app that
+    keeps restarting is not up beside its database that is."""
+    ups = [up for _, exact, up in matches if exact] or [up for _, _, up in matches]
+    if all(ups):
+        return "Yes, on your server I see"
+    return "Partly: on your server I see" if any(ups) else "Not really: on your server I see"
 
 
 def _one(found: dict, name: str) -> str:
-    seen, up, whole = _seen(found, name)
+    matches, whole = _seen(found, name)
+    seen = [said for said, _, _ in matches]
     if seen and whole:
-        start = "Yes, on your server I see" if up else "Not really: on your server I see"
-        return f"{start} {_listed(seen, SAID_MATCHES)}."
+        return f"{_start(matches)} {_listed(seen, SAID_MATCHES)}."
     if seen:
         return f"I don't see {name} on your server, but I see {_listed(seen, SAID_MATCHES)}."
     if found["docker"] is None and found["systemd"] is None:
@@ -606,21 +626,16 @@ def _one(found: dict, name: str) -> str:
     return f"I don't see {name} among the docker containers or services running on your server."
 
 
-def _called(found: dict, name: str) -> bool:
-    """Whether a container, its image or a service there is called name exactly, once the words
-    around a name are gone: "the plex service" is plex, but nas-backup is no nas, and "my home
-    nas" is homenas, so home is no program's name."""
-    said = _without(name, AROUND)
-    there = [part for c in found["docker"] or []
-             for part in (c["name"], c["image"].rpartition("/")[2].partition(":")[0])]
-    return any(_same_name(said, text) for text in there + (found["systemd"] or []))
-
-
 def _on_a_server(args: dict, host: str) -> bool:
-    """An on that says server without naming this one, as "my server": a name that is the
-    server's own is then asked after as a program."""
+    """An on that says server without naming this one, as "my server"."""
     on = " ".join(_words(args.get("on")))
     return any(w in SERVER_WORDS for w in on.split()) and not names_host(on, host)
+
+
+def _as_a_program(args: dict, host: str, name: str, missed_here: str | None) -> bool:
+    """The server's label alone, asked after as a program: once this computer was looked at for
+    it, or with an on that says server, as "Is Plex running on my server?" on plex.lan."""
+    return is_own_name(name, host) and bool(missed_here or _on_a_server(args, host))
 
 
 def answer(args: dict, config, session=None, missed_here: str | None = None,
@@ -634,17 +649,19 @@ def answer(args: dict, config, session=None, missed_here: str | None = None,
     found = read(host)
     if session is not None:
         session.tainted = True
-    whole = bool(name) and _seen(found, name)[2]
+    matches, whole = _seen(found, name) if name else ([], False)
+    program = bool(name) and _as_a_program(args, host, name, missed_here)
     if _asks_after_ssh(args):
         text = OVER_SSH     # its unit may be ssh, sshd or another, but it let me in
-    elif name and names_host(name, host) and not _called(found, name):
-        # the server's own name, with nothing there called that
+    elif name and names_host(name, host) and not (
+            whole if program else any(exact for _, exact, _ in matches)):
+        # The server's own name: what runs there, unless something there is what was asked
+        # after. Asked after as a program, anything that matches it is; said as the server, as
+        # "my nas" beside nas-backup, only something called exactly that.
         text = _everything(found)
-        if missed_here:
-            text = (f"Nothing called {missed_here} is running on this computer or on your "
-                    f"server. {text}")
-        elif is_own_name(name, host) and _on_a_server(args, host):
-            text = f"Nothing called {name} is running on your server. {text}"
+        if program:
+            where = "this computer or on your server" if missed_here else "your server"
+            text = f"Nothing called {name} is running on {where}. {text}"
     else:
         text = _one(found, name) if name else _everything(found)
         if missed_here and not whole:

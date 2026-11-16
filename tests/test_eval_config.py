@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 import yaml
 
+from tests import no_ssh
 from tools import eval_cutoffs
 from tools import eval_config
 from tools.eval_config import Refused, evaluation_server, on_this_computer, run_server
@@ -410,12 +411,13 @@ class EveryActionIsCutOff(unittest.TestCase):
 
     def test_no_evaluation_reaches_your_server(self):
         """system.running on the server has no card, so it would really run: ssh is never
-        started, whatever server the evaluation has."""
+        started, whatever server the evaluation has, by a Popen imported by name too."""
         config = {**DEFAULTS, "server": "real.example:8080"}
         session = Session()
-        with install(), contextlib.redirect_stdout(io.StringIO()), \
-                patch("subprocess.Popen", side_effect=AssertionError("ssh was started")):
+        no_ssh.REACHED.clear()
+        with install(), contextlib.redirect_stdout(io.StringIO()), no_ssh.refusing():
             result = system.running({"name": "localai", "on": "server"}, config, session)
+        self.assertEqual(no_ssh.REACHED, [], "ssh was started")
         self.assertEqual(result, {APP_SAYS: True})
         self.assertEqual([said.text for said in session.after],
                          ["Yes, on your server I see the docker container localai, up 3 days."])
