@@ -311,5 +311,109 @@ class LocalPreview(unittest.TestCase):
         self.assertIn("dist-preview/", (ROOT / "website/.gitignore").read_text().split())
 
 
+class HeroAndHeader(unittest.TestCase):
+    """The themes fill the hero behind the title, and the header blurs a layer inside it, never
+    itself: it moves with transform, and a moving element has nothing behind it to blur."""
+
+    @classmethod
+    def setUpClass(cls):
+        build = load_build()
+        folder = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(folder.cleanup)
+        build.DIST = Path(folder.name) / "dist"
+        with contextlib.redirect_stdout(io.StringIO()):
+            build.main()
+        cls.build = build
+        cls.pages = sorted(build.DIST.glob("**/index.html"))
+        cls.css = (build.DIST / "style.css").read_text()
+        cls.js = (build.DIST / "app.js").read_text()
+        plain = re.sub(r"/\*.*?\*/", "", cls.css, flags=re.S)
+        # Innermost rules only: an @media or @supports wrapper drops out, its rules stay.
+        cls.rules = [(selectors.strip(), body) for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", plain)]
+
+    def rule(self, selector):
+        """The declarations of every rule whose selector list holds this selector."""
+        bodies = [body for selectors, body in self.rules
+                  if selector in [one.strip() for one in selectors.split(",")]]
+        self.assertTrue(bodies, selector)
+        return " ".join(bodies)
+
+    def hero(self, page):
+        match = re.search(r'<section class="hero" id="hero" data-theme="(\w+)">(.*?)</section>',
+                          page.read_text(), re.S)
+        self.assertTrue(match, page)
+        return match[1], match[2]
+
+    def test_the_theme_lies_behind_the_title_edge_to_edge(self):
+        for page in self.pages:
+            theme, hero = self.hero(page)
+            self.assertEqual(theme, self.build.THEME_ORDER[0], page)
+            self.assertIn('<canvas id="tux" aria-hidden="true"></canvas>', hero, page)
+            self.assertIn('<div class="fallback" aria-hidden="true"></div>', hero, page)
+            self.assertLess(hero.index('<canvas id="tux"'), hero.index("<h1>Tuxistant</h1>"), page)
+            self.assertLess(hero.index("<h1>"), hero.index('id="download"'), page)
+        canvas = self.rule("#tux")
+        for declaration in ("position: absolute", "inset: 0", "width: 100%", "height: 100%",
+                            "pointer-events: none"):     # never takes a tap, a click or a scroll
+            self.assertIn(declaration, canvas)
+        self.assertRegex(canvas, r"z-index: -\d")
+        self.assertIn("isolation: isolate", self.rule(".hero"), "below zero, yet still inside the hero")
+        self.assertIn("margin-block-start: calc(-1 * var(--header-h))", self.rule("main > .hero:first-child"),
+                      "on up under the header's glass")
+
+    def test_the_theme_picker_stays_in_the_hero(self):
+        first = self.build.THEME_ORDER[0]
+        for page in self.pages:
+            code = "en" if page.parent == self.build.DIST else page.parent.name
+            strings = json.loads((ROOT / "website/src/i18n" / f"{code}.json").read_text())
+            self.assertEqual(set(strings["themes"]), set(self.build.THEME_ORDER), page)
+            _, hero = self.hero(page)
+            self.assertIn(f'<div class="pick"><span id="theme-name">{html_escape(strings["themes"][first])}'
+                          '</span><span class="dots" id="dots"></span></div>', hero, page)
+
+    def test_every_theme_has_a_still_drawing_for_browsers_without_webgl(self):
+        self.assertIn("display: none", self.rule(".has-gl .fallback"))
+        for theme in self.build.THEME_ORDER:
+            self.assertIn("background:", self.rule(f'.hero[data-theme="{theme}"] .fallback::before'), theme)
+
+    def test_the_header_blurs_a_layer_inside_it_not_itself(self):
+        for page in self.pages:
+            self.assertRegex(page.read_text(), r'<header class="site-header" id="site-header">\s*'
+                                               r'<div class="nav-glass" aria-hidden="true"></div>', page)
+        for selectors, body in self.rules:
+            for selector in selectors.split(","):
+                subject = re.split(r"[\s>+~]+", selector.strip())[-1]
+                if re.match(r"(\.site-header|#site-header|header)(?![\w-])", subject):
+                    self.assertNotIn("backdrop-filter", body, selector)
+        header = self.rule(".site-header")
+        for declaration in ("position: fixed", "inset: 0 0 auto", "z-index: 100", "isolation: isolate",
+                            "will-change: transform"):
+            self.assertIn(declaration, header)
+        self.assertIn("transform: translateY(-100%)", self.rule(".site-header.is-hidden"))
+        glass = self.rule(".nav-glass")
+        for declaration in ("position: absolute", "inset: 0", "z-index: -1", "pointer-events: none",
+                            "background: var(--bg)"):    # solid where the browser can't blur
+            self.assertIn(declaration, glass)
+        self.assertRegex(self.css, r"@supports \(\(backdrop-filter: blur\(1px\)\) or \(-webkit-backdrop-filter: "
+                                   r"blur\(1px\)\)\) \{\s*\.nav-glass \{[^}]*-webkit-backdrop-filter: blur\(20px\) "
+                                   r"saturate\(145%\);\s*backdrop-filter: blur\(20px\) saturate\(145%\)")
+        self.assertRegex(self.css, r"@media \(prefers-reduced-transparency: reduce\) \{\s*\.nav-glass \{"
+                                   r"[^}]*backdrop-filter: none")
+        self.assertIn("padding-top: var(--header-h)", self.rule("body"))
+        self.assertIn("scroll-padding-top", self.rule("html"))
+        reduced = self.css[self.css.index("@media (prefers-reduced-motion: reduce)"):]
+        self.assertRegex(reduced, r"\.site-header \{ transition: none")
+
+    def test_the_header_hides_on_the_way_down_and_comes_back_on_the_way_up(self):
+        for rule in ("y < 96", "performance.now() + 900", "delta > 6", "delta < -6", "{ passive: true }",
+                     "'hashchange'", "'focusin'"):
+            self.assertIn(rule, self.js)
+
+    def test_the_shader_spares_a_phone(self):
+        for rule in ("Math.min(devicePixelRatio || 1, 1.5", "IntersectionObserver", "'visibilitychange'",
+                     "document.hidden", "prefers-reduced-motion: reduce"):
+            self.assertIn(rule, self.js)
+
+
 if __name__ == "__main__":
     unittest.main()

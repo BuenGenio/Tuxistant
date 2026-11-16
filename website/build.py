@@ -344,20 +344,22 @@ def page(code, strings, languages, releases, detect, policy):
   </div>
 </header>
 <main>{local_preview_html(strings)}
-  <section class="hero wrap">
-    <h1>Tuxistant</h1>
-    <p class="tagline">{esc(strings['tagline'])}</p>
-    <div class="stage">
-      <canvas id="tux" aria-hidden="true"></canvas>
-      <div class="fallback" aria-hidden="true"></div>
+  <section class="hero" id="hero" data-theme="{THEME_ORDER[0]}">
+    <canvas id="tux" aria-hidden="true"></canvas>
+    <div class="fallback" aria-hidden="true"></div>
+    <div class="hero-in wrap">
+      <div class="hero-copy">
+        <h1>Tuxistant</h1>
+        <p class="tagline">{esc(strings['tagline'])}</p>
+        <div class="download">
+          <a class="btn btn-main" id="download" aria-disabled="true"></a>
+          <p class="dl-meta"><span id="dl-meta-text"></span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
+          {preview_html(strings, releases)}
+        </div>
+        <div class="pick"><span id="theme-name">{esc(strings['themes'][THEME_ORDER[0]])}</span><span class="dots" id="dots"></span></div>
+      </div>
       <ul class="caps caps-a">{caps_a}</ul>
       <ul class="caps caps-b">{caps_b}</ul>
-    </div>
-    <div class="pick"><span id="theme-name" aria-live="polite"></span><span class="dots" id="dots"></span></div>
-    <div class="download">
-      <a class="btn btn-main" id="download" aria-disabled="true"></a>
-      <p class="dl-meta"><span id="dl-meta-text"></span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
-      {preview_html(strings, releases)}
     </div>
   </section>
   <div class="wrap"><div class="ticker">{ticker_html(strings)}</div></div>
