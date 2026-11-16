@@ -40,6 +40,14 @@
     ? fill(S.dlMeta, { version: release.version, channel: S[release.channel] })
     : S.dlPlanned;
 
+  // A section's download is the hero's file: the visitor's own system when that has a release, and
+  // otherwise Linux, phones included. It names the system it downloads for, as the hero does.
+  const ctaOS = S.releases[os]?.url ? os : 'linux';
+  for (const link of document.querySelectorAll('[data-cta="download"]')) {
+    link.href = S.releases[ctaOS].url;
+    link.textContent = fill(S.dlFor, { os: OS_NAMES[ctaOS] });
+  }
+
   // OS tabs
   const tabs = [...document.querySelectorAll('[role="tab"]')];
   function selectTab(id, focus) {
@@ -52,15 +60,26 @@
     }
     examplesAsk(id);
   }
-  // The examples end by asking about the system on show: where it has a release, whether the
-  // visitor wants it; where it has none, that it is coming and what pays for it.
+  // The examples end by asking about the system on show. Where it has a release: whether the
+  // visitor wants it. Where it has none: that it is coming, and whether they have a desktop the
+  // download beside it runs on. The Donate card just below stays the page's one donation ask.
   function examplesAsk(id) {
-    const cta = document.querySelector('#examples .acc-cta');
-    const soon = !S.releases[id].url;
-    cta.querySelector('p').textContent = soon ? fill(S.ctaSoon, { os: OS_NAMES[id] }) : S.ctaExamples;
-    for (const action of cta.querySelectorAll('.acc-actions > *')) {
-      action.hidden = (action.dataset.cta === 'donate') !== soon;
+    const prompt = document.querySelector('#examples .acc-cta p');
+    if (S.releases[id].url) {
+      prompt.textContent = S.ctaExamples;
+      return;
     }
+    const sentences = [fill(S.ctaSoon, { os: OS_NAMES[id] })];
+    if (S.releases[ctaOS].url) sentences.push(fill(S.ctaSoonAlso, { os: OS_NAMES[ctaOS] }));
+    // A sentence to a span, so a narrow screen breaks between them rather than inside one.
+    prompt.replaceChildren();
+    sentences.forEach((sentence, index) => {
+      // After a full-width stop, as Chinese ends a sentence with, no space.
+      if (index && !/[\u3000-\u303f\uff00-\uffef]$/.test(sentences[index - 1])) prompt.append(' ');
+      const span = document.createElement('span');
+      span.textContent = sentence;
+      prompt.append(span);
+    });
   }
   tabs.forEach((tab, index) => {
     tab.addEventListener('click', () => selectTab(tab.dataset.os));
@@ -73,14 +92,6 @@
     });
   });
   selectTab(shownOS);
-
-  // A section's download is the hero's file: the visitor's own system when that has a release, and
-  // otherwise Linux, phones included. It names the system it downloads for, as the hero does.
-  const ctaOS = S.releases[os]?.url ? os : 'linux';
-  for (const link of document.querySelectorAll('[data-cta="download"]')) {
-    link.href = S.releases[ctaOS].url;
-    link.textContent = fill(S.dlFor, { os: OS_NAMES[ctaOS] });
-  }
 
   // Sections: accordions. The page arrives with every section open and its heading plain text,
   // which is how it stays without script. Here each heading's text becomes the toggle, a button

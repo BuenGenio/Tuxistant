@@ -14,7 +14,7 @@
   "dlFor": "Download for {os}", "dlSoon": "Coming to {os}", "dlPending": "{os} preview coming soon", "dlAll": "All versions",
   "dlMeta": "Version {version}, {channel}", "dlPlanned": "Not available yet",
   "examplesTitle": "What it does for you", "youSay": "You say", "approve": "You approve it first",
-  "ctaExamples": "Want it on your own desktop?", "ctaPreview": "Help prove them on a real desktop.", "ctaVersions": "Looking for an older version or the source code?", "ctaSoon": "Coming to {os}. Your support pays for it.", "ctaDownload": "Download Tuxistant", "ctaReleases": "See every release on GitHub",
+  "ctaExamples": "Want it on your own desktop?", "ctaPreview": "Help prove them on a real desktop.", "ctaVersions": "Looking for an older version or the source code?", "ctaSoon": "Coming to {os}.", "ctaSoonAlso": "Have a {os} desktop too?", "ctaReleases": "See every release on GitHub",
   "examples": {
     "linux": [
       ["now", "How much disk space do I have left?", "Checks your disk and tells you out loud."],

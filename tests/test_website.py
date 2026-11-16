@@ -8,6 +8,8 @@ import importlib.util
 import io
 import json
 import re
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +22,38 @@ def load_build():
     build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(build)
     return build
+
+
+def dom_tree(html):
+    """The page as tests/site_dom.mjs takes it: ["tag", {attributes}, [children]], text as strings."""
+    from html.parser import HTMLParser
+    void = {"meta", "link", "br", "img", "input", "source", "hr", "path", "use", "circle"}
+
+    class Builder(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack = [["#root", {}, []]]
+
+        def handle_starttag(self, tag, attrs):
+            node = [tag, {name: value or "" for name, value in attrs}, []]
+            self.stack[-1][2].append(node)
+            if tag not in void:
+                self.stack.append(node)
+
+        def handle_startendtag(self, tag, attrs):
+            self.stack[-1][2].append([tag, {name: value or "" for name, value in attrs}, []])
+
+        def handle_endtag(self, tag):
+            if tag not in void:
+                while self.stack.pop()[0] != tag:
+                    pass
+
+        def handle_data(self, data):
+            self.stack[-1][2].append(data)
+
+    builder = Builder()
+    builder.feed(html)
+    return next(node for node in builder.stack[0][2] if isinstance(node, list))
 
 
 def releases_shown(html):
@@ -170,9 +204,9 @@ class BuiltSite(unittest.TestCase):
             self.assertIn('tabindex="0"', self.ticker(page)[1][0][0], page)
 
     # Accordion sections, each ending with a call to action.
-    ACC_SECTIONS = {    # section: its title, its prompt, and the label of each action in order
-        "examples": ("examplesTitle", "ctaExamples", ["ctaDownload", "donate"]),
-        "preview": ("previewTitle", "ctaPreview", ["ctaDownload", "releaseNotes"]),
+    ACC_SECTIONS = {    # section: its title, its prompt, and each action in order
+        "examples": ("examplesTitle", "ctaExamples", ["download"]),
+        "preview": ("previewTitle", "ctaPreview", ["download", "releaseNotes"]),
         "versions": ("versionsTitle", "ctaVersions", ["ctaReleases"]),
     }
 
@@ -257,10 +291,12 @@ class BuiltSite(unittest.TestCase):
     def test_every_section_ends_with_a_call_to_action_in_its_language(self):
         releases = json.loads((ROOT / "website/src/releases.json").read_text())
         notes = self.build.release_in(releases, releases["linux"]["version"])["page"]
-        hrefs = {"ctaDownload": releases["linux"]["url"], "releaseNotes": notes, "donate": self.build.DONATE,
+        hrefs = {"download": releases["linux"]["url"], "releaseNotes": notes,
                  "ctaReleases": "https://github.com/BuenGenio/Tuxistant/releases"}
         for page in self.pages:
             strings = self.strings(page)
+            # Without script the download is the Linux file, so it says Linux, as the hero's does.
+            labels = dict(strings, download=self.build.fill(strings["dlFor"], os="Linux"))
             sections, _ = self.accordions(page)
             for section in sections:
                 name = section["attrs"]["id"]
@@ -272,39 +308,50 @@ class BuiltSite(unittest.TestCase):
                 self.assertEqual(node["children"][0]["tag"], "p", (page, name))
                 self.assertEqual(node["children"][0]["text"], strings[prompt], (page, name))
                 links = self.find_all(node, lambda n: n["tag"] == "a")
-                self.assertEqual([link["text"] for link in links], [strings[key] for key in actions], (page, name))
+                self.assertEqual([link["text"] for link in links], [labels[key] for key in actions], (page, name))
                 self.assertEqual([link["attrs"]["href"] for link in links], [hrefs[key] for key in actions], (page, name))
                 self.assertIn("btn-cta", links[0]["attrs"]["class"].split(), "the first action is a button")
-                # The donation is the examples' ask only on a system with no release, so it starts
-                # hidden: without script the Linux tab is on show, and Linux has one.
-                self.assertEqual(["hidden" in link["attrs"] for link in links],
-                                 [key == "donate" for key in actions], (page, name))
-        for key in ("ctaExamples", "ctaPreview", "ctaVersions", "ctaDownload", "ctaReleases", "ctaSoon"):
+                self.assertFalse(any("hidden" in link["attrs"] for link in links), (page, name))
+        for key in ("ctaExamples", "ctaPreview", "ctaVersions", "ctaReleases", "ctaSoon", "ctaSoonAlso"):
             labels = [self.strings(page)[key] for page in self.pages]
             self.assertTrue(all(label.strip() for label in labels), key)
             self.assertEqual(len(set(labels)), 5, f"{key}: each language has its own words")
         for page in self.pages:
-            self.assertEqual(re.findall(r"\{(\w+)\}", self.strings(page)["ctaSoon"]), ["os"], page)
+            for key in ("ctaSoon", "ctaSoonAlso"):
+                self.assertEqual(re.findall(r"\{(\w+)\}", self.strings(page)[key]), ["os"], (page, key))
+
+    def test_the_donate_card_is_the_one_donation_ask_besides_the_header(self):
+        """An open-source page with a Donate button in every view reads as pushy, so no section's
+        call to action repeats the card just below it."""
+        for page in self.pages:
+            tree = self.element_tree(page.read_text())
+            asks = self.find_all(tree, lambda n: n["tag"] == "a" and n["attrs"].get("href") == self.build.DONATE)
+            self.assertEqual(len(asks), 2, page)
+            header = self.find_all(tree, lambda n: n["attrs"].get("id") == "site-header")[0]
+            card = self.find_all(tree, lambda n: "support" in n["attrs"].get("class", "").split())[0]
+            self.assertIn(asks[0], self.find_all(header, lambda n: n["tag"] == "a"), page)
+            self.assertIn(asks[1], self.find_all(card, lambda n: n["tag"] == "a"), page)
+            self.assertNotIn('data-cta="donate"', page.read_text(), page)
 
     def test_the_examples_ask_about_the_system_on_show(self):
         """A Mac visitor opens on the macOS tab, where nothing is out yet: the examples must not then
-        ask whether they want it on their desktop and offer a Linux download."""
+        ask whether they want it on their desktop. test_app_js_fits_each_visitor runs the code."""
         app = (self.dist / "app.js").read_text()
         select = app[app.index("function selectTab("):app.index("function examplesAsk(")]
         self.assertIn("examplesAsk(id);", select, "the ask follows every change of tab")
         ask = app[app.index("function examplesAsk("):]
         ask = ask[:ask.index("\n  }\n") + 4]
-        self.assertIn("const soon = !S.releases[id].url;", ask)
-        self.assertIn("soon ? fill(S.ctaSoon, { os: OS_NAMES[id] }) : S.ctaExamples", ask)
-        self.assertIn("action.hidden = (action.dataset.cta === 'donate') !== soon;", ask)
+        self.assertIn("document.querySelector('#examples .acc-cta p')", ask, "the examples' own prompt")
         for page in self.pages:
             data = json.loads(re.search(r'<script type="application/json" id="strings">(.*?)</script>',
                                         page.read_text(), re.S)[1])
             strings = self.strings(page)
-            self.assertEqual((data["ctaExamples"], data["ctaSoon"]),
-                             (strings["ctaExamples"], strings["ctaSoon"]), page)
+            self.assertEqual((data["ctaExamples"], data["ctaSoon"], data["ctaSoonAlso"]),
+                             (strings["ctaExamples"], strings["ctaSoon"], strings["ctaSoonAlso"]), page)
+            # Two sentences, so a narrow screen can break between them.
+            self.assertTrue(strings["ctaSoon"].rstrip().endswith((".", "。")), page)
         css = (self.dist / "style.css").read_text()
-        self.assertIn(".acc-actions [hidden] { display: none; }", css, ".btn's display would show it")
+        self.assertIn(".acc-cta p span { display: inline-block; }", css, "a line breaks between sentences")
 
     def test_a_section_download_names_the_system_it_downloads_for(self):
         """Phones, macOS and Windows have no release of their own and get Linux's, as the hero does,
@@ -313,10 +360,85 @@ class BuiltSite(unittest.TestCase):
         block = app[app.index("const ctaOS = "):]
         block = block[:block.index("\n  }\n")]
         self.assertIn("const ctaOS = S.releases[os]?.url ? os : 'linux';", block)
+        self.assertIn("document.querySelectorAll('[data-cta=\"download\"]')", block)
         self.assertIn("link.href = S.releases[ctaOS].url;", block)
         self.assertIn("link.textContent = fill(S.dlFor, { os: OS_NAMES[ctaOS] });", block)
         self.assertRegex(app, r"if \(/android\|iphone\|ipad\|ipod/\.test\(ua\)\) return null;",
                          "a phone is no system: it falls through to Linux")
+        # What app.js relabels is exactly the sections' download buttons.
+        linux = json.loads((ROOT / "website/src/releases.json").read_text())["linux"]["url"]
+        for page in self.pages:
+            tree = self.element_tree(page.read_text())
+            marked = self.find_all(tree, lambda n: n["attrs"].get("data-cta") == "download")
+            ctas = self.find_all(tree, lambda n: "acc-cta" in n["attrs"].get("class", "").split())
+            buttons = [link for cta in ctas for link in self.find_all(cta, lambda n: n["tag"] == "a")
+                       if link["attrs"].get("href") == linux]
+            self.assertEqual(marked, buttons, page)
+            self.assertEqual(len(marked), 2, page)
+
+    AGENTS = {      # a visitor: user agent, platform, and the system detectOS() sees (None: a phone)
+        "phone": ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 "
+                  "(KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1", "iPhone", None),
+        "mac": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+                "Version/18.1 Safari/605.1.15", "MacIntel", "macos"),
+        "windows": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/140.0.0.0 Safari/537.36", "Win32", "windows"),
+        "linux": ("Mozilla/5.0 (X11; Linux x86_64; rv:140.0) Gecko/20100101 Firefox/140.0",
+                  "Linux x86_64", "linux"),
+    }
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node.js")
+    def test_app_js_fits_each_visitor(self):
+        """Runs app.js on every page as a phone, a Mac, a Windows PC and a Linux desktop would, then
+        opens each tab: what the hero and the sections offer, and what the examples ask."""
+        releases = json.loads((ROOT / "website/src/releases.json").read_text())
+        names = dict(self.build.OS_ORDER)
+        tabs = [None] + [f"#tab-{os_id}" for os_id in names]
+        probes = ["#download", "#examples .acc-cta p", "#examples .acc-cta a", "#preview .acc-cta p",
+                  "#preview .acc-cta a", "[data-cta=\"download\"]", ".acc-toggle", "[role=\"tab\"][aria-selected=\"true\"]"]
+        pages = {str(page): dom_tree(page.read_text()) for page in self.pages}
+        cases = [{"page": str(page), "userAgent": agent, "platform": platform, "steps": tabs, "probes": probes}
+                 for page in self.pages for agent, platform, _ in self.AGENTS.values()]
+        with tempfile.TemporaryDirectory() as folder:
+            given, report = Path(folder) / "input.json", Path(folder) / "report.json"
+            given.write_text(json.dumps({"app": str(self.dist / "app.js"), "pages": pages, "cases": cases}))
+            subprocess.run(["node", str(ROOT / "tests/site_dom.mjs"), str(given), str(report)],
+                           capture_output=True, timeout=300, check=True)
+            reports = iter(json.loads(report.read_text()))
+        for page in self.pages:
+            strings = self.strings(page)
+            for visitor, (_, _, own) in self.AGENTS.items():
+                where = (page.relative_to(self.dist), visitor)
+                steps = next(reports)
+                self.assertNotIn("error", steps, where)
+                # The section downloads are the hero's file: the visitor's own when there is one.
+                cta_os = own if own and releases[own]["url"] else "linux"
+                label = self.build.fill(strings["dlFor"], os=names[cta_os])
+                for step, tab in zip(steps, tabs):
+                    on_show = tab[len("#tab-"):] if tab else own or "linux"
+                    where = (page.relative_to(self.dist), visitor, on_show)
+                    self.assertEqual([t["attrs"]["data-os"] for t in step[probes[7]]], [on_show], where)
+                    downloads = step['[data-cta="download"]']
+                    self.assertEqual([(d["text"], d["attrs"]["href"]) for d in downloads],
+                                     [(label, releases[cta_os]["url"])] * 2, where)
+                    self.assertEqual(step["#download"][0]["attrs"].get("href"), releases[own or "linux"]["url"], where)
+                    # The examples end on one action, the download, and ask about the tab on show.
+                    self.assertEqual(step["#examples .acc-cta a"], downloads[:1], where)
+                    prompt = step["#examples .acc-cta p"][0]
+                    if releases[on_show]["url"]:
+                        self.assertEqual(prompt["text"], strings["ctaExamples"], where)
+                        continue
+                    soon = self.build.fill(strings["ctaSoon"], os=names[on_show])
+                    also = self.build.fill(strings["ctaSoonAlso"], os=names[cta_os])
+                    gap = [] if soon.endswith("。") else [["#text", " "]]
+                    self.assertEqual(prompt["parts"], [["span", soon], *gap, ["span", also]], where)
+                # New in 0.5.0 keeps its own prompt and both actions.
+                last = steps[-1]
+                self.assertEqual([p["text"] for p in last["#preview .acc-cta p"]], [strings["ctaPreview"]], where)
+                self.assertEqual([a["text"] for a in last["#preview .acc-cta a"]], [label, strings["releaseNotes"]], where)
+                # The first section stays open and the rest fold.
+                self.assertEqual([t["attrs"]["aria-expanded"] for t in last[".acc-toggle"]],
+                                 ["true", "false", "false"], where)
 
     def test_with_no_linux_download_a_section_offers_every_release_instead(self):
         releases = json.loads((ROOT / "website/src/releases.json").read_text())

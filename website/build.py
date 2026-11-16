@@ -317,20 +317,15 @@ def acc_close(prompt, *actions):
 
 
 def cta_download(strings, releases):
-    """The newest stable download, as the hero's button offers it. app.js points it at the visitor's
-    own system when that has a release, and names the system either way. With no Linux download
-    yet it offers every release on GitHub instead, rather than a button that downloads nothing."""
+    """The newest stable download, as the hero's button offers it: the Linux file, and it says so,
+    since that is what it fetches without script too. app.js points it at the visitor's own system
+    when that has a release, and names that system instead. With no Linux download yet it offers
+    every release on GitHub, rather than a button that downloads nothing."""
     url = releases["linux"]["url"]
     if not url:
         return cta_releases(strings, releases)
-    return f'<a class="btn btn-cta" href="{esc(url)}" data-cta="download">{esc(strings["ctaDownload"])}</a>'
-
-
-def cta_donate(strings):
-    """What the examples ask for on a system with no release yet. app.js shows it in place of the
-    download while such a system's tab is open; without script the Linux tab is, so it stays hidden."""
-    return (f'<a class="btn btn-cta btn-coffee" href="{DONATE}" rel="noopener" data-cta="donate" hidden>'
-            f'{esc(strings["donate"])}</a>')
+    label = fill(strings["dlFor"], os="Linux")
+    return f'<a class="btn btn-cta" href="{esc(url)}" data-cta="download">{esc(label)}</a>'
 
 
 def cta_notes(strings, releases):
@@ -360,7 +355,7 @@ def page(code, strings, languages, releases, detect, policy):
                        f'<link rel="canonical" href="{SITE_URL}{path_for(code)}">')
     data = {k: strings[k] for k in ("dlFor", "dlSoon", "dlPending", "dlMeta", "dlPlanned",
                                     "preview", "stable", "planned", "themes", "showTheme",
-                                    "ctaExamples", "ctaSoon")}
+                                    "ctaExamples", "ctaSoon", "ctaSoonAlso")}
     data["releases"] = {os_id: releases[os_id] for os_id, _ in OS_ORDER}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"
@@ -415,7 +410,7 @@ def page(code, strings, languages, releases, detect, policy):
   {acc_open('examples', strings['examplesTitle'])}
     <div class="tabs" role="tablist" aria-labelledby="examples-title">{tabs}</div>
     {panels}
-  {acc_close(strings['ctaExamples'], cta_download(strings, releases), cta_donate(strings))}
+  {acc_close(strings['ctaExamples'], cta_download(strings, releases))}
   {acc_open('preview', strings['previewTitle'])}
     <p class="lead">{esc(strings['previewLead'])}</p>
     <ul class="caps caps-row">{preview_caps_html(strings)}</ul>

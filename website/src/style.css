@@ -422,8 +422,8 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 /* The last section is followed by the Donate card, whose own margin is the gap, open or closed. */
 .acc:has(+ .wrap > .support) .acc-cta { margin-block-end: 0; }
 .acc-cta p { margin: 0; font-weight: 650; text-wrap: balance; }     /* no word left alone on a line */
+.acc-cta p span { display: inline-block; }     /* two sentences break between them, not inside one */
 .acc-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
-.acc-actions [hidden] { display: none; }    /* .btn's display would otherwise show it */
 .btn-cta {
   min-height: 44px;
   padding-inline: 18px;
@@ -437,7 +437,6 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .btn-cta:hover { box-shadow: 0 0 0 2px var(--text); }
 .btn-cta-alt { background: var(--text); color: var(--bg); }
 .btn-cta-alt:hover { box-shadow: 0 0 0 2px var(--accent); }
-.btn-cta.btn-coffee { background: #ffdd00; color: #1a1500; }
 /* As tall as the button beside it, so it is as easy to tap. */
 .acc-more { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 6px; font-size: 0.9rem; font-weight: 600; }
 
