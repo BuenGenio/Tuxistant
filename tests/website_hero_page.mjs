@@ -106,6 +106,7 @@ hero.append(canvas, copy, claims);
 Object.assign(hero.parts, { '.hero-copy': copy, '.pick': pick, '.caps': claims });
 Object.assign(copy.parts, { h1: title, '.tagline': tagline });
 const root = new Element();
+const examplesPrompt = new Element();     // the examples' call to action, worded for the tab on show
 const byId = {
   strings: Object.assign(new Element(), { textContent: strings }), download: new Element(),
   'dl-meta-text': new Element(), lang: new Element(), mode: new Element(), 'site-header': header,
@@ -115,7 +116,8 @@ const document = {
   documentElement: root, body: new Element(), hidden: false, dir: 'ltr',
   get activeElement() { return active; },
   getElementById: id => byId[id] ?? null,
-  querySelector: selector => (selector === 'meta[name="theme-color"]' ? new Element() : null),
+  querySelector: selector => ({ 'meta[name="theme-color"]': new Element(),
+                                '#examples .acc-cta p': examplesPrompt })[selector] ?? null,
   querySelectorAll: () => [],
   createElement: () => new Element(),
   createRange: () => ({ selectNodeContents() {}, getBoundingClientRect: () => ({ width: 170 }) }),

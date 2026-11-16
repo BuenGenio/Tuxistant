@@ -14,6 +14,7 @@
   "dlFor": "下载 {os} 版", "dlSoon": "{os} 版即将推出", "dlPending": "{os} 预览版即将推出", "dlAll": "所有版本",
   "dlMeta": "版本 {version}，{channel}", "dlPlanned": "暂未提供",
   "examplesTitle": "它能为你做什么", "youSay": "你说", "approve": "需要你先确认",
+  "ctaExamples": "想在你自己的桌面上用它吗？", "ctaPreview": "帮忙在真实桌面上验证它们。", "ctaVersions": "在找旧版本或源代码？", "ctaSoon": "{os} 版即将推出。", "ctaSoonAlso": "你也在用 {os} 桌面吗？", "ctaReleases": "在 GitHub 上查看所有版本",
   "examples": {
     "linux": [
       ["now", "我的磁盘还剩多少空间？", "检查磁盘并大声告诉你。"],
@@ -34,7 +35,7 @@
       ["soon", "清理我的临时文件。", "显示找到的内容，然后释放空间。", true]
     ]
   },
-  "versionsTitle": "版本", "colSystem": "系统", "colVersion": "版本号", "colStatus": "状态", "colNeeds": "运行要求",
+  "versionsTitle": "版本与发布记录", "colSystem": "系统", "colVersion": "版本号", "colStatus": "状态", "colNeeds": "运行要求",
   "preview": "预览版", "stable": "稳定版", "planned": "计划中", "linuxNeeds": "GNOME 50 和你自己的 LocalAI 服务器", "tbd": "待公布",
   "previewTry": "试用 Linux 版 {version} 预览版", "previewSep": "，", "previewUntried": "尚未在真实桌面上试用", "releaseNotes": "发布说明",
   "previewTitle": "0.5.0 新增内容", "previewLead": "已经做好，但尚未在真实桌面上得到验证。每项在真实桌面上正常工作后会改为“现已支持”。",

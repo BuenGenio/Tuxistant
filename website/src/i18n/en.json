@@ -14,6 +14,7 @@
   "dlFor": "Download for {os}", "dlSoon": "Coming to {os}", "dlPending": "{os} preview coming soon", "dlAll": "All versions",
   "dlMeta": "Version {version}, {channel}", "dlPlanned": "Not available yet",
   "examplesTitle": "What it does for you", "youSay": "You say", "approve": "You approve it first",
+  "ctaExamples": "Want it on your own desktop?", "ctaPreview": "Help prove them on a real desktop.", "ctaVersions": "Looking for an older version or the source code?", "ctaSoon": "Coming to {os}.", "ctaSoonAlso": "Have a {os} desktop too?", "ctaReleases": "See every release on GitHub",
   "examples": {
     "linux": [
       ["now", "How much disk space do I have left?", "Checks your disk and tells you out loud."],
@@ -34,7 +35,7 @@
       ["soon", "Clear my temp files.", "Shows what it found, then frees the space.", true]
     ]
   },
-  "versionsTitle": "Versions", "colSystem": "System", "colVersion": "Version", "colStatus": "Status", "colNeeds": "Needs",
+  "versionsTitle": "Versions and releases", "colSystem": "System", "colVersion": "Version", "colStatus": "Status", "colNeeds": "Needs",
   "preview": "Preview", "stable": "Stable", "planned": "Planned", "linuxNeeds": "GNOME 50 and your own LocalAI server", "tbd": "To be announced",
   "previewTry": "Try the {version} preview for Linux", "previewSep": ", ", "previewUntried": "not yet tried on a real desktop", "releaseNotes": "Release notes",
   "previewTitle": "New in 0.5.0", "previewLead": "Built, but not yet proven on a real desktop. Each becomes Now once it has worked on one.",

@@ -14,6 +14,7 @@
   "dlFor": "Baixar para {os}", "dlSoon": "Em breve no {os}", "dlPending": "Prévia para {os} em breve", "dlAll": "Todas as versões",
   "dlMeta": "Versão {version}, {channel}", "dlPlanned": "Ainda não disponível",
   "examplesTitle": "O que ele faz por você", "youSay": "Você diz", "approve": "Você aprova primeiro",
+  "ctaExamples": "Quer isso no seu próprio computador?", "ctaPreview": "Ajude a comprová-las num computador real.", "ctaVersions": "Procurando uma versão anterior ou o código-fonte?", "ctaSoon": "Em breve no {os}.", "ctaSoonAlso": "Também usa um computador com {os}?", "ctaReleases": "Todas as versões no GitHub",
   "examples": {
     "linux": [
       ["now", "Quanto espaço ainda tenho no disco?", "Verifica o disco e diz em voz alta."],
@@ -34,7 +35,7 @@
       ["soon", "Limpe meus arquivos temporários.", "Mostra o que encontrou e libera o espaço.", true]
     ]
   },
-  "versionsTitle": "Versões", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
+  "versionsTitle": "Versões e histórico", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
   "preview": "Prévia", "stable": "Estável", "planned": "Planejada", "linuxNeeds": "GNOME 50 e seu próprio servidor LocalAI", "tbd": "A anunciar",
   "previewTry": "Experimente a prévia {version} para Linux", "previewSep": ", ", "previewUntried": "ainda não testada num computador real", "releaseNotes": "Notas da versão",
   "previewTitle": "Novidades da 0.5.0", "previewLead": "Já estão prontas, mas ainda não foram comprovadas num computador real. Cada uma passa para Já quando tiver funcionado em um.",
