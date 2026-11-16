@@ -6,12 +6,14 @@ refused when one of its words is ssh, docker or systemctl, by name or by path, a
 ssh x or env /usr/bin/ssh x, or when a word of a script one of its words holds is, one level
 down, split as a shell splits it at spaces and at ; & | ( ) < > and backquotes, as in
 sh -c "cd /&&ssh x" or o=$(ssh x). Double quotes don't keep a script's words together here, as
-$(...) still runs inside them; single quotes do, so RemoteCommand's exec sh -c '...' is one
-word, whose docker is a level further down. os.spawn* and pty.spawn fork first and start the
-program in the child, where a refusal only ends the child, so every os.fork and os.forkpty is
-refused while it is on. ssh reads ~/.ssh/config from the home in the passwd file whatever HOME
-says, so a ProxyCommand or Match exec of the developer's would run. An audit hook can't be taken
-out again, so this one stays for the whole run and does nothing while off."""
+$(...) still runs inside them, and are taken out of a word as a shell takes them out, so "ssh"
+and eval "ssh x" are ssh; single quotes do, so RemoteCommand's exec sh -c '...' is one word,
+whose docker is a level further down. os.spawn* and pty.spawn fork first and start the program
+in the child, where a refusal only ends the child, so every os.fork and os.forkpty is refused
+while it is on. It can't see a script given on stdin, as sh with input=, which is in no word.
+ssh reads ~/.ssh/config from the home in the passwd file whatever HOME says, so a ProxyCommand
+or Match exec of the developer's would run. An audit hook can't be taken out again, so this one
+stays for the whole run and does nothing while off."""
 import contextlib
 import os
 import re
@@ -51,8 +53,9 @@ def _split(text: str) -> list[str]:
 
 
 def refused(words: list[str]) -> bool:
-    """Whether a start with these words runs ssh, docker or systemctl."""
-    return any(os.path.basename(piece) in REFUSED
+    """Whether a start with these words runs ssh, docker or systemctl. A shell takes double
+    quotes out of a word, so "/usr/bin/ssh" and s"s"h are ssh to it."""
+    return any(os.path.basename(piece.replace('"', "")) in REFUSED
                for word in words for piece in (word, *_split(word)))
 
 

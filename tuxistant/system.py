@@ -160,8 +160,10 @@ def _names_the_server(said: str, config) -> bool:
 
 
 def _here(on: str) -> bool:
-    """An on that means this computer: none, "my laptop", "localhost", this computer's name."""
+    """An on that means this computer: none, "my laptop", "localhost", this computer's name,
+    with "my" or "box" around it as the server's may have."""
     return (on in NOTHING or serverstatus.is_local(on)
+            or serverstatus.is_local(serverstatus._without(on, serverstatus.AROUND_A_HOST))
             or bool(_words(on)) and _words(on) <= HERE)
 
 
