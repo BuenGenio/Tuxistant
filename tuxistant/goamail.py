@@ -554,11 +554,15 @@ def _subject(message) -> str:
 
 
 def _decoded(part) -> str:
-    """A part's text, from as much of it as was fetched: base64 cut short still decodes."""
+    """A part's text, from as much of it as was fetched: base64 cut short still decodes. Its last
+    group is padded, not dropped, as one that ends a part with no padding would lose the last word
+    of it, and "482 913 is your Acme code." was read as "... Acme cod". A single letter left over
+    holds no whole byte."""
     try:
         if str(part.get("Content-Transfer-Encoding", "")).strip().lower() == "base64":
             letters = re.sub(r"[^A-Za-z0-9+/]", "", str(part.get_payload()))
-            data = base64.b64decode(letters[:len(letters) // 4 * 4])
+            letters = letters[:len(letters) - (len(letters) % 4 == 1)]
+            data = base64.b64decode(letters + "=" * (-len(letters) % 4))
         else:
             data = part.get_payload(decode=True) or b""
         try:

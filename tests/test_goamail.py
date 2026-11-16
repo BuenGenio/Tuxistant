@@ -436,15 +436,38 @@ class Secrets(Goa):
             message("About your Acme account, page", ACME, None,
                     html="<p>Your Acme code below.</p><p>code=482 913</p><p>Thanks</p>"),
             message("About your Acme account, page 2", ACME, None,
-                    html="<p>To sign in, use <b>482913</b>&mdash;Verification ends soon.</p>")])
+                    html="<p>To sign in, use <b>482913</b>&mdash;Verification ends soon.</p>"),
+            *(message(f"About your Acme account, part {n}", ACME, None, html=page)
+              for n, page in enumerate((
+                  "<p>To sign in, use <b>482913</b>&mdash;10 minutes left.</p>",
+                  "<p>Your Acme code is <b>482 913</b>&ndash;DO NOT SHARE it.</p>",
+                  "<p>\u60a8\u7684\u9a8c\u8bc1\u7801\u662f\uff1a<b>482913</b>\uff0c5\u5206"
+                  "\u949f\u5185\u6709\u6548</p>")))])
+
+    async def test_a_base64_part_with_no_line_end_is_read_to_its_last_letter(self):
+        """Its last group was dropped, not padded: "482 913 is your Acme code." was read as
+        "... Acme cod", and with the word for a code gone, the code was shown."""
+        texts = ("482 913 is your Acme code.", "Use 482913 now to sign in")
+        raws = [(f"From: {ACME}\r\nTo: {USER}\r\nSubject: About your Acme account {n}\r\n"
+                 "Date: Fri, 13 Nov 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n"
+                 "Content-Type: text/plain; charset=utf-8\r\n"
+                 "Content-Transfer-Encoding: base64\r\n\r\n"
+                 + base64.b64encode(text.encode()).decode() + "\r\n").encode()
+                for n, text in enumerate(texts)]
+        for raw, text in zip(raws, texts):
+            self.assertEqual(goamail._body(email.message_from_bytes(raw))[0], text)
+        cut = email.message_from_bytes(raws[0][:-12])      # a fetch that stopped short
+        self.assertTrue(texts[0].startswith(goamail._body(cut)[0]))
+        await self.all_hidden(raws)
 
     async def all_hidden(self, mails):
         """Each of these mails is shown to the model with its code hidden."""
         await self.mailbox(gmail(inbox=[(raw, 1 + n / 100) for n, raw in enumerate(mails)]))
         self.says = ["NOTHING"] * len(mails)
-        # Only the best 30 are kept, so that is all one ask can read.
+        # Only the best 30 are kept, and the newest 40 fetched, so that is all one ask can read.
         with mock.patch.object(mail, "TRIED", len(mails)), \
-                mock.patch.object(mail, "MAX_CHECKED", max(mail.MAX_CHECKED, len(mails))):
+                mock.patch.object(mail, "MAX_CHECKED", max(mail.MAX_CHECKED, len(mails))), \
+                mock.patch.object(goamail, "FETCHED", max(goamail.FETCHED, len(mails))):
             await self.ask("Did Acme email me?")
         self.assertEqual(len(self.model), len(mails))
         for call in range(len(mails)):

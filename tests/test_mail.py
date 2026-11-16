@@ -82,15 +82,18 @@ ORDER = ("Thanks for your order with Acme Kitchen. Order number: 10482913. Fligh
          "Tuesday.")
 ORDER_NUMBERS = ("10482913", "BA 2491", "reference 6612", "0800 123 4567")
 # Sign-in words split in ways the part that is read is joined back up: by a line, a soft hyphen,
-# a character reference for a space or a letter, and tags.
+# a character reference for a space or a letter, and tags; and joined by a dash, which the hiding
+# reads as a space.
 SPLIT_TALK = ("Please sign\nin within 10 minutes.", "Please sign\u00ad in within 10 minutes.",
               "Please sign&nbsp;in within 10 minutes.", "Please &#115;ign in within 10 minutes.",
-              "Please <b>sign</b> <b>in</b> within 10 minutes.", "Thanks for verifying&nbsp;it.")
+              "Please <b>sign</b> <b>in</b> within 10 minutes.", "Thanks for verifying&nbsp;it.",
+              "Please sign\u2011in within 10 minutes.", "Please log&#8208;in within 10 minutes.")
 
 
 # (subject, text) of mails whose sign-in talk, or word for a code, is in one and the code in the
 # other. The model reads both together, so each code is hidden, whichever way round.
 SPLIT_ACROSS = (("Sign in to Acme", "Hi, enter 482913 on the page to continue."),
+                ("Sign\u2011in to Acme now", "Hi, enter 482913 on the page."),
                 ("Acme 482913", "Use it to sign in to Acme."),
                 ("Your Acme verification code", "Enter this on the page: 482913"),
                 ("Your Acme code", "Hello from Acme.\n\nEnter this on the page: 482913 thanks"),
@@ -133,7 +136,11 @@ DASHED = ("Your Acme code is 482‑913.", "Your Acme code:\n482&#8209;913\nThank
 DASHED_CODES = (r"482\W{0,3}913", r"KQ7\W{0,3}X9B")
 # Codes glued to the word after them by a dot, a bullet or a dash, in a mail that only talks of
 # signing in. Made hyphens, the dots joined each code to its word, as a reference's parts are
-# joined, and so did every dash: a hyphen joins only a digit, a slash or a few capitals now.
+# joined, and so did every dash: to the number or the capitals after it too, "482913-10 minutes
+# left", or to half of it, "482 [hidden]". A dash is a space to the hiding now, and a hyphen joins
+# only a digit, a slash or a few capitals, so a short word glued by one ("-is") is no reference.
+# Then the marks NFKC makes a comma, a full stop or a slash of, and a code glued to Japanese or
+# Chinese, which put no space round one.
 GLUED = ("Hello from Acme. To sign in, use 482913•Verification ends in 10 minutes.",
          "To sign in, use 482913·Unterstützung", "To sign in, enter 482913・確認",
          "To sign in, use KQ7X9B•Verification", "Sign in: Verification•KQ7X9B ends soon",
@@ -147,23 +154,38 @@ GLUED = ("Hello from Acme. To sign in, use 482913•Verification ends in 10 minu
          "To sign in, use 482913\uff0dVerification", "To sign in, use 482913\ufe63Verification",
          "To sign in, use 482913\u2010Verification", "To sign in, use 482913-Verification",
          "To sign in, use KQ7X9B—Verification", "Sign in: Verification—KQ7X9B ends soon",
-         "To sign in, use KQ7 X9B—Verification")
+         "To sign in, use KQ7 X9B—Verification",
+         "Sign in to Acme: 482913—10 minutes left.", "Sign in with 482913—15 minutes left.",
+         "Hello from Acme. To sign in, use 482913&#8212;10 minutes left.",
+         "To sign in, use <b>482913</b>&mdash;10 minutes left.", "Sign in with 482913–1 now",
+         "To sign in, use 482913–5分钟内有效", "To sign in, use 482913‑2FA is on",
+         "Your Acme code is 482 913—DO NOT SHARE it.", "Acme: 482913—DO NOT SHARE THIS CODE.",
+         "482913—ACME code", "482913–ACME PIN", "482913—NOT to be shared. It is your code.",
+         "To sign in, enter 482 913—ACME", "Your Acme code is 482 913—ACME.",
+         "Verification: 482 913—DO NOT share.", "Your Acme code is 482 913–EN.",
+         "482913—is your Acme code.", "Hi, 482 913—that is your Acme code.",
+         "482913-is your Acme code.", "Hi, 482 913-that is your Acme code.",
+         "Your Acme code—KQW 9XB", "Your Acme code is KQW 9XB—DO NOT share it.",
+         "您的验证码是：482913，5分钟内有效。", "Your Acme PIN…482913 is what to type",
+         "Step 10…482913 is your Acme code", "Your Acme code: 482913／Acme team",
+         "認証コードは482913です。", "您的验证码是KQ7 X9B，请勿泄露。", "您的验证码是KQW 9XB，请勿泄露。")
 # Codes a second word for a code is joined to. Matches can't overlap, so "code=482" took the
 # first half of the code after the first word, and 913 was shown.
 TWICE_NAMED = ("Your Acme code below.\n\ncode=482 913\n\nThanks",
                "Your Acme PIN is ready. pin=482 913 Thanks", "Your Acme code: token=KQ7 X9B")
 # Codes in two groups of three, of capitals and digits with a group of letters only, which
 # were hidden only with a digit in each group: beside the word for a code, alone on its line and
-# in a mail that talks of signing in.
+# in a mail that talks of signing in. Three capitals beside three digits, "ABC 123", are left
+# alone, as an amount or a flight ("GBP 125", "BAW 123"): see test_what_is_left_alone.
 GROUPS = ("Your Acme code is KQW 9XB.", "Your Acme code is KQ7 XQB. Thanks",
-          "Your Acme code is KQW XBT.", "Your Acme code is ABC 123.",
+          "Your Acme code is KQW XBT.",
           "Hello from Acme.\n\nKQW 9XB\n\nThanks", "Hello from Acme.\n*KQ7 XQB*\nThanks",
           "Sign in with KQW 9XB within 10 minutes.")
 # The codes in these mails, as the model would read them, and what is left of one half hidden.
 SHOWN_CODES = (*DASHED_CODES, "482913", "KQ7X9B",
                r"KQ\W{0,3}W\W{0,3}X\W{0,3}B\W{0,3}T", r"K\W{0,3}Q\W{0,3}7\W{0,3}X\W{0,3}9\W{0,3}B",
-               r"48\W{0,3}29\W{0,3}13", r"\b913\b", r"\bX9B\b",
-               r"\b(?:KQW|KQ7|9XB|XQB|XBT)\b", r"ABC\W{0,3}123")
+               r"48\W{0,3}29\W{0,3}13", r"\b482\b", r"\b913\b", r"\bX9B\b",
+               r"\b(?:KQW|KQ7|9XB|XQB|XBT)\b")
 # A code on its own line with punctuation round it, as html2text writes a bold one, as the plain
 # part of an HTML mail writes an item of a list or code, or as a table's cell is written.
 DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nThanks",
@@ -172,7 +194,7 @@ DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nTha
            "Hello from Acme.\n• KQ7X9B\nThanks", "Hello from Acme.\n| 482913 |\nThanks",
            "Hello from Acme.\n# 482913\nThanks", "Hello from Acme.\n/482913/\nThanks",
            "Hello from Acme.\n\u25cf 482913\nThanks", "Hello from Acme.\n\u25aa KQ7X9B\nThanks",
-           "Hello from Acme.\n\u25e6 482913.\nThanks")
+           "Hello from Acme.\n\u25e6 482913.\nThanks", "Hello from Acme.\n\u25a0 482913\nThanks")
 # Bodies built to be slow to hide: a word for a code over and over, and runs of letters that
 # the word for one may end.
 SLOW_TO_HIDE = ("码!" * 10_000, "pin!" * 5000, "é" * 16_000, "×" * 16_000, "À" * 16_000,
@@ -678,7 +700,31 @@ class Secrets(Base):
                 ("Thanks, Zoe\u0308. Questions & answers from AT&T and R&D.",
                  "Thanks, Zo\u00eb. Questions & answers from AT&T and R&D."),
                 ("See pages 12\u201315 of the report \u2014 it comes to 1,250 pounds.",
-                 "pages 12-15 of the report - it comes to 1,250 pounds."),
+                 "pages 12\u201315 of the report \u2013 it comes to 1,250 pounds."),
+                ("Your balance is \u22121,250 pounds.", "\u20131,250 pounds"),
+                # An amount, a flight or a train: three capitals beside three digits, alone on
+                # a line, under sign-in talk or near the word for a code.
+                ("Hotel Alpenblick\nTotal\nGBP 450\nThanks", "GBP 450"),
+                ("Total due:\nGBP 125\nThanks", "GBP 125"), ("Paid\n125 USD", "125 USD"),
+                ("Hello\n| EUR 120 |\nThanks", "EUR 120"),
+                ("Sign in to track it. Total: CHF 129.95", "CHF 129.95"),
+                ("Sign in to see your order. Total: AUD 249.00", "AUD 249.00"),
+                ("Free cancellation expires on 3 March. Total: CHF 450 for two nights.", "CHF 450"),
+                ("Your subscription expires on 3 May. Price: 500 UAH a month.", "500 UAH"),
+                ("Your plan expires on 3 May. Price: 1500 UAH a year.", "1500 UAH"),
+                ("This offer is valid for one trip. Your train: ICE 578 to Berlin.", "ICE 578"),
+                ("Verify your seats. Flights BAW 123 and EZY 812.", "BAW 123 and EZY 812"),
+                ("Discount code applied: you save 125 000.50 a year.", "125 000.50"),
+                # Phone and order numbers joined by hyphens, in a mail that talks of signing in.
+                ("To verify, call us on 1-800-555-1234.", "1-800-555-1234"),
+                ("Your promo code is SAVE10. Order 112-4829137-1234567 ships today.",
+                 "112-4829137-1234567"),
+                ("Your warranty expires soon. Call 1-800-555-0199 to renew.", "1-800-555-0199"),
+                ("Sign in. Call 020-7946-0018 or (800) 555-0199.",
+                 "020-7946-0018 or (800) 555-0199"),
+                ("Log in to track order 112-4829137-1234567.", "112-4829137-1234567"),
+                ("Log in to track order 4829-1375, ticket 12-345678.",
+                 "4829-1375, ticket 12-345678"),
                 ("Annual report\n(2026)\nThanks", "(2026)"),
                 *((f"{sample['subject']}\n{sample['body']}", sample["body"][-25:])
                   for sample in SAMPLE if sample["subject"] != "One time code")):
@@ -839,8 +885,60 @@ class Secrets(Base):
     def test_what_overlaps_is_hidden_once(self):
         """The number and the letters with digits round it are both secrets, and two [hidden]
         side by side are read out as two."""
-        self.assertEqual(mail._hide("To sign in, use 482913\u2014it expires soon."),
+        self.assertEqual(mail._hide("To sign in, use 482913-it expires soon."),
                          f"To sign in, use {mail.HIDDEN} expires soon.")
+
+    def test_the_second_pass_hides_no_more_of_a_reference(self):
+        """The second pass reads what the first left, [hidden] and all. A hyphen before what the
+        first had hidden joined nothing any more, so the number before it went too, and then the
+        one before that: "1-800-555-1234" came out as "1-[hidden]-[hidden]". A hyphen joins
+        [hidden] as it would the number it stands for, and letters and digits together never
+        start or end with a hyphen, so what the first pass left of a mail the second leaves."""
+        for text, kept in (("To verify, call us on 1-800-555-1234.", "1-800-555-1234"),
+                           ("Sign in to see order 10482913-SHIP-4477 today.", "10482913-SHIP-"),
+                           ("Sign in: AB12CD-PARCELS-2 is on its way.", "-PARCELS-2"),
+                           ("Sign in to see ref 24504-FXEA-8587 today.", "24504-FXEA-")):
+            once, twice = mail._hide(text), mail._secret_free("Acme", text)[1]
+            self.assertEqual(twice, once, text)
+            self.assertIn(kept, twice, text)
+
+    def test_a_word_for_a_code_across_fields_is_not_a_bare_pass_key_or_token(self):
+        """A boarding pass, a room key or a ticket's token names no code in the other part of a
+        mail, and an amount near the top of the text is no code under a subject that names one."""
+        for subject, body, kept in (
+                ("Your Acme pass", "Hello, it is 0800 123 4567 / 10482913 / BA 2491.",
+                 "0800 123 4567 / 10482913 / BA 2491"),
+                ("Key information about your Acme stay", "Hello, it is 10482913.", "10482913"),
+                ("Your Acme booking: 10482913", "Your boarding pass is attached.", "10482913"),
+                ("Your Acme booking: 10482913", "Your room key is at the desk.", "10482913"),
+                ("Your Acme code", "Your order total is CHF 125.", "CHF 125")):
+            kept_mail = mail._kept(mail.terms("Acme"), "", subject, body, False)
+            self.assertIn(kept, f"{kept_mail[1]} {kept_mail[2]}", subject)
+        # A password, a PIN or a passcode still does, as "Acme 482913" over "Your Acme PIN".
+        for subject, body in (("Acme 482913", "Your Acme PIN, as asked."),
+                              ("Your Acme passcode", "Hello, it is 482913.")):
+            kept_mail = mail._kept(mail.terms("Acme"), "", subject, body, False)
+            self.assertNotIn("482913", f"{kept_mail[1]} {kept_mail[2]}", subject)
+
+    def test_every_mark_nfkc_makes_punctuation_of_is_a_space_first(self):
+        """NFKC made "，" a comma, so "482913，5分钟" read as a decimal and the code reached the
+        model. MADE_MARKS is every character NFKC makes nothing but these four marks of, which
+        is slow to find at import."""
+        made = {char for char in map(chr, range(sys.maxunicode + 1))
+                if char not in ".,/-" and unicodedata.normalize("NFKC", char)
+                and not unicodedata.normalize("NFKC", char).strip(".,/-")}
+        self.assertEqual(set(map(chr, mail.MADE_MARKS)), made)
+
+    def test_every_dot_and_bullet_is_a_space(self):
+        """A code after any of them is alone on its line, and one between two groups joins
+        them as a space would."""
+        for dot in ("\u00b7\u2027\u30fb\u2022\u2219\u2023\u204c\u204d\u22c5\u25a0\u25aa\u25ab"
+                    "\u25cf\u25e6\u2981\u29bf\u2e31"):
+            for text, code in ((f"Hello from Acme.\n{dot} 482913\nThanks", "482913"),
+                               (f"Your Acme code is 482{dot}913.", "913")):
+                shown = mail._hide(text)
+                self.assertNotIn(code, shown, repr(text))
+                self.assertIn(mail.HIDDEN, shown, repr(text))
 
     async def all_hidden(self, texts):
         self.index(*({"subject": f"About your Acme account {n}", "body": text, "id": f"{n}@x",
@@ -1604,7 +1702,8 @@ class Limits(Base):
                      "\uff33\uff49\uff47\uff4e in now", "your one-time PIN", "Verification",
                      *SPLIT_TALK):
             self.assertTrue(mail._talks(rest), rest)
-            self.assertTrue(mail.SIGN_IN_TALK.search(mail._plain(mail._joined(mail._plain(rest)))))
+            self.assertTrue(mail.SIGN_IN_TALK.search(
+                mail._apart(mail._plain(mail._joined(mail._plain(rest))))))
         for rest in ("Thanks for your order.", "", None, "design in", "a login_form"):
             self.assertFalse(mail._talks(rest), rest)
         # A rest that NFKC grows too far to read is taken to talk of signing in.
