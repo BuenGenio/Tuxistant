@@ -10,7 +10,7 @@
     ["soon", "Finds your files"], ["soon", "Sends files to your phone"], ["now", "Translates as you speak"], ["soon", "Runs commands, with your OK"], ["soon", "Share skills in a reviewed registry"]
   ],
   "themes": { "tux": "Listening Tux", "orb": "Orb", "waves": "Waves", "scanner": "Scanner" },
-  "showTheme": "Show theme",
+  "showTheme": "Show theme", "pauseMotion": "Pause the animation", "playMotion": "Play the animation",
   "dlFor": "Download for {os}", "dlSoon": "Coming to {os}", "dlPending": "{os} preview coming soon", "dlAll": "All versions",
   "dlMeta": "Version {version}, {channel}", "dlPlanned": "Not available yet",
   "examplesTitle": "What it does for you", "youSay": "You say", "approve": "You approve it first",

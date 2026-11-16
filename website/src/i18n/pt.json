@@ -10,7 +10,7 @@
     ["soon", "Encontra seus arquivos"], ["soon", "Envia arquivos para o celular"], ["now", "Traduz enquanto você fala"], ["soon", "Executa comandos com sua permissão"], ["soon", "Habilidades revisadas para todos"]
   ],
   "themes": { "tux": "Tux ouvindo", "orb": "Orbe", "waves": "Ondas", "scanner": "Scanner" },
-  "showTheme": "Mostrar tema",
+  "showTheme": "Mostrar tema", "pauseMotion": "Pausar a animação", "playMotion": "Retomar a animação",
   "dlFor": "Baixar para {os}", "dlSoon": "Em breve no {os}", "dlPending": "Prévia para {os} em breve", "dlAll": "Todas as versões",
   "dlMeta": "Versão {version}, {channel}", "dlPlanned": "Ainda não disponível",
   "examplesTitle": "O que ele faz por você", "youSay": "Você diz", "approve": "Você aprova primeiro",

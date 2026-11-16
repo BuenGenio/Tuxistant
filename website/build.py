@@ -72,7 +72,9 @@ MODE_ICONS = (
     '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
 )
 # Runs before first paint on every page, so a stored choice never flashes the system's colours.
-MODE_SCRIPT = ("try{var m=localStorage.getItem('mode');"
+# The js class tells the stylesheet a script will draw the hero, so the still drawing that stands
+# in without one never flashes first.
+MODE_SCRIPT = ("document.documentElement.classList.add('js');try{var m=localStorage.getItem('mode');"
                "if(m==='light'||m==='dark')document.documentElement.dataset.mode=m}catch(e){}")
 
 esc = html.escape
@@ -395,7 +397,8 @@ def page(code, strings, languages, releases, detect, policy):
         alternates += (f'<link rel="alternate" hreflang="x-default" href="{SITE_URL}/">'
                        f'<link rel="canonical" href="{SITE_URL}{path_for(code)}">')
     data = {k: strings[k] for k in ("dlFor", "dlSoon", "dlPending", "dlMeta", "dlPlanned",
-                                    "preview", "stable", "planned", "themes", "showTheme")}
+                                    "preview", "stable", "planned", "themes", "showTheme",
+                                    "pauseMotion", "playMotion")}
     data["releases"] = {os_id: releases[os_id] for os_id, _ in OS_ORDER}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"
@@ -430,20 +433,22 @@ def page(code, strings, languages, releases, detect, policy):
   </div>
 </header>
 <main>{local_preview_html(strings)}
-  <section class="hero wrap">
-    <h1>Tuxistant</h1>
-    <p class="tagline">{esc(strings['tagline'])}</p>
-    <div class="stage">
-      <canvas id="tux" aria-hidden="true"></canvas>
-      <div class="fallback" aria-hidden="true"></div>
+  <section class="hero" id="hero" data-theme="{THEME_ORDER[0]}">
+    <canvas id="tux" aria-hidden="true"></canvas>
+    <div class="fallback" aria-hidden="true"></div>
+    <div class="hero-in wrap">
+      <div class="hero-copy">
+        <h1>Tuxistant</h1>
+        <p class="tagline">{esc(strings['tagline'])}</p>
+        <div class="download">
+          <a class="btn btn-main" id="download" aria-disabled="true"></a>
+          <p class="dl-meta"><span id="dl-meta-text"></span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
+          {preview_html(strings, releases)}
+        </div>
+        <div class="pick"><span id="theme-name">{esc(strings['themes'][THEME_ORDER[0]])}</span><span class="dots" id="dots"></span></div>
+      </div>
       <ul class="caps caps-a">{caps_a}</ul>
       <ul class="caps caps-b">{caps_b}</ul>
-    </div>
-    <div class="pick"><span id="theme-name" aria-live="polite"></span><span class="dots" id="dots"></span></div>
-    <div class="download">
-      <a class="btn btn-main" id="download" aria-disabled="true"></a>
-      <p class="dl-meta"><span id="dl-meta-text"></span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
-      {preview_html(strings, releases)}
     </div>
   </section>
   <div class="wrap"><div class="ticker">{ticker_html(strings)}</div></div>
