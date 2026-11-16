@@ -406,6 +406,8 @@ async def main():
         for _ in range(REPS):
             name, args = await first_tool(text.replace("{server}", SERVER_HOST)
                                           .replace("{label}", SERVER_LABEL))
+            if name not in OFFERED | {None, "ERROR"}:
+                name = "(other)"    # printed unredacted, and a made-up name may hold the host
             name = judged(name, args) if name not in (None, "ERROR") else name
             seen[name] += 1
             ok = (name is None) if wanted is None else name in wanted

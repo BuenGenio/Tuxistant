@@ -577,6 +577,14 @@ class RoutingCases(unittest.TestCase):
                            if re.search(r"zephyr|kitchen", line, re.I)][:5])
         self.assertFalse(space["SERVER_IS_HERE"])
 
+    def test_a_tool_name_the_model_makes_up_is_not_printed(self):
+        """Only the arguments go through redacted(), and a name no tool has may hold the host."""
+        async def first_tool(text):
+            return "system_running_zephyrboxkitchen", json.dumps({"name": "localai"})
+        printed, _ = _run_routing(first_tool)
+        self.assertIn("{'(other)': 1}", printed)
+        self.assertIsNone(re.search(r"zephyr|kitchen", printed, re.I))
+
     def test_a_connection_that_fails_names_no_server_either(self):
         async def first_tool(text):
             raise ConnectionRefusedError(f"Connect call failed ('{ROUTED_HOST}', 8080)")

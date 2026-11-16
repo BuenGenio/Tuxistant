@@ -1,14 +1,20 @@
-"""Refuses ssh, docker and systemctl while switched on, however a test starts them.
+"""Refuses ssh, docker and systemctl while switched on, started any of the ways listed here.
 
 An audit hook sees each start before it happens: subprocess.Popen, which subprocess.run and a
-Popen imported by name both start through, os.posix_spawn, os.exec*, os.spawn* and os.system.
-A start is refused when one of its words is ssh, docker or systemctl, by name or by path, as in
-timeout 5 ssh x or env /usr/bin/ssh x, or when a word of a script one of its words holds is, one
-level down, as in sh -c "ssh x". ssh reads ~/.ssh/config from the home in the passwd file
-whatever HOME says, so a ProxyCommand or Match exec of the developer's would run. An audit hook
-can't be taken out again, so this one stays for the whole run and does nothing while off."""
+Popen imported by name both start through, os.posix_spawn, os.exec* and os.system. A start is
+refused when one of its words is ssh, docker or systemctl, by name or by path, as in timeout 5
+ssh x or env /usr/bin/ssh x, or when a word of a script one of its words holds is, one level
+down, split as a shell splits it at spaces and at ; & | ( ) < > and backquotes, as in
+sh -c "cd /&&ssh x" or o=$(ssh x). Double quotes don't keep a script's words together here, as
+$(...) still runs inside them; single quotes do, so RemoteCommand's exec sh -c '...' is one
+word, whose docker is a level further down. os.spawn* and pty.spawn fork first and start the
+program in the child, where a refusal only ends the child, so every os.fork and os.forkpty is
+refused while it is on. ssh reads ~/.ssh/config from the home in the passwd file whatever HOME
+says, so a ProxyCommand or Match exec of the developer's would run. An audit hook can't be taken
+out again, so this one stays for the whole run and does nothing while off."""
 import contextlib
 import os
+import re
 import shlex
 import sys
 
@@ -16,7 +22,9 @@ REFUSED = {"ssh", "docker", "systemctl"}
 REACHED = []        # what was refused, for the test to check
 # Where each event has the program and its words: os.system has only a command line.
 WATCHED = {"subprocess.Popen": (0, 1), "os.posix_spawn": (0, 1), "os.exec": (0, 1),
-           "os.spawn": (1, 2), "os.system": (None, 0)}
+           "os.system": (None, 0)}
+FORKS = {"os.fork", "os.forkpty"}
+OPERATORS = "();<>|&`"
 _ON = []
 
 
@@ -30,10 +38,16 @@ def _texts(value) -> list[str]:
 
 
 def _split(text: str) -> list[str]:
+    """A script's words as a shell has them, at its operators too: shlex.split keeps true;ssh
+    as one word."""
+    words = shlex.shlex(text, posix=True, punctuation_chars=OPERATORS)
+    words.whitespace_split = True
+    words.commenters = ""       # a # inside a word starts no comment in sh
+    words.quotes = "'"
     try:
-        return shlex.split(text)
+        return list(words)
     except ValueError:      # a quote that doesn't close
-        return text.split()
+        return re.split(rf"[\s'{re.escape(OPERATORS)}]+", text)
 
 
 def refused(words: list[str]) -> bool:
@@ -43,7 +57,12 @@ def refused(words: list[str]) -> bool:
 
 
 def _guard(event: str, args: tuple) -> None:
-    if not _ON or event not in WATCHED:
+    if not _ON:
+        return
+    if event in FORKS:
+        REACHED.append([event])
+        raise AssertionError(f"a test called {event}, which os.spawn* and pty.spawn start through")
+    if event not in WATCHED:
         return
     program, words = WATCHED[event]
     started = _texts(args[words])

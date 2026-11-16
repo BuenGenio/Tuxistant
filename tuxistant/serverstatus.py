@@ -20,6 +20,7 @@ import signal
 import socket
 import subprocess
 import time
+from typing import NamedTuple
 
 from .gate import APP_SAYS, Speak, shown
 from .servers import SERVER, SERVER_NAME_RE
@@ -508,7 +509,9 @@ def _status(container: dict) -> str:
     return f", {status[0].lower()}{status[1:]}" if status else ""
 
 
-def _everything(found: dict) -> str:
+def _everything(found: dict, first: set = frozenset()) -> str:
+    """What runs there, a few names in each part, with the names in first before the rest, so
+    the cut can't drop what matched the name asked after."""
     said = []
     containers = found["docker"]
     if containers is None:
@@ -516,19 +519,19 @@ def _everything(found: dict) -> str:
     elif not containers:
         said.append("No docker containers are running on your server.")
     else:
-        up = [c["name"] for c in containers if _up(c)]
-        if up:
+        def named(which) -> list[str]:
+            return sorted((c["name"] for c in containers if which(c)), key=lambda n: n not in first)
+        if up := named(_up):
             said.append(f"On your server, {_plural(len(up), 'docker container')} "
                         f"{_is(len(up))} running: {_listed(up, SAID_CONTAINERS)}.")
         else:
             said.append("No docker containers are really up on your server.")
-        sick = [c["name"] for c in containers if "unhealthy" in c["status"].casefold()]
-        if sick:
+        if sick := named(lambda c: "unhealthy" in c["status"].casefold()):
             said.append(f"Unhealthy: {_listed(sick, SAID_CONTAINERS)}.")
-        if again := [c["name"] for c in containers if _restarting(c)]:
+        if again := named(_restarting):
             said.append(f"Restarting again and again, so not really up: "
                         f"{_listed(again, SAID_CONTAINERS)}.")
-        if paused := [c["name"] for c in containers if _paused(c)]:
+        if paused := named(_paused):
             said.append(f"Paused, so not running: {_listed(paused, SAID_CONTAINERS)}.")
     services = found["systemd"]
     if services is None:
@@ -536,7 +539,8 @@ def _everything(found: dict) -> str:
                     if found["systemd_missing"] else "I couldn't read your server's system "
                     "services.")
     elif services:
-        own = [s for s in services if not s.casefold().startswith(PLUMBING)]
+        own = sorted((s for s in services if not s.casefold().startswith(PLUMBING)),
+                     key=lambda s: s not in first)
         count = f"There {_is(len(services))} {_plural(len(services), 'system service')} running"
         plumbing = "which is" if len(services) == 1 else "all"
         if not own:
@@ -579,30 +583,38 @@ def _match(name: str, *texts: str) -> str | None:
     return None
 
 
-def _seen(found: dict, name: str) -> tuple[list[tuple[str, bool, bool]], bool]:
-    """What on the server matches name, each as said, whether it is called name exactly, once
-    the words around a name are gone, and whether it is really up, and whether they match the
-    whole name: if nothing does, what matched some of its words. "the plex service" is called
-    plex, but nas-backup isn't called nas, and "my home nas" is homenas."""
+class Match(NamedTuple):
+    said: str       # as said, with its status
+    exact: bool     # called the name exactly, once the words around a name are gone
+    up: bool        # really up: not restarting or paused
+    name: str       # the container's or the unit's own name
+
+
+def _seen(found: dict, name: str) -> tuple[list[Match], bool]:
+    """What on the server matches name, and whether they match the whole name: if nothing does,
+    what matched some of its words. "the plex service" is called plex, but nas-backup isn't
+    called nas, and "my home nas" is homenas. What is called the name exactly comes first, then
+    what isn't up, so what decides how the answer starts is among the few said."""
     exactly = _without(name, AROUND)
     seen = {"whole": [], "part": []}
     for c in found["docker"] or []:
         image = c["image"].rpartition("/")[2].partition(":")[0]
         exact = _same_name(exactly, c["name"]) or _same_name(exactly, image)
         if how := "whole" if exact else _match(name, c["name"], image):
-            seen[how].append((f"the docker container {c['name']}{_status(c)}", exact, _up(c)))
+            seen[how].append(Match(f"the docker container {c['name']}{_status(c)}", exact,
+                                   _up(c), c["name"]))
     for s in found["systemd"] or []:
         exact = _same_name(exactly, s)
         if how := "whole" if exact else _match(name, s):
-            seen[how].append((f"the service {s}", exact, True))
+            seen[how].append(Match(f"the service {s}", exact, True, s))
     how = "whole" if seen["whole"] else "part"
-    return seen[how], how == "whole"
+    return sorted(seen[how], key=lambda m: (not m.exact, m.up)), how == "whole"
 
 
-def _start(matches: list[tuple[str, bool, bool]]) -> str:
+def _start(matches: list[Match]) -> str:
     """Up or not by what is called the name exactly, or else by all that matches: an app that
     keeps restarting is not up beside its database that is."""
-    ups = [up for _, exact, up in matches if exact] or [up for _, _, up in matches]
+    ups = [m.up for m in matches if m.exact] or [m.up for m in matches]
     if all(ups):
         return "Yes, on your server I see"
     return "Partly: on your server I see" if any(ups) else "Not really: on your server I see"
@@ -610,7 +622,7 @@ def _start(matches: list[tuple[str, bool, bool]]) -> str:
 
 def _one(found: dict, name: str) -> str:
     matches, whole = _seen(found, name)
-    seen = [said for said, _, _ in matches]
+    seen = [m.said for m in matches]
     if seen and whole:
         return f"{_start(matches)} {_listed(seen, SAID_MATCHES)}."
     if seen:
@@ -638,6 +650,20 @@ def _as_a_program(args: dict, host: str, name: str, missed_here: str | None) -> 
     return is_own_name(name, host) and bool(missed_here or _on_a_server(args, host))
 
 
+def _the_list_answers(found: dict, name: str, host: str, matches: list[Match], whole: bool,
+                      program: bool) -> bool:
+    """The server's own name: what runs there, unless something there is what was asked after.
+    Asked after as a program, anything that matches all of it is, and the list, which then says
+    no first, answers only once docker and systemd were both read: otherwise the answer says
+    which one couldn't be checked, as for any name. Said as the server, as "my nas" beside
+    nas-backup, only something called exactly that is."""
+    if not names_host(name, host):
+        return False
+    if program:
+        return not whole and found["docker"] is not None and found["systemd"] is not None
+    return not any(m.exact for m in matches)
+
+
 def answer(args: dict, config, session=None, missed_here: str | None = None,
            say_which: bool = False) -> str:
     """The sentence to say, from daemon code alone. Marks the conversation as having read
@@ -653,15 +679,14 @@ def answer(args: dict, config, session=None, missed_here: str | None = None,
     program = bool(name) and _as_a_program(args, host, name, missed_here)
     if _asks_after_ssh(args):
         text = OVER_SSH     # its unit may be ssh, sshd or another, but it let me in
-    elif name and names_host(name, host) and not (
-            whole if program else any(exact for _, exact, _ in matches)):
-        # The server's own name: what runs there, unless something there is what was asked
-        # after. Asked after as a program, anything that matches it is; said as the server, as
-        # "my nas" beside nas-backup, only something called exactly that.
-        text = _everything(found)
-        if program:
-            where = "this computer or on your server" if missed_here else "your server"
-            text = f"Nothing called {name} is running on {where}. {text}"
+    elif name and _the_list_answers(found, name, host, matches, whole, program):
+        text = _everything(found, {m.name for m in matches} if whole else frozenset())
+        if program and missed_here:
+            # Asked "Is the NAS up?", "Nothing called nas is running" would sound like it is down.
+            text = (f"Your server answered, and nothing called {name} is running there or on "
+                    f"this computer. {text}")
+        elif program:
+            text = f"Nothing called {name} is running on your server. {text}"
     else:
         text = _one(found, name) if name else _everything(found)
         if missed_here and not whole:
