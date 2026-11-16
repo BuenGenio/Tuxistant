@@ -57,16 +57,20 @@ MAX_NAME_CHARS = 40
 # say which, as no exit code is over 255. -H is docker's own socket, over a DOCKER_HOST or docker
 # context of the user's, which may be a rootless docker, podman's socket or another machine. A
 # docker stopped between the check and docker ps, which a slow D-Bus can make up to 8 seconds
-# apart, would still be started by its socket. Services are read by their active state, and
-# each line says whether it runs something: a oneshot such as ufw or wg-quick@wg0 stays active
-# once it has exited, and is never running. No "!": csh expands it even in quotes.
+# apart, would still be started by its socket. What docker lists is the system docker's alone,
+# so that is what is said. Services are read in the states where they run something or did:
+# active, as a oneshot such as ufw or wg-quick@wg0 stays once it has exited, activating, as a
+# oneshot such as restic-backup is while its job runs and a unit that keeps crashing is while
+# it waits to start again, and reloading. Each line says which. No "!": csh expands it even in
+# quotes.
 INNER = ("export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T=\"timeout 8\"; "
          "$T systemctl is-active --quiet docker.service 2>/dev/null; S=$?; echo @docker; "
          "if [ $S = 0 ]; then $T docker -H unix:///var/run/docker.sock ps "
          "--format \"{{.Names}}|{{.Image}}|{{.Status}}\" 2>&1; echo \"@exit $?\"; "
          "elif [ $S = 3 ]; then echo \"@exit 300\"; else echo \"@exit 301\"; fi; "
-         "echo @systemd; $T systemctl list-units --type=service --state=active --no-legend "
-         "--plain --no-pager 2>/dev/null; echo \"@exit $?\"")
+         "echo @systemd; $T systemctl list-units --type=service "
+         "--state=active,activating,reloading --no-legend --plain --no-pager 2>/dev/null; "
+         "echo \"@exit $?\"")
 REMOTE = "exec sh -c " + shlex.quote(INNER)
 # Over what ~/.ssh/config says: a RemoteCommand would replace the command, a ControlMaster
 # would leave a connection open for your own sessions to reuse, an IdentityAgent is an agent,
@@ -146,6 +150,13 @@ NOT_WHOLE = {
                             "I couldn't read its system services"),
 }
 OVER_SSH = "Yes, I reached your server over ssh."
+SSHD_RUNS = "Yes, I reached your server over ssh, and its sshd service is running."
+NO_SSHD = ("I reached your server over ssh, but I don't see an sshd service among its system "
+           "services.")
+# Where a no looked, by which lists were read whole: docker's and systemd's. Only the system
+# docker is asked, and only the system's services are read, not the ssh user's own.
+LOOKED = {(True, True): "the system docker's containers or the system services",
+          (True, False): "the system docker's containers", (False, True): "the system services"}
 
 # "@" as in wg-quick@wg0, which a service here may be called too
 NAME = re.compile(r"[a-z0-9][a-z0-9 ._@-]{0,%d}" % (MAX_NAME_CHARS - 1))
@@ -177,8 +188,12 @@ POSSESSIVES = {"my", "our", "your", "the", "own"}
 # Around the server's name and never part of it, as in "my home nas", "the nas server" or
 # "my nas box".
 AROUND_A_HOST = POSSESSIVES | SERVER_WORDS | {"home", "box", "host"}
-# The server that answered over ssh runs one of these, whatever its unit is called.
-SSH_NAMES = {"ssh", "sshd", "openssh", "opensshserver"}
+# The server that answered over ssh runs an ssh server, whatever it is. sshd is OpenSSH's,
+# which may not be: Tailscale SSH or Dropbear may have answered.
+SSH_NAMES = {"ssh"}
+SSHD_NAMES = {"sshd", "openssh", "opensshserver", "opensshd"}
+# OpenSSH's units: Debian's is ssh, and a socket starts one per connection as sshd@ or ssh@.
+SSHD_UNITS = ("ssh", "sshd")
 # Part of the system itself, so they are counted but not named: nobody asks after getty. One
 # ending in - or @ starts a family; any other is a whole name, or one before a -, @ or ., as
 # dbus-broker or snapd.apparmor, so an app such as cronicle or sshwifty is named.
@@ -443,9 +458,23 @@ def _dropped(lines: list[str]) -> bool:
     return any("|" in line and not CONTAINER.fullmatch(line.partition("|")[0]) for line in lines)
 
 
+RUNNING, STARTING, RESTARTING, DONE = "running", "starting", "restarting", "done"
+# As said after a unit's name. One that is done is still active, with nothing left running.
+UNIT_STATUS = {RUNNING: "", STARTING: ", starting", RESTARTING: ", restarting again and again",
+               DONE: ", active"}
+
+
 class Unit(NamedTuple):
     name: str
-    running: bool       # its SUB is running: an active oneshot, as ufw, has exited
+    state: str      # RUNNING, STARTING, RESTARTING or DONE
+
+
+def _state(active: str, sub: str) -> str:
+    """Activating is a job that runs, as a oneshot's backup does, unless the unit waits to start
+    again after it crashed. Active and exited is done, as ufw is once it has set up."""
+    if active == "activating":
+        return RESTARTING if sub.startswith("auto-restart") else STARTING
+    return DONE if sub == "exited" else RUNNING
 
 
 def _services(lines: list[str]) -> list[Unit]:
@@ -454,8 +483,13 @@ def _services(lines: list[str]) -> list[Unit]:
     for line in lines:
         words = line.split()
         if words and (unit := UNIT.fullmatch(words[0])):
-            found.append(Unit(unit[1], words[3:4] == ["running"]))
+            found.append(Unit(unit[1], _state(*(words + ["", "", ""])[2:4])))
     return found
+
+
+def _runs(unit: Unit) -> bool:
+    """Runs something now: is counted, and is up."""
+    return unit.state in (RUNNING, STARTING)
 
 
 def read(host: str) -> dict:
@@ -555,10 +589,22 @@ def _needed(name: str) -> list[str]:
     return [key for key in (_key(w) for w in name.split() if w not in AROUND) if key]
 
 
-def _asks_after_ssh(args: dict) -> bool:
+def _asks_after_ssh(args: dict) -> str | None:
+    """"ssh" for an ssh server, which the answer came over, "sshd" for OpenSSH's, or None."""
     words = [w for w in _words(args.get("name"))
              if w not in FILLER | SERVER_WORDS | {"service", "daemon"}]
-    return _key(" ".join(words)) in SSH_NAMES
+    key = _key(" ".join(words))
+    return "ssh" if key in SSH_NAMES else "sshd" if key in SSHD_NAMES else None
+
+
+def _sshd(found: dict) -> str:
+    """Whether OpenSSH's sshd runs there: the answer came over ssh, but Tailscale SSH or
+    Dropbear may have given it."""
+    if any(_runs(s) and s.name.split("@")[0] in SSHD_UNITS for s in found["systemd"] or []):
+        return SSHD_RUNS
+    if not _read(found, "systemd"):
+        return f"I reached your server over ssh. {_not_whole(found, 'systemd')[0]}"
+    return NO_SSHD
 
 
 def _listed(names: list[str], limit: int) -> str:
@@ -608,8 +654,13 @@ def _status(container: dict) -> str:
 
 
 def _said_name(name: str) -> str:
-    """A container's name as said: docker lets it be as long as it likes, as a k8s_ one is."""
-    return shown(name, SAID_NAME_CHARS)
+    """A container's name as said: docker lets it be as long as it likes, as a k8s_ one is, so
+    a long one is cut after a whole part of it, with no count of what is left to read out."""
+    if len(name) <= SAID_NAME_CHARS:
+        return name
+    cut = name[:SAID_NAME_CHARS]
+    end = max(cut.rfind(mark) for mark in "-_.")
+    return f"{cut[:end] if end > 0 else cut}…"
 
 
 def _plumbing(unit: str) -> bool:
@@ -622,24 +673,26 @@ def _plumbing(unit: str) -> bool:
 def _everything(found: dict, first: set = frozenset()) -> str:
     """What runs there, a few names in each part, with the names in first before the rest, so
     the cut can't drop what matched the name asked after. A list read only in part is counted
-    as "at least", and says why after its part."""
+    as "at least", and says why after its part. Only the system docker is asked, so that is
+    what is said: a rootless docker of the ssh user's may run more."""
     said = []
     containers, partly = found["docker"], _not_whole(found, "docker")
     least = "at least " if partly else ""
-    if containers is None:
-        said.append(partly[0])
-    elif not containers and not partly:
-        said.append("No docker containers are running on your server.")
+    if containers is None or not containers and partly:
+        said.append(partly[0])      # none read, so none is said to be up or down
+    elif not containers:
+        said.append("On your server, the system docker has no containers running.")
     else:
         def named(which) -> list[str]:
             return [_said_name(n) for n in sorted((c["name"] for c in containers if which(c)),
                                                    key=lambda n: n not in first)]
         if up := named(_up):
-            said.append(f"On your server, {least}{_plural(len(up), 'docker container')} "
-                        f"{_is(len(up))} running: {_listed(up, SAID_CONTAINERS)}.")
+            said.append(f"On your server, the system docker has {least}"
+                        f"{_plural(len(up), 'container')} running: {_listed(up, SAID_CONTAINERS)}.")
         else:
-            said.append("None of the docker containers I could read on your server is really up."
-                        if partly else "No docker containers are really up on your server.")
+            said.append("On your server, none of the system docker's containers I could read is "
+                        "really up." if partly else
+                        "On your server, the system docker has no containers really up.")
         if sick := named(lambda c: "unhealthy" in c["status"].casefold()):
             said.append(f"Unhealthy: {_listed(sick, SAID_CONTAINERS)}.")
         if again := named(_restarting):
@@ -651,8 +704,9 @@ def _everything(found: dict, first: set = frozenset()) -> str:
             said.append(partly[0])
     services, partly = found["systemd"], _not_whole(found, "systemd")
     least = "at least " if partly else ""
-    # Only those that run something are counted: an active oneshot, as ufw, has exited.
-    running = [s.name for s in services or [] if s.running]
+    # Only those that run something are counted, a oneshot's job included: one that is done, as
+    # ufw, or waits to start again after a crash runs nothing.
+    running = [s.name for s in services or [] if _runs(s)]
     if running:
         own = sorted((s for s in running if not _plumbing(s)), key=lambda s: s not in first)
         count = (f"There {_is(len(running))} {least}"
@@ -704,8 +758,9 @@ class Match(NamedTuple):
     said: str       # as said, with its status
     exact: bool     # called the name exactly, once the words around a name are gone: by its
                     # own name, a container's image or a unit's name
-    named: bool     # called it by its own name, a container's or a unit's: only that decides
-    up: bool        # really up: not restarting or paused
+    named: bool     # called it by its own name, a container's or a unit's that runs something
+                    # or keeps trying to: only that decides
+    up: bool        # really up: not restarting or paused, and for a unit, running something
     name: str       # the container's or the unit's own name
 
 
@@ -713,8 +768,8 @@ def _seen(found: dict, name: str) -> tuple[list[Match], bool]:
     """What on the server matches name, and whether they match the whole name: if nothing does,
     what matched some of its words. "the plex service" is called plex, but nas-backup isn't
     called nas, and "my home nas" is homenas. What is called the name exactly comes first, by its
-    own name before its image, then what isn't up, and for a "Partly" the first that is up comes
-    second, so what decides how the answer starts is among the few said."""
+    own name before its image, then what isn't up, and when some of that isn't up, the first
+    that is up comes second, so what decides how the answer starts is among the few said."""
     exactly = _without(name, AROUND)
     seen = {"whole": [], "part": []}
     for c in found["docker"] or []:
@@ -725,16 +780,20 @@ def _seen(found: dict, name: str) -> tuple[list[Match], bool]:
             seen[how].append(Match(f"the docker container {_said_name(c['name'])}{_status(c)}",
                                    exact, named, _up(c), c["name"]))
     for s in found["systemd"] or []:
-        named = _same_name(exactly, s.name)
-        if how := "whole" if named else _match(name, s.name):
-            # A oneshot that has set up, as ufw or wg-quick@wg0, is up, as on this computer.
-            seen[how].append(Match(f"the service {s.name}{'' if s.running else ', active'}",
-                                   named, named, True, s.name))
+        exact = _same_name(exactly, s.name)
+        if how := "whole" if exact else _match(name, s.name):
+            # One that is done, as ufw once it has set up, or a compose wrapper such as
+            # immich.service once it has run docker compose up, runs nothing, so it says nothing
+            # of the app, and decides nothing.
+            seen[how].append(Match(f"the service {s.name}{UNIT_STATUS[s.state]}", exact,
+                                   exact and s.state != DONE, _runs(s), s.name))
     how = "whole" if seen["whole"] else "part"
     matches = sorted(seen[how], key=lambda m: (not m.named, not m.exact, m.up))
-    first = _deciding(matches) or [m for m in matches if m.exact]
-    if any(m.up for m in first) and not all(m.up for m in first):
-        up = next(m for m in first if m.up)
+    deciding = _deciding(matches)
+    first = deciding or [m for m in matches if m.exact]
+    # With all that decides down, what else is up decides there is no "Not really".
+    if not all(m.up for m in first) and (
+            up := next((m for m in (matches if deciding else first) if m.up), None)):
         matches.remove(up)
         matches.insert(1, up)
     return matches, how == "whole"
@@ -745,20 +804,26 @@ def _deciding(matches: list[Match]) -> list[Match]:
     that keeps restarting is not up beside its database that is, and a nextcloud-db that is up
     says nothing of a nextcloud container that isn't there. Nor does a container that only runs
     the image of that name, as a nextcloud-cron-1 of the nextcloud image or mastodon-sidekiq of
-    mastodon's, which may be a helper beside an app that is down."""
+    mastodon's, which may be a helper beside an app that is down, or a unit of that name that is
+    done, as a wrapper that ran docker compose up."""
     return [m for m in matches if m.named]
 
 
 def _start(matches: list[Match], plainly: bool = False) -> str:
     """With nothing called the name exactly, or plainly, for a list not read whole, where more
-    may be called that, there is no "Yes", "Partly" or "Not really"."""
+    may be called that, there is no "Yes", "Partly" or "Not really". Nor is there a "Not really"
+    while something else that matches the whole name is up: a native plexmediaserver may be the
+    Plex asked after, beside a plex container that can't have its port."""
     deciding = _deciding(matches)
     if plainly or not deciding:
         return "On your server I see"
     if all(m.up for m in deciding):
         return "Yes, on your server I see"
-    return ("Partly: on your server I see" if any(m.up for m in deciding)
-            else "Not really: on your server I see")
+    if any(m.up for m in deciding):
+        return "Partly: on your server I see"
+    if any(m.up for m in matches):
+        return "On your server I see"
+    return "Not really: on your server I see"
 
 
 def _no_docker(found: dict) -> str:
@@ -772,7 +837,10 @@ def _no_systemd(found: dict) -> str:
 
 def _one(found: dict, name: str, matches: list[Match], whole: bool) -> str:
     """Whether name runs there. A no says where it was looked for and what couldn't be, which
-    may have it. Only system services are read, not the ssh user's own, so a no says so."""
+    may have it. Only the system docker and the system's services are read, not the ssh user's
+    own, so a no says so. What matches only some of the name gets no no, as it may be what was
+    asked after under another name, as mssql-server is SQL Server: only that nothing is called
+    it exactly."""
     seen = [m.said for m in matches]
     unread = [why[0] for why in (_not_whole(found, "docker"), _not_whole(found, "systemd")) if why]
     if seen and whole:
@@ -786,17 +854,12 @@ def _one(found: dict, name: str, matches: list[Match], whole: bool) -> str:
     if not docker and not systemd:
         no = (f"I couldn't check all of your server for {name}, as {_no_docker(found)} and "
               f"{_no_systemd(found)}")
-    elif not docker:
-        no = (f"I don't see {name} among the system services running on your server, and "
-              f"{_no_docker(found)}")
-    elif not systemd:
-        no = (f"I don't see {name} among the docker containers running on your server, and "
-              f"{_no_systemd(found)}")
-    elif seen:
-        no = f"I don't see {name} on your server"
     else:
-        no = (f"I don't see {name} among the docker containers or system services running on "
-              "your server")
+        where = f"{LOOKED[docker, systemd]} running on your server"
+        why = "" if docker and systemd else (
+            f", and {_no_systemd(found) if docker else _no_docker(found)}")
+        no = (f"Nothing among {where} is called {name} exactly{why}" if seen
+              else f"I don't see {name} among {where}{why}")
     return f"{no}, but I see {_listed(seen, SAID_MATCHES)}." if seen else f"{no}."
 
 
@@ -815,14 +878,14 @@ def _as_a_program(args: dict, host: str, name: str, missed_here: str | None) -> 
 def _the_list_answers(found: dict, name: str, host: str, matches: list[Match], whole: bool,
                       program: bool) -> bool:
     """The server's own name: what runs there, unless something there is what was asked after.
-    Asked after as a program, anything that matches all of it is, and the list, which then says
-    no first, answers only once docker and systemd were both read whole: otherwise the answer
-    says what it couldn't check, as for any name. Said as the server, as "my nas" beside
-    nas-backup, only something called exactly that is."""
+    Asked after as a program, anything that matches any of it is, as myplex may be Plex, and
+    the list, which then says no first, answers only once docker and systemd were both read
+    whole: otherwise the answer says what it couldn't check, as for any name. Said as the
+    server, as "my nas" beside nas-backup, only something called exactly that is."""
     if not names_host(name, host):
         return False
     if program:
-        return not whole and _read(found, "docker") and _read(found, "systemd")
+        return not matches and _read(found, "docker") and _read(found, "systemd")
     return not any(m.exact for m in matches)
 
 
@@ -855,24 +918,25 @@ def answer(args: dict, config, session=None, missed_here: str | None = None,
     # the server were down, so the answer says it answered. Nothing there is called the name
     # by its own name, so it is never a yes.
     up_there = program and bool(missed_here) and not _deciding(matches)
-    if ssh:
-        text = OVER_SSH     # its unit may be ssh, sshd or another, but it let me in
+    both = f"{LOOKED[True, True]} running"
+    if ssh == "ssh":
+        text = OVER_SSH     # whatever ssh server it is, it let me in
+    elif ssh:
+        text = _sshd(found)
     elif name and _the_list_answers(found, name, host, matches, whole, program):
         text = _everything(found, {m.name for m in matches} if whole else frozenset())
         if up_there:
-            text = (f"Your server answered. I don't see {name} among the docker containers or "
-                    f"system services running there, and {_not_here(name)}. {text}")
+            text = (f"Your server answered. I don't see {name} among {both} there, and "
+                    f"{_not_here(name)}. {text}")
         elif program:
-            text = (f"I don't see {name} among the docker containers or system services running "
-                    f"on your server. {text}")
+            text = f"I don't see {name} among {both} on your server. {text}"
     else:
         text = _one(found, name, matches, whole) if name else _everything(found)
         if up_there:
             text = f"Your server answered, and {_not_here(missed_here)}. {text}"
         elif missed_here and not whole:
             # This computer was looked at first, and only a yes says where it was found.
-            missed = _sentence(_not_here(missed_here))
-            text = f"{missed}, and {text}" if name else f"{missed}. {text}"
+            text = f"{_sentence(_not_here(missed_here))}. {text}"
     if say_which:
         text = f"I checked the server in Settings, {_label(host) or host}. {text}"
     return shown(text, 600)

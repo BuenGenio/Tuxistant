@@ -22,6 +22,13 @@ POWER = Path("/sys/class/power_supply")
 SERVICE_NAME = re.compile(r"[a-z0-9][a-z0-9@._+-]{0,63}")
 STOPPED_EARLY = ("Counting stopped after a few seconds, so the real numbers are higher and the "
                  "order may change.")
+OWN_NAME_CHARS = 15     # of a process's own name, all Linux keeps
+# What runs a script, as in "python3 /usr/bin/wsdd", for pgrep's extended regular expressions,
+# with the options before the script, though not -c, -e or -m, which take code or a module: in
+# "sh -c nginx", nginx isn't a script. pgrep -i matches either case, so neither case is there.
+INTERPRETER = (r"(python[0-9.]*|perl[0-9.]*|ruby[0-9.]*|node|nodejs|(ba|da|z)?sh)"
+               r"( -[abdf-ln-zABDF-LN-Z]+)* ")
+SCRIPT = r"(\.(py|pl|rb|js|sh))?"
 
 
 def _tool(*command: str) -> str:
@@ -225,12 +232,26 @@ def _any_dashes(name: str) -> str:
 
 
 def _process_here(name: str) -> bool:
-    """A process of that name. Linux keeps only 15 characters of a process's own name, all that
-    pgrep -x sees, so it is looked for as the first word of a command line too, alone or after a
-    folder, as /usr/libexec/evolution-addressbook-factory, whose own name is evolution-addre."""
+    """A program run under its own name. pgrep -x sees a process's own name, of which Linux
+    keeps only 15 characters, so it is looked for in the command line too: as its first word,
+    alone or after a folder, and before a space or a colon, as in php-fpm's "php-fpm: master
+    process", or as the script an interpreter runs, as in "python3 /usr/bin/wsdd". A script
+    started by its #! line is called by its own name, cut at 15 characters, so a longer one is
+    found by that and the script after its interpreter, whichever that is. A later word, as in
+    "man nginx", is no program of that name."""
     pattern = _any_dashes(name)
-    return any(_tool("pgrep", "-i", how, "--", wanted).strip()
-               for how, wanted in (("-x", pattern), ("-f", f"^([^ ]*/)?{pattern}( |$)")))
+    first = f"^([^ ]*/)?({INTERPRETER}([^ ]*/)?)?{pattern}{SCRIPT}( |:|$)"
+    if any(_tool("pgrep", "-i", how, "--", wanted).strip()
+           for how, wanted in (("-x", pattern), ("-f", first))):
+        return True
+    if len(name) <= OWN_NAME_CHARS:
+        return False
+    own = re.sub(r"([.+])", r"\\\1", name[:OWN_NAME_CHARS])
+    return bool(_pids("-x", own) & _pids("-f", f"^[^ ]+( -[^ ]+)* ([^ ]*/)?{pattern}( |$)"))
+
+
+def _pids(how: str, wanted: str) -> set[str]:
+    return set(_tool("pgrep", "-i", how, "--", wanted).split())
 
 
 def _here_by_name(name: str) -> bool:

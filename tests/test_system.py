@@ -119,6 +119,21 @@ class Tailscale(unittest.TestCase):
                 config.set("say_tailscale_address", "yes")
 
 
+def pgrep(processes: list[tuple[str, str]]):
+    """A stand-in for _tool with these processes, each (its own name, its command line), and
+    every service inactive: pgrep -x matches the whole of a process's own name, pgrep -f any of
+    its command line, and each prints the PIDs it found, one a line."""
+    def tool(*command):
+        if command[0] == "systemctl":
+            return "inactive\n"
+        assert command[:2] == ("pgrep", "-i") and command[3] == "--", command
+        how, pattern = command[2], command[-1]
+        match = re.fullmatch if how == "-x" else re.search
+        return "".join(f"{pid}\n" for pid, process in enumerate(processes, 100)
+                       if match(pattern, process[0 if how == "-x" else 1], re.I))
+    return tool
+
+
 class Running(unittest.TestCase):
     def outputs(self, service="", user="", process="", command_line=""):
         return mock.patch.object(system, "_tool",
@@ -143,29 +158,61 @@ class Running(unittest.TestCase):
 
     def test_a_name_longer_than_linux_keeps_is_found_by_its_command_line(self):
         """Linux keeps 15 characters of a process's own name, all that pgrep -x sees: at-spi2-
-        registryd is at-spi2-registr there. Its command line has it whole."""
-        command_lines = ["/usr/libexec/at-spi2-registryd --use-gnome-session",
-                         "/usr/bin/python3 /opt/evolution-addressbook-factory-helper.py",
-                         "gnome-text-editor"]
-        comms = [line.split()[0].rpartition("/")[2][:15] for line in command_lines]
-
-        def tool(*command):
-            if command[0] == "systemctl":
-                return "inactive\n"
-            how, pattern = command[2], command[-1]
-            found = comms if how == "-x" else command_lines
-            match = re.fullmatch if how == "-x" else re.search
-            return "".join("1\n" for line in found if match(pattern, line, re.I))
-        for name, here in (("at-spi2-registryd", True), ("gnome-text-editor", True),
-                           ("gnometexteditor", True), ("at-spi2-registry", False),
-                           ("evolution-addressbook-factory", False), ("libexec", False)):
-            with self.subTest(name), mock.patch.object(system, "_tool", side_effect=tool):
-                self.assertEqual(system.running({"name": name}, None)["running"], here)
+        registryd is at-spi2-registr there. Its command line has it whole. A process title of
+        "name: ...", as php-fpm's master sets, is its name too, and so is a script run by an
+        interpreter, by name or by its #! line, whose own name is cut at 15 characters."""
+        here = [("at-spi2-registr", "/usr/libexec/at-spi2-registryd --use-gnome-session"),
+                ("python3", "/usr/bin/python3 /opt/evolution-addressbook-factory-helper.py"),
+                ("gnome-text-edit", "gnome-text-editor"),
+                # Debian's and Ubuntu's php8.2-fpm, whose binary is php-fpm8.2
+                ("php-fpm8.2", "php-fpm: master process (/etc/php/8.2/fpm/php-fpm.conf)"),
+                ("systemd-userwor", "systemd-userwork: waiting..."),
+                # Run by an interpreter: its own name is the interpreter's.
+                ("python3", "python3 /usr/bin/wsdd --shortlog"),
+                ("python3", "/usr/bin/python3 /usr/share/unattended-upgrades/"
+                            "unattended-upgrade-shutdown --wait-for-signal"),
+                ("python3", "/usr/bin/python3 -sP /usr/sbin/firewalld --nofork"),
+                ("bash", "bash /home/me/bin/charge-pulse.sh"),
+                # Started by its #! line: its own name is its first 15 characters.
+                ("tux-probe-long-", "/usr/bin/python3 /usr/local/bin/tux-probe-long-daemon"),
+                ("tux-probe-shell", "/bin/sh /usr/local/bin/tux-probe-shell-loop"),
+                ("tux-probe-lua-s", "/usr/bin/lua5.4 /usr/local/bin/tux-probe-lua-script"),
+                ("jupyter-noteboo", "/usr/bin/python3 /usr/bin/jupyter-notebook --no-browser")]
+        # Only a later word of a command line, which is no program of that name.
+        later = [("man", "/usr/bin/man at-spi2-registryd"), ("tail", "tail -f /var/log/nginx"),
+                 ("vim", "vim gnome-text-editor"), ("sh", "sh -c nginx -g 'daemon off;'"),
+                 ("python3", "python3 -c wsdd"), ("python3", "python3 -m firewalld"),
+                 ("less", "less /usr/local/bin/tux-probe-lua-script"),
+                 ("vi", "vi /home/me/bin/charge-pulse.sh")]
+        for processes, name, running in (
+                (here, "at-spi2-registryd", True), (here, "gnome-text-editor", True),
+                (here, "gnometexteditor", True), (here, "php-fpm", True),
+                (here, "systemd-userwork", True), (here, "wsdd", True),
+                (here, "unattended-upgrade-shutdown", True), (here, "firewalld", True),
+                (here, "charge-pulse", True), (here, "tux-probe-long-daemon", True),
+                (here, "tux-probe-shell-loop", True), (here, "tux-probe-lua-script", True),
+                (here, "jupyter-notebook", True),
+                (here, "at-spi2-registry", False), (here, "tux-probe-lua-scripts", False),
+                (here, "evolution-addressbook-factory", False), (here, "libexec", False),
+                (here, "php", False), (here, "fpm", False), (here, "lua5.4", True),
+                (later, "at-spi2-registryd", False), (later, "nginx", False),
+                (later, "gnome-text-editor", False), (later, "wsdd", False),
+                (later, "firewalld", False), (later, "tux-probe-lua-script", False),
+                (later, "charge-pulse", False)):
+            with self.subTest(name=name, processes=processes[0][0]), \
+                    mock.patch.object(system, "_tool", side_effect=pgrep(processes)):
+                self.assertEqual(system.running({"name": name}, None)["running"], running)
         # Asked about another computer, what is said of this one is so too.
-        with mock.patch.object(system, "_tool", side_effect=tool), \
+        for name in ("at-spi2-registryd", "php-fpm", "wsdd", "tux-probe-long-daemon"):
+            with self.subTest(name), mock.patch.object(system, "_tool", side_effect=pgrep(here)), \
+                    self.assertRaises(ValueError) as raised:
+                system.running({"name": name, "on": "my work laptop"}, None)
+            self.assertIn(f"On this computer, {name} is running.", str(raised.exception))
+        with mock.patch.object(system, "_tool", side_effect=pgrep(later)), \
                 self.assertRaises(ValueError) as raised:
-            system.running({"name": "at-spi2-registryd", "on": "my work laptop"}, None)
-        self.assertIn("On this computer, at-spi2-registryd is running.", str(raised.exception))
+            system.running({"name": "nginx", "on": "my work laptop"}, None)
+        self.assertIn("No service or process called nginx is running on this computer.",
+                      str(raised.exception))
 
     def test_a_name_cannot_become_an_option_or_a_command(self):
         for name in ("", "-h", "--user", "a b", "a;rm", "$(x)", "a/b", "x" * 80, "../x"):
