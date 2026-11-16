@@ -8,6 +8,7 @@ tests/test_eval_config.py fails when an action is added and not named in ACTIONS
 """
 import contextlib
 import importlib
+import re
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -21,9 +22,9 @@ from tuxistant.skillhost import Offline
 ACTIONS = {
     # Read only, on this computer: the clock, disk and folder sizes, system facts, file search.
     "time.now": (), "disk.usage": (), "disk.folders": (), "system.info": (), "file.find": (),
-    # On this computer it only reads. On your server a made-up one answers in place of ssh, so
-    # the owner's is never reached.
-    "system.running": ("serverstatus._run",),
+    # Made-up services and processes answer for this computer, and a made-up server in place of
+    # ssh, so neither the owner's own nor their server's list is ever printed or reached.
+    "system.running": ("system._read", "serverstatus._run"),
     # The web and your own servers, by design: nothing private goes, and nothing at home moves.
     "weather.forecast": (), "news.headlines": (), "web.search": (), "research.run": (),
     "knowledge.answer": (), "translate.text": (),
@@ -210,6 +211,26 @@ MADE_UP_SERVER = (b"@docker.service\nactive\n@exit 0\n"
                   b"systemd-journald.service loaded active running Journal\n@exit 0\n")
 
 
+MADE_UP_UNITS = ("docker.service loaded active running Docker Application Container Engine\n"
+                 "nginx.service loaded active running A high performance web server\n")
+# Each made-up process: its pid, its own name and its command line, which pgrep is matched on.
+MADE_UP_PROCESSES = ((1187, "dockerd", "/usr/bin/dockerd -H fd://"),
+                     (1203, "containerd", "/usr/bin/containerd"),
+                     (2310, "firefox", "/usr/lib/firefox/firefox"))
+
+
+def _made_up_read(*command):
+    """In place of systemctl and pgrep on this computer: the owner's own services and processes,
+    whose command lines may hold home paths, host names or tokens, never reach a log."""
+    if command[:1] == ("systemctl",):
+        return 0, "" if "--user" in command else MADE_UP_UNITS
+    if command[:1] == ("pgrep",):
+        found = "".join(f"{pid} {name}\n" for pid, name, line in MADE_UP_PROCESSES
+                        if re.search(command[-1], line, re.I))
+        return (0 if found else 1), found
+    return blocked()
+
+
 def _made_up_ssh(_argv, _env):
     """In place of ssh: the server in Settings is never reached from an evaluation."""
     print("   (would ask the server what is running)")
@@ -253,6 +274,7 @@ def stand_ins(folder: Path) -> dict:
         "homeassistant._call": NoHome().call,
         "mcp.SkillProcess": _no_process,
         "serverstatus._run": _made_up_ssh,
+        "system._read": _made_up_read,
     }
 
 

@@ -54,13 +54,31 @@ LOCALAI = ("On your server, docker lists local-ai, Up 3 days. None of the 4 serv
            "has localai in its name.")
 NGINX = ("On your server, none of the 2 containers docker lists has nginx in its name or image. "
          "systemd lists nginx.service, active (running).")
-NOTHING_HERE = "No running service here, and no process's command line, has {} in it."
+NOTHING_HERE = "No service systemd lists here, and no process's command line, has {} in it."
 # What Tux must never say: each is a judgment of whether something works, which no list gives.
-VERDICTS = re.compile(r"(?-i:\bYes\b)|\b(Partly|Not really|really up|is running|isn't running|"
-                      r"is not running|is up|isn't up|not up|is down|keeps restarting|I see)\b",
-                      re.I)
+# A state as its list gives it, as "active (running)", "Up 3 hours" or "systemctl says
+# docker.service is inactive", isn't one. nmcli's "yes:" in system.py is a field it reads, an
+# ssh option's "=yes" a setting, "what's running" what you ask, and "a key that works on its own"
+# is about ssh's key.
+VERDICTS = re.compile(r"(?<!=)\byes\b(?!:)|\b(Partly|Not really|really up|keeps restarting|I see|"
+                      r"crash-?looping)\b"
+                      r"|(\bis|\bare|\bwas|\bwere|n't|(?<!what)['’]s)( not)? (running|stopped|"
+                      r"working|up|down|crashing|restarting|healthy|broken|dead|alive)\b"
+                      r"|\bnot (running|up|working)\b"
+                      r"|\brunning (service|process|container|app|program)s?\b"
+                      r"|(?<!key that )\bworks\b", re.I)
+# What TESTING.md says of the scan, word for word, and what it catches is pinned beside it.
+VERDICT_SCAN = ("for a verdict, and fails on any: a yes in any case other than nmcli's \"yes:\" "
+                "field or an ssh option's \"=yes\", \"Partly\", \"Not really\", \"keeps "
+                "restarting\", \"crash-looping\", \"works\" other than in \"a key that works\", "
+                "a \"running\" service or process, \"not running\", \"not up\" or \"not "
+                "working\", and \"is\", \"are\", \"was\", \"were\", \"n't\" or \"'s\" other than "
+                "in \"what's\", with or without \"not\", before running, stopped, working, up, "
+                "down, crashing, restarting, healthy, broken, dead or alive. A state as its list "
+                "gave it, such as \"active (running)\" or \"Up 3 hours (healthy)\", isn't one.")
 REAL_THIS_COMPUTER = serverstatus._this_computer
 REAL_RUN = serverstatus._run
+REAL_HAS_SSH_FOLDER = serverstatus._has_ssh_folder
 # What INNER must be, word for word: anything added before a read would run on your server with
 # no click, and RemoteCommand runs it on this computer.
 PINNED_INNER = ('export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T="timeout 8"; '
@@ -119,7 +137,8 @@ def setUpModule():
     """The same on every computer: no test depends on what this one is called. A test that
     means to run something uses REAL_RUN by name, on a stand-in."""
     unittest.enterModuleContext(no_ssh.refusing())
-    for name, new in (("_this_computer", mock.Mock(return_value=HERE)), ("_run", _no_real_ssh)):
+    for name, new in (("_this_computer", mock.Mock(return_value=HERE)), ("_run", _no_real_ssh),
+                      ("_has_ssh_folder", mock.Mock(return_value=True))):
         patcher = mock.patch.object(serverstatus, name, new)
         patcher.start()
         unittest.addModuleCleanup(patcher.stop)
@@ -623,6 +642,32 @@ class Relay(Case):
                     self.assertNotRegex(text, VERDICTS)
                     self.assertNotIn("more characters", text)
 
+    def test_the_verdict_scan_catches_each_wording(self):
+        """What TESTING.md says the scan catches, and what it lets through: a state as its list
+        gave it, and Tux's own words about what it did."""
+        for verdict in ("Yes, docker is running.", "yes, plex", "YES", "Partly.", "Not really.",
+                        "docker's running", "docker’s not running", "plex is stopped",
+                        "plex is working", "the app works", "jellyfin is crash-looping",
+                        "jellyfin is crashlooping", "nginx isn't running", "nginx is not up",
+                        "it's down", "the containers are up", "No running service here",
+                        "a running process", "nothing is running", "not running",
+                        "it keeps restarting", "I see plex", "plex is healthy", "web was dead",
+                        "it isn't working", "the app is broken", "ssh is alive",
+                        "plex's running", "Yes=yes, yes"):
+            with self.subTest(verdict):
+                self.assertRegex(verdict, VERDICTS)
+        for relayed in ("nginx.service, active (running)", "web, Up 3 hours (healthy)",
+                        "immich_ml, Restarting (1) 5 seconds ago", "h.service, inactive (dead)",
+                        "systemctl says docker.service is inactive, so I didn't ask docker.",
+                        "systemctl says docker.service is active, but docker said permission "
+                        "denied.", serverstatus.TIMED_OUT, serverstatus.NO_KEY, "yes:",
+                        "BatchMode=yes", "what's running",
+                        NOTHING_HERE.format("plex"),
+                        "docker's list went on past what I could read."):
+            with self.subTest(relayed):
+                self.assertNotRegex(relayed, VERDICTS)
+        self.assertIn(VERDICT_SCAN, _flat("docs/TESTING.md"))
+
     def test_every_state_list_units_gives_is_read(self):
         """No --state: a oneshot that has exited, a job that runs, one that waits to start again,
         one that stops and one that failed are all rows, so a relayed list is the whole list."""
@@ -680,7 +725,8 @@ class Relay(Case):
 
     def test_docker_s_own_daemon_gets_what_systemctl_says_of_it(self):
         """"Is the docker daemon running?": what systemctl says of docker.service, then the
-        list, as docker gave it; or why docker wasn't asked."""
+        list, as docker gave it, or in the same sentence why docker's list wasn't read once it
+        was asked; or why docker wasn't asked."""
         for name in ("docker daemon", "the docker daemon", "docker engine", "dockerd", "Dockerd",
                      "the dockerd service", "docker", "docker containers"):
             with self.subTest(name):
@@ -691,8 +737,9 @@ class Relay(Case):
                                  b"daemon socket\n", services("docker"), docker_exit=1)
                 self.assertEqual(said({"name": name, "on": "my server"},
                                       answer=(0, refused, b""))[0],
-                                 "On your server, docker said permission denied. systemd lists 1 "
-                                 "service: docker.service, active (running).")
+                                 "On your server, systemctl says docker.service is active, but "
+                                 "docker said permission denied. systemd lists 1 service: "
+                                 "docker.service, active (running).")
                 stopped = server(None, services("nginx"), b"@docker.service\ninactive\n@exit 3\n")
                 self.assertEqual(said({"name": name, "on": "my server"},
                                       answer=(0, stopped, b""))[0],
@@ -701,10 +748,57 @@ class Relay(Case):
                                  "(running).")
         # Only for docker: the whole list asked otherwise doesn't start with it.
         self.assertTrue(said()[0].startswith(TWO))
+        self.assertEqual(said(answer=(0, refused, b""))[0],
+                         "On your server, docker said permission denied. systemd lists 1 service: "
+                         "docker.service, active (running).")
         for name in ("daemon", "engine", "the daemon"):
             with self.subTest(name):
                 self.assertTrue(said({"name": name, "on": "my server"})[0].startswith(
                     "On your server, none of the 2 containers docker lists"))
+
+    def test_docker_s_own_daemon_whatever_docker_then_did(self):
+        """systemctl said active, so docker was asked: that is said first whatever docker did,
+        and docker.service is among the services said, however many there are."""
+        units = services(*(f"a{i}" for i in range(20))) + services("docker")
+        listed = ("systemd lists 21 services: docker.service, active (running); a0.service, "
+                  "active (running); a1.service, active (running); a2.service, active (running); "
+                  "and 17 more.")
+        for docker, code, what in (
+                (b"permission denied while trying to connect to the Docker daemon socket\n", 1,
+                 "but docker said permission denied."),
+                (b"", 124, "but docker took too long to answer."),
+                (b"docker: unknown flag: --format\n", 125,
+                 "but docker gave an error (exit status 125)."),
+                (b"Cannot connect to the Docker daemon\n", 1,
+                 "but docker gave an error (exit status 1)."),
+                (b"", 127, "but I couldn't find a docker command."),
+                (b"", 126, "but I couldn't run docker."),
+                (containers("web"), 0, ". docker lists 1 container: web, Up 1 day.")):
+            answer = server(docker, units, b"@docker.service\nreloading\n@exit 0\n",
+                            docker_exit=code)
+            with self.subTest(code=code, what=what):
+                text = said({"name": "the docker daemon", "on": "my server"},
+                            answer=(0, answer, b""))[0]
+                joint = what if what.startswith(".") else f", {what}"
+                self.assertEqual(text, f"On your server, systemctl says docker.service is "
+                                       f"reloading{joint} {listed}")
+        # docker's answer cut off before it ended: said so, after what systemctl said.
+        cut = ACTIVE + b"@systemd\n" + units + b"@exit 0\n"
+        self.assertEqual(said({"name": "dockerd", "on": "my server"}, answer=(0, cut, b""))[0],
+                         f"On your server, systemctl says docker.service is active, but I couldn't "
+                         f"read docker's answer. {listed}")
+        # What systemctl said or why it said nothing comes first whatever it said.
+        for said_of_it in (b"inactive\n@exit 3\n", b"inactive\n@exit 4\n", b"@exit 1\n",
+                           b"@exit 124\n", b"@exit 127\n", b"active\n@exit 0\n",
+                           b"active\n@exit 3\n", b""):
+            answer = server(None if b"@exit 0" not in said_of_it else b"", units,
+                            b"@docker.service\n" + said_of_it)
+            with self.subTest(said_of_it):
+                text = said({"name": "the docker daemon", "on": "my server"},
+                            answer=(0, answer, b""))[0]
+                first = text.removeprefix("On your server, ").partition(". ")[0]
+                self.assertIn("systemctl", first)
+                self.assertTrue(text.endswith(listed), text)
 
     def test_words_around_a_name_ask_for_the_whole_list(self):
         for name in ("server", "my server", HOST, "MyServer.Example", "myserver", f"ssh {HOST}",
@@ -1078,6 +1172,33 @@ class BoundedRun(Case):
                 REAL_RUN(argv, {"PATH": "/usr/bin:/bin"})
         self.assertEqual(str(raised.exception), serverstatus.TIMED_OUT)
 
+    def test_with_no_ssh_folder_ssh_is_not_started(self):
+        """ssh without -F makes ~/.ssh in the home folder passwd gives when there is none, once it
+        has connected: so then it isn't started, and Tux says why, without saying it tried."""
+        with tempfile.TemporaryDirectory() as home:
+            with mock.patch.object(serverstatus.pwd, "getpwuid",
+                                   return_value=mock.Mock(pw_dir=home)):
+                self.assertFalse(REAL_HAS_SSH_FOLDER())
+                os.mkdir(os.path.join(home, ".ssh"))
+                self.assertTrue(REAL_HAS_SSH_FOLDER())
+            with mock.patch.object(serverstatus.pwd, "getpwuid", side_effect=KeyError(1000)):
+                self.assertFalse(REAL_HAS_SSH_FOLDER())
+        popen = mock.Mock(side_effect=AssertionError("ssh was started"))
+        with mock.patch.object(serverstatus, "_has_ssh_folder", return_value=False), \
+                mock.patch.object(serverstatus, "_run", REAL_RUN), \
+                mock.patch.object(serverstatus.subprocess, "Popen", popen):
+            for args, say_which in (({"name": "plex", "on": "my server"}, False),
+                                    ({"name": "plex", "on": "my work server"}, True)):
+                with self.subTest(args):
+                    session = Session()
+                    serverstatus.running(args, CONFIG, session, None, say_which)
+                    self.assertEqual([s.text for s in session.after],
+                                     [serverstatus.NO_SSH_FOLDER])
+                    self.assertFalse(session.tainted)
+        popen.assert_not_called()
+        self.assertIn("makes a `~/.ssh` folder when your home folder has none, so then Tux "
+                      "doesn't start it", _skills_section())
+
     def test_no_ssh_program(self):
         """Not called ssh, which no test may start, even where there is none."""
         with self.assertRaises(serverstatus.Unanswered) as raised:
@@ -1414,11 +1535,17 @@ class RemoteCommand(Case):
             else:
                 os.remove(os.path.join(self.bin, "docker"))
                 os.symlink(os.path.join(self.bin, "podman"), os.path.join(self.bin, "docker"))
-            for service, socket in ((3, 3), (3, 0), (4, 4), (1, 3), (124, 0)):
+            for service, socket, why in (
+                    (3, 3, "systemctl says docker.service is inactive, so I didn't ask docker."),
+                    (3, 0, "systemctl says docker.service is inactive, so I didn't ask docker."),
+                    (4, 4, serverstatus.NO_DOCKER_UNIT),
+                    (1, 3, "systemctl didn't say whether docker.service is active (exit status "
+                           "1), so I didn't ask docker."),
+                    (124, 0, serverstatus.SYSTEMCTL_SLOW_DOCKER)):
                 with self.subTest(how=how, service=service, socket=socket):
                     self.fake("systemctl", FAKE_SYSTEMCTL, service=service, socket=socket)
                     found = self.read()
-                    self.assertIsNone(found["docker"])
+                    self.assertEqual((found["docker"], found["docker_why"]), (None, why))
                     self.never("podman")
                     self.never("docker")
         # The stand-ins do run podman when they are called.
@@ -1649,6 +1776,26 @@ class RealServerCheck(Case):
             self.assertIn(said, check)
         self.assertNotIn("Check `ps` afterwards", check)
 
+    def test_its_compare_step_reads_what_tux_reads(self):
+        """Here Tux reads the system's and your own list-units, and pgrep's list with its own
+        pattern, which takes - _ . or a space between the letters: the step compares with those,
+        by the same flags, so a row Tux rightly says isn't missing from them."""
+        check = " ".join(self.check().split())
+        with mock.patch.object(system, "_read", side_effect=nothing_here) as read:
+            system.here_said("firefox")
+        commands = [call.args for call in read.call_args_list]
+        self.assertEqual(len(commands), 3)
+        for args in commands:
+            if args[0] == "systemctl":
+                shown = [a for a in args if a not in ("--no-legend", "--plain", "--no-pager")]
+                self.assertIn(f"`{' '.join(shown)}`", check)
+            else:
+                *flags, ends, pattern = args
+                self.assertEqual(ends, "--")
+                self.assertIn(f"`{' '.join(flags)} '{pattern}'`", check)
+        self.assertIn("Tux's own pattern, which also takes `-`, `_`, `.` or a space between the "
+                      "letters, so it may find more than `pgrep -l -i -f firefox` would", check)
+
     def test_its_local_step_expects_the_process_the_server_runs(self):
         """pgrep sees the process name, which comes from the image's /local-ai, not from the
         container's name in compose.yaml."""
@@ -1749,10 +1896,18 @@ class Docs(Case):
                 text = said(args, answer=(0, answer, b""))[0]
                 self.assertIn(f'"{text}"', skills)
         docker = said({"name": "the docker daemon", "on": "my server"})[0]
-        self.assertIn('which starts with what `systemctl` said of `docker.service`: "On your '
-                      'server, systemctl says docker.service is active."', skills)
+        self.assertIn('which starts with what `systemctl` said of `docker.service`, or why it '
+                      'said nothing: "On your server, systemctl says docker.service is active." '
+                      'or, when docker didn\'t list its containers then, "On your server, '
+                      'systemctl says docker.service is active, but docker said permission '
+                      'denied."', skills)
         self.assertTrue(docker.startswith("On your server, systemctl says docker.service is "
                                           "active. "))
+        refused = server(b"permission denied\n", b"", docker_exit=1)
+        self.assertTrue(said({"name": "the docker daemon", "on": "my server"},
+                             answer=(0, refused, b""))[0].startswith(
+            "On your server, systemctl says docker.service is active, but docker said permission "
+            "denied. "))
         # Each reason a list wasn't read, as it is said.
         nginx = services("nginx")
         for answer in (server(None, nginx, b"@docker.service\ninactive\n@exit 3\n"),
@@ -1794,8 +1949,7 @@ class Docs(Case):
 
     def test_this_computer_is_described_as_it_is_read_and_said(self):
         skills = _skills_section()
-        processes = ("1234 php-fpm: master process (/etc/php-fpm.conf)\n"
-                     "1240 php-fpm: pool www\n")
+        processes = "1234 php-fpm\n1240 php-fpm\n"
         with mock.patch.object(system, "_read", side_effect=lambda *command: (
                 (0, "php-fpm.service loaded active running PHP\n" if "--user" not in command
                  else "") if command[0] == "systemctl" else (0, processes))):
@@ -1809,12 +1963,18 @@ class Docs(Case):
         self.assertIn(f'"{none}"', skills)
         self.assertIn(f'"{none}"', _changelog_entry())
         for said_so in ("`systemctl list-units --type=service` lists, the system's and your "
-                        "user's", "`pgrep -a -i -f`", f"up to {system.SAID_HERE} of each",
-                        f"the first {system.COMMAND_CHARS} characters of its command line",
+                        "user's", "`pgrep -l -i -f`", f"up to {system.SAID_HERE} of each",
+                        "each process by its pid and its own name as `pgrep -l` gives them, never "
+                        "its command line",
                         "with any of `-`, `_`, `.` or a space between its letters"):
             self.assertIn(said_so, skills)
             self.assertIn(said_so, _changelog_entry())
-        self.assertEqual(system.LIST_UNITS[:2], ("list-units", "--type=service"))
+        with mock.patch.object(system, "_read", side_effect=nothing_here) as read:
+            system.here_said("php-fpm")
+        self.assertEqual([call.args[:-1] for call in read.call_args_list], [
+            ("systemctl", "list-units", "--type=service", "--no-legend", "--plain"),
+            ("systemctl", "--user", "list-units", "--type=service", "--no-legend", "--plain"),
+            ("pgrep", "-l", "-i", "-f", "--")])
         # What a list it couldn't get is said as, rather than as having none.
         with mock.patch.object(system, "_read", return_value=(3, "")):
             failed = system.here_said("php-fpm")[1]
@@ -1882,7 +2042,8 @@ class Docs(Case):
                            if s["id"] == "org.tuxistant.system")
         self.assertEqual(description, "Tells you about this computer, such as how long it has "
                                       "been on and its IP address. Says what docker and systemd "
-                                      "list about a name on your server, and what runs on this "
+                                      "list about a name on your server, a Linux server with "
+                                      "systemd and docker.service, and what runs on this "
                                       "computer, in their own words, and doesn't judge whether "
                                       "an app works")
         tools = json.dumps(Skills(config=CONFIG).tools())
@@ -1901,6 +2062,27 @@ class Docs(Case):
         self.assertIn(f"`{Relay.__name__}` in `tests/test_serverstatus.py` checks that every row "
                       "that matches is said with its state as listed", testing)
         self.assertTrue(hasattr(Relay, "test_no_sentence_judges_whether_anything_works"))
+
+    def test_the_pictures_show_what_tux_says(self):
+        """The README's History shows a reply to "Is docker running?": the one Tux says for a
+        made-up listing, which is no verdict. tools/docs_images.py takes the picture from
+        tests/shell_harness/docs_shots.py, which is read here, not imported."""
+        tree = ast.parse((ROOT / "tests" / "shell_harness" / "docs_shots.py").read_text())
+        turns = next(ast.literal_eval(node.value) for node in tree.body
+                     if isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "TURNS")
+        for heard, reply, _ in turns:
+            with self.subTest(heard):
+                self.assertNotRegex(reply, VERDICTS)
+        running = [reply for _, reply, actions in turns if "system.running" in actions]
+        self.assertEqual(len(running), 1)
+
+        def docker_here(*command):
+            if command[0] == "systemctl":
+                return 0, "" if "--user" in command else ("docker.service loaded active running "
+                                                          "Docker\n")
+            return 0, "1187 dockerd\n"
+        with mock.patch.object(system, "_read", side_effect=docker_here):
+            self.assertEqual(running[0], system.here_said("docker")[1])
 
     def test_what_it_needs_of_ssh_and_what_marks_the_conversation(self):
         text = (ROOT / "docs" / "SKILLS.md").read_text()
@@ -1930,12 +2112,12 @@ class Docs(Case):
         plex = server(containers("plex", status="Up 2 days"), b"")
         text = asked({"name": "plex"}, {**CONFIG, "server": "plex.lan:8080"},
                      answer=(0, plex, b""))[1]
-        self.assertTrue(text.startswith("No running service here, and no process's command "
+        self.assertTrue(text.startswith("No service systemd lists here, and no process's command "
                                         "line, has plex in it. On your server, docker lists plex, "
                                         "Up 2 days."), text)
-        self.assertIn('gets an answer that starts "No running service here, and no process\'s '
-                      'command line, has plex in it. On your server, docker lists plex, Up 2 '
-                      'days."', skills)
+        self.assertIn('gets an answer that starts "No service systemd lists here, and no '
+                      'process\'s command line, has plex in it. On your server, docker lists plex, '
+                      'Up 2 days."', skills)
         self.assertIn('"I can only check this computer and the server in Settings. The server in '
                       'Settings is this computer." and what this computer lists', skills)
 
@@ -2028,13 +2210,14 @@ def nothing_here(*command):
 
 
 def running_here(*command):
-    """This computer, made up: pgrep finds one process, whatever it is asked for."""
-    return (0, "") if command[0] == "systemctl" else (0, "4242 /usr/bin/thing --serve\n")
+    """This computer, made up: pgrep finds one process, whatever it is asked for, and lists it
+    by its pid and its own name."""
+    return (0, "") if command[0] == "systemctl" else (0, "4242 thing\n")
 
 
 def found_here(name: str) -> str:
     return (f"On this computer, no service systemd lists has {name} in its name, and these "
-            f"processes have {name} in their command line: 4242 /usr/bin/thing --serve.")
+            f"processes have {name} in their command line: 4242 thing.")
 
 
 def asked(args, config=CONFIG, here=nothing_here, answer=(0, FULL, b"")):
@@ -2305,6 +2488,21 @@ class SystemRunning(Case):
                                                      CONFIG))
                 self.assertTrue(system.about_server({"name": name}, CONFIG))
 
+    def test_the_server_as_settings_has_it_is_the_server(self):
+        """An on that is the server in Settings with its port or scheme is that server, not
+        another computer: it is asked, and not named as one that may be another."""
+        for on in (f"{HOST}:8080", f"http://{HOST}", f"https://{HOST}:8080/",
+                   HOST.upper() + ":8080", "myserver:8080"):
+            with self.subTest(on):
+                result, text, run, tool = asked({"name": "localai", "on": on})
+                self.assertEqual((result, text), ({APP_SAYS: True}, LOCALAI))
+                run.assert_called_once()
+                tool.assert_not_called()
+        # Another host on the same port is still another computer.
+        result, text, run, _ = asked({"name": "localai", "on": "other.example:8080"})
+        self.assertTrue(text.startswith(system.ONLY_TWO), text)
+        run.assert_not_called()
+
     def test_a_local_server_s_name_is_this_computer(self):
         config = {**CONFIG, "server": "thislaptop:8080"}
         result, text, run, _ = asked({"name": "thislaptop"}, config)
@@ -2316,7 +2514,7 @@ class SystemRunning(Case):
         def tool(*command):
             if command[0] == "pgrep":
                 found = re.search(command[-1], "/local-ai --models /models", re.I)
-                return (0, "123 /local-ai --models /models\n") if found else (1, "")
+                return (0, "123 local-ai\n") if found else (1, "")
             return 0, ""
         config = {**CONFIG, "server": "localhost:8080"}
         for name in ("localai", "local-ai", "LocalAI", "local_ai", "local.ai", "locala"):
@@ -2324,8 +2522,7 @@ class SystemRunning(Case):
                 result, text, run, _ = asked({"name": name, "on": "my server"}, config, tool)
                 self.assertEqual(result, {APP_SAYS: True})
                 self.assertIn("these processes have", text)
-                self.assertTrue(text.endswith("in their command line: 123 /local-ai --models "
-                                              "/models."), text)
+                self.assertTrue(text.endswith("in their command line: 123 local-ai."), text)
                 run.assert_not_called()
         self.assertEqual(asked({"name": "localaix"}, config, tool)[1],
                          NOTHING_HERE.format("localaix"))

@@ -23,7 +23,6 @@ SERVICE_NAME = re.compile(r"[a-z0-9][a-z0-9@._+-]{0,63}")
 STOPPED_EARLY = ("Counting stopped after a few seconds, so the real numbers are higher and the "
                  "order may change.")
 SAID_HERE = 4           # services and processes said, of each
-COMMAND_CHARS = 80      # of a process's command line said
 LIST_UNITS = ("list-units", "--type=service", "--no-legend", "--plain", "--no-pager")
 
 
@@ -157,9 +156,14 @@ def _words(text: str) -> set[str]:
 def _names_the_server(said: str, config) -> bool:
     """The server's name, or its first label, as zephyr for zephyr.lan, with my, home or server
     around it and in any spelling: "my home nas" for nas.lan, "zephyr nas" for zephyr-nas.lan.
-    An address only as itself."""
+    An address only as itself. The server as Settings has it, with its port or scheme, as
+    zephyr.lan:8080 or http://zephyr.lan, is it too."""
     host = _server_host(config)
-    return bool(host) and serverstatus.names_host(said, host)
+    if not host:
+        return False
+    given = serverstatus.host_of(said)
+    return (serverstatus.names_host(said, host)
+            or given is not None and serverstatus.is_own_name(given, host))
 
 
 def _here(on: str) -> bool:
@@ -253,28 +257,24 @@ def _services_here(name: str) -> tuple[list, bool]:
 
 
 def _processes_here(name: str) -> list[str] | None:
-    """Each process whose command line has name in it, as pgrep -a gives it, its pid first, or
-    None when pgrep didn't list them."""
-    code, output = _read("pgrep", "-a", "-i", "-f", "--", _pattern(name))
+    """Each process whose command line has name in it, by its pid and its own name as pgrep -l
+    gives them, or None when pgrep didn't list them. Never the command line itself: another
+    program's arguments may hold a password or a token, as in mysql -pS3cret, and what Tux says
+    is heard, sent to the speech server and kept in History."""
+    code, output = _read("pgrep", "-l", "-i", "-f", "--", _pattern(name))
     if code not in (0, 1):
         return None
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 
-def _process(line: str) -> str:
-    """A process as said: its pid and the first characters of its command line."""
-    pid, _, command_line = line.partition(" ")
-    cut = "…" if len(command_line) > COMMAND_CHARS else ""
-    return f"{pid} {command_line[:COMMAND_CHARS]}{cut}"
-
-
 def here_said(name: str) -> tuple[bool, str]:
     """What this computer lists with name in it, relayed: the services as systemd gives them and
-    the processes as pgrep does, and whether there was any."""
+    the processes by pid and name as pgrep does, and whether there was any."""
     units, whole = _services_here(name)
     processes = _processes_here(name)
     if not units and whole and processes == []:
-        return False, f"No running service here, and no process's command line, has {name} in it."
+        return False, (f"No service systemd lists here, and no process's command line, has {name} "
+                       "in it.")
     said = []
     if units:
         said.append("systemd lists " + serverstatus.said_rows(
@@ -283,7 +283,7 @@ def here_said(name: str) -> tuple[bool, str]:
         said.append(f"no service systemd lists has {name} in its name")
     if processes:
         said.append(f"these processes have {name} in their command line: "
-                    + serverstatus.said_rows([_process(p) for p in processes], SAID_HERE))
+                    + serverstatus.said_rows(processes, SAID_HERE))
     elif processes == []:
         said.append(f"no process's command line has {name} in it")
     else:
@@ -296,7 +296,7 @@ def here_said(name: str) -> tuple[bool, str]:
 
 def running(args: dict, config, session=None) -> dict:
     """What lists a service or program by that name, here or on the server, relayed and said by
-    the app: a command line is any program's text. Here, a name goes no further than these
+    the app: a process's name is any program's text. Here, a name goes no further than these
     read-only tools, and this needs the real system, which the shell sandbox hides."""
     session = session if session is not None else Session()
     if _from_the_server(args, config):

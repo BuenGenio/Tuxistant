@@ -404,6 +404,7 @@ class EveryActionIsCutOff(unittest.TestCase):
             self.assertTrue(listed and all(app.path.startswith("/eval/") for app in listed))
             self.assertEqual(apps._default_for("https"), "firefox.desktop")
             self.assertIs(serverstatus._run, eval_cutoffs._made_up_ssh)
+            self.assertIs(system._read, eval_cutoffs._made_up_read)
             printed = io.StringIO()
             with contextlib.redirect_stdout(printed):
                 self.assertTrue(apps._launch("/eval/applications/firefox.desktop"))
@@ -422,6 +423,25 @@ class EveryActionIsCutOff(unittest.TestCase):
         self.assertEqual([said.text for said in session.after],
                          ["On your server, docker lists localai, Up 3 days. None of the 2 "
                           "services systemd lists has localai in its name."])
+
+    def test_no_evaluation_prints_this_computer_s_own_lists(self):
+        """eval_flows prints what the app says, and "Is docker running?" here would say the
+        owner's own services and processes: made-up ones answer, and systemctl and pgrep are
+        never started."""
+        session = Session()
+        no_ssh.REACHED.clear()
+        with install(), contextlib.redirect_stdout(io.StringIO()), no_ssh.refusing(), \
+                mock.patch.object(system.subprocess, "run",
+                                  side_effect=AssertionError("a tool was started")):
+            result = system.running({"name": "docker"}, DEFAULTS, session)
+        self.assertEqual(no_ssh.REACHED, [], "systemctl was started")
+        self.assertEqual(result, {APP_SAYS: True})
+        self.assertEqual([said.text for said in session.after],
+                         ["On this computer, systemd lists docker.service, active (running), and "
+                          "these processes have docker in their command line: 1187 dockerd."])
+        self.assertIn("made-up services and processes in place of `systemctl` and `pgrep` here, "
+                      "so no evaluation prints your own",
+                      " ".join((ROOT / "docs" / "SKILLS.md").read_text().split()))
 
     def test_eval_flows_installs_them_first_and_leaves_them_alone(self):
         """Read and never imported, as importing it would run it."""

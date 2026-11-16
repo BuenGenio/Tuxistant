@@ -19,12 +19,13 @@ Ubuntu's update-motd scripts, the start-up files your shell there reads, such as
 what it runs for that key, such as an authorized_keys command=, a ForceCommand or ~/.ssh/rc,
 before the command or in its place. ssh takes the port and user from ~/.ssh/config, and gets no
 agent, so the key has to work on its own. What your ssh_config runs itself, such as a
-ProxyCommand, still runs.
+ProxyCommand, still runs. With no ~/.ssh, ssh isn't started, as it would make one.
 What the server sends is someone else's text. It is capped, each row has to look like one, and
 the app says the answer itself, so none of it reaches a model with tools.
 """
 import ipaddress
 import os
+import pwd
 import re
 import selectors
 import shlex
@@ -107,6 +108,8 @@ ON_THIS_COMPUTER = ("The server in Settings is this computer. I can't list what 
                     "I can check one program or service by its name.")
 BAD_HOST = "The server address in Settings isn't one I can reach over ssh."
 NO_SSH = "ssh isn't installed on this computer, so I can't reach your server."
+NO_SSH_FOLDER = ("There's no .ssh folder in your home folder, and ssh would make one, so I didn't "
+                 "start it. Connect to your server once with ssh in a terminal, then ask me again.")
 NO_KEY = ("Your server turned down this computer's ssh key. I can't type a passphrase or use the "
           "ssh agent, so I need a key that works on its own.")
 HOST_KEY = ("This computer doesn't know your server's ssh host key yet. Connect to it once with "
@@ -130,8 +133,8 @@ SYSTEMCTL_SLOW_DOCKER = ("systemctl took too long to say whether docker.service 
                          "didn't ask docker.")
 SYSTEMCTL_UNREAD_DOCKER = ("I couldn't read systemctl's answer about docker.service, so I didn't "
                            "ask docker.")
-# After what systemctl said: what sh said of docker, as 127 or 126.
-DOCKER_MISSING = {127: "but I couldn't find a docker command.", 126: "but I couldn't run docker."}
+# What sh said of docker, as 127 or 126, after what systemctl said of docker.service.
+DOCKER_MISSING = {127: "I couldn't find a docker command.", 126: "I couldn't run docker."}
 DOCKER_SLOW = "docker took too long to answer."
 DOCKER_REFUSED = "docker said permission denied."
 DOCKER_UNREAD = "I couldn't read docker's answer."
@@ -170,7 +173,8 @@ AROUND = {"server", "servers", "my", "our", "own", "the", "your", "on", "is", "a
           "services", "service", "all", "everything", "anything", "running", "processes",
           "programs", "apps", "applications", "*"}
 # With docker or dockerd, docker's own daemon, as "dockerd", "the docker daemon" or "docker
-# engine": the whole list, which starts with what systemctl says of docker.service.
+# engine": the whole list, which starts with what systemctl says of docker.service, with the
+# rows that have docker in them first.
 DOCKERD = {"dockerd", "daemon", "engine"}
 # Never part of a name, so not said back either: "my plex" asks after plex.
 FILLER = {"my", "our", "own", "the", "your", "on", "is", "are", "what", "which", "all",
@@ -337,10 +341,21 @@ def _env() -> dict:
     return env
 
 
+def _has_ssh_folder() -> bool:
+    """ssh without -F makes ~/.ssh in the home folder passwd gives, not $HOME, when there is
+    none, once it has connected: so with none it isn't started, and nothing is made."""
+    try:
+        return os.path.isdir(os.path.join(pwd.getpwuid(os.getuid()).pw_dir, ".ssh"))
+    except (KeyError, OSError):
+        return False
+
+
 def _run(argv: list[str], env: dict) -> tuple[int, bytes, bytes]:
     """(exit code, output, errors), each capped. A server that sends too much is cut off there.
     Done once ssh has exited and its output has ended, even if something ssh started, such as a
     ProxyCommand, still holds its error pipe: that is killed with the rest of the group."""
+    if not _has_ssh_folder():
+        raise Unanswered(NO_SSH_FOLDER)
     try:
         process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, env=env, start_new_session=True)
@@ -475,7 +490,8 @@ def units(lines: list[str], cut: bool) -> Listing:
 def read(host: str) -> dict:
     """What the server lists, or Unanswered. "docker" and "systemd" are Listings, or None when
     that one wasn't read, with why in "docker_why" or "systemd_why", a sentence. "docker_service"
-    is what systemctl is-active said of docker.service: its exit code and its word."""
+    is what systemctl is-active said of docker.service: its exit code and its word. "docker_asked"
+    is why docker, once asked, didn't list its containers, without what systemctl said."""
     code, output, errors = _run(command(host), _env())
     if code == 255:
         raise Unanswered(_ssh_failed(errors))
@@ -487,6 +503,7 @@ def read(host: str) -> dict:
     found = {"docker_service": (unit_code, word if STATE.fullmatch(word) else None)}
     code, lines, cut = sections.get("docker", (None, [], False))
     found["docker"] = _containers(lines, cut) if code == 0 else None
+    found["docker_asked"] = None if code in (0, NOT_ASKED) else _asked_why(code, lines)
     found["docker_why"] = None if code == 0 else _docker_why(code, lines, *found["docker_service"])
     code, lines, cut = sections.get("systemd", (None, [], False))
     found["systemd"] = units(lines, cut) if code == 0 else None
@@ -496,11 +513,19 @@ def read(host: str) -> dict:
 
 def _docker_why(code: int | None, lines: list[str], unit_code: int | None,
                 word: str | None) -> str:
-    """Why docker's list wasn't read. docker's own complaint is read only to pick a sentence."""
+    """Why docker's list wasn't read."""
     if code == NOT_ASKED:
         return _unasked(unit_code, word)
+    if code in (NOT_FOUND, CANT_RUN):   # sh's word, not docker's: so what systemctl said first
+        return f"{_says_of_docker(word)}, but {_asked_why(code, lines)}"
+    return _asked_why(code, lines)
+
+
+def _asked_why(code: int | None, lines: list[str]) -> str:
+    """Why docker, once asked, didn't list its containers. Its own complaint is read only to pick
+    a sentence."""
     if code in (NOT_FOUND, CANT_RUN):
-        return f"systemctl says docker.service is {word or 'active'}, {DOCKER_MISSING[code]}"
+        return DOCKER_MISSING[code]
     if code == TIMED_OUT_THERE:
         return DOCKER_SLOW
     if code is None:
@@ -508,6 +533,11 @@ def _docker_why(code: int | None, lines: list[str], unit_code: int | None,
     if "permission denied" in " ".join(lines).casefold():
         return DOCKER_REFUSED
     return f"docker gave an error (exit status {code})."
+
+
+def _says_of_docker(word: str | None) -> str:
+    """What systemctl is-active said of docker.service when it exited with 0, with its word."""
+    return f"systemctl says docker.service is {word or 'active'}"
 
 
 def _unasked(code: int | None, word: str | None) -> str:
@@ -653,15 +683,21 @@ def _no_rows(part: str, listing: Listing) -> str:
 def everything(found: dict, first: str | None = None, docker_state: bool = False) -> str:
     """What each list has, a few rows of each with their state, and how many more, with any that
     have first in them before the rest, so the cap can't leave those out. With docker_state, what
-    systemctl said of docker.service first, when docker was asked."""
+    systemctl said of docker.service first whenever it said active, and so docker was asked: with
+    why docker's list then wasn't read in the same sentence. Otherwise why docker wasn't asked
+    comes first, which is what systemctl said or why it said nothing."""
     sentences = []
     code, word = found["docker_service"]
-    if docker_state and found["docker"] is not None and code == 0:
-        sentences.append(f"systemctl says docker.service is {word or 'active'}.")
+    asked = found["docker_asked"]
+    said_of_docker = docker_state and code == 0 and (found["docker"] is not None or bool(asked))
+    if said_of_docker:
+        sentences.append(f"{_says_of_docker(word)}, but {asked}" if asked else
+                         f"{_says_of_docker(word)}.")
     for part, limit in (("docker", SAID_CONTAINERS), ("systemd", SAID_SERVICES)):
         listing = found[part]
         if listing is None:
-            sentences.append(found[f"{part}_why"])
+            if not (part == "docker" and said_of_docker):
+                sentences.append(found[f"{part}_why"])
             continue
         if not listing.rows:
             sentences += [_no_rows(part, listing), *_notes(part, listing)]
@@ -762,7 +798,8 @@ def answer(args: dict, config, session=None, here: str | None = None,
     if _asks_after_ssh(args):
         text = f"{OVER_SSH} {about(found, 'ssh', ('systemd',))}"
     elif name is None:
-        text = everything(found, docker_state=_asks_after_docker(_kept(args, host)))
+        docker = _asks_after_docker(_kept(args, host))
+        text = everything(found, "docker" if docker else None, docker)
     elif names_host(name, host) and not _as_a_program(args, host, name, here):
         text = everything(found, first=_label(host))
     else:
@@ -795,7 +832,8 @@ def running(args: dict, config, session, here: str | None = None,
 def _unanswered(why: str, config, here: str | None, say_which: bool) -> str:
     """Why the server didn't answer, still after what this computer was found to have, and
     which server was tried once one was: a sleeping server must not hide what is here."""
-    if say_which and why not in (NO_SERVER, BAD_HOST, ON_THIS_COMPUTER, BAD_NAME, NO_SSH):
+    if say_which and why not in (NO_SERVER, BAD_HOST, ON_THIS_COMPUTER, BAD_NAME, NO_SSH,
+                                 NO_SSH_FOLDER):
         try:
             host = target(config)
             why = f"I tried the server in Settings, {_label(host) or host}. {why}"
