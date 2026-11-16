@@ -25,8 +25,8 @@ from tuxistant import goamail, mail  # noqa: E402
 from tuxistant.webfetch import clean  # noqa: E402
 
 # ---- 0.5.0's hiding, from tuxistant/mail.py at the 0.5.0 tag ---------------------------------
-OLD_SPACE = re.compile(r"[   -   　]")
-OLD_UNSEEN = re.compile(r"[​-‏⁠﻿­]")
+OLD_SPACE = re.compile(r"[\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]")
+OLD_UNSEEN = re.compile(r"[\u200b-\u200f\u2060\ufeff\u00ad]")
 OLD_SECRET_WORD = re.compile(
     r"(?<![A-Za-z])(?:pass(?:words?|phrases?|codes?|wd)?|pwd|pins?|otp|keys?|tokens?)(?![A-Za-z])"
     r"|(?<![A-Za-z])(?!post|bar|zip)[A-Za-zÀ-ÿ]*codes?(?![A-Za-z])|c[oó]dig\w*|codic\w*"
@@ -164,11 +164,18 @@ def _letters(token: str) -> str:
     return "".join(re.findall(r"[A-Za-z0-9]", _plain(token)))
 
 
+def _edge(char: str) -> str:
+    return "0-9" if char.isdigit() else "A-Za-z0-9"
+
+
 def _stands(chars: str, read: str) -> bool:
-    """The characters in order, at most three others between any two, nothing alphanumeric
-    either side: "482913", "482 913", "4-8-2-9-1-3" and "K Q W X B T" all stand."""
-    return bool(re.search(r"(?<![A-Za-z0-9])" + r"[^A-Za-z0-9\n]{0,3}".join(map(re.escape, chars))
-                          + r"(?![A-Za-z0-9])", read))
+    """The characters in order, at most three others between any two, and nothing of their kind
+    either side: "482913", "482 913", "4-8-2-9-1-3" and "K Q W X B T" all stand, and so does
+    482913 in "482913Verification", as the model reads a run of digits glued to a word apart from
+    it. A digit stops only at a digit, a letter at a letter or a digit."""
+    return bool(re.search(f"(?<![{_edge(chars[0])}])"
+                          + r"[^A-Za-z0-9\n]{0,3}".join(map(re.escape, chars))
+                          + f"(?![{_edge(chars[-1])}])", read))
 
 
 def shown(token: str, read: str | None) -> str:
@@ -187,8 +194,8 @@ def shown(token: str, read: str | None) -> str:
 # ---- the mail -------------------------------------------------------------------------------
 CODES = ("4829", "482913", "48291375", "KQ7X9B", "kq7x9b", "A7K2Q9XB", "KQWXBT", "482 913",
          "48 29 13", "4829 1375", "482-913", "482.913", "482–913", "482—913",
-         "482‑913", "482−913", "482·913", "482•913", "482 913",
-         "482 913", "482　913", "482－913", "KQ7-X9B", "KQ7 X9B", "KQW-XBT",
+         "482‑913", "482−913", "482·913", "482•913", "482\u00a0913",
+         "482\u2009913", "482\u3000913", "482－913", "KQ7-X9B", "KQ7 X9B", "KQW-XBT",
          "KQW 9XB", "ABC-123", "4 8 2 9 1 3", "K Q 7 X 9 B",
          "４８２９１３", "ＫＱ７Ｘ９Ｂ",
          "\U0001d7d2\U0001d7d6\U0001d7d0\U0001d7d7\U0001d7cf\U0001d7d1",
@@ -204,14 +211,23 @@ BODIES = ("Your Acme verification code is {C}.", "{C} is your Acme code.",
           "您的验证码是{C}，请勿泄露。",
           "Your code is {C}. Requested on 12/03/2026 at 10:42 from +44 20 7946 0000.",
           "Order #10482913: your delivery code is {C}, total £49.99.",
-          "Your code is {C}. Your code again: {C}.")
+          "Your code is {C}. Your code again: {C}.",
+          # Before a word that starts with a currency's letters, as a brand or a name may.
+          "{C} Audible verification code", "{C} audio verification code",
+          "To sign in, enter {C}\nAudrey\nAcme", "Sign in with {C} Ronald",
+          "{C} Cadence Bank verification code")
 # Every mark a code can be glued to the next word or the last by, and the words.
 GLUES = ("-‐‑‒–—―−⸺﹘﹣－⁃˗➖"
-         "〜〰־⸗⸚⹀︱︲­"
+         "〜〰־⸗⸚⹀︱︲\u00ad"
          ":;,.!?/|()[]*_#'\"«»“”‘’…"
-         "，。、：；．／～~→=+&@%<>·•﹐﹒")
+         "，。、：；．／～~→=+&@%<>·•﹐﹒"
+         # A space and a line end, before a word that starts with a currency's letters, and what
+         # no one sees, which 0.5.0 read as a space: bidi controls, invisible operators, private
+         # use and controls.
+         " \n\u202a\u202c\u202e\u2061\u2063\u2066\u2068\u2069\u061c\ue000\x1f")
 AFTER = ("Verification ends soon", "DO NOT SHARE IT", "SMS. Thanks", "10 minutes left",
-         "2FA is on", "Acme team", "请勿泄露", "5分钟内有效")
+         "2FA is on", "Acme team", "请勿泄露", "5分钟内有效", "Audible may ask again",
+         "Ronald, Acme support")
 BEFORE = ("Your code", "Verification", "PIN", "Step 10", "验证码")
 HTML = ("<p>Your Acme verification code is <b>{C}</b>.</p>",
         "<p>Your Acme code is</p><table><tr>{CELLS}</tr></table>",
@@ -230,7 +246,11 @@ ORDINARY = ("12 March 2026", "12/03/2026", "2026-03-12", "12-Mar-2026", "10:30",
             "BAW 123", "EZY 812",
             # Phone and order numbers joined by hyphens.
             "1-800-555-1234", "020-7946-0018", "0800-123-4567", "12-345678",
-            "204-4567890-1234567")
+            "204-4567890-1234567",
+            # Ranges written with an en dash, as an HTML template writes them, and times.
+            "10:30–11:00", "14:00–18:00", "12–15 March", "10–20%", "10am-12pm",
+            # Prices and dates in Chinese, Japanese and Korean, and the wide marks NFKC changes.
+            "12800円", "3000元", "128000원", "2026年3月12日", "１２８，０００", "２０２６／０３／１２")
 FRAMES = (("Your booking with Acme", "Hello,\n\nIt is {N}.\n\nThanks"),
           ("Your order from Acme",
            "Hello,\n\nIt is {N}.\n\nLog in to your account to see your order."),
@@ -243,7 +263,18 @@ FRAMES = (("Your booking with Acme", "Hello,\n\nIt is {N}.\n\nThanks"),
            "Ship to:\nA. Person\n1 High Street\nLondon\n{N}\nUnited Kingdom"),
           ("Your Acme receipt", "Hotel Alpenblick\nTotal\n{N}\nThank you for booking."),
           ("Your Acme booking: {N}", "Your boarding pass is attached."),
-          ("Your Acme booking: {N}", "Log in to your account to see it."))
+          ("Your Acme booking: {N}", "Log in to your account to see it."),
+          # After a word for a code, as a booking's confirmation code is.
+          ("Your Acme booking", "Your booking code is HMX4K2.\n\nIt is {N}."),
+          ("Message from Acme", "認証コード：482913\n有効期限：{N}"),
+          # Under a subject whose word for a code is also a number's, a QR code's or a barcode's:
+          # "your order number", "booking number", "about your QR code", "your QR e-ticket".
+          ("Acme: 您的订单号码", "Hello,\n\nIt is {N}.\n\nThanks"),
+          ("[Acme] 예약번호 안내", "Hello,\n\nIt is {N}.\n\nThanks"),
+          ("Acme QRコードのご案内", "Hello,\n\nIt is {N}.\n\nThanks"),
+          ("Acme 您的二维码电子票", "Hello,\n\nIt is {N}.\n\nThanks"))
+# The booking above as an HTML template writes it, with each en dash a character reference.
+BOOKING = "<p>Your booking code is <b>HMX4K2</b>.</p><p>It is {N}.</p>"
 
 
 def corpus() -> list[dict]:
@@ -287,6 +318,10 @@ def corpus() -> list[dict]:
         for subject, body in FRAMES:
             add("ordinary", f"{subject[:24]!r} {body[:30]!r} | {number!r}",
                 subject.replace("{N}", number), body.replace("{N}", number), [number])
+        for cte in ("8bit", "qp", "base64"):
+            add("ordinary", f"html {cte} booking | {number!r}", "Your Acme booking", None,
+                [number], BOOKING.replace("{N}", html.escape(number).replace("–", "&ndash;")),
+                cte)
         for code in ("482913", "KQ7X9B"):
             add("both", f"next to {number!r} | {code!r}", "Message from Acme",
                 f"Hello from Acme. It is {number}. Your verification code is {code}.",
@@ -296,22 +331,26 @@ def corpus() -> list[dict]:
 
 # Three capitals beside three digits, an amount or a flight: never a code (see mail.AMOUNT).
 AMOUNT = re.compile(r"[A-Z]{3} \d{3}(?:[.,]\d+)?|\d{3}(?:[.,]\d+)? [A-Z]{3}")
+TIMES = re.compile(r"\d{1,2}(?:am|pm)(?:[-–]\d{1,2}(?:am|pm))?")     # "2pm-4pm" is no code
 
 
 # What this version hides on purpose that 0.5.0 read out, as CHANGELOG and docs/CONTRACT.md step 5
-# say: in a mail that talks of signing in, every number in either part and letters with digits;
-# whatever a subject that names a code reaches in the text; a postcode, or a range of numbers,
-# on a line of its own, and two groups of three beside a word for a secret, but not an amount.
+# say: in a mail that talks of signing in, every number in either part and letters with digits,
+# but for a time; whatever a subject that names a code reaches in the text; a postcode, or a
+# range such as 2024–25, on a line of its own; two groups of three beside a word for a secret,
+# but not an amount; and a year or a time straight after a colon there, as NFKC makes "：" one.
 def meant_to_hide(m: dict, number: str) -> bool:
     whole = f"{m['subject']}\n{index_text(m)}"
     talks = mail.SIGN_IN_TALK.search(whole)
     mixed = re.search(r"\d", number) and re.search(r"[A-Za-z]", number) \
-        and not AMOUNT.fullmatch(number)
+        and not AMOUNT.fullmatch(number) and not TIMES.fullmatch(number)
     grouped = re.fullmatch(r"[A-Z0-9]{3} [A-Z0-9]{3}", number) and not AMOUNT.fullmatch(number)
     own_line = f"\n{number}\n" in whole and (grouped or re.fullmatch(r"\d+\W\d+", number))
     beside = grouped and mail.SECRET_WORD.search(whole)
+    given = re.match(r"(?:19|20)\d\d(?!\d|年)|\d{1,2}(?:am|pm)", number) \
+        and re.search(r"[:：]" + re.escape(number), whole) and mail.SECRET_WORD.search(whole)
     return bool((talks and (number in m["subject"] or mixed)) or "code" in m["subject"]
-                or own_line or beside or (m["kind"] == "both" and mixed))
+                or own_line or beside or given or (m["kind"] == "both" and mixed))
 
 
 # And the one code docs/SECURITY.md says still gets through: pairs of letters and digits,
@@ -333,6 +372,14 @@ class AgainstFiveOh(unittest.TestCase):
             text = index_text(m)
             cls.read.append((m, old_read(m["subject"], text), thunderbird_read(m["subject"], text),
                              online_read(m)))
+
+    def test_what_no_one_sees_is_written_as_an_escape_here(self):
+        """An editor that strips such characters would change 0.5.0's patterns above unseen, and
+        a reader can't tell "482\u00a0913" from "482 913"."""
+        unseen = [f"line {n}: U+{ord(char):04X}" for n, line in enumerate(
+            Path(__file__).read_text(encoding="utf-8").splitlines(), 1) for char in line
+            if char != " " and unicodedata.category(char) in ("Cc", "Cf", "Co", "Cn", "Zs", "Mn")]
+        self.assertEqual(unseen, [])
 
     def test_there_are_enough_mails(self):
         self.assertGreater(sum(1 for m, *_ in self.read if m["kind"] != "ordinary"), 400)

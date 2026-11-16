@@ -139,8 +139,9 @@ DASHED_CODES = (r"482\W{0,3}913", r"KQ7\W{0,3}X9B")
 # joined, and so did every dash: to the number or the capitals after it too, "482913-10 minutes
 # left", or to half of it, "482 [hidden]". A dash is a space to the hiding now, and a hyphen joins
 # only a digit, a slash or a few capitals, so a short word glued by one ("-is") is no reference.
-# Then the marks NFKC makes a comma, a full stop or a slash of, and a code glued to Japanese or
-# Chinese, which put no space round one.
+# Then the marks NFKC makes a comma, a full stop or a slash of, and a code glued to Japanese,
+# Chinese, Korean or Thai, which put no space round one. Then glued by what no one sees, which
+# taken out joined the code to the word; and before a word that starts like a currency's name.
 GLUED = ("Hello from Acme. To sign in, use 482913•Verification ends in 10 minutes.",
          "To sign in, use 482913·Unterstützung", "To sign in, enter 482913・確認",
          "To sign in, use KQ7X9B•Verification", "Sign in: Verification•KQ7X9B ends soon",
@@ -168,7 +169,20 @@ GLUED = ("Hello from Acme. To sign in, use 482913•Verification ends in 10 minu
          "Your Acme code—KQW 9XB", "Your Acme code is KQW 9XB—DO NOT share it.",
          "您的验证码是：482913，5分钟内有效。", "Your Acme PIN…482913 is what to type",
          "Step 10…482913 is your Acme code", "Your Acme code: 482913／Acme team",
-         "認証コードは482913です。", "您的验证码是KQ7 X9B，请勿泄露。", "您的验证码是KQW 9XB，请勿泄露。")
+         "認証コードは482913です。", "您的验证码是KQ7 X9B，请勿泄露。", "您的验证码是KQW 9XB，请勿泄露。",
+         "認証コードはKQ7X9Bです。", "您的验证码是KQ7X9B，请勿泄露。", "验证码KQ7X9B请勿泄露",
+         "인증번호는KQ7X9B입니다", "您的验证码是KQWXBT，请勿泄露。", "認証コードはKQW-XBTです。",
+         "Sign in to Acme. 请输入KQ7X9B完成登录。", "รหัส OTP: 482913ใช้ได้ภายใน 5 นาที",
+         "รหัส OTP ของคุณคือ\u2068482913\u2069ใช้ได้ภายใน 5 นาที",
+         "رمز التحقق \u202b482913\u202cصالح لمدة 10 دقائق",
+         "Your Acme code: \u2068482 913\u2069\u2068DO NOT SHARE\u2069",
+         "To sign in, use 482913\u2066Verification ends soon.",
+         "Your code\u202a482913 is what to type", "482913\u202ais your Acme code.",
+         "To sign in, use 482913\x1fVerification ends soon.",
+         "Sign in with 482913 Audible app.", "482913 audio verification code",
+         "To sign in, use 482913 Audible may ask again.",
+         "To sign in, use 482913\nRonald, Acme support",
+         "Use 482913 Audible will never ask for it. Sign in now")
 # Codes a second word for a code is joined to. Matches can't overlap, so "code=482" took the
 # first half of the code after the first word, and 913 was shown.
 TWICE_NAMED = ("Your Acme code below.\n\ncode=482 913\n\nThanks",
@@ -194,7 +208,9 @@ DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nTha
            "Hello from Acme.\n• KQ7X9B\nThanks", "Hello from Acme.\n| 482913 |\nThanks",
            "Hello from Acme.\n# 482913\nThanks", "Hello from Acme.\n/482913/\nThanks",
            "Hello from Acme.\n\u25cf 482913\nThanks", "Hello from Acme.\n\u25aa KQ7X9B\nThanks",
-           "Hello from Acme.\n\u25e6 482913.\nThanks", "Hello from Acme.\n\u25a0 482913\nThanks")
+           "Hello from Acme.\n\u25e6 482913.\nThanks", "Hello from Acme.\n\u25a0 482913\nThanks",
+           # Ended by a full stop of Chinese or Japanese, or a wide one, which is made that.
+           "Hello from Acme.\n482913．\nThanks", "Hello from Acme.\nKQ7X9B。\nThanks")
 # Bodies built to be slow to hide: a word for a code over and over, and runs of letters that
 # the word for one may end.
 SLOW_TO_HIDE = ("码!" * 10_000, "pin!" * 5000, "é" * 16_000, "×" * 16_000, "À" * 16_000,
@@ -656,6 +672,14 @@ class Secrets(Base):
                 # Other languages.
                 ("Ihr Code\nIhr Bestätigungscode lautet 482913.", "482913"),
                 ("Konto\nIhr Passwort ist Blume42", "Blume42"),
+                # A password with a dash or a dot in it, which the hiding reads as a space.
+                ("Wifi\nThe wifi password is Sunny—Day—7 for the guests.", "Day"),
+                ("Wifi\nYour new Acme password: Sunny–Day–7", "Day"),
+                ("Wifi\nThe wifi password is Sunny\u2011Day\u2011Seven", "Seven"),
+                ("Wifi\nThe wifi password is Blume·42", "42"),
+                ("Wifi\nThe wifi password is Blume•42", "42"),
+                # A code with a space between each character, glued to the Chinese before it.
+                ("验证\n您的验证码是K Q 7 X 9 B，请勿泄露。", "K"),
                 ("Код подтверждения\nВаш код 482913", "482913"),
                 ("認証\n認証コード: 482913", "482913"), ("驗證\n驗證碼482913", "482913")):
             shown = mail._hide(text)
@@ -695,8 +719,13 @@ class Secrets(Base):
                 ("Your tax code has changed." + " We wrote to your employer about it too." * 5
                  + " Your reference is PEX000000000.", "PEX000000000"),
                 ("Your password is safe with us: we never ask for it by phone on 0800.", "phone"),
+                # What stands inside a word is taken out, as in 0.5.0; what else no one sees is a
+                # space, which clean() makes one of before the model reads it.
+                ("Your re\u00adference is AB-12. Ship\u200bping on 3 May.",
+                 "reference is AB-12. Shipping on 3 May."),
+                # What no one sees is a space, which clean() makes one of before the model reads it.
                 ("Your table at \u2068Caf\u00e9 Rouge\u2069 is booked for \u20688\u2069 people.",
-                 "Caf\u00e9 Rouge is booked for 8 people"),
+                 "Caf\u00e9 Rouge  is booked for  8  people"),
                 ("Thanks, Zoe\u0308. Questions & answers from AT&T and R&D.",
                  "Thanks, Zo\u00eb. Questions & answers from AT&T and R&D."),
                 ("See pages 12\u201315 of the report \u2014 it comes to 1,250 pounds.",
@@ -726,6 +755,25 @@ class Secrets(Base):
                 ("Log in to track order 4829-1375, ticket 12-345678.",
                  "4829-1375, ticket 12-345678"),
                 ("Annual report\n(2026)\nThanks", "(2026)"),
+                # A range written with an en dash, after a word for a code: no code is two digits
+                # and two.
+                ("Hotel Baixa. Confirmation code: HMX4K2. Check-in 14:00–18:00, 12–15 March 2026.",
+                 "Check-in 14:00–18:00, 12–15 March 2026."),
+                ("Use discount code SPRING10 for 10–20% off", "10–20% off"),
+                ("Your verification code is 482913. It is 10:30–11:00.", "10:30–11:00"),
+                # A price or a date in Chinese, Japanese or Korean, which glue a unit to a number.
+                ("Log in to see your order. 合計 12800円 (税込)", "12800円"),
+                ("Log in to see your order. 总计3000元。", "3000元"),
+                ("주문번호: 20261234\n결제금액: 128000원", "128000원"),
+                ("認証コード：482913\n有効期限：2026年3月12日", "2026年3月12日"),
+                # The number after a wide comma, and a date in wide digits alone on its line.
+                ("您的验证码是：482913，5分钟内有效。", "、5分钟内有效"),
+                ("您的快递已到柜。取件码：5821，3号柜，请及时领取。", "、3号柜"),
+                ("Hello\n２０２６／０３／１２\nThanks", "2026∕03∕12"),
+                ("Sign in to see it. Total: 128，000", "128、000"),
+                # Two times joined by a hyphen, in a mail that talks of signing in.
+                ("Hello, It is 2pm-4pm. Log in to your account to see your order.", "2pm-4pm"),
+                ("Log in to book: 10am-12pm or 2pm-4pm.", "10am-12pm or 2pm-4pm"),
                 *((f"{sample['subject']}\n{sample['body']}", sample["body"][-25:])
                   for sample in SAMPLE if sample["subject"] != "One time code")):
             self.assertIn(kept, mail._hide(text), text[:50])
@@ -911,27 +959,44 @@ class Secrets(Base):
                 ("Key information about your Acme stay", "Hello, it is 10482913.", "10482913"),
                 ("Your Acme booking: 10482913", "Your boarding pass is attached.", "10482913"),
                 ("Your Acme booking: 10482913", "Your room key is at the desk.", "10482913"),
-                ("Your Acme code", "Your order total is CHF 125.", "CHF 125")):
+                ("Your Acme code", "Your order total is CHF 125.", "CHF 125"),
+                # 码, 번호 and コード are a number's, a QR code's or a barcode's too.
+                ("Acme: 您的订单号码", "订单 10482913 已发货，客服电话 4008 1234，金额 2999 元。",
+                 "订单 10482913 已发货、客服电话 4008 1234、金额 2999 元。"),
+                ("[Acme] 예약번호 안내", "체크인 2026-03-12, 128000원, 문의 1588 1234, 예약 10482913",
+                 "체크인 2026-03-12, 128000원, 문의 1588 1234, 예약 10482913"),
+                ("Acme QRコードのご案内", "予約番号 10482913 12800円", "予約番号 10482913 12800円"),
+                ("Acme 您的二维码电子票", "订单 10482913，2999元，2026-03-12", "订单 10482913、2999元、2026-03-12")):
             kept_mail = mail._kept(mail.terms("Acme"), "", subject, body, False)
             self.assertIn(kept, f"{kept_mail[1]} {kept_mail[2]}", subject)
         # A password, a PIN or a passcode still does, as "Acme 482913" over "Your Acme PIN".
         for subject, body in (("Acme 482913", "Your Acme PIN, as asked."),
-                              ("Your Acme passcode", "Hello, it is 482913.")):
+                              ("Your Acme passcode", "Hello, it is 482913."),
+                              ("Acme 您的验证码", "Hello, it is 482913."),
+                              ("Acme 482913", "您的验证码，请勿泄露。"),
+                              ("[Acme] 인증번호 안내", "Hello, it is 482913.")):
             kept_mail = mail._kept(mail.terms("Acme"), "", subject, body, False)
             self.assertNotIn("482913", f"{kept_mail[1]} {kept_mail[2]}", subject)
 
-    def test_every_mark_nfkc_makes_punctuation_of_is_a_space_first(self):
+    def test_every_mark_nfkc_makes_punctuation_of_is_changed_first(self):
         """NFKC made "，" a comma, so "482913，5分钟" read as a decimal and the code reached the
-        model. MADE_MARKS is every character NFKC makes nothing but these four marks of, which
-        is slow to find at import."""
+        model, and "＿" a low line, which is part of a word. MADE_MARKS is every character NFKC
+        makes nothing but these five marks of, which is slow to find at import. Each is made a
+        mark that NFKC leaves alone and no pattern takes for a joiner, a dash or a space: made a
+        space, the wide comma joined the 5 of "5分钟" to the code before it."""
         made = {char for char in map(chr, range(sys.maxunicode + 1))
-                if char not in ".,/-" and unicodedata.normalize("NFKC", char)
-                and not unicodedata.normalize("NFKC", char).strip(".,/-")}
+                if char not in ".,/-_" and unicodedata.normalize("NFKC", char)
+                and not unicodedata.normalize("NFKC", char).strip(".,/-_")}
         self.assertEqual(set(map(chr, mail.MADE_MARKS)), made)
+        for mark in mail.MADE_MARKS.values():
+            self.assertEqual(unicodedata.normalize("NFKC", mark), mark)
+            self.assertNotRegex(mark, r"[\w.,/-]")
+        self.assertEqual(mail._plain("482913，5分钟．２０２６／０３"), "482913、5分钟。2026∕03")
 
-    def test_every_dot_and_bullet_is_a_space(self):
+    def test_every_dot_and_bullet_is_a_space_to_the_hiding(self):
         """A code after any of them is alone on its line, and one between two groups joins
-        them as a space would."""
+        them as a space would. The model reads a middle dot, so a password with one in it is
+        one password."""
         for dot in ("\u00b7\u2027\u30fb\u2022\u2219\u2023\u204c\u204d\u22c5\u25a0\u25aa\u25ab"
                     "\u25cf\u25e6\u2981\u29bf\u2e31"):
             for text, code in ((f"Hello from Acme.\n{dot} 482913\nThanks", "482913"),
@@ -939,6 +1004,7 @@ class Secrets(Base):
                 shown = mail._hide(text)
                 self.assertNotIn(code, shown, repr(text))
                 self.assertIn(mail.HIDDEN, shown, repr(text))
+            self.assertEqual(mail._plain(f"Blume{dot}42"), "Blume\u00b742")
 
     async def all_hidden(self, texts):
         self.index(*({"subject": f"About your Acme account {n}", "body": text, "id": f"{n}@x",

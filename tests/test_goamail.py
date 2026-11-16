@@ -419,6 +419,23 @@ class Secrets(Goa):
                                         "Your code is KQ7&#8209;X9B.",
                                         "<b>482913</b>.", "<strong>KQ7X9B</strong>!")))])
 
+    async def test_a_password_with_a_dash_or_a_dot_in_it_is_hidden_whole(self):
+        """The hiding read a dash as a space, and the model a dot as one, so a password after
+        "is" was hidden only up to the first of them."""
+        words = ("Sunny&mdash;Day&mdash;Seven", "Sunny&#8209;Day&#8209;Seven", "Blume&middot;Seven",
+                 "Blume&bull;Seven")
+        mails = [message(f"About your Acme wifi {n}", ACME, None,
+                         html=f"<p>The wifi password is {word} for the guests.</p>")
+                 for n, word in enumerate(words)]
+        await self.mailbox(gmail(inbox=[(HELLO, 900), *((raw, 1) for raw in mails)]))
+        self.says = ["NOTHING"] * len(mails)
+        with mock.patch.object(mail, "TRIED", len(mails)):
+            await self.ask("Did Acme email me about the wifi?")
+        self.assertEqual(len(self.model), len(mails))
+        for call in range(len(mails)):
+            self.assertIn(f"password is {mail.HIDDEN} for the guests", self.read(call))
+            self.assertNotIn("Seven", self.read(call))
+
     async def test_a_code_in_two_groups_of_three_is_hidden_with_a_group_of_letters(self):
         """Only groups that both held a digit were hidden."""
         await self.all_hidden([
