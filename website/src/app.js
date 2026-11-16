@@ -50,6 +50,17 @@
       document.getElementById(`panel-${tab.dataset.os}`).hidden = !on;
       if (on && focus) tab.focus();
     }
+    examplesAsk(id);
+  }
+  // The examples end by asking about the system on show: where it has a release, whether the
+  // visitor wants it; where it has none, that it is coming and what pays for it.
+  function examplesAsk(id) {
+    const cta = document.querySelector('#examples .acc-cta');
+    const soon = !S.releases[id].url;
+    cta.querySelector('p').textContent = soon ? fill(S.ctaSoon, { os: OS_NAMES[id] }) : S.ctaExamples;
+    for (const action of cta.querySelectorAll('.acc-actions > *')) {
+      action.hidden = (action.dataset.cta === 'donate') !== soon;
+    }
   }
   tabs.forEach((tab, index) => {
     tab.addEventListener('click', () => selectTab(tab.dataset.os));
@@ -63,9 +74,30 @@
   });
   selectTab(shownOS);
 
-  // Sections: accordions. The page arrives with every section open, which is how it stays without
-  // script. Here the first stays open, the rest close, and a link into one opens it. A closed panel
-  // is hidden until found where the browser can do that, so find in page still reaches its text.
+  // A section's download is the hero's file: the visitor's own system when that has a release, and
+  // otherwise Linux, phones included. It names the system it downloads for, as the hero does.
+  const ctaOS = S.releases[os]?.url ? os : 'linux';
+  for (const link of document.querySelectorAll('[data-cta="download"]')) {
+    link.href = S.releases[ctaOS].url;
+    link.textContent = fill(S.dlFor, { os: OS_NAMES[ctaOS] });
+  }
+
+  // Sections: accordions. The page arrives with every section open and its heading plain text,
+  // which is how it stays without script. Here each heading's text becomes the toggle, a button
+  // inside the h2 so the outline keeps it; the first section stays open, the rest close, and a link
+  // into one opens it. A closed panel is hidden until found where the browser can do that, so find
+  // in page still reaches its text.
+  for (const heading of document.querySelectorAll('.acc-head h2')) {
+    const section = heading.closest('.acc');
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'acc-toggle';
+    toggle.id = `${section.id}-toggle`;
+    toggle.setAttribute('aria-controls', section.querySelector('.acc-panel').id);
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.append(...heading.childNodes);
+    heading.append(toggle);
+  }
   const HIDDEN = 'onbeforematch' in document.body ? 'until-found' : true;
   const FOLD_MS = 300;    // a little longer than the 280 ms fold in style.css
   const folding = new WeakMap();
@@ -113,14 +145,6 @@
   addEventListener('hashchange', () => reveal(location.hash)?.scrollIntoView());
   reveal(location.hash)?.scrollIntoView();
   document.documentElement.classList.add('has-acc');
-
-  // A section's download is the hero's: the visitor's own system when that has a release. On a
-  // system without one it still downloads for Linux, so it says so rather than promising more.
-  const ownRelease = os && S.releases[os];
-  for (const link of document.querySelectorAll('[data-cta="download"]')) {
-    if (ownRelease?.url) link.href = ownRelease.url;
-    else if (os) link.textContent = fill(S.dlFor, { os: OS_NAMES.linux });
-  }
 
   // Language: the choice is remembered, so / stops following the browser.
   const language = document.getElementById('lang');

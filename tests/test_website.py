@@ -171,7 +171,7 @@ class BuiltSite(unittest.TestCase):
 
     # Accordion sections, each ending with a call to action.
     ACC_SECTIONS = {    # section: its title, its prompt, and the label of each action in order
-        "examples": ("examplesTitle", "ctaExamples", ["ctaDownload"]),
+        "examples": ("examplesTitle", "ctaExamples", ["ctaDownload", "donate"]),
         "preview": ("previewTitle", "ctaPreview", ["ctaDownload", "releaseNotes"]),
         "versions": ("versionsTitle", "ctaVersions", ["ctaReleases"]),
     }
@@ -236,23 +236,28 @@ class BuiltSite(unittest.TestCase):
                 self.assertEqual(len(headings), 1, (page, name))
                 heading = headings[0]
                 self.assertEqual(section["attrs"]["aria-labelledby"], heading["attrs"]["id"], (page, name))
-                # The toggle is a real button inside the heading, so the outline keeps the heading.
-                [toggle] = heading["children"]
-                self.assertEqual(toggle["tag"], "button", (page, name))
-                self.assertEqual(toggle["attrs"].get("type"), "button", (page, name))
-                self.assertEqual(toggle["text"], strings[self.ACC_SECTIONS[name][0]], (page, name))
+                # Plain text until app.js makes it the toggle: without script, no button that does nothing.
+                self.assertEqual(heading["children"], [], (page, name))
+                self.assertEqual(heading["text"], strings[self.ACC_SECTIONS[name][0]], (page, name))
+                # The h2 is alone in its box, so fitHeadings() measures the room beside the chevron.
+                head = section["children"][0]
+                self.assertEqual(head["attrs"].get("class"), "acc-head", (page, name))
+                self.assertEqual([child["attrs"].get("class") for child in head["children"]],
+                                 ["acc-fit", "acc-chev"], (page, name))
+                self.assertEqual(head["children"][0]["children"], [heading], (page, name))
                 # Open until script closes it, so a page without script shows everything.
-                self.assertEqual(toggle["attrs"].get("aria-expanded"), "true", (page, name))
-                panel = by_id[toggle["attrs"]["aria-controls"]]
-                self.assertIn(panel, self.find_all(section, lambda n: True), (page, name))
+                panel = by_id[f"{name}-panel"]
+                self.assertEqual(panel["attrs"].get("class"), "acc-panel", (page, name))
                 self.assertNotIn("hidden", panel["attrs"], (page, name))
-                self.assertEqual(section["children"][-1], panel, "everything but the heading folds")
+                self.assertEqual(section["children"], [head, panel], "everything but the heading folds")
             self.assertNotIn("is-closed", html, "only app.js closes a section")
+            self.assertNotIn("acc-toggle", html, "only app.js makes the toggle")
+            self.assertNotIn("aria-expanded", html, "only app.js makes the toggle")
 
     def test_every_section_ends_with_a_call_to_action_in_its_language(self):
         releases = json.loads((ROOT / "website/src/releases.json").read_text())
         notes = self.build.release_in(releases, releases["linux"]["version"])["page"]
-        hrefs = {"ctaDownload": releases["linux"]["url"], "releaseNotes": notes,
+        hrefs = {"ctaDownload": releases["linux"]["url"], "releaseNotes": notes, "donate": self.build.DONATE,
                  "ctaReleases": "https://github.com/BuenGenio/Tuxistant/releases"}
         for page in self.pages:
             strings = self.strings(page)
@@ -270,10 +275,58 @@ class BuiltSite(unittest.TestCase):
                 self.assertEqual([link["text"] for link in links], [strings[key] for key in actions], (page, name))
                 self.assertEqual([link["attrs"]["href"] for link in links], [hrefs[key] for key in actions], (page, name))
                 self.assertIn("btn-cta", links[0]["attrs"]["class"].split(), "the first action is a button")
-        for key in ("ctaExamples", "ctaPreview", "ctaVersions", "ctaDownload", "ctaReleases"):
+                # The donation is the examples' ask only on a system with no release, so it starts
+                # hidden: without script the Linux tab is on show, and Linux has one.
+                self.assertEqual(["hidden" in link["attrs"] for link in links],
+                                 [key == "donate" for key in actions], (page, name))
+        for key in ("ctaExamples", "ctaPreview", "ctaVersions", "ctaDownload", "ctaReleases", "ctaSoon"):
             labels = [self.strings(page)[key] for page in self.pages]
             self.assertTrue(all(label.strip() for label in labels), key)
             self.assertEqual(len(set(labels)), 5, f"{key}: each language has its own words")
+        for page in self.pages:
+            self.assertEqual(re.findall(r"\{(\w+)\}", self.strings(page)["ctaSoon"]), ["os"], page)
+
+    def test_the_examples_ask_about_the_system_on_show(self):
+        """A Mac visitor opens on the macOS tab, where nothing is out yet: the examples must not then
+        ask whether they want it on their desktop and offer a Linux download."""
+        app = (self.dist / "app.js").read_text()
+        select = app[app.index("function selectTab("):app.index("function examplesAsk(")]
+        self.assertIn("examplesAsk(id);", select, "the ask follows every change of tab")
+        ask = app[app.index("function examplesAsk("):]
+        ask = ask[:ask.index("\n  }\n") + 4]
+        self.assertIn("const soon = !S.releases[id].url;", ask)
+        self.assertIn("soon ? fill(S.ctaSoon, { os: OS_NAMES[id] }) : S.ctaExamples", ask)
+        self.assertIn("action.hidden = (action.dataset.cta === 'donate') !== soon;", ask)
+        for page in self.pages:
+            data = json.loads(re.search(r'<script type="application/json" id="strings">(.*?)</script>',
+                                        page.read_text(), re.S)[1])
+            strings = self.strings(page)
+            self.assertEqual((data["ctaExamples"], data["ctaSoon"]),
+                             (strings["ctaExamples"], strings["ctaSoon"]), page)
+        css = (self.dist / "style.css").read_text()
+        self.assertIn(".acc-actions [hidden] { display: none; }", css, ".btn's display would show it")
+
+    def test_a_section_download_names_the_system_it_downloads_for(self):
+        """Phones, macOS and Windows have no release of their own and get Linux's, as the hero does,
+        so the button says Linux; only a system with its own release gets its own file."""
+        app = (self.dist / "app.js").read_text()
+        block = app[app.index("const ctaOS = "):]
+        block = block[:block.index("\n  }\n")]
+        self.assertIn("const ctaOS = S.releases[os]?.url ? os : 'linux';", block)
+        self.assertIn("link.href = S.releases[ctaOS].url;", block)
+        self.assertIn("link.textContent = fill(S.dlFor, { os: OS_NAMES[ctaOS] });", block)
+        self.assertRegex(app, r"if \(/android\|iphone\|ipad\|ipod/\.test\(ua\)\) return null;",
+                         "a phone is no system: it falls through to Linux")
+
+    def test_with_no_linux_download_a_section_offers_every_release_instead(self):
+        releases = json.loads((ROOT / "website/src/releases.json").read_text())
+        strings = self.strings(self.pages[0])
+        self.assertIn('data-cta="download"', self.build.cta_download(strings, releases))
+        releases["linux"]["url"] = None     # "coming soon": nothing to download
+        offered = self.build.cta_download(strings, releases)
+        self.assertNotIn('data-cta="download"', offered)
+        self.assertNotIn("#download", offered)
+        self.assertEqual(offered, self.build.cta_releases(strings, releases))
 
     def test_every_in_page_link_lands_on_something(self):
         for page in self.pages:
@@ -295,6 +348,32 @@ class BuiltSite(unittest.TestCase):
                                 r"\{ display: block; content-visibility: visible; \}")
         self.assertIn("classList.add('has-acc')", app)
         self.assertIn("animate = !reducedMotion", app, "the fold is instant for reduced motion")
+        # The toggle: made from the heading's text, inside the h2, open, and naming its panel.
+        make = app[app.index("for (const heading of document.querySelectorAll('.acc-head h2'))"):]
+        make = make[:make.index("\n  }\n")]
+        for line in ("document.createElement('button')", "toggle.type = 'button';", "toggle.className = 'acc-toggle';",
+                     "toggle.setAttribute('aria-controls', section.querySelector('.acc-panel').id);",
+                     "toggle.setAttribute('aria-expanded', 'true');", "toggle.append(...heading.childNodes);",
+                     "heading.append(toggle);"):
+            self.assertIn(line, make)
+        self.assertLess(app.index("heading.append(toggle);"), app.index("const accordions = "))
+        # Where hidden=until-found is unknown, a closed panel must leave layout and the tab order.
+        self.assertIn('.acc-panel[hidden]:not([hidden="until-found"]) { display: none; }', block)
+        # The toggle's hit area is the whole row, so a tap on the chevron folds too.
+        self.assertRegex(block, r'\.acc-toggle::after \{ content: ""; position: absolute; inset: 0 -8px;')
+        self.assertRegex(block, r"\.acc-head \{ position: relative;")
+        # A touch screen keeps :hover after a tap, so the chevron's highlight is for pointers only.
+        self.assertRegex(block, r"@media \(hover: hover\) \{\s*\.acc-head:hover \.acc-chev \{")
+        self.assertNotRegex(block.replace("@media (hover: hover) {\n  .acc-head:hover", ""), r"\.acc-head:hover")
+        # The Donate card's margin is the only gap after the last section: margins never stack.
+        self.assertIn(".acc:has(+ .wrap > .support) .acc-cta { margin-block-end: 0; }", block)
+        # A link is as tall as the button beside it.
+        self.assertRegex(block, r"\.acc-more \{[^}]*min-height: 44px;")
+        # Following an in-page link scrolls before hashchange fires, so the header's grace starts on
+        # the click, ahead of the scroll.
+        self.assertRegex(app, r"document\.addEventListener\('click', event => \{\s*"
+                              r"if \(event\.target\.closest\?\.\('a\[href\^=\"#\"\]'\)\) "
+                              r"(graceUntil = performance\.now\(\) \+ 900|navigated\(\))")
         for opened_by in ("addEventListener('hashchange', () => reveal(location.hash)",
                           "reveal(location.hash)?.scrollIntoView();", "reveal(link.hash)", "'beforematch'"):
             self.assertIn(opened_by, app, "a link, a hash or find in page opens its section")

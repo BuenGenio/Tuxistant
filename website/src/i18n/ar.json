@@ -14,7 +14,7 @@
   "dlFor": "تنزيل لنظام {os}", "dlSoon": "قريبًا على {os}", "dlPending": "النسخة التجريبية لنظام {os} قريبًا", "dlAll": "كل الإصدارات",
   "dlMeta": "الإصدار {version}، {channel}", "dlPlanned": "غير متاح بعد",
   "examplesTitle": "ماذا يفعل من أجلك", "youSay": "تقول", "approve": "بعد موافقتك أولًا",
-  "ctaExamples": "أتريده على سطح مكتبك؟", "ctaPreview": "ساعد في إثبات نجاحها على سطح مكتب حقيقي.", "ctaVersions": "تبحث عن إصدار أقدم أو عن الشيفرة المصدرية؟", "ctaDownload": "تنزيل Tuxistant", "ctaReleases": "عرض كل الإصدارات على GitHub",
+  "ctaExamples": "أتريده على سطح مكتبك؟", "ctaPreview": "ساعد في إثبات نجاحها على سطح مكتب حقيقي.", "ctaVersions": "تبحث عن إصدار أقدم أو عن الشيفرة المصدرية؟", "ctaSoon": "قريبًا على {os}. دعمك يموّل هذا الإصدار.", "ctaDownload": "تنزيل Tuxistant", "ctaReleases": "عرض كل الإصدارات على GitHub",
   "examples": {
     "linux": [
       ["now", "كم تبقى من مساحة القرص؟", "يفحص القرص ويخبرك بصوت مسموع."],
@@ -35,7 +35,7 @@
       ["soon", "احذف ملفاتي المؤقتة.", "يعرض ما وجده ثم يحرر المساحة.", true]
     ]
   },
-  "versionsTitle": "الإصدارات", "colSystem": "النظام", "colVersion": "الإصدار", "colStatus": "الحالة", "colNeeds": "المتطلبات",
+  "versionsTitle": "الإصدارات وسجلّها", "colSystem": "النظام", "colVersion": "الإصدار", "colStatus": "الحالة", "colNeeds": "المتطلبات",
   "preview": "تجريبي", "stable": "مستقر", "planned": "مخطط له", "linuxNeeds": "GNOME 50 وخادم LocalAI خاص بك", "tbd": "يُعلن لاحقًا",
   "previewTry": "جرّب النسخة التجريبية {version} لنظام Linux", "previewSep": "، ", "previewUntried": "لم تُجرَّب بعد على سطح مكتب حقيقي", "releaseNotes": "ملاحظات الإصدار",
   "previewTitle": "الجديد في 0.5.0", "previewLead": "جاهزة، لكن نجاحها لم يثبت بعد على سطح مكتب حقيقي. تصبح كل منها «متاح» بعد أن تعمل على واحد.",

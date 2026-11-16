@@ -295,20 +295,19 @@ def apply_upcoming(path, languages, releases):
         strings["localPreview"] = upcoming["banner"][code]
 
 
-# Accordion sections. Every section after the ticker arrives open, which is how it stays without
-# script; app.js closes all but the first and opens the one a link points into. The heading keeps
-# its place in the outline: the toggle is a button inside the h2, and the h2 sits alone in its own
-# box so fitHeadings() in app.js measures the room left beside the chevron.
+# Accordion sections. Every section after the ticker arrives open with a plain heading, which is how
+# it stays without script: no button that does nothing. app.js turns the heading's text into the
+# toggle, a button inside the h2 so the outline keeps the heading, closes all but the first section
+# and opens the one a link points into. The h2 sits alone in its own box so fitHeadings() in app.js
+# measures the room left beside the chevron.
 ACC_CHEVRON = ('<svg class="acc-chev" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
                '<path d="M6 9l6 6 6-6"/></svg>')
 
 
 def acc_open(name, title):
     return (f'<section class="section acc wrap" id="{name}" aria-labelledby="{name}-title">'
-            f'<div class="acc-head"><div class="acc-fit"><h2 id="{name}-title">'
-            f'<button class="acc-toggle" type="button" id="{name}-toggle" aria-expanded="true" '
-            f'aria-controls="{name}-panel">{esc(title)}</button></h2></div>{ACC_CHEVRON}</div>'
-            f'<div class="acc-panel" id="{name}-panel"><div class="acc-inner">')
+            f'<div class="acc-head"><div class="acc-fit"><h2 id="{name}-title">{esc(title)}</h2></div>'
+            f'{ACC_CHEVRON}</div><div class="acc-panel" id="{name}-panel"><div class="acc-inner">')
 
 
 def acc_close(prompt, *actions):
@@ -319,9 +318,19 @@ def acc_close(prompt, *actions):
 
 def cta_download(strings, releases):
     """The newest stable download, as the hero's button offers it. app.js points it at the visitor's
-    own system when that has a release, and otherwise says it is for Linux."""
-    url = releases["linux"]["url"] or "#download"
+    own system when that has a release, and names the system either way. With no Linux download
+    yet it offers every release on GitHub instead, rather than a button that downloads nothing."""
+    url = releases["linux"]["url"]
+    if not url:
+        return cta_releases(strings, releases)
     return f'<a class="btn btn-cta" href="{esc(url)}" data-cta="download">{esc(strings["ctaDownload"])}</a>'
+
+
+def cta_donate(strings):
+    """What the examples ask for on a system with no release yet. app.js shows it in place of the
+    download while such a system's tab is open; without script the Linux tab is, so it stays hidden."""
+    return (f'<a class="btn btn-cta btn-coffee" href="{DONATE}" rel="noopener" data-cta="donate" hidden>'
+            f'{esc(strings["donate"])}</a>')
 
 
 def cta_notes(strings, releases):
@@ -350,7 +359,8 @@ def page(code, strings, languages, releases, detect, policy):
         alternates += (f'<link rel="alternate" hreflang="x-default" href="{SITE_URL}/">'
                        f'<link rel="canonical" href="{SITE_URL}{path_for(code)}">')
     data = {k: strings[k] for k in ("dlFor", "dlSoon", "dlPending", "dlMeta", "dlPlanned",
-                                    "preview", "stable", "planned", "themes", "showTheme")}
+                                    "preview", "stable", "planned", "themes", "showTheme",
+                                    "ctaExamples", "ctaSoon")}
     data["releases"] = {os_id: releases[os_id] for os_id, _ in OS_ORDER}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"
@@ -405,7 +415,7 @@ def page(code, strings, languages, releases, detect, policy):
   {acc_open('examples', strings['examplesTitle'])}
     <div class="tabs" role="tablist" aria-labelledby="examples-title">{tabs}</div>
     {panels}
-  {acc_close(strings['ctaExamples'], cta_download(strings, releases))}
+  {acc_close(strings['ctaExamples'], cta_download(strings, releases), cta_donate(strings))}
   {acc_open('preview', strings['previewTitle'])}
     <p class="lead">{esc(strings['previewLead'])}</p>
     <ul class="caps caps-row">{preview_caps_html(strings)}</ul>
