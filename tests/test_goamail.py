@@ -25,7 +25,7 @@ from tests import imap_fake  # noqa: E402
 from tests.imap_fake import TOKEN, USER, Box, PrivateBus, Server, message  # noqa: E402
 from tests.mail_index import build  # noqa: E402
 from tests.test_mail import (ASKED, CONFIG, DASHED, DRESSED, GLUED,  # noqa: E402
-                             GROWN, IN_PARTS, INTO_WORD_AFTER, LONE_DIGIT, LONG, ORDER,
+                             GROUPS, GROWN, IN_PARTS, INTO_WORD_AFTER, LONE_DIGIT, LONG, ORDER,
                              ORDER_NUMBERS, SHOWN_CODES, SPLIT_ACROSS, TALK_PAST, TWICE_NAMED,
                              WIDE_CODE, WIDE_SPELT, WIDE_TOKENS, WORD_AFTER, Base, escaped,
                              straddling)
@@ -419,20 +419,32 @@ class Secrets(Goa):
                                         "Your code is KQ7&#8209;X9B.",
                                         "<b>482913</b>.", "<strong>KQ7X9B</strong>!")))])
 
+    async def test_a_code_in_two_groups_of_three_is_hidden_with_a_group_of_letters(self):
+        """Only groups that both held a digit were hidden."""
+        await self.all_hidden([
+            *(message(f"About your Acme account {n}", ACME, text)
+              for n, text in enumerate(GROUPS)),
+            message("About your Acme account, page", ACME, None,
+                    html="<p>Hello from Acme.</p><p><b>KQW 9XB</b></p><p>Thanks</p>")])
+
     async def test_a_code_glued_to_a_word_or_named_twice_is_hidden(self):
-        """A dot made a hyphen glued a code to the word after it, and a code taken in half by a
-        second word for one joined to it showed the other half."""
+        """A dot or a dash made a hyphen glued a code to the word after it, and a code taken in
+        half by a second word for one joined to it showed the other half."""
         await self.all_hidden([
             *(message(f"About your Acme account {n}", ACME, text)
               for n, text in enumerate(GLUED + TWICE_NAMED)),
             message("About your Acme account, page", ACME, None,
-                    html="<p>Your Acme code below.</p><p>code=482 913</p><p>Thanks</p>")])
+                    html="<p>Your Acme code below.</p><p>code=482 913</p><p>Thanks</p>"),
+            message("About your Acme account, page 2", ACME, None,
+                    html="<p>To sign in, use <b>482913</b>&mdash;Verification ends soon.</p>")])
 
     async def all_hidden(self, mails):
         """Each of these mails is shown to the model with its code hidden."""
         await self.mailbox(gmail(inbox=[(raw, 1 + n / 100) for n, raw in enumerate(mails)]))
         self.says = ["NOTHING"] * len(mails)
-        with mock.patch.object(mail, "TRIED", len(mails)):
+        # Only the best 30 are kept, so that is all one ask can read.
+        with mock.patch.object(mail, "TRIED", len(mails)), \
+                mock.patch.object(mail, "MAX_CHECKED", max(mail.MAX_CHECKED, len(mails))):
             await self.ask("Did Acme email me?")
         self.assertEqual(len(self.model), len(mails))
         for call in range(len(mails)):

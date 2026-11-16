@@ -116,7 +116,10 @@ SPLIT_ACROSS = (("Sign in to Acme", "Hi, enter 482913 on the page to continue.")
                 ("Your new Acme code", "Hello from Acme. Enter this on the page: KQW-XBT thanks"),
                 ("Your Acme code", "48 29 13"),
                 ("Your Acme code", "Hi, KQ7 X9B is it."),
-                ("Sign in to Acme", "Hello. Enter K Q 7 X 9 B on the page."))
+                ("Sign in to Acme", "Hello. Enter K Q 7 X 9 B on the page."),
+                # Two groups of three, one of them letters only.
+                ("Sign in to Acme", "Hello.\n\nKQW 9XB\n\nThanks"),
+                ("Acme KQW 9XB", "This is your Acme code."))
 # Codes joined by a dash that isn't a hyphen-minus: a non-breaking hyphen, which templates write
 # as &#8209; to keep a code on one line, a hyphen, a minus sign and an en dash, the other minus
 # signs, and the dots that stand where a dash would, which are spaces.
@@ -124,29 +127,52 @@ DASHED = ("Your Acme code is 482‑913.", "Your Acme code:\n482&#8209;913\nThank
           "Sign in to Acme with 482‐913 now.", "Your Acme code is KQ7‑X9B.",
           "Your Acme code is 482−913.", "Your Acme code is 482–913.",
           "Your Acme code is 482·913.", "Your Acme code is 482‧913.",
-          "Your Acme code is 482⁃913.", "Your Acme code is 482➖913.")
+          "Your Acme code is 482⁃913.", "Your Acme code is 482➖913.",
+          "Your Acme code is 482\u22c5913.", "Your Acme code is 482\u2e31913.",
+          "Your Acme code is 482\u25cf913.")
 DASHED_CODES = (r"482\W{0,3}913", r"KQ7\W{0,3}X9B")
-# Codes glued to the word after them by a dot or a bullet, in a mail that only talks of signing
-# in. Made hyphens, the dots joined each code to its word, as a reference's parts are joined.
+# Codes glued to the word after them by a dot, a bullet or a dash, in a mail that only talks of
+# signing in. Made hyphens, the dots joined each code to its word, as a reference's parts are
+# joined, and so did every dash: a hyphen joins only a digit, a slash or a few capitals now.
 GLUED = ("Hello from Acme. To sign in, use 482913•Verification ends in 10 minutes.",
          "To sign in, use 482913·Unterstützung", "To sign in, enter 482913・確認",
          "To sign in, use KQ7X9B•Verification", "Sign in: Verification•KQ7X9B ends soon",
-         "Use KQ7·X9B to sign in")
+         "Use KQ7·X9B to sign in",
+         "Hello from Acme. To sign in, use 482913—Verification ends in 10 minutes.",
+         "Hello from Acme. To sign in, use 482913&#8212;Verification ends in 10 minutes.",
+         "To sign in, enter 482913–remember, it expires soon.",
+         "Your verification number—482913—expires in 10 minutes.",
+         "To sign in use 482913–Bestätigung", "To sign in, use 482913—Unterstützung",
+         "Enter 482 913—Verification ends soon", "Enter 482-913—Verification ends soon",
+         "To sign in, use 482913\uff0dVerification", "To sign in, use 482913\ufe63Verification",
+         "To sign in, use 482913\u2010Verification", "To sign in, use 482913-Verification",
+         "To sign in, use KQ7X9B—Verification", "Sign in: Verification—KQ7X9B ends soon",
+         "To sign in, use KQ7 X9B—Verification")
 # Codes a second word for a code is joined to. Matches can't overlap, so "code=482" took the
 # first half of the code after the first word, and 913 was shown.
 TWICE_NAMED = ("Your Acme code below.\n\ncode=482 913\n\nThanks",
                "Your Acme PIN is ready. pin=482 913 Thanks", "Your Acme code: token=KQ7 X9B")
+# Codes in two groups of three, of capitals and digits with a group of letters only, which
+# were hidden only with a digit in each group: beside the word for a code, alone on its line and
+# in a mail that talks of signing in.
+GROUPS = ("Your Acme code is KQW 9XB.", "Your Acme code is KQ7 XQB. Thanks",
+          "Your Acme code is KQW XBT.", "Your Acme code is ABC 123.",
+          "Hello from Acme.\n\nKQW 9XB\n\nThanks", "Hello from Acme.\n*KQ7 XQB*\nThanks",
+          "Sign in with KQW 9XB within 10 minutes.")
 # The codes in these mails, as the model would read them, and what is left of one half hidden.
 SHOWN_CODES = (*DASHED_CODES, "482913", "KQ7X9B",
                r"KQ\W{0,3}W\W{0,3}X\W{0,3}B\W{0,3}T", r"K\W{0,3}Q\W{0,3}7\W{0,3}X\W{0,3}9\W{0,3}B",
-               r"48\W{0,3}29\W{0,3}13", r"\b913\b", r"\bX9B\b")
+               r"48\W{0,3}29\W{0,3}13", r"\b913\b", r"\bX9B\b",
+               r"\b(?:KQW|KQ7|9XB|XQB|XBT)\b", r"ABC\W{0,3}123")
 # A code on its own line with punctuation round it, as html2text writes a bold one, as the plain
 # part of an HTML mail writes an item of a list or code, or as a table's cell is written.
 DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nThanks",
            "Hello from Acme.\n**KQ7X9B**\nThanks", "Hello from Acme.\n(482 913)\nThanks",
            "Hello from Acme.\n`482913`\nThanks", "Hello from Acme.\n- 482913\nThanks",
            "Hello from Acme.\n• KQ7X9B\nThanks", "Hello from Acme.\n| 482913 |\nThanks",
-           "Hello from Acme.\n# 482913\nThanks", "Hello from Acme.\n/482913/\nThanks")
+           "Hello from Acme.\n# 482913\nThanks", "Hello from Acme.\n/482913/\nThanks",
+           "Hello from Acme.\n\u25cf 482913\nThanks", "Hello from Acme.\n\u25aa KQ7X9B\nThanks",
+           "Hello from Acme.\n\u25e6 482913.\nThanks")
 # Bodies built to be slow to hide: a word for a code over and over, and runs of letters that
 # the word for one may end.
 SLOW_TO_HIDE = ("码!" * 10_000, "pin!" * 5000, "é" * 16_000, "×" * 16_000, "À" * 16_000,
@@ -632,6 +658,9 @@ class Secrets(Base):
                 ("Sign in to see your statement for 2026.", "2026"),
                 ("Sign in to pay the 1250 pounds you owe us.", "1250"),
                 ("Sign in to pay the 1 2 5 0 pounds you owe us.", "1 2 5 0 pounds"),
+                ("Sign in to pay the GBP 125 you owe us.", "GBP 125"),
+                ("Sign in to pay the 125 EUR you owe us.", "125 EUR"),
+                ("Sign in to track parcel 10482913-ABCDEF today.", "10482913-ABCDEF"),
                 ("Sign in to book: we're open 9am 5pm on the 1st 2nd and 3rd.",
                  "9am 5pm on the 1st 2nd"),
                 ("Copyright\n2\n0\n2\n6\nAcme", "2026"),
@@ -798,16 +827,29 @@ class Secrets(Base):
         await self.all_hidden(DASHED + DRESSED)
 
     async def test_a_code_glued_to_a_word_or_named_twice_is_hidden(self):
-        """A dot or a bullet made a hyphen glued a code to the word after it, and a code taken
-        in half by a second word for one joined to it showed the other half."""
+        """A dot, a bullet or a dash made a hyphen glued a code to the word after it, and a code
+        taken in half by a second word for one joined to it showed the other half."""
         await self.all_hidden(GLUED + TWICE_NAMED)
+
+    async def test_a_code_in_two_groups_of_three_is_hidden_with_a_group_of_letters(self):
+        """Only groups that both held a digit were hidden, and a random code has a group with no
+        digit more often than not."""
+        await self.all_hidden(GROUPS)
+
+    def test_what_overlaps_is_hidden_once(self):
+        """The number and the letters with digits round it are both secrets, and two [hidden]
+        side by side are read out as two."""
+        self.assertEqual(mail._hide("To sign in, use 482913\u2014it expires soon."),
+                         f"To sign in, use {mail.HIDDEN} expires soon.")
 
     async def all_hidden(self, texts):
         self.index(*({"subject": f"About your Acme account {n}", "body": text, "id": f"{n}@x",
                       "author": "Acme <account@acme.example>", "days_ago": 1 + n / 10}
                      for n, text in enumerate(texts)))
         self.says = ["NOTHING"] * len(texts)
-        with mock.patch.object(mail, "TRIED", len(texts)):
+        # Only the best 30 are kept, so that is all one ask can read.
+        with mock.patch.object(mail, "TRIED", len(texts)), \
+                mock.patch.object(mail, "MAX_CHECKED", max(mail.MAX_CHECKED, len(texts))):
             await self.ask("Did Acme email me about my account?")
         self.assertEqual(len(self.model), len(texts))
         for call in range(len(texts)):
@@ -1401,12 +1443,12 @@ class Strangers(Base):
                    PASSPORT, *hostile, strangers=True)
         real, took = mail.find, []
 
-        def timed(stems):
-            started = time.monotonic()
+        def timed(stems):     # by its own thread's time, as a busy machine slows the clock
+            started = time.thread_time()
             try:
                 return real(stems)
             finally:
-                took.append(time.monotonic() - started)
+                took.append(time.thread_time() - started)
 
         worst, ticking = [0.0], [True]
 
@@ -1637,6 +1679,29 @@ class Limits(Base):
             said, _ = await self.ask()
         self.assertTrue(said.startswith("Then."), said)
         self.assertEqual(len(hidden), 1)
+
+    async def test_a_long_plain_subject_is_cut_before_it_is_hidden(self):
+        """NFKC leaves plain text as it is, so only the cut keeps a stranger's subject of
+        600,000 characters from taking seconds to hide, and a few of them from running the
+        search out of time before the real mail."""
+        hostile = [{"subject": "Passport application renewal " + "pin 1 " * 100_000,
+                    "author": f"S <s{n}@strangers.example>", "days_ago": 0.1 + n / 100,
+                    "body": "Hi."} for n in range(3)]
+        self.index({"subject": "Hello", "author": OFFICE, "days_ago": 900, "body": "Hello."},
+                   PASSPORT, *hostile, strangers=True)
+        real, hidden = mail._secret_free, []
+
+        def measured(subject, *args):
+            hidden.append(len(subject))
+            return real(subject, *args)
+
+        self.says = ["You applied on the 2nd."]
+        with mock.patch.object(mail, "_secret_free", measured):
+            said, _ = await self.ask()
+        self.assertTrue(said.startswith("You applied on the 2nd. That's from an email from "
+                                        "notify.citizen.example"), said)
+        self.assertEqual(len(hidden), 4)
+        self.assertLessEqual(max(hidden), mail.SCAN_CHARS)
 
     async def test_a_subject_longer_than_a_text_is_read_is_cut_first(self):
         """Thunderbird's index keeps a subject whole, and a stranger's of 30,000 ligatures took

@@ -231,14 +231,24 @@ GIVEN = re.compile(r"[^.!?\n]{0,60}?(?:\b(?i:is|are|was|will be|(?:changed|set|r
 # What a secret looks like, next to the word for one.
 # A hyphen may stand right before or after one, as every dash is made one: "code—482913—". A
 # lookahead looks no further than the match it guards can reach.
+# A hyphen joins a number to the rest of a reference, as in "48213-2" or "10482913-AB", only when
+# a digit, a slash or a short group of capitals follows it. Any hyphen did, and every dash is
+# one, so a code glued to a word by an em dash, "use 482913—Verification", was taken for part of
+# a reference and reached the model.
+JOINED = r"-(?:[\d/_]|(?-i:[A-Z0-9]{1,6})(?!\w))"
 SPACED = r"(?<![\w.,/-])(?:[A-Za-z0-9] ){3,13}[A-Za-z0-9](?![\w/-])"     # K Q 7 X 9 B
-GROUPED = (r"(?<![\w.,/-])(?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3} (?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3}"
-           r"(?![\w/]|-[\w/])")                                   # KQ7 X9B
+# Two groups of three: of letters and digits with a digit in each, "KQ7 X9B", or of capitals and
+# digits with a digit in either, "KQW 9XB" or "123 ABC", but not an amount, "GBP 125".
+GROUPED = (r"(?<![\w.,/-])(?:(?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3} (?=[A-Za-z]{0,2}\d)[A-Za-z0-9]{3}"
+           r"|(?!(?:GBP|EUR|USD) |\d{3} (?:GBP|EUR|USD))"
+           r"(?=[A-Z0-9]{0,2}\d|[A-Z0-9]{3} [A-Z0-9]{0,2}\d)[A-Z0-9]{3} [A-Z0-9]{3})"
+           rf"(?![\w/]|{JOINED})")
 SHAPED = re.compile(
-    r"(?<![A-Za-z0-9.,/])\d(?:[ -]?\d){3,11}(?![\w/]|-[\w/]|[.,]\d)"  # 482913, 482 913, 4 8 2 9 1 3
+    rf"(?<![A-Za-z0-9.,/])\d(?:[ -]?\d){{3,11}}(?![\w/]|{JOINED}|[.,]\d)"  # 482913, 482 913
     r"|(?<![\w@./])(?=[\w!#$%^&*+=-]{0,23}\d)(?=[\w!#$%^&*+=-]{0,23}[A-Za-z])"
     r"[\w!#$%^&*+=-]{4,24}(?![\w@])"
     r"|\b[A-Z]{2,6}(?:-[A-Z0-9]{2,6}){1,3}\b|\b[A-Z]{5,10}\b"     # KQW-XBT, KQWXB
+    r"|\b[A-Z]{3} [A-Z]{3}\b"                                     # KQW XBT
     rf"|{SPACED}|{GROUPED}")
 NOT_A_SECRET = re.compile(r"\d+(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)|(?:19|20)\d\d", re.I)
 JUST_GIVEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)      # "code is 2048" is no year
@@ -251,9 +261,9 @@ SIGN_IN_TALK = re.compile(r"\b(?=[slvaoe2t])(?:" + "|".join(
     re.escape(word).replace(r"\ ", "[- ]?").replace(r"\*", r"\w*") for word in SIGN_IN_WORDS)
     + r")\b", re.I)
 MONEY = r"\s*(?:pounds|euros|dollars|gbp|eur|usd|%)"
-NUMBER = re.compile(r"(?=\d)(?:(?<![\w.,/£$€])\d{3}[ -]\d{3}(?![\w/]|-[\w/])"
-                    rf"|(?<![\w.,/£$€])\d{{4,8}}(?![\w/]|-[\w/]|[.,]\d|{MONEY})"
-                    rf"|(?<![\w.,/£$€])\d(?: \d){{3,7}}(?![\w/]|-[\w/]|[.,]\d|{MONEY}))", re.I)
+NUMBER = re.compile(rf"(?=\d)(?:(?<![\w.,/£$€])\d{{3}}[ -]\d{{3}}(?![\w/]|{JOINED})"
+                    rf"|(?<![\w.,/£$€])\d{{4,8}}(?![\w/]|{JOINED}|[.,]\d|{MONEY})"
+                    rf"|(?<![\w.,/£$€])\d(?: \d){{3,7}}(?![\w/]|{JOINED}|[.,]\d|{MONEY}))", re.I)
 # A line that is nothing but a code, give or take the punctuation a template, html2text or the
 # plain part of an HTML mail puts round one: "*482913*" for a bold code, "482913.", "(KQ7X9B)",
 # "`482913`" for code, "- 482913" or "+ 482913" for an item of a list (a bullet is made a space:
@@ -263,28 +273,31 @@ AROUND = (r"""[ \t*_"'“”‘’‹›«»()\[\]{}<>.,:;!?`|#=~/\-"""
 ALONE = re.compile(
     rf"^(?:\+[ \t])?{AROUND}((?:\d[ -]?){{4,12}}"
     r"|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,14}"
-    r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9])"
+    r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9]"
+    r"|(?=[A-Z0-9 ]{0,6}\d)(?=[A-Z0-9 ]{0,6}[A-Z])[A-Z0-9]{3} [A-Z0-9]{3})"     # KQW 9XB
     rf"{AROUND}$", re.M)
 # In a mail that talks of signing in, letters and digits together are hidden as numbers are:
 # "Use KQ7X9B to sign in", and so are they in groups or with a space between each, "KQ7 X9B" or
 # "K Q 7 X 9 B", as long as a letter is among them (NUMBER has those of digits only). The bounds
 # on the lookaheads only keep each look short. Without them it is still linear, as the lookbehind
-# keeps it from starting again inside a run of letters and digits.
+# keeps it from starting again inside a run of letters and digits, but for right after a hyphen
+# that ends a word of four letters or more: "Verification—KQ7X9B" is no reference.
 MIXED = re.compile(r"(?=[A-Za-z0-9-])(?:"
-                   r"(?<![\w@./-])(?=[A-Za-z0-9-]{0,13}\d)(?=[A-Za-z0-9-]{0,13}[A-Za-z])"
-                   r"[A-Za-z0-9-]{5,14}(?![\w@/-])"
+                   r"(?:(?<![\w@./-])|(?<=[^\W\d_]{4}-))"
+                   r"(?=[A-Za-z0-9-]{0,13}\d)(?=[A-Za-z0-9-]{0,13}[A-Za-z])"
+                   rf"[A-Za-z0-9-]{{5,14}}(?![\w@/]|{JOINED})"
                    rf"|(?=(?:[A-Za-z0-9] ){{0,13}}\d(?![\w/-]))"
                    rf"(?=(?:[A-Za-z0-9] ){{0,13}}[A-Za-z](?![\w/-])){SPACED}"
                    rf"|(?=[0-9]{{0,2}}[A-Za-z]|[A-Za-z0-9]{{3}} [0-9]{{0,2}}[A-Za-z]){GROUPED})")
 # Every dash is a hyphen to the model, and to the hiding: a code joined by a non-breaking hyphen,
 # as templates write "482&#8209;913" to keep it on one line, is the code it is. So are the other
-# minus signs.
+# minus signs. A dash before a word joins a code to it no more than a space would (see JOINED).
 DASHES = frozenset("\u2212\u02d7\u2796\u2043")
 # The dots and bullets that stand between the groups of a code, as in "482·913", or before an
-# item of a list, are spaces. Made hyphens, they glued a code to the word after it, and a code
-# joined to a word by a hyphen is taken for part of a reference: "use 482913•Verification"
-# reached the model as "482913-Verification".
-DOTS = frozenset("\u00b7\u2027\u30fb\u2022\u2219")
+# item of a list, such as ●, ■, ▪ or ◦, are spaces, so a code after one is alone on its
+# line. Made hyphens, they glued a code to the word after it: "use 482913•Verification".
+DOTS = frozenset("\u00b7\u2027\u30fb\u2022\u2219\u2023\u204c\u204d\u22c5\u25a0\u25aa\u25ab"
+                 "\u25cf\u25e6\u2981\u29bf\u2e31")
 SPELT = re.compile(     # a run of lines of one character each, as one to an HTML block makes
     r"^[ \t]*[A-Za-z0-9][ \t]*(?:\n\s*[A-Za-z0-9][ \t]*){3,}$", re.M)
 # The end of a text that was cut short, read backwards: its last word, which the cut may have gone
@@ -704,14 +717,16 @@ def _hide(text: str, cut: bool = False, talk: bool | None = None) -> str:
 
 
 def _hidden(text: str, cut: bool, talk: bool, look: bool = True, lead: int = 0) -> str:
-    """_hide, of a text already made plain (see _spans for look and lead)."""
+    """_hide, of a text already made plain (see _spans for look and lead). Secrets that overlap,
+    as "482913" and "482913-it" do, are one [hidden]."""
     stop = len(_uncut(text)) if cut else len(text)
     out, at = [], 0
     for start, end in _spans(text, talk, look, lead):
         if start >= stop:
             break
         if end > at:
-            out += [text[at:max(start, at)], HIDDEN]
+            if start >= at:
+                out += [text[at:start], HIDDEN]
             at = end
     return "".join(out) + text[at:stop]
 
