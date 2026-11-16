@@ -13,6 +13,7 @@ import json
 import logging
 import shutil
 import socket
+import ssl
 import sys
 import tempfile
 import time
@@ -143,6 +144,19 @@ class Finding(Goa):
         said, _ = await self.ask()
         self.assertTrue(said.startswith("Then."), said)
         self.assertEqual((self.calls.made, server.commands), ([], []))
+
+    async def test_a_thunderbird_that_holds_no_mail_leaves_the_search_to_the_account(self):
+        """Someone who once opened Thunderbird has an index with nothing in it. Taken as the place
+        to look, it answered "I couldn't find any mail about that", and their Google account was
+        never searched."""
+        build(self.home, [], "empty.default")
+        server = await self.mailbox(gmail(inbox=[(HELLO, 900), (PASSPORT, 13)]))
+        self.says = ["You applied on Thursday."]
+        said, _ = await self.ask()
+        self.assertTrue(said.startswith("You applied on Thursday. That's from an email from "
+                                        "notify.citizen.example"), said)
+        self.assertEqual(self.calls.made, ["GetAccessToken"])
+        self.assertEqual(len(server.signed_in_with), 1)
 
     async def test_a_server_that_matches_whole_words_only_still_finds_it(self):
         """"passport" is looked for as "passp" too, which Gmail wouldn't find."""
@@ -473,7 +487,7 @@ class Secrets(Goa):
         is a space too, so a stranger can't glue a code to a word with it."""
         self.assertEqual(goamail._unhtml("<p>Hi <b>you</b></p><div><span>KQ</span><span>7X</span>"
                                          " <b>9B</b>\x00x</div>"),
-                         f"Hi you\nKQ{mail.JOIN}7X 9B x")
+                         f"\nHi you\n\nKQ{mail.JOIN}7X 9B x")
         message_ = message("About your Acme account", ACME, "To sign in, use 482913\x00CAD team.")
         self.assertNotIn(mail.JOIN, goamail._read({b"HEADER": message_.split(b"\r\n\r\n")[0],
                                                    b"TEXT": text_of(message_)})[1])
@@ -709,6 +723,40 @@ class Accounts(Goa):
             await self.ask()
         self.assertEqual(server.signed_in_with, [])
 
+    async def test_a_server_whose_certificate_names_another_host_never_gets_the_token(self):
+        """The certificate is trusted, and made for 127.0.0.1 only. Reached as localhost, its
+        name doesn't match: without that check, the token would go to any server with any
+        certificate a trusted authority signed."""
+        await self.named_otherwise("ssl", {})
+        context = goamail._context()
+        self.assertTrue(context.check_hostname)
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertGreaterEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+
+    async def test_and_neither_does_one_that_starts_tls_later(self):
+        await self.named_otherwise("starttls", {"ssl": False, "tls": True})
+
+    async def named_otherwise(self, mode, account):
+        server = Server(CERT, KEY, gmail(inbox=[(HELLO, 900), (PASSPORT, 13)]), mode)
+        self.addCleanup(server.close)
+        await self.accounts({"host": f"localhost:{server.port}", **account})
+        with self.assertRaisesRegex(RuntimeError, goamail.BAD_CERTIFICATE):
+            await self.ask()
+        self.assertEqual(server.signed_in_with, [])
+
+    async def test_at_most_three_accounts_are_searched(self):
+        """Each is sent the question's words and its token, so no more than the docs say."""
+        servers = [Server(CERT, KEY, gmail(inbox=[(HELLO, 900), (PASSPORT, 13)]))
+                   for _ in range(4)]
+        for server in servers:
+            self.addCleanup(server.close)
+        await self.accounts(*({"host": server.host} for server in servers))
+        self.says = ["Then."]
+        said, _ = await self.ask()
+        self.assertTrue(said.startswith("Then."), said)
+        self.assertEqual(self.calls.made, ["GetAccessToken"] * goamail.MAX_ACCOUNTS)
+        self.assertEqual([bool(server.commands) for server in servers], [True, True, True, False])
+
     async def test_starttls_works_and_is_never_skipped(self):
         server = await self.mailbox(gmail(inbox=[(HELLO, 900), (PASSPORT, 13)]), "starttls",
                                     account={"ssl": False, "tls": True})
@@ -777,6 +825,25 @@ class Accounts(Goa):
         self.assertTrue(said.startswith("Then. That's from an email from notify.citizen"), said)
         self.assertEqual(self.calls.made, ["GetAccessToken"] * 3)
         self.assertLess(time.monotonic() - started, 6)
+
+    async def test_a_server_that_takes_all_its_time_leaves_time_to_read_the_answer(self):
+        """The search ends ANSWER_S before the action's time, so a server that takes all it is
+        given to say who wrote before still leaves the model one mail's reading time, and the
+        answer is read."""
+        server = await self.mailbox(gmail(inbox=[(HELLO, 900), (PASSPORT, 13)]))
+        server.stall_from = 30
+        real, given = mail._note, []
+
+        async def note(question, found, config, seconds):
+            given.append(seconds)
+            return await real(question, found, config, seconds)
+
+        self.says = ["Then."]
+        with mock.patch.object(mail, "LIMIT_S", 6), mock.patch.object(mail, "ANSWER_S", 3), \
+                mock.patch.object(mail, "_note", note):
+            said, _ = await self.ask()
+        self.assertTrue(said.startswith("Then. That's from an email from notify.citizen"), said)
+        self.assertGreater(given[0], 2.5)
 
     async def test_tokens_that_dont_come_in_time_are_never_called_no_mail(self):
         """The accounts are there, Online Accounts was only slow to refresh their tokens."""
@@ -1107,7 +1174,7 @@ class HostileMail(Goa):
             self.assertLess(timed((page * size)[:size]), max(0.05, 10 * ordinary), page)
         page = ("<head><title>x</title></head><p>Hi <b>you</b></p><script>a()</script>"
                 "<style>p{}</style><p>3 &lt; 4</p><script>left open <p>but read")
-        self.assertEqual(goamail._unhtml(page), "Hi you\n3 < 4\nleft open but read")
+        self.assertEqual(goamail._unhtml(page), "\nHi you\n\n3 < 4\nleft open\nbut read")
 
     async def test_tokens_read_on_the_last_round_dont_survive(self):
         """A wide < read from a reference escaped as deep as it is read was made a real one
@@ -1258,6 +1325,129 @@ class HostileMail(Goa):
         shown = " ".join(self.read(n) for n in range(len(self.model)))
         self.assertIn("Read despite its charset.", shown)
         self.assertIn("Deep.", shown)
+
+
+
+def fetched_mail(subject: bytes, body: bytes, charset: str = "utf-8", kind: str = "plain",
+                 author: bytes = ACME.encode()) -> dict:
+    """A mail as a FETCH gives it, its header and text in whatever bytes a sender wrote."""
+    return {b"HEADER": b"From: " + author + b"\r\nSubject: " + subject + b"\r\nMIME-Version: "
+            b"1.0\r\n" + f"Content-Type: text/{kind}; charset={charset}\r\n".encode(),
+            b"TEXT": body}
+
+
+def shown_of(found: dict) -> str:
+    """What the model reads of it, as goamail._rows and mail._note hide it."""
+    message_, body, cut = goamail._read(found)
+    kept = goamail._hidden(mail.terms("Acme"), message_, found, body, True, cut, False)
+    return mail._shown(kept[1], mail.SUBJECT_CHARS) + "\n" + mail._shown(kept[2], mail.BODY_CHARS)
+
+
+class Decoding(Goa):
+    """A mail is read as Thunderbird reads it, so that 0.5.0's rules, which read Thunderbird's
+    index, hide in it what they hid there."""
+
+    def test_a_subject_in_8_bit_bytes_is_read_as_thunderbird_reads_it(self):
+        """Many senders write the subject in their own bytes, with no encoded word. Each byte
+        was a U+FFFD, "Tu c��digo de Acme es 746596", and the code was no longer after a word for
+        one."""
+        for subject, code, charset, body in (
+                ("Tu código de Acme es 746596", "746596", "utf-8",
+                 "Hola, Sam: gracias por usar Acme."),
+                ("【Acme】您的验证码是585113", "585113", "gbk", "亲爱的用户，感谢您使用Acme。"),
+                ("Seu código de acesso Acme: 652314", "652314", "cp1252", "Olá! Obrigado."),
+                ("رمز الدخول إلى Acme هو 920224", "920224", "cp1256", "مرحبا، شكرا لك.")):
+            label = {"utf-8": "utf-8", "gbk": "gb2312", "cp1252": "iso-8859-1",
+                     "cp1256": "windows-1256"}[charset]
+            found = fetched_mail(subject.encode(charset), body.encode(charset), label)
+            self.assertEqual(goamail._subject(goamail._read(found)[0]), subject)
+            self.assertNotIn(code, shown_of(found), subject)
+        found = fetched_mail(b"Hi", b"Hi", author="José Núñez <jose@acme.example>".encode())
+        self.assertEqual(goamail._author(goamail._read(found)[0]),
+                         "José Núñez <jose@acme.example>")
+
+    def test_charset_labels_are_read_as_thunderbird_reads_them(self):
+        """ISO-8859-1 and ASCII as Windows-1252, and GB2312 as GBK, as Thunderbird and every
+        browser read them: read as labelled, the "…" in a password was a line end and cut it in
+        two, a "€" before a price was a control that made it a code, and an encoded subject in
+        GBK was given to the model as the base64 it came in, code and all."""
+        for text, charset, label, gone, kept in (
+                ("Tu contraseña temporal es: Playa…Soleado para hoy.", "cp1252", "iso-8859-1",
+                 "Soleado", "para hoy"),
+                ("Acme\nTotal: €1250\nLog in to your account to track your order.", "cp1252",
+                 "us-ascii", None, "€1250"),
+                ("Acme\n配送时间 10:00–12:00… 王喆", "gbk", "gb2312", None, "10:00–12:00"),
+                ("Your temporary password is “Sol2026” for today.", "cp1252", "latin1",
+                 "Sol2026", "for today")):
+            found = fetched_mail(b"Acme", text.encode(charset), label)
+            self.assertEqual(goamail._read(found)[1], text)
+            shown = shown_of(found)
+            self.assertIn(kept, shown, text)
+            if gone:
+                self.assertNotIn(gone, shown, text)
+        words = "王喆，您的验证码482913".encode("gbk")
+        encoded = b"=?gb2312?B?" + base64.b64encode(words) + b"?="
+        found = fetched_mail(encoded, b"Acme", "utf-8")
+        self.assertEqual(goamail._subject(goamail._read(found)[0]), "王喆，您的验证码482913")
+        self.assertNotIn("482913", shown_of(found))
+        self.assertNotIn(base64.b64encode(words).decode()[:12], shown_of(found))
+        self.assertEqual(goamail._words("=?utf-8?q?Acme_=E2=80=93?= =?utf-8?b?w6k=?= x"),
+                         "Acme –é x")
+
+    def test_html_is_read_as_thunderbirds_index_reads_it(self):
+        """A comment is nothing, every inline tag joins, and a block element has a line of its
+        own from its opener: made a space, a list of inline tags that lacked kbd, samp or bdi,
+        and lines only at a closer, "48 29 13", "KQ 7X 9B" and "KQ7X9B Thanks" were each shown,
+        where 0.5.0 hid each in Thunderbird's index."""
+        for page, code in (("<p>Use 48<!-- -->29<!-- -->13 to sign in</p>", "482913"),
+                           ("<p>Your Acme code is <kbd>KQ</kbd><kbd>7X</kbd><kbd>9B</kbd></p>",
+                            "KQ"),
+                           ("<p>Enter this on the page:</p><center>KQ7X9B</center><p>Thanks</p>",
+                            "KQ7X9B"),
+                           ("<div>Enter this on the page:<div>KQ7X9B</div></div>", "KQ7X9B")):
+            found = fetched_mail(b"Acme", page.encode(), kind="html")
+            self.assertNotIn(code, shown_of(found), page)
+        self.assertEqual(goamail._unhtml("<p>Use 48<!-- -->29<!-- -->13 to sign in</p>"),
+                         "\nUse 482913 to sign in")
+        for tag in ("abbr", "bdi", "bdo", "cite", "data", "del", "dfn", "ins", "kbd", "label",
+                    "samp", "time", "var", "o:p", "img"):
+            self.assertEqual(goamail._unhtml(f"<p>is <{tag}>KQ</{tag}><{tag}>7X</{tag}></p>"),
+                             f"\nis KQ{mail.JOIN}7X", tag)
+        for tag in ("center", "section", "pre", "dd", "header", "footer"):
+            self.assertEqual(goamail._unhtml(f"Code:<{tag}>KQ7X9B</{tag}>Thanks"),
+                             "Code:\nKQ7X9B\nThanks", tag)
+        self.assertEqual(goamail._unhtml("<td>KQ</td><td>7X</td>"), "KQ 7X")
+
+    def test_a_plain_parts_line_ends_are_thunderbirds(self):
+        """A server ends each line with a carriage return, which Thunderbird's index doesn't
+        keep: before one, a code had no line to itself to 0.5.0's rules, and was a character
+        further from the word for it, "482913 CAD" 62 characters before "code"."""
+        for text, code in (("482913 CAD\r\nAcme IT\r\nDesk 4\r\nFloor 2\r\nLevel 1\r\n"
+                            "Room 912\r\nYour code.", "482913"),
+                           ("Hello,\r\n\r\n-AB12\r\n\r\nThanks", "AB12")):
+            for cte, body in (("8bit", text.encode()),
+                              ("base64", base64.encodebytes(text.encode()))):
+                found = fetched_mail(b"Acme", body)
+                found[b"HEADER"] += f"Content-Transfer-Encoding: {cte}\r\n".encode()
+                self.assertNotIn("\r", goamail._read(found)[1])
+                self.assertNotIn(code, shown_of(found), text)
+
+    def test_mail_built_to_be_slow_to_hide_is_read_quickly(self):
+        """A piece 0.5.0's rules hide many times over, of which making the text plain makes one
+        more, was placed once for each place it was hidden at every place it stands: 16 KB of
+        it took seconds and gigabytes to hide, for each mail."""
+        def timed(text):
+            found = fetched_mail(b"About your Acme account", text.encode())
+            started = time.monotonic()
+            shown_of(found)
+            return time.monotonic() - started
+
+        size = goamail.TEXT_BYTES
+        ordinary = min(timed(("Thanks for your order. " * size)[:size]) for _ in range(3))
+        for text in ("Sign in to Acme ４８２９\r\n" + "4829 " * 3200,
+                     "pin 4829 " * 490 + "４８２９",
+                     "Your Acme code\r\n４８２９\r\n" + "4829\r\n" * 2600):
+            self.assertLess(timed(text[:size]), max(0.25, 20 * ordinary), text[:20])
 
 
 if __name__ == "__main__":

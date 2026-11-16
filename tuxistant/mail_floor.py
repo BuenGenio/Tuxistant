@@ -11,8 +11,8 @@ and what either hides is hidden (see mail._floored), so no code or password 0.5.
 on either path. Those rules are best effort above this floor.
 
 New here, after the second marked line, are only spans(), hidden() and put(): where in the text
-as given 0.5.0 would hide, and a guard against the two kinds of text these rules are slow over
-(see _slow).
+as given 0.5.0 would hide, its talk of signing in for a text cut shorter than 0.5.0 read it, and
+a guard against the two kinds of text these rules are slow over (see _slow).
 """
 import bisect
 import functools
@@ -119,10 +119,13 @@ def _gone(glue: str) -> re.Pattern:
     return re.compile(UNSEEN.pattern[:-1] + re.escape(glue) + "]") if glue else UNSEEN
 
 
-def spans(text: str, glue: str = "") -> list[tuple[int, int]]:
+def spans(text: str, glue: str = "", talk: bool = False) -> list[tuple[int, int]]:
     """Where in text, as given, 0.5.0's _hide would put [hidden]. It read the text with odd
     spaces made plain and what no one sees taken out (SPACE and UNSEEN), and here each glue
-    character is taken out too: places are counted back past what was taken out."""
+    character is taken out too: places are counted back past what was taken out. talk: the text
+    is part of a longer one that talks of signing in where 0.5.0 would have read it, as a mail
+    server sends less of a mail than Thunderbird's index held, so every number that talk hid
+    goes too, as in _spans."""
     gone = [found.start() for found in _gone(glue).finditer(text)]
     plain = _gone(glue).sub("", SPACE.sub(" ", text))
     if _slow(plain):
@@ -132,7 +135,11 @@ def spans(text: str, glue: str = "") -> list[tuple[int, int]]:
     def place(at: int) -> int:
         return at + bisect.bisect_right(shifts, at)
 
-    return [(place(start), place(end - 1) + 1) for start, end in _spans(plain)]
+    found = _spans(plain)
+    if talk and not SIGN_IN_TALK.search(plain):
+        found = sorted(found + [one.span() for one in NUMBER.finditer(plain)
+                                if not YEAR.fullmatch(one[0].strip())])
+    return [(place(start), place(end - 1) + 1) for start, end in found]
 
 
 def hidden(text: str, glue: str = "") -> str:

@@ -107,6 +107,7 @@ class Server:
         self.huge = False           # answer a FETCH with a literal far bigger than was asked for
         self.fat = 0                # pad every literal to this many bytes, whatever was asked for
         self.stall = 0              # seconds to wait before answering a SEARCH
+        self.stall_from = 0         # and before answering one for a sender's mail
         self.drip = False           # answer a SEARCH a byte at a time, never ending the line
         self.inject = b""           # sent in the clear straight after STARTTLS's OK
         self.inject_before = b""    # and straight before it
@@ -255,6 +256,8 @@ class Session:
             return self.line(f"{tag} BAD no mailbox")
         if verb.upper() == "SEARCH":
             time.sleep(self.server.stall)
+            if "FROM" in rest.upper().split():
+                time.sleep(self.server.stall_from)
             while self.server.drip:
                 self.send(b"*")
                 time.sleep(0.1)

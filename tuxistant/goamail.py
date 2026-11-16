@@ -27,11 +27,12 @@ mail, which its sender wrote.
 """
 import asyncio
 import base64
+import codecs
 import email
 import email.errors
-import email.header
 import email.message
 import email.policy
+import email.quoprimime
 import html
 import imaplib
 import re
@@ -103,20 +104,46 @@ INTERNAL = re.compile(r'"\s?(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d\d):(\d\d):(\d\d)
 # "<head " took two seconds, holding the event loop, so each is looked for once (see _skipped).
 SKIPPED_HTML = re.compile(r"(?i)<(script|style|head)\b")
 CLOSER = {name: re.compile(rf"(?i)</{name}\s*>") for name in ("script", "style", "head")}
-BREAK = re.compile(r"(?i)<br\s*/?>|</(?:p|div|tr|li|h\d|table|blockquote)\s*>")
+# Elements a browser and Thunderbird's index put on lines of their own: a line ends at each one's
+# opener and closer, and at <br>, so "<div>Enter this:<div>KQ7X9B</div></div>" or a code in a
+# <center> after a paragraph has a line to itself, as it had for 0.5.0.
+BLOCKS = ("address|article|aside|blockquote|body|caption|center|dd|details|dialog|dir|div|dl|dt"
+          "|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|html|legend|li|listing"
+          "|main|menu|nav|ol|p|plaintext|pre|section|summary|table|tbody|tfoot|thead|title|tr|ul"
+          "|xmp")
+BREAK = re.compile(rf"(?i)<br\b[^<>]*>|</?(?:{BLOCKS})\b[^<>]*>")
 TAG = re.compile(r"<[^>]*>")
-# Inline tags, which a browser and Thunderbird's index join what stands either side of. Between
-# two digits they are taken out: made spaces, "<span>48</span><span>29</span><span>13</span>"
-# read "48 29 13", which no sender wrote. Anywhere else they are mail.JOIN, which 0.5.0's rules
-# read as nothing, as they read Thunderbird's index, and this version's own as a space, as a
-# label joined to its code would hide it no more: "<span>Your code is</span><span>482913</span>".
-# So "<span>KQ</span><span>7X</span><span>9B</span>" is KQ7X9B to 0.5.0's rules, as it was in
-# Thunderbird. A tag holds no "<", so each is looked for no further than the next one.
-INLINE_TAG = (r"</?(?:a|b|big|code|em|font|i|mark|s|small|span|strong|sub|sup|tt|u|wbr)\b"
-              r"[^<>]*>")
-INLINE = re.compile(rf"(?i)(?<=\d)(?:{INLINE_TAG})+(?=\d)")
+# Every other element is inline, which a browser and Thunderbird's index join what stands either
+# side of, but for a table's cell and a quote, which they set apart. Between two digits an inline
+# tag is taken out: made spaces, "<span>48</span><span>29</span><span>13</span>" read "48 29 13",
+# which no sender wrote. So it is beside a letter of a language that writes no spaces, which glues
+# nothing to a code (see mail.SPACELESS) but keeps a number glued to it out of sign-in talk (see
+# mail._glued), as in Thunderbird's index: "请致电<b>95588</b>" is a phone number after "call".
+# Anywhere else it is mail.JOIN, which 0.5.0's rules read as nothing, as they read Thunderbird's
+# index, and this version's own as a space, as a label joined to its code would hide it no more:
+# "<span>Your code is</span><span>482913</span>". So "<kbd>KQ</kbd><kbd>7X</kbd><kbd>9B</kbd>" is
+# KQ7X9B to 0.5.0's rules, as it was in Thunderbird. A tag holds no "<", so each is looked for no
+# further than the next one, and a run of them only from its first. A comment is nothing (see
+# _uncommented).
+INLINE_TAG = rf"<(?!/?(?:t[dh]|q|{BLOCKS}|br)\b)/?[A-Za-z][^<>]*>"
+INLINE = re.compile(rf"(?i)(?<=\d)(?:{INLINE_TAG})+(?=\d)|(?<={mail.GLUE_LETTER.pattern})"
+                    rf"(?:{INLINE_TAG})+|(?<!>)(?:{INLINE_TAG})+(?={mail.GLUE_LETTER.pattern})")
 JOINED = re.compile(rf"(?i)(?:{INLINE_TAG})+")
 SPACING = re.compile(rf"[\s{mail.JOIN}]+")    # what str.split splits on, and the joins
+# A server ends each line of a mail with a carriage return, which Thunderbird's index doesn't
+# keep: before one, a code was never alone on its line to 0.5.0's rules, and 0.5.0's reach of
+# 60 or 160 characters was shorter by one for each line.
+LINE_ENDS = re.compile(r"\r\n?")
+# Charset labels as Thunderbird reads them, which is as browsers do (the WHATWG Encoding
+# Standard), as senders label them: ISO-8859-1 and ASCII are Windows-1252, GB2312 and GBK are
+# GB18030, and so on. Read as labelled, the "…" of an Outlook mail labelled ISO-8859-1 was a line
+# end, which cut a password in two, and its € a control, which made a price a code.
+CODECS = {"iso8859-1": "cp1252", "ascii": "cp1252", "iso8859-9": "cp1254", "tis-620": "cp874",
+          "iso8859-11": "cp874", "gb2312": "gb18030", "gbk": "gb18030", "x-gbk": "gb18030",
+          "euc_kr": "cp949"}
+# An encoded word (RFC 2047), and the space between two of them, which is not part of the text.
+ENCODED_WORD = re.compile(r"=\?([^?\s]+)\?([QqBb])\?([^?\s]*)\?=")
+BETWEEN_WORDS = re.compile(r"(?<=\?=)\s+(?==\?[^?\s]+\?[QqBb]\?)")
 
 
 class Account(NamedTuple):
@@ -377,7 +404,7 @@ def _signed_in(account: Account, token: str, until: float) -> imaplib.IMAP4:
             try:
                 imap.starttls(_context())
             except BaseException:
-                imap.shutdown()
+                _closed_after(imap)
                 raise
         else:
             imap = _Tls(account.host, account.port, until)
@@ -398,6 +425,16 @@ def _signed_in(account: Account, token: str, until: float) -> imaplib.IMAP4:
             raise Unusable(UNREACHABLE) from None
         raise Unusable(REFUSED) from None
     return imap
+
+
+def _closed_after(imap) -> None:
+    """A connection shut after a failed start of TLS, which can fail itself: its error took the
+    place of the certificate's, and a server whose name the certificate didn't match was one
+    that couldn't be reached."""
+    try:
+        imap.shutdown()
+    except OSError:
+        pass
 
 
 def _shown_name(name: bytes) -> str:
@@ -535,8 +572,57 @@ def _imap_date(when: datetime) -> str:
 
 
 def _flat(value) -> str:
-    text = str(value or "").encode("utf-8", "surrogateescape").decode("utf-8", "replace")
-    return " ".join(text.split())
+    return " ".join(str(value or "").split())
+
+
+def _codec(label: str | None, fallback: str = "utf-8") -> str:
+    """The codec a charset label is read with, as Thunderbird reads it (see CODECS)."""
+    label = (label or "").strip().lower()
+    try:
+        name = codecs.lookup(label).name
+    except (LookupError, ValueError, TypeError):
+        name = label if label in CODECS else fallback
+    return CODECS.get(name, name)
+
+
+def _header(message, name: str) -> str | None:
+    """The first header of that name as it came, its bytes read as UTF-8 if they are that, and
+    otherwise in the mail's own charset, or Windows-1252. Many senders write a subject in 8-bit
+    bytes with no encoded word, which the email package gives back with each byte a U+FFFD:
+    "Tu código" was "Tu c��digo", and the code after it was no longer after a word for one."""
+    value = next((value for key, value in message.raw_items() if key.lower() == name.lower()),
+                 None)
+    if value is None:
+        return None
+    data = str(value).encode("utf-8", "surrogateescape")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        charset = next((found for part in message.walk()
+                        if (found := part.get_content_charset())), None)
+        codec = _codec(charset, "cp1252")
+        try:
+            return data.decode("cp1252" if codec == "utf-8" else codec, "replace")
+        except LookupError:
+            return data.decode("cp1252", "replace")
+
+
+def _words(text: str) -> str:
+    """A header with its encoded words read, each by its charset as Thunderbird reads it (see
+    CODECS), and anything else as it is. One that can't be read stays as it came."""
+    return ENCODED_WORD.sub(_word, BETWEEN_WORDS.sub("", text))
+
+
+def _word(found: re.Match) -> str:
+    charset, kind, data = found.groups()
+    try:
+        if kind in "Bb":
+            raw = _base64(data)
+        else:
+            raw = email.quoprimime.header_decode(data).encode("latin-1", "replace")
+        return raw.decode(_codec(charset.split("*")[0]), "replace")
+    except (ValueError, LookupError, UnicodeError):
+        return found[0]
 
 
 def _parsed(header: bytes, text: bytes) -> email.message.Message | None:
@@ -548,21 +634,16 @@ def _parsed(header: bytes, text: bytes) -> email.message.Message | None:
 
 
 def _author(message) -> str:
-    """The sender line as it came, not decoded: only the address in it counts (see
-    mail._sender), and that is plain ASCII. Two sender lines are nobody's."""
+    """The sender line as it came, its encoded words not read: only the address in it counts
+    (see mail._sender), and that is plain ASCII. Two sender lines are nobody's."""
     found = message.get_all("From") or []
-    return _flat(found[0]) if len(found) == 1 else ""
+    return _flat(_header(message, "From")) if len(found) == 1 else ""
 
 
 def _subject(message) -> str:
-    """The subject decoded, or as it came if it can't be. An encoded word whose charset name
-    isn't ASCII raises a CharsetError that carries the name, which is the sender's own text: see
-    _search."""
-    raw = _flat(message.get("Subject"))
-    try:
-        return _flat(email.header.make_header(email.header.decode_header(raw)))
-    except (ValueError, LookupError, UnicodeError, email.errors.MessageError):
-        return raw
+    """The subject with its encoded words read (see _words), and its 8-bit bytes (see _header).
+    Nothing here raises over a charset's name, which is the sender's own text: see _search."""
+    return _flat(_words(_header(message, "Subject") or ""))
 
 
 def _decoded(part) -> str:
@@ -572,29 +653,44 @@ def _decoded(part) -> str:
     holds no whole byte."""
     try:
         if str(part.get("Content-Transfer-Encoding", "")).strip().lower() == "base64":
-            letters = re.sub(r"[^A-Za-z0-9+/]", "", str(part.get_payload()))
-            letters = letters[:len(letters) - (len(letters) % 4 == 1)]
-            data = base64.b64decode(letters + "=" * (-len(letters) % 4))
+            data = _base64(str(part.get_payload()))
         else:
             data = part.get_payload(decode=True) or b""
         try:
-            return data.decode(part.get_content_charset() or "utf-8", "replace")
+            return data.decode(_codec(part.get_content_charset()), "replace")
         except (LookupError, ValueError, TypeError):
             return data.decode("utf-8", "replace")
     except (ValueError, TypeError, LookupError, AttributeError):
         return ""
 
 
+def _base64(text: str) -> bytes:
+    letters = re.sub(r"[^A-Za-z0-9+/]", "", text)
+    letters = letters[:len(letters) - (len(letters) % 4 == 1)]
+    return base64.b64decode(letters + "=" * (-len(letters) % 4))
+
+
 def _unhtml(text: str) -> str:
     """HTML as text, with each line's spaces made one and mail.JOIN where an inline tag stood
     (see INLINE). One beside a space is that space."""
-    text = _untagged(BREAK.sub("\n", _skipped(text.replace(mail.JOIN, " "))))
+    text = _untagged(BREAK.sub("\n", _skipped(_uncommented(text.replace(mail.JOIN, " ")))))
     return "\n".join(_spaced(line) for line in html.unescape(text).splitlines())
 
 
 def _spaced(line: str) -> str:
     return SPACING.sub(lambda run: " " if run[0].strip(mail.JOIN) else mail.JOIN,
                        line).strip(" " + mail.JOIN)
+
+
+def _uncommented(text: str) -> str:
+    """HTML without its comments, each to its first end, as nothing: made a space,
+    "48<!-- -->29<!-- -->13" read "48 29 13", where Thunderbird's index has 482913. A comment
+    with no end after it stays, and no later one is looked for, as none can end either."""
+    out, at = [], 0
+    while (start := text.find("<!--", at)) >= 0 and (end := text.find("-->", start + 4)) >= 0:
+        out.append(text[at:start])
+        at = end + 3
+    return "".join(out) + text[at:]
 
 
 def _skipped(text: str) -> str:
@@ -635,7 +731,8 @@ def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
             continue
         kind = part.get_content_type()
         if kind == "text/plain" and plain is None:
-            plain = (_decoded(part).replace(mail.JOIN, " "), fetched_cut and part is leaves[-1])
+            plain = (LINE_ENDS.sub("\n", _decoded(part).replace(mail.JOIN, " ")),
+                     fetched_cut and part is leaves[-1])
         elif kind == "text/html" and marked is None:
             marked = (_decoded(part), fetched_cut and part is leaves[-1])
     text, cut = plain if plain and plain[0].strip() else (

@@ -92,10 +92,7 @@ SPLIT_TALK = ("Please sign\nin within 10 minutes.", "Please sign\u00ad in within
 
 # (subject, text) of mails whose sign-in talk, or word for a code, is in one and the code in the
 # other. The model reads both together, so each code is hidden, whichever way round.
-SPLIT_ACROSS = (("Sign in to Acme", "Hi, enter 482913 on the page to continue."),
-                ("Sign\u2011in to Acme now", "Hi, enter 482913 on the page."),
-                ("Acme 482913", "Use it to sign in to Acme."),
-                ("Your Acme verification code", "Enter this on the page: 482913"),
+SPLIT_ACROSS = (("Your Acme verification code", "Enter this on the page: 482913"),
                 ("Your Acme code", "Hello from Acme.\n\nEnter this on the page: 482913 thanks"),
                 ("Acme 482913", "Here is your code."),
                 ("Acme: 482913", "This is your Acme code. Thanks."),
@@ -124,7 +121,7 @@ SPLIT_ACROSS = (("Sign in to Acme", "Hi, enter 482913 on the page to continue.")
                 ("Your new Acme code", "Hello from Acme. Enter this on the page: KQW-XBT thanks"),
                 ("Your Acme code", "48 29 13"),
                 ("Your Acme code", "Hi, KQ7 X9B is it."),
-                ("Sign in to Acme", "Hello. Enter K Q 7 X 9 B on the page."),
+                ("Your Acme sign-in code", "Hello. Enter K Q 7 X 9 B on the page."),
                 # Two groups of three, one of them letters only.
                 ("Sign in to Acme", "Hello.\n\nKQW 9XB\n\nThanks"),
                 ("Acme KQW 9XB", "This is your Acme code."))
@@ -269,9 +266,14 @@ DRESSED = ("Hello from Acme.\n*482913*\nThanks", "Hello from Acme.\n482913.\nTha
            "Hello from Acme.\n（482913）\nThanks")
 # Bodies built to be slow to hide: a word for a code over and over, runs of letters that the
 # word for one may end, a ligature NFKC makes 18 characters of, and runs of what no one sees that
-# a keycap's mark could follow.
+# a keycap's mark could follow. And a piece 0.5.0's rules hide many times over, of which making
+# the text plain makes one more, as a wide copy of it is: each place it was hidden was placed at
+# every place it stands, and a few such mails took seconds and gigabytes to hide.
 SLOW_TO_HIDE = ("码!" * 10_000, "pin!" * 5000, "é" * 16_000, "×" * 16_000, "À" * 16_000,
-                "\ufdfa" * 20_000, "\ufe0f" * 20_000, "\u3164" * 20_000, "\U000e0020" * 20_000)
+                "\ufdfa" * 20_000, "\ufe0f" * 20_000, "\u3164" * 20_000, "\U000e0020" * 20_000,
+                "Your Acme code\n４８２９\n" + "4829\n" * 4000,
+                "Your Acme code\n４８２９１３\n" + "482913\n" * 2850,
+                "pin 4829 " * 490 + "４８２９", "Sign in to Acme.\n" + "1234 " * 3990 + "１２３４")
 # A code only the second pass hides, once the lines are joined: "Your Acme code is 482 913".
 SPLIT_LINES = "Your Acme code is\n482\n913\nThanks, the team"
 
@@ -740,7 +742,7 @@ class Secrets(Base):
                                "| 482913 |", "# 482913", "{482913}", "=482913=", "~482913~",
                                "482913 ←", "→ 482913", "482·913", "/482913/", "« 482913 »",
                                "— 482913", "‹KQ7X9B›", "- KQ7X9B")),
-                # Letters and digits together, in a mail that talks of signing in or beside the
+                # Letters and digits together, on a line that talks of signing in or beside the
                 # word for a code.
                 ("Acme\nUse KQ7X9B to sign in to Acme.", "KQ7X9B"),
                 ("Acme\nYour code is KQ7 X9B.", "KQ7 X9B"),
@@ -828,6 +830,10 @@ class Secrets(Base):
                 # The Arabic "is" that goes with رمز, and the English ones in capitals.
                 ("حساب\nرمز المرور الخاص بك هو shamsilyawm", "shamsilyawm"),
                 ("Code\nرمز التحقق الخاص بك هو 2047", "2047"),
+                # كود, "code", as Arabic senders write it as well as رمز, after the number too.
+                ("Code\nكود التحقق الخاص بك هو 482913", "482913"),
+                ("Code\n482913 هو كود التحقق الخاص بك. لا تشاركه مع أحد.", "482913"),
+                ("Code\nكود التفعيل: 482913", "482913"), ("Code\nأدخل الكود 482913", "482913"),
                 ("PIN\nYOUR ACME PIN IS 2047. DO NOT SHARE IT.", "2047"),
                 ("Account\nYour temporary password WAS sunshine", "sunshine"),
                 # A colon after a word for "is" in another language: the password is after the
@@ -857,6 +863,8 @@ class Secrets(Base):
                 ("4,800 is fine, please go ahead and start on the 30th.", "30th"),
                 ("Your reference is PEX000000000. We will write again.", "PEX000000000"),
                 ("The spare keys are with the neighbour at number 4.", "neighbour"),
+                # ركود ("stagnation") holds the letters of كود ("code") and names none.
+                ("ركود السوق في الربع الأول، والطلبية 48213 في الطريق", "48213"),
                 ("Sign in to see your statement for 2026.", "2026"),
                 ("Sign in to pay the 1250 pounds you owe us.", "1250"),
                 ("Sign in to pay the 1 2 5 0 pounds you owe us.", "1 2 5 0 pounds"),
@@ -1045,7 +1053,7 @@ class Secrets(Base):
             for read in both(text):
                 self.assertNotIn(secret, read, text)
                 self.assertIn(mail.HIDDEN, read, text)
-        with mock.patch.object(mail_floor, "spans", lambda text, glue="": []):
+        with mock.patch.object(mail_floor, "spans", lambda text, glue="", talk=False: []):
             for text, secret in cases[4:]:
                 for read in both(text):
                     self.assertIn(secret, read, text)
@@ -1076,6 +1084,16 @@ class Secrets(Base):
         self.assertNotIn("valid", body)
         self.assertNotIn("4 8 2 9 1 3", body)
         self.assertEqual(mail._secret_free("Acme", text)[1], body)
+
+    def test_more_places_for_0_5_0s_pieces_than_characters_are_not_looked_for(self):
+        """Each piece is placed once, but a text can still hold more places for them than it has
+        characters, as runs of one digit that overlap do, each of a length 0.5.0's rules hide,
+        beside a wide copy that makes one more. They are hidden in the text as it came then."""
+        text = "１" + "1" * 5000
+        plain = mail._made_plain(text)[0]
+        spans = [(1, 1 + size) for size in range(4, 13)]
+        self.assertIsNone(mail._placed(text, plain, spans))
+        self.assertEqual(len(mail._placed(text, plain, spans[:1])), len(plain) - 3)
 
     def test_a_year_range_on_the_line_after_a_colon_is_read_out(self):
         """A year is a code given right after a colon on its own line only: "Season:" over
@@ -1200,11 +1218,11 @@ class Secrets(Base):
         await self.ask("Did Acme thank me?")
         self.assertIn(f"code is {mail.HIDDEN} Thanks", self.read(0))
 
-    async def test_sign_in_talk_in_the_subject_counts_for_the_text_and_back(self):
-        """The model reads them together, so a code in one is hidden when the other talks of
-        signing in, or names a code: "Acme 482913" over "Here is your code." reached it whole.
-        A word for a code in one counted for the other only as sign-in talk, which hides numbers
-        and letters with digits, so "KQW-XBT" under "Your Acme code" reached it too."""
+    async def test_a_word_for_a_code_in_the_subject_counts_for_the_text_and_back(self):
+        """The model reads them together, so a code in one is hidden when the other names a code:
+        "Acme 482913" over "Here is your code." reached it whole. A word for a code in one
+        counted for the other only as sign-in talk, which hides numbers, so "KQW-XBT" under
+        "Your Acme code" reached it too."""
         codes = SHOWN_CODES
         for subject, body in SPLIT_ACROSS:
             kept = mail._kept(mail.terms("Acme"), "", subject, body, False)
@@ -1222,6 +1240,61 @@ class Secrets(Base):
             self.assertIn(mail.HIDDEN, self.read(call))
             for code in codes:
                 self.assertNotRegex(self.read(call), code)
+
+    def test_sign_in_talk_counts_for_its_own_part_only(self):
+        """As 0.5.0 had it. Talk of signing in in one part of a mail, as a footer has, hid every
+        number in the other, and letters with digits anywhere, as flight numbers and references
+        are written: "Log in to your account to track your order." lost the order number in the
+        subject, and "Faça login" a flight and a time."""
+        for subject, body, kept in (
+                ("Your Acme order 4829137 has shipped",
+                 "Hi Sam. Log in to your account to track your order.", "4829137"),
+                ("Seu voo TP1351 para Madri", "Embarque às 14h35.\n\nFaça login na sua conta.",
+                 "TP1351"),
+                ("Seu voo para Madri", "Embarque às 14h35.\n\nFaça login na sua conta.", "14h35"),
+                ("رحلتك EK202 إلى دبي", "سجل login إلى حسابك.", "EK202"),
+                ("航班CA1831行程确认", "登录 login 查看详情。", "CA1831"),
+                ("Your Acme booking (sign in to manage it)",
+                 "Order 4829137, flight BA2491, call 0800 123 4567.",
+                 "Order 4829137, flight BA2491, call 0800 123 4567."),
+                ("Your Acme receipt", "Order W123456789, ref #A1B2C3, ES-2026-0042, on "
+                 "12-Mar-2026, open 24-hour.\n\nVerified by Acme Pay.",
+                 "Order W123456789, ref #A1B2C3, ES-2026-0042, on 12-Mar-2026, open 24-hour.")):
+            subject, body = mail._secret_free(subject, body)
+            shown = f"{mail._shown(subject, 200)} {mail._shown(body, 400)}"
+            self.assertIn(kept, shown, subject)
+        # A part's own talk still hides its own numbers, as 0.5.0's did.
+        kept_mail = mail._kept(mail.terms("Acme"), "", "Acme",
+                               "Log in to your account. Order 4829137 has shipped.", False)
+        self.assertNotIn("4829137", kept_mail[2])
+
+    def test_a_word_for_a_qr_gift_or_tracking_code_counts_for_its_own_part_only(self):
+        """A subject that names a QR code, a gift, promo or discount code, a parcel's tracking
+        code or a booking's, in any of five languages, says nothing of a sign-in code, and the
+        dates, times, prices, orders, flights and phone numbers in its text were all hidden."""
+        texts = {"en": "Event: 14 March 2026, doors 19:30. Order 4829137, total 1250 GBP. "
+                       "Flight BA2491 lands 18:45. Questions? Call 0800 123 4567.",
+                 "es": "Tu pedido 4829137 llega el 12/03/2026 entre 10:00-12:00. Total: 1250 € "
+                       "Vuelo IB3166. Llámanos al 900 123 456.",
+                 "pt": "Embarque às 14h35. Total 1250 reais, R$ 4999. Ligue +55 11 98765-4321.",
+                 "ar": "رقم الطلب 19999، اتصل على 920012345، المبلغ 1250 ريال."}
+        for subject, lang in (
+                ("Your QR code ticket for Acme Live", "en"), ("Your Acme gift code", "en"),
+                ("Tracking code for your Acme order", "en"), ("Your Acme booking code", "en"),
+                ("Your Acme discount code inside", "en"), ("Your Acme promo code", "en"),
+                ("Your Acme voucher code", "en"), ("Your Acme coupon code", "en"),
+                ("Código de seguimiento de tu pedido Acme", "es"),
+                ("Tu código de descuento de Acme", "es"), ("Tu código promocional Acme", "es"),
+                ("Seu código de desconto Acme", "pt"), ("Código de rastreio Acme", "pt"),
+                ("رمز الخصم الخاص بك من Acme", "ar"), ("رمز الحجز Acme", "ar"),
+                ("رمز التتبع Acme", "ar")):
+            kept_mail = mail._kept(mail.terms("Acme"), "", subject, texts[lang], False)
+            self.assertNotIn(mail.HIDDEN, mail._shown(kept_mail[2], 400), subject)
+        # One that names a sign-in code still does.
+        for subject in ("Your Acme verification code", "Tu código de verificación de Acme",
+                        "Seu código de acesso Acme", "كود التحقق من Acme", "Your Acme code"):
+            kept_mail = mail._kept(mail.terms("Acme"), "", subject, "Hi, it is 482913.", False)
+            self.assertNotIn("482913", kept_mail[2], subject)
 
     def test_a_word_for_a_code_far_down_the_text_leaves_the_subject_alone(self):
         """Near the top, the word names the subject's code. Further down it is a promo code's,

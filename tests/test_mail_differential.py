@@ -136,9 +136,10 @@ def _part(text: str, subtype: str, cte: str, code: str = "") -> tuple[str, bytes
             f"Content-Transfer-Encoding: {name}\r\n"), encoded
 
 
-def online_read(m: dict) -> str | None:
+def online_read(m: dict, talking: bool = False) -> str | None:
     """What the model is shown of a mail through Online Accounts, from the header fields and the
-    text an IMAP FETCH gives (see goamail._rows), then mail._note's hiding."""
+    text an IMAP FETCH gives (see goamail._rows), then mail._note's hiding. talking: the server's
+    own search finds sign-in talk in the mail (see goamail._talking)."""
     subject = m["subject"] if m["subject"].isascii() else \
         email.header.Header(m["subject"], "utf-8").encode()
     head = f"From: {AUTHOR}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\n"
@@ -150,20 +151,32 @@ def online_read(m: dict) -> str | None:
         header = (head + 'Content-Type: multipart/alternative; boundary="b"\r\n\r\n').encode()
         text = b"".join(b"--b\r\n" + h.encode() + b"\r\n" + body + b"\r\n" for h, body in parts)
         text += b"--b--\r\n"
-    found = {b"HEADER": header, b"TEXT": text}
+    found = {b"HEADER": header, b"TEXT": text[:goamail.TEXT_BYTES]}
     read = goamail._read(found)
-    kept = read and goamail._hidden(STEMS, read[0], found, read[1], True, read[2], False)
+    kept = read and goamail._hidden(STEMS, read[0], found, read[1], True, read[2], talking)
     if not kept:
         return None
     return mail._shown(kept[1], mail.SUBJECT_CHARS) + "\n" + mail._shown(kept[2], mail.BODY_CHARS)
 
 
 def index_text(m: dict) -> str:
-    """The body as Thunderbird's index holds it: the plain part, or the HTML with blocks on lines
-    of their own, cells spaced, inline tags taken out and character references read."""
-    if m["plain"] is not None:
-        return m["plain"]
-    text = re.sub(r"(?i)<br\s*/?>|</(?:p|div|tr|li|h\d|table)\s*>", "\n", m["html"])
+    """The body as Thunderbird's index holds it: the plain part, or the HTML as text."""
+    return m["plain"] if m["plain"] is not None else html_text(m["html"])
+
+
+# The elements a browser and Thunderbird's index put on lines of their own.
+BLOCKS = ("address|article|aside|blockquote|body|caption|center|dd|details|dialog|dir|div|dl|dt"
+          "|fieldset|figcaption|figure|footer|form|h[1-6]|header|hgroup|hr|html|legend|li|listing"
+          "|main|menu|nav|ol|p|plaintext|pre|section|summary|table|tbody|tfoot|thead|title|tr|ul"
+          "|xmp")
+
+
+def html_text(markup: str) -> str:
+    """HTML as Thunderbird's index holds it: without its scripts, styles, head and comments, each
+    block on a line of its own, from its opener to its closer, cells spaced, every other tag taken
+    out and character references read."""
+    text = re.sub(r"(?is)<(script|style|head)\b.*?</\1\s*>|<!--.*?-->", "", markup)
+    text = re.sub(rf"(?i)<br\b[^>]*>|</?(?:{BLOCKS})\b[^>]*>", "\n", text)
     text = html.unescape(re.sub(r"<[^>]*>", "", re.sub(r"(?i)</t[dh]\s*>", " ", text)))
     return "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
 
@@ -299,7 +312,13 @@ HTML = ("<p>Your Acme verification code is <b>{C}</b>.</p>",
         "<p>Use this to sign in:</p><div>{SPANS}</div>",
         "<p>Use this to sign in:</p><div>{PAIRS}</div>",
         "<p>To sign in, use <b>{C}</b>&mdash;10 minutes left.</p>",
-        "<p>验证码：<b>{C}</b>，5分钟内有效</p>")
+        "<p>验证码：<b>{C}</b>，5分钟内有效</p>",
+        # Split by comments, two to a tag no list of inline ones had, and in a block that a
+        # paragraph or a block round it opens, each of which Thunderbird's index joins or sets
+        # on a line of its own.
+        "<p>Use {COMMENTED} to sign in</p>", "<p>Your Acme code is {KBD}</p>",
+        "<p>Enter this on the page:</p><center>{C}</center><p>Thanks</p>",
+        "<div>Enter this on the page:<div>{C}</div></div>")
 ORDINARY = ("12 March 2026", "12/03/2026", "2026-03-12", "12-Mar-2026", "10:30", "2pm-4pm",
             "10am–12pm", "£1,250.00", "$49.99", "USD 125", "£1250", "0800 123 4567",
             "+44 20 7946 0000", "(555) 010-4477", "555-010-4477", "1-800-555-0199", "10482913",
@@ -394,9 +413,24 @@ def corpus() -> list[dict]:
                       .replace("{CELLS}", "".join(f"<td>{c}</td>" for c in letters))
                       .replace("{SPANS}", "".join(f"<span>{c}</span>" for c in letters))
                       .replace("{PAIRS}", "".join(f"<span>{letters[i:i + 2]}</span>"
-                                                  for i in range(0, len(letters), 2))))
+                                                  for i in range(0, len(letters), 2)))
+                      .replace("{KBD}", "".join(f"<kbd>{letters[i:i + 2]}</kbd>"
+                                                for i in range(0, len(letters), 2)))
+                      .replace("{COMMENTED}", "<!-- -->".join(
+                          letters[i:i + 2] for i in range(0, len(letters), 2))))
             add("code", f"html {shape[:30]!r} | {code!r}", "Message from Acme", None, [code],
                 markup)
+    for code in ("482913", "KQ7X9B"):
+        for mark in ("\u0301", "\u0308", "\u20e3"):    # an accent, a diaeresis or a keycap
+            for body in ("Your Acme code: {C}e{M}", "Your Acme code: {C}{M} thanks"):
+                add("code", f"marked {body[:18]!r} U+{ord(mark):04X} | {code!r}",
+                    "Message from Acme", body.replace("{C}", code).replace("{M}", mark), [code])
+    # A server ends each line with a carriage return, which Thunderbird's index doesn't keep.
+    for body in ("482913 CAD\nAcme IT\nDesk 4\nFloor 2\nLevel 1\nRoom 912\nYour code.",
+                 "Hello,\n\n-AB12\n\nThanks"):
+        for cte in ("8bit", "qp", "base64"):
+            add("code", f"lines {cte} {body[:12]!r}", "Message from Acme", body, [body[:6]],
+                cte=cte)
     for password in PASSWORDS:
         for body in PASSWORD_BODIES:
             add("code", f"password {body[:16]!r} | {password!r}", "Message from Acme",
@@ -424,22 +458,20 @@ TIMES = re.compile(r"\d{1,2}(?:am|pm)(?:[-–]\d{1,2}(?:am|pm))?")     # "2pm-4p
 
 
 # What this version hides on purpose that 0.5.0 read out, as CHANGELOG and docs/CONTRACT.md step 5
-# say: in a mail that talks of signing in, every number in either part and letters with digits,
-# but for a time; whatever a subject that names a code reaches in the text; a postcode, or a
+# say: letters with digits on a line that talks of signing in, but for a time; a postcode, or a
 # range such as 0900–1730, on a line of its own; two groups of three beside a word for a secret,
 # but not an amount; and a year or a time straight after a colon there, as NFKC makes "：" one.
 def meant_to_hide(m: dict, number: str) -> bool:
     whole = f"{m['subject']}\n{index_text(m)}"
-    talks = mail.SIGN_IN_TALK.search(whole)
     mixed = re.search(r"\d", number) and re.search(r"[A-Za-z]", number) \
         and not AMOUNT.fullmatch(number) and not TIMES.fullmatch(number)
+    talks = any(number in line and mail.SIGN_IN_TALK.search(line) for line in whole.splitlines())
     grouped = re.fullmatch(r"[A-Z0-9]{3} [A-Z0-9]{3}", number) and not AMOUNT.fullmatch(number)
     own_line = f"\n{number}\n" in whole and (grouped or re.fullmatch(r"\d+\W\d+", number))
     beside = grouped and mail.SECRET_WORD.search(whole)
     given = re.match(r"(?:19|20)\d\d(?!\d|年)|\d{1,2}(?:am|pm)", number) \
         and re.search(r"[:：]" + re.escape(number), whole) and mail.SECRET_WORD.search(whole)
-    return bool((talks and (number in m["subject"] or mixed)) or "code" in m["subject"]
-                or own_line or beside or given or (m["kind"] == "both" and mixed))
+    return bool((talks and mixed) or own_line or beside or given or (m["kind"] == "both" and mixed))
 
 
 def once(text: str) -> str:
@@ -519,7 +551,8 @@ class AgainstFiveOh(unittest.TestCase):
                        source.index("# ---- end of 0.5.0")].split("\n", 1)[1]
         self.assertEqual(hashlib.sha256(block.encode()).hexdigest(),
                          "5cfb2962deaab766dc5addf7e0e5b5d0d90761246cc328467dfa76c45449a0e3")
-        rng, odd = random.Random(5), ("\u200b", "\u00ad", "\ufeff", "\u00a0", mail.JOIN)
+        rng, odd = random.Random(5), ("\u200b", "\u00ad", "\ufeff", "\u00a0", mail.JOIN, "\u0301",
+                                      "\u20e3")
         for m, *_ in self.read:
             for text in (m["subject"], index_text(m)):
                 for glue in ("", mail.JOIN):
@@ -534,7 +567,7 @@ class AgainstFiveOh(unittest.TestCase):
         """What this version's own rules hide with the floor gone, they hide with it there, on
         both paths: the mail they read has the floor's [hidden] in it, where a word that said it
         talks of signing in may have stood."""
-        with mock.patch.object(mail_floor, "spans", lambda text, glue="": []):
+        with mock.patch.object(mail_floor, "spans", lambda text, glue="", talk=False: []):
             alone = [(thunderbird_read(m["subject"], index_text(m)), online_read(m))
                      for m, *_ in self.read]
         lost = defaultdict(list)
@@ -545,6 +578,26 @@ class AgainstFiveOh(unittest.TestCase):
                         lost[path].append(f"{m['why']}: {seen!r}")
         if lost:
             self.fail(report(lost, "tokens hidden without the floor but shown with it"))
+
+    def test_a_mail_cut_where_online_accounts_fetched_it_hides_what_0_5_0_hid(self):
+        """A server sends the first 16,000 bytes of a mail, where Thunderbird's index held 0.5.0
+        20,000 characters of it: sign-in talk past the cut, which the server's own search finds,
+        counts for 0.5.0's rules too, so a code before a currency's code they don't take for a
+        price, or a price whose sign is after it, is hidden as 0.5.0 hid it."""
+        filler = "Thanks for being with us this year.\n" * 470
+        read = []
+        for head in ("Use 482913 CAD team.", "Total 1500 € paid.", "Ref 4829 1375 CHF."):
+            text = f"{head}\n{filler}Sign in to Acme now."
+            self.assertLess(goamail.TEXT_BYTES, len(text.encode()))
+            self.assertLess(len(text), mail.SCAN_CHARS)
+            m = {"kind": "code", "why": f"cut {head!r}", "subject": "Message from Acme",
+                 "plain": text, "html": None, "cte": "8bit", "tokens": [head]}
+            read.append((m, old_read(m["subject"], text), thunderbird_read(m["subject"], text),
+                         online_read(m, talking=True)))
+            self.assertTrue(old_tokens(text), head)
+        broken = floor_broken(read)
+        if broken:
+            self.fail(report(broken, "pieces 0.5.0 hid that reach the model"))
 
     def test_no_ordinary_number_0_5_0_read_out_is_hidden(self):
         hidden_now = defaultdict(list)

@@ -314,14 +314,14 @@ def corpus() -> list[dict]:
             add("ordinary", "ordinary", f"{subject[:16]!r} {body[:34]!r} | {number!r}",
                 subject.replace("{N}", number), body.replace("{N}", number), [number],
                 documented=documented
-                # letters and digits together in a mail that talks of signing in
-                or "Log in" in body and bool(re.search(r"[A-Z].*\d|\d.*[A-Z]", number)))
+                # letters and digits together on a line that talks of signing in
+                or "Log in to see your order. Total: {N}" == body
+                and bool(re.search(r"[A-Z].*\d|\d.*[A-Z]", number)))
         for shape in ORDINARY_HTML:
             for cte in ("8bit", "qp"):
                 add("ordinary, html", "ordinary", f"{cte} {shape[:30]!r} | {number!r}",
                     "Your Acme booking", None, [number], shape.replace("{N}", html.escape(number)),
-                    cte, documented="Log in" in shape
-                    and bool(re.search(r"[A-Z].*\d|\d.*[A-Z]", number)))
+                    cte, documented=False)
     for word in IS_WORDS:
         for number in YEARS:
             for context, subject, body in YEAR_FRAMES:
