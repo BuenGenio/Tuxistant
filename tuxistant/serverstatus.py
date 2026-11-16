@@ -1,18 +1,19 @@
 """What runs on your own server: its docker containers and systemd services, read over ssh.
 
 One fixed command that reads goes to the host of the server in Settings, and nothing the model
-wrote goes with it: a name to look for is matched here, once the answer is back. The command
-starts no docker there, not even one you stopped that its socket would start again, a
-rootless one whose user socket still listens included. Where docker is podman's shim, docker ps
-is a rootless podman ps: the first time, it creates podman's container storage for your user,
-it leaves podman's pause process running for your user, and it lists only your user's
-containers, not root's. A docker pointed at podman's socket starts podman's API service for
-your user for a few seconds, though no containers. The login opens a session there
-as any ssh does, which starts your user services if nothing else keeps them running, and what
-the server runs for any login with that key, such as an authorized_keys command=, a
-ForceCommand or ~/.ssh/rc, runs too, before the command or in its place. ssh takes the port and
-user from ~/.ssh/config, and gets no agent, so the key has to work on its own. What your
-ssh_config runs itself, such as a ProxyCommand, still runs.
+wrote goes with it: a name to look for is matched here, once the answer is back. It is made for
+a Linux server where systemd runs the services, and runs docker-ce or docker.io as
+docker.service, socket-activated or not. docker is asked only while systemd says docker.service
+is running, and only at docker's own socket, so the command itself starts nothing there: not a
+docker you stopped that its socket would start again, nor podman behind a docker shim, a
+rootless docker, or another daemon a docker context or DOCKER_HOST points at. Only a docker
+stopped in the moment between the check and docker ps could still be started by its socket.
+Anywhere else the answer says what it couldn't check. The login opens a session there as any ssh does, which
+starts your user services if nothing else keeps them running, and what the server runs for any
+login with that key, such as an authorized_keys command=, a ForceCommand or ~/.ssh/rc, runs
+too, before the command or in its place. ssh takes the port and user from ~/.ssh/config, and
+gets no agent, so the key has to work on its own. What your ssh_config runs itself, such as a
+ProxyCommand, still runs.
 What the server sends is someone else's text. It is capped, each name has to look like a name,
 and the app says the answer itself, so none of it reaches a model with tools.
 """
@@ -42,23 +43,21 @@ MAX_NAME_CHARS = 40
 
 # Run by the remote user's own shell, whichever it is, so it hands the work to sh at once.
 # Killing ssh here doesn't end what it started there, as there is no terminal to hang up, so a
-# docker that hangs is given a timeout there too, where one works: an old busybox one fails
-# the "true" first and is left out. docker ps on a stopped docker whose docker.socket still
-# listens would start it again, and with it every container set to restart, so it is asked only
-# when the service is up or no socket waits for it, for the system and then for the user, as a
-# rootless docker's socket is the user's: with no user manager to ask, both of those fail and
-# change nothing. Synology's DSM keeps docker in /usr/local/bin, which a command over ssh
-# doesn't have on its PATH there, so that is added, after what is there. No "!": csh expands it
-# even in quotes.
-INNER = ("export LC_ALL=C PATH=\"$PATH:/usr/local/bin:/usr/local/sbin\"; "
-         "T=; timeout 8 true >/dev/null 2>&1 && T=\"timeout 8\"; "
-         "D=1; $T systemctl is-active --quiet docker.service 2>/dev/null || "
-         "{ $T systemctl is-active --quiet docker.socket 2>/dev/null && D=; }; "
-         "$T systemctl --user is-active --quiet docker.service 2>/dev/null || "
-         "{ $T systemctl --user is-active --quiet docker.socket 2>/dev/null && D=; }; "
-         "echo @docker; if [ -n \"$D\" ]; then "
-         "$T docker ps --format \"{{.Names}}|{{.Image}}|{{.Status}}\" 2>&1; "
-         "echo \"@exit $?\"; else echo \"@exit 300\"; fi; "
+# command that hangs is given a timeout there too, where one works: an old busybox one fails
+# the "true" first and is left out. docker is asked only when systemctl says docker.service is
+# running: docker ps on a stopped docker whose docker.socket still listens would start it again,
+# with every container set to restart, and a docker that systemd doesn't run as docker.service
+# may be podman's shim, which sets up podman for the user, or a rootless docker. Any answer but
+# active (0) or not (3), as from a D-Bus that is down, a timeout or no systemctl, leaves docker
+# unasked too. 300 and 301 say which, as no exit code is over 255. -H is docker's own socket,
+# over a DOCKER_HOST or docker context of the user's, which may be a rootless docker, podman's
+# socket or another machine. A docker stopped in the moment between the check and docker ps
+# would still be started by its socket. No "!": csh expands it even in quotes.
+INNER = ("export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T=\"timeout 8\"; "
+         "$T systemctl is-active --quiet docker.service 2>/dev/null; S=$?; echo @docker; "
+         "if [ $S = 0 ]; then $T docker -H unix:///var/run/docker.sock ps "
+         "--format \"{{.Names}}|{{.Image}}|{{.Status}}\" 2>&1; echo \"@exit $?\"; "
+         "elif [ $S = 3 ]; then echo \"@exit 300\"; else echo \"@exit 301\"; fi; "
          "echo @systemd; $T systemctl list-units --type=service --state=running --no-legend "
          "--plain --no-pager 2>/dev/null; echo \"@exit $?\"")
 REMOTE = "exec sh -c " + shlex.quote(INNER)
@@ -84,7 +83,8 @@ SSH_OPTIONS = ("-T", "-x", "-a", "-o", "IgnoreUnknown=*", "-o", "BatchMode=yes",
                "-o", "SessionType=default", "-o", "LogLevel=ERROR")
 PASSED_ENV = ("PATH", "HOME", "USER", "LANG")
 NOT_FOUND = 127             # what sh says for a command that isn't there
-STOPPED = 300               # docker ps not asked, as above: no exit code is over 255
+NOT_ACTIVE = 300            # docker not asked: systemctl says docker.service isn't running
+NO_SYSTEMD_ANSWER = 301     # docker not asked: systemctl couldn't say
 
 NO_SERVER = "There's no server set in Settings, so I don't know which one to check."
 ON_THIS_COMPUTER = ("The server in Settings is this computer. I can't list what runs here, but "
@@ -101,16 +101,24 @@ HOST_KEY_CHANGED = ("Your server's ssh host key has changed since this computer 
 CANT_CONNECT = "I couldn't connect to your server over ssh. It may be off, or out of reach from here."
 TIMED_OUT = "Your server took too long to answer, so I stopped."
 UNREADABLE = "Your server answered, but not in a way I could read."
-NEITHER = "I couldn't find docker or systemd on your server, so I can't tell what's running there."
+NEITHER = "I couldn't find systemd on your server, so I couldn't check what's running there."
 BAD_NAME = "Say the name of one program or service, in a word or two."
 DOCKER_REFUSED = ("Your user on the server isn't allowed to use docker, so I can't list its "
                   "containers.")
-DOCKER_STOPPED = "Docker is stopped on your server, so I didn't start it."
+DOCKER_NOT_ACTIVE = "Docker isn't running as docker.service on your server, so I didn't ask it."
+DOCKER_NO_SYSTEMD = ("I couldn't ask systemd whether docker is running on your server, so I "
+                     "didn't ask docker.")
+# Why docker's containers weren't read: said alone, and after an "and" in a no. Each says only
+# what is known: DSM's docker, snap's or a rootless one isn't docker.service, but may be running.
+DOCKER_UNREAD = {
+    "missing": ("I couldn't find docker on your server.", "I couldn't find docker there"),
+    "not active": (DOCKER_NOT_ACTIVE, "docker isn't running as docker.service there"),
+    "no systemd": (DOCKER_NO_SYSTEMD, "I couldn't ask systemd whether docker is running there"),
+    "refused": (DOCKER_REFUSED, "your user isn't allowed to use docker there"),
+    "error": ("Docker on your server gave me an error.", "docker gave me an error there"),
+    "silent": ("Docker on your server didn't answer me.", "docker didn't answer there"),
+}
 OVER_SSH = "Yes, I reached your server over ssh."
-PODMAN = "Docker there is podman, so I see only your user's containers."
-# What podman-docker's docker says on its error output each time, unless /etc/containers/nodocker
-# is there: a rootless podman ps sees only the ssh user's containers.
-PODMAN_SHIM = "Emulate Docker CLI using podman."
 
 # "@" as in wg-quick@wg0, which a service here may be called too
 NAME = re.compile(r"[a-z0-9][a-z0-9 ._@-]{0,%d}" % (MAX_NAME_CHARS - 1))
@@ -364,16 +372,19 @@ def _ssh_failed(errors: bytes) -> str:
 
 
 def _sections(text: str) -> dict:
-    """{"docker": (exit code, lines), "systemd": ...} for each section the answer finished."""
-    found, current, lines = {}, None, []
+    """{"docker": (exit code, lines, cut), "systemd": ...} for each section the answer finished,
+    where cut says it had more than MAX_LINES lines, of which only those were kept."""
+    found, current, lines, cut = {}, None, [], False
     for line in text.splitlines():
         if line in ("@docker", "@systemd"):
-            current, lines = line[1:], []
+            current, lines, cut = line[1:], [], False
         elif current and (code := EXIT.fullmatch(line)):
-            found[current] = (int(code[1]), lines)
+            found[current] = (int(code[1]), lines, cut)
             current = None
         elif current and len(lines) < MAX_LINES:
             lines.append(line)
+        elif current:
+            cut = True
     return found
 
 
@@ -399,10 +410,9 @@ def _services(lines: list[str]) -> list[str]:
 
 def read(host: str) -> dict:
     """What runs on host, or Unanswered. "docker" and "systemd" are lists, or None when that
-    one wasn't read, with why in "docker_missing" or "systemd_missing" for one not found, as
-    sh's 127 says. A docker not found may be on another PATH, or the containers podman's, so it
-    is no sign that none run. "podman" is a docker list from podman's shim, of your user's
-    containers alone."""
+    one wasn't read, with why in "docker_why", a key of DOCKER_UNREAD, and in "systemd_missing"
+    for a systemctl sh didn't find. "docker_cut" and "systemd_cut" mark a list that had more
+    lines than were read."""
     code, output, errors = _run(command(host), _env())
     if code == 255:
         raise Unanswered(_ssh_failed(errors))
@@ -411,20 +421,38 @@ def read(host: str) -> dict:
         raise Unanswered(UNREADABLE)
     result = {}
     for part, parse in (("docker", _containers), ("systemd", _services)):
-        status, lines = sections.get(part, (None, []))
+        status, lines, cut = sections.get(part, (None, [], False))
         result[part] = parse(lines) if status == 0 else None
-        result[f"{part}_missing"] = status == NOT_FOUND
-    result["docker_stopped"] = sections.get("docker", (None,))[0] == STOPPED
-    # docker's own complaint, read only to pick a sentence
-    docker_lines = sections.get("docker", (0, []))[1]
-    result["docker_refused"] = result["docker"] is None and any(
-        "permission denied" in line.casefold() for line in docker_lines)
-    result["podman"] = result["docker"] is not None and any(
-        line.startswith(PODMAN_SHIM) for line in docker_lines)
-    if result["docker"] is None and result["systemd"] is None and (
-            result["docker_missing"] and result["systemd_missing"]):
-        raise Unanswered(NEITHER)
+        result[f"{part}_cut"] = cut and status == 0
+    status, lines, _ = sections.get("docker", (None, [], False))
+    result["docker_why"] = None if status == 0 else _docker_why(status, lines)
+    result["systemd_missing"] = sections.get("systemd", (None,))[0] == NOT_FOUND
     return result
+
+
+def _docker_why(status: int | None, lines: list[str]) -> str:
+    """Why docker's list wasn't read. docker's own complaint is read only to pick a sentence."""
+    if why := {NOT_FOUND: "missing", NOT_ACTIVE: "not active",
+               NO_SYSTEMD_ANSWER: "no systemd"}.get(status):
+        return why
+    said = " ".join(lines).casefold()
+    if "permission denied" in said:
+        return "refused"
+    return "error" if "error response from daemon" in said else "silent"
+
+
+def _neither(found: dict) -> bool:
+    """Nothing read, and no systemctl: docker is asked only where systemd runs it."""
+    return found["docker"] is None and found["systemd_missing"]
+
+
+def _read(found: dict, part: str) -> bool:
+    """Read whole: a list cut short may leave out what was asked after."""
+    return found[part] is not None and not found[f"{part}_cut"]
+
+
+def _cut(found: dict) -> bool:
+    return found["docker_cut"] or found["systemd_cut"]
 
 
 def _key(text: str) -> str:
@@ -498,14 +526,6 @@ def _plural(count: int, one: str) -> str:
     return f"{count} {one}" + ("" if count == 1 else "s")
 
 
-def _docker_unread(found: dict) -> str:
-    if found["docker_missing"]:
-        return "I couldn't find docker on your server."
-    if found["docker_stopped"]:
-        return DOCKER_STOPPED
-    return DOCKER_REFUSED if found["docker_refused"] else "Docker on your server didn't answer me."
-
-
 def _restarting(container: dict) -> bool:
     """docker ps lists a container that keeps crashing too, as "Restarting (1) 5 seconds ago"."""
     return container["status"].casefold().startswith("restarting")
@@ -535,19 +555,22 @@ def _everything(found: dict, first: set = frozenset()) -> str:
     """What runs there, a few names in each part, with the names in first before the rest, so
     the cut can't drop what matched the name asked after."""
     said = []
-    containers = found["docker"]
+    containers, cut = found["docker"], found["docker_cut"]
+    # A list cut short is counted as "at least", and says so after its part.
+    least = "at least " if cut else ""
     if containers is None:
-        said.append(_docker_unread(found))
-    elif not containers:
+        said.append(DOCKER_UNREAD[found["docker_why"]][0])
+    elif not containers and not cut:
         said.append("No docker containers are running on your server.")
     else:
         def named(which) -> list[str]:
             return sorted((c["name"] for c in containers if which(c)), key=lambda n: n not in first)
         if up := named(_up):
-            said.append(f"On your server, {_plural(len(up), 'docker container')} "
+            said.append(f"On your server, {least}{_plural(len(up), 'docker container')} "
                         f"{_is(len(up))} running: {_listed(up, SAID_CONTAINERS)}.")
         else:
-            said.append("No docker containers are really up on your server.")
+            said.append("None of the docker containers I could read on your server is really up."
+                        if cut else "No docker containers are really up on your server.")
         if sick := named(lambda c: "unhealthy" in c["status"].casefold()):
             said.append(f"Unhealthy: {_listed(sick, SAID_CONTAINERS)}.")
         if again := named(_restarting):
@@ -555,9 +578,10 @@ def _everything(found: dict, first: set = frozenset()) -> str:
                         f"{_listed(again, SAID_CONTAINERS)}.")
         if paused := named(_paused):
             said.append(f"Paused, so not running: {_listed(paused, SAID_CONTAINERS)}.")
-    if found["podman"]:
-        said.append(PODMAN)
-    services = found["systemd"]
+        if cut:
+            said.append("Docker's list was longer than I could read.")
+    services, cut = found["systemd"], found["systemd_cut"]
+    least = "at least " if cut else ""
     if services is None:
         said.append("Your server doesn't use systemd, so I can't list its services."
                     if found["systemd_missing"] else "I couldn't read your server's system "
@@ -565,7 +589,8 @@ def _everything(found: dict, first: set = frozenset()) -> str:
     elif services:
         own = sorted((s for s in services if not s.casefold().startswith(PLUMBING)),
                      key=lambda s: s not in first)
-        count = f"There {_is(len(services))} {_plural(len(services), 'system service')} running"
+        count = (f"There {_is(len(services))} {least}"
+                 f"{_plural(len(services), 'system service')} running")
         plumbing = "which is" if len(services) == 1 else "all"
         if not own:
             said.append(f"{count}, {plumbing} part of the system itself.")
@@ -573,6 +598,8 @@ def _everything(found: dict, first: set = frozenset()) -> str:
             said.append(f"{count}: {_listed(own, SAID_SERVICES)}.")
         else:
             said.append(f"{count}, among them {_listed(own, SAID_SERVICES)}.")
+    if services is not None and cut:
+        said.append("Your server's list of services was longer than I could read.")
     return " ".join(said)
 
 
@@ -643,66 +670,61 @@ def _seen(found: dict, name: str) -> tuple[list[Match], bool]:
 
 
 def _deciding(matches: list[Match]) -> list[Match]:
-    """What decides whether it is up: what is called the name exactly, or else all that
-    matches. An app that keeps restarting is not up beside its database that is."""
-    return [m for m in matches if m.exact] or matches
+    """What decides whether it is up: what is called the name exactly. An app that keeps
+    restarting is not up beside its database that is, and a nextcloud-db that is up says
+    nothing of a nextcloud container that isn't there."""
+    return [m for m in matches if m.exact]
 
 
 def _start(matches: list[Match], plainly: bool = False) -> str:
-    """plainly leaves out "Not really" and "Partly", for what isn't called the name and may not
-    be what was asked after."""
-    if _all_up(matches):
-        return "Yes, on your server I see"
-    if plainly:
+    """With nothing called the name exactly, or plainly, for a list cut short where more may be
+    called that, there is no "Yes", "Partly" or "Not really"."""
+    deciding = _deciding(matches)
+    if plainly or not deciding:
         return "On your server I see"
-    return ("Partly: on your server I see" if any(m.up for m in _deciding(matches))
+    if all(m.up for m in deciding):
+        return "Yes, on your server I see"
+    return ("Partly: on your server I see" if any(m.up for m in deciding)
             else "Not really: on your server I see")
 
 
-def _all_up(matches: list[Match]) -> bool:
-    return all(m.up for m in _deciding(matches))
-
-
 def _no_docker(found: dict) -> str:
-    """Why docker's containers weren't read, after an "and". Not found is all sh's 127 says:
-    docker may be on another PATH there, or the containers podman's."""
-    if found["docker_missing"]:
-        return "I couldn't find docker there"
-    if found["docker_stopped"]:
-        return "docker is stopped there"
-    if found["docker_refused"]:
-        return "your user isn't allowed to use docker there"
-    return "docker didn't answer there"
+    """Why docker's containers weren't all read, after an "and"."""
+    if found["docker"] is not None:
+        return "docker listed more than I could read there"
+    return DOCKER_UNREAD[found["docker_why"]][1]
 
 
-def _podman(found: dict) -> str:
-    """After a sentence that isn't a yes: root's containers weren't seen."""
-    return f" {PODMAN}" if found["podman"] else ""
+def _no_systemd(found: dict) -> str:
+    if found["systemd"] is not None:
+        return "it listed more services than I could read"
+    return ("it doesn't use systemd" if found["systemd_missing"]
+            else "I couldn't read its system services")
 
 
-def _one(found: dict, name: str, matches: list[Match], whole: bool,
-         plainly: bool = False) -> str:
+def _one(found: dict, name: str, matches: list[Match], whole: bool) -> str:
     """Whether name runs there. A no says where it was looked for and what couldn't be, which
     may have it."""
     seen = [m.said for m in matches]
     if seen and whole:
-        said = f"{_start(matches, plainly)} {_listed(seen, SAID_MATCHES)}."
-        return said if _all_up(matches) else said + _podman(found)
+        return f"{_start(matches, _cut(found))} {_listed(seen, SAID_MATCHES)}."
     if found["docker"] is None and found["systemd"] is None:
         return f"I couldn't check for {name} on your server. {_everything(found)}"
-    if found["docker"] is None:
+    docker, systemd = _read(found, "docker"), _read(found, "systemd")
+    if not docker and not systemd:
+        no = (f"I couldn't check all of your server for {name}, as {_no_docker(found)} and "
+              f"{_no_systemd(found)}")
+    elif not docker:
         no = (f"I don't see {name} among the services running on your server, and "
               f"{_no_docker(found)}")
-    elif found["systemd"] is None:
+    elif not systemd:
         no = (f"I don't see {name} among the docker containers running on your server, and "
-              + ("it doesn't use systemd" if found["systemd_missing"]
-                 else "I couldn't read its system services"))
+              f"{_no_systemd(found)}")
     elif seen:
         no = f"I don't see {name} on your server"
     else:
         no = f"I don't see {name} among the docker containers or services running on your server"
-    no = f"{no}, but I see {_listed(seen, SAID_MATCHES)}." if seen else f"{no}."
-    return no + _podman(found)
+    return f"{no}, but I see {_listed(seen, SAID_MATCHES)}." if seen else f"{no}."
 
 
 def _on_a_server(args: dict, host: str) -> bool:
@@ -721,16 +743,23 @@ def _the_list_answers(found: dict, name: str, host: str, matches: list[Match], w
                       program: bool) -> bool:
     """The server's own name: what runs there, unless something there is what was asked after.
     Asked after as a program, anything that matches all of it is, and the list, which then says
-    no first, answers only once docker and systemd were both read, and docker's list wasn't
-    podman's of your user alone: otherwise the answer says what it couldn't check, as for any
-    name. Said as the server, as "my nas" beside nas-backup, only something called exactly that
-    is."""
+    no first, answers only once docker and systemd were both read whole: otherwise the answer
+    says what it couldn't check, as for any name. Said as the server, as "my nas" beside
+    nas-backup, only something called exactly that is."""
     if not names_host(name, host):
         return False
     if program:
-        return (not whole and found["docker"] is not None and not found["podman"]
-                and found["systemd"] is not None)
+        return not whole and _read(found, "docker") and _read(found, "systemd")
     return not any(m.exact for m in matches)
+
+
+def _not_here(name: str) -> str:
+    """What this computer was looked at for: a service or a process of that name."""
+    return f"no service or process called {name} is running on this computer"
+
+
+def _sentence(text: str) -> str:
+    return text[:1].upper() + text[1:]
 
 
 def answer(args: dict, config, session=None, missed_here: str | None = None,
@@ -742,30 +771,34 @@ def answer(args: dict, config, session=None, missed_here: str | None = None,
     host = target(config)
     name = wanted(args, host)
     found = read(host)
+    ssh = _asks_after_ssh(args)
+    if not ssh and _neither(found):
+        raise Unanswered(NEITHER)
     if session is not None:
         session.tainted = True
     matches, whole = _seen(found, name) if name else ([], False)
     program = bool(name) and _as_a_program(args, host, name, missed_here)
-    # Asked "Is the NAS up?", a no, or a "Not really" for a nas-backup that isn't called nas,
-    # would sound as if the server were down, so the answer says it answered.
+    # Asked "Is the NAS up?", a no, or what isn't called nas, as nas-backup, would sound as if
+    # the server were down, so the answer says it answered. Nothing there is called the name
+    # exactly, so it is never a yes.
     up_there = program and bool(missed_here) and not any(m.exact for m in matches)
-    if _asks_after_ssh(args):
+    if ssh:
         text = OVER_SSH     # its unit may be ssh, sshd or another, but it let me in
     elif name and _the_list_answers(found, name, host, matches, whole, program):
         text = _everything(found, {m.name for m in matches} if whole else frozenset())
         if up_there:
-            text = (f"Your server answered, and nothing called {name} is running there or on "
-                    f"this computer. {text}")
+            text = (f"Your server answered. I don't see {name} among the docker containers or "
+                    f"services running there, and {_not_here(name)}. {text}")
         elif program:
-            text = f"Nothing called {name} is running on your server. {text}"
+            text = (f"I don't see {name} among the docker containers or services running on "
+                    f"your server. {text}")
     else:
-        text = _one(found, name, matches, whole, up_there) if name else _everything(found)
-        if up_there and not (whole and all(m.up for m in matches)):
-            text = (f"Your server answered, and nothing called {missed_here} is running on this "
-                    f"computer. {text}")
+        text = _one(found, name, matches, whole) if name else _everything(found)
+        if up_there:
+            text = f"Your server answered, and {_not_here(missed_here)}. {text}"
         elif missed_here and not whole:
             # This computer was looked at first, and only a yes says where it was found.
-            missed = f"Nothing called {missed_here} is running on this computer"
+            missed = _sentence(_not_here(missed_here))
             text = f"{missed}, and {text}" if name else f"{missed}. {text}"
     if say_which:
         text = f"I checked the server in Settings, {_label(host) or host}. {text}"
@@ -793,6 +826,6 @@ def _unanswered(why: str, config, missed_here: str | None, say_which: bool) -> s
         except Unanswered:
             pass
     if missed_here:
-        why = f"Nothing called {missed_here} is running on this computer. {why}"
+        why = f"{_sentence(_not_here(missed_here))}. {why}"
     return shown(why, 600)
 

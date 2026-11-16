@@ -32,6 +32,10 @@ FLAG = "--server"
 NOTHING_SENT = "Nothing was sent."
 # A word this long the model may split, as zephyr box for zephyrbox.
 SPLIT_FROM = 6
+# A word this long is the server's even inside another word, as myzephyr, zephyrs or zephyr2.
+GLUED_FROM = 5
+# What may be an address, in any spelling: 10.0.0.05, fd00:0:0::12, ::ffff:10.0.0.5.
+ADDRESS_LIKE = re.compile(r"(?<![0-9a-z])[0-9a-f]*[:.][0-9a-f:.]*[0-9a-f](?![0-9a-z])", re.I)
 
 
 RECIPES = Path(__file__).resolve().parent.parent / "tests" / "recipes"
@@ -65,13 +69,30 @@ def _patterns(host: str) -> list[str]:
     return [found[name] for name in sorted(found, key=len, reverse=True)]
 
 
+def _glued(host: str) -> list[str]:
+    """The words of the host's labels of GLUED_FROM letters or more that aren't generic, the
+    longest first: zephyr for zephyr.lan, tail1234 for box.tail1234.ts.net."""
+    if is_address(host):
+        return []
+    words = {w for label in host.casefold().split(".") for w in re.split(r"[-_]", label)
+             if len(w) >= GLUED_FROM and w not in GENERIC_LABELS}
+    return sorted(words, key=len, reverse=True)
+
+
 def redacted(text: str, host: str, placeholder: str = "{server}") -> str:
     """text with the server's host, its first label and any other telling label or word of it
     in place of placeholder, in any case: the model may call zephyr.lan zephyr and alice-nas.lan
-    alice nas, and what is printed goes into public notes. The longest first and only as a whole
-    word, so a short label leaves other words alone."""
+    alice nas, and what is printed goes into public notes. The longest first and as a whole
+    word, so a short label leaves other words alone, then a long one inside other words too, as
+    myzephyr, and an address in any spelling, as 10.0.0.05 or fd00:0:0::12."""
     for pattern in _patterns(host):
         text = re.sub(rf"(?<![a-z0-9]){pattern}(?![a-z0-9])", placeholder, text, flags=re.I)
+    if glued := _glued(host):
+        inside = re.compile("|".join(map(re.escape, glued)), re.I)
+        # Around what is already redacted, so a word inside the placeholder is left alone.
+        text = placeholder.join(inside.sub(placeholder, part) for part in text.split(placeholder))
+    if (own := _address(host)) is not None:
+        text = ADDRESS_LIKE.sub(lambda m: placeholder if _address(m[0]) == own else m[0], text)
     return text
 
 

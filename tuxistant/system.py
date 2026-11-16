@@ -261,12 +261,13 @@ def running(args: dict, config, session=None) -> dict:
         if session is not None:
             session.tainted = True
         if settings_here:
-            said = f"{name} is" if found else f"nothing called {name} is"
+            said = f"{name} is" if found else f"no service or process called {name} is"
             raise ValueError(f"{ONLY_TWO} The server in Settings is this computer, and {said} "
                              "running on it.")
         only = _only_two(config)
         raise ValueError(f"{only} On this computer, {name} is running." if found else
-                         f"{only} Nothing called {name} is running on this computer.")
+                         f"{only} No service or process called {name} is running on this "
+                         "computer.")
     return {"name": name, "running": found}
 
 

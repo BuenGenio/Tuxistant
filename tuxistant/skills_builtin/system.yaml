@@ -4,7 +4,7 @@ description: Tells you about this computer, such as how long it has been on and 
 version: 1.0.0
 permissions:
   files_read: true    # your IP address and Wi-Fi name are private, so a web search after them asks
-  network: [home]     # system.running on your server: one fixed read-only command, over ssh
+  network: [home]     # system.running on your server: one fixed command that reads, over ssh
 actions:
   system.info:
     description: Get facts about this computer. Use it for how long it has been on, its IP address, memory, how busy it is, battery, Wi-Fi, what is using the most CPU, or the operating system

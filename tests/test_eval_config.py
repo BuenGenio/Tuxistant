@@ -529,9 +529,20 @@ class RoutingCases(unittest.TestCase):
                  '{"on": "{server}"} {server} {server} {server}, my nas'),
                 ("zephyr-box.lan", '{"on": "ZephyrBox"} zephyr box, Zephyr',
                  '{"on": "{server}"} {server}, {server}'),
-                # A long word split by the model, but not a short or generic one.
+                # A long word split by the model, but not a short or generic one, and inside
+                # another word.
                 ("zephyrbox.lan", "my zephyr box, Zephyr-Box, zephyr_box. zephyrboxes",
-                 "my {server}, {server}, {server}. zephyrboxes"),
+                 "my {server}, {server}, {server}. {server}es"),
+                ("zephyr.lan", "myzephyr zephyrs Zephyr2, zephyr", "my{server} {server}s {server}2, "
+                                                                 "{server}"),
+                ("box.tail1234.ts.net", "mytail1234 boxes", "my{server} boxes"),
+                # A word that is in the placeholder is left alone there.
+                ("serve.lan", "{server} serves", "{server} {server}s"),
+                # An address in another spelling, but not another address.
+                ("fd00::12", "fd00:0:0::12 [FD00::12] fd00::1:2 fd00::12.",
+                 "{server} [{server}] fd00::1:2 {server}."),
+                ("10.0.0.5", "10.0.0.05, 10.0.0.50 and ::ffff:10.0.0.5",
+                 "{server}, 10.0.0.50 and ::ffff:{server}"),
                 ("zephyrbox-kitchen.lan", "zephyr box kitchen, kit chen, Zephyrbox.Kitchen",
                  "{server}, {server}, {server}"),
                 ("pi.lan", "p i on pi", "p i on {server}"),
@@ -611,7 +622,8 @@ ROUTED_HOST = "zephyrbox-kitchen.lan"      # made up
 SPELLINGS = (ROUTED_HOST, ROUTED_HOST.upper(), "zephyrbox-kitchen", "zephyrbox kitchen",
              "ZephyrboxKitchen", "zephyrbox", "Zephyrbox.Kitchen", "zephyrbox_kitchen", "kitchen",
              f"{ROUTED_HOST}:8080", f"ssh://{ROUTED_HOST}", "zephyr box", "Zephyr-Box kitchen",
-             "zephyr box kitchen")
+             "zephyr box kitchen", "myzephyrbox", "zephyrbox2", "zephyrboxes", "kitchens",
+             "the-zephyrbox-kitchen2")
 # The host across where eval_routing cuts what it prints: 90 for a call, 70 for an answer.
 ACROSS_THE_CUT = json.dumps({"name": "x" * 63, "on": ROUTED_HOST})
 SAID_ACROSS_THE_CUT = "y" * 63 + " " + ROUTED_HOST
