@@ -351,3 +351,38 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   .ticker-list { flex: 0 1 auto; flex-wrap: wrap; justify-content: center; gap: 8px 26px; min-width: 0; animation: none; }
   .ticker-list[aria-hidden="true"] { display: none; }
 }
+
+/* Release chips: what each release added, one chip per feature, most impact first. The list keeps
+   the rel-added class, so the release row above places it, and a wrapped chip stays a rounded box. */
+.feat-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.rel-added { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.feat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding-block: 2px;
+  padding-inline: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 0.95em;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.3;
+}
+.feat span { min-width: 0; overflow-wrap: break-word; }
+.feat-icon {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+[dir="rtl"] .feat-icon.is-mirrored { transform: scaleX(-1); }
+.is-planned .feat { border-style: dashed; background: none; }
+@media (max-width: 860px) {
+  .feat { font-size: 0.8rem; }
+}

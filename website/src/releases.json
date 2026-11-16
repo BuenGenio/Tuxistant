@@ -21,65 +21,62 @@
       "date": "2026-11-15",
       "channel": "stable",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.5.0",
-      "added": {
-        "en": "Recipe skills you write in YAML, a page for every skill in Settings, follow-up questions, hands-free dictation and an agreement before anything goes to the cloud",
-        "es": "Habilidades de receta que escribes en YAML, una página para cada habilidad en Configuración, preguntas de seguimiento, dictado manos libres y un acuerdo antes de enviar nada a la nube",
-        "pt": "Habilidades de receita que você escreve em YAML, uma página para cada habilidade em Configurações, perguntas de acompanhamento, ditado sem as mãos e um acordo antes de enviar qualquer coisa para a nuvem",
-        "zh": "用 YAML 编写的配方技能、设置中每个技能的独立页面、追问、免手持听写，以及任何内容发往云端之前的同意",
-        "ar": "مهارات وصفات تكتبها بلغة YAML، وصفحة لكل مهارة في الإعدادات، وأسئلة متابعة، وإملاء دون استخدام اليدين، وموافقة قبل إرسال أي شيء إلى السحابة"
-      }
+      "features": [
+        {"icon": "recipe", "label": {"en": "Recipe skills in YAML", "es": "Habilidades receta en YAML", "pt": "Habilidades receita em YAML", "zh": "YAML 配方技能", "ar": "مهارات الوصفات بلغة YAML"}},
+        {"icon": "followup", "label": {"en": "Follow-up questions", "es": "Preguntas de seguimiento", "pt": "Perguntas de acompanhamento", "zh": "追问", "ar": "أسئلة المتابعة"}},
+        {"icon": "dictation", "label": {"en": "Hands-free dictation", "es": "Dictado manos libres", "pt": "Ditado sem as mãos", "zh": "免手持听写", "ar": "إملاء دون استخدام اليدين"}},
+        {"icon": "settings", "label": {"en": "A page for every skill in Settings", "es": "Una página para cada habilidad en Configuración", "pt": "Uma página para cada habilidade em Configurações", "zh": "设置中每个技能的独立页面", "ar": "صفحة لكل مهارة في الإعدادات"}},
+        {"icon": "consent", "label": {"en": "Agreement before anything goes to the cloud", "es": "Tu acuerdo antes de enviar nada a la nube", "pt": "Seu acordo antes de enviar algo para a nuvem", "zh": "任何内容发往云端前先征得同意", "ar": "موافقة قبل إرسال أي شيء إلى السحابة"}}
+      ]
     },
     {
       "version": "0.4.0",
       "date": "2026-11-13",
       "channel": "preview",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.4.0",
-      "added": {
-        "en": "Opens apps and Settings pages, and keeps questions about your home out of fact lookups",
-        "es": "Abre apps y páginas de Configuración, y aparta de las búsquedas de datos las preguntas sobre tu casa",
-        "pt": "Abre apps e páginas de Configurações, e deixa as perguntas sobre sua casa fora das buscas de fatos",
-        "zh": "打开应用和设置页面，并让关于你家的问题不进入事实查询",
-        "ar": "يفتح التطبيقات وصفحات الإعدادات، ويُبقي الأسئلة عن منزلك خارج البحث عن المعلومات"
-      }
+      "features": [
+        {"icon": "apps", "label": {"en": "Opens apps", "es": "Abre apps", "pt": "Abre apps", "zh": "打开应用", "ar": "يفتح التطبيقات"}},
+        {"icon": "settings", "label": {"en": "Opens Settings pages", "es": "Abre páginas de Configuración", "pt": "Abre páginas de Configurações", "zh": "打开设置页面", "ar": "يفتح صفحات الإعدادات"}},
+        {"icon": "shield", "label": {"en": "Home questions kept out of fact lookups", "es": "Preguntas sobre tu casa fuera de las búsquedas de datos", "pt": "Perguntas sobre sua casa fora das buscas de fatos", "zh": "关于你家的问题不进入事实查询", "ar": "أسئلة منزلك خارج البحث عن المعلومات"}}
+      ]
     },
     {
       "version": "0.3.0",
       "date": "2026-11-13",
       "channel": "preview",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.3.0",
-      "added": {
-        "en": "Web search and research, facts from Wikipedia, mail search, your own skills, media, timers and Home Assistant",
-        "es": "Búsqueda e investigación en la web, datos de Wikipedia, búsqueda en el correo, tus propias habilidades, multimedia, temporizadores y Home Assistant",
-        "pt": "Pesquisa e investigação na web, fatos da Wikipédia, busca nos e-mails, suas próprias habilidades, mídia, timers e Home Assistant",
-        "zh": "网页搜索与调研、来自维基百科的事实、邮件搜索、你自己的技能、媒体控制、计时器和 Home Assistant",
-        "ar": "البحث في الويب والتقصّي، ومعلومات من ويكيبيديا، والبحث في البريد، ومهاراتك الخاصة، والوسائط، والمؤقتات، وHome Assistant"
-      }
+      "features": [
+        {"icon": "mail", "label": {"en": "Mail search", "es": "Búsqueda en el correo", "pt": "Busca nos e-mails", "zh": "邮件搜索", "ar": "البحث في البريد"}},
+        {"icon": "search", "label": {"en": "Web search and research", "es": "Búsqueda e investigación en la web", "pt": "Pesquisa e investigação na web", "zh": "网页搜索与调研", "ar": "البحث في الويب والتقصّي"}},
+        {"icon": "home", "label": {"en": "Home Assistant", "es": "Home Assistant", "pt": "Home Assistant", "zh": "Home Assistant", "ar": "Home Assistant"}},
+        {"icon": "timer", "label": {"en": "Timers and reminders", "es": "Temporizadores y recordatorios", "pt": "Timers e lembretes", "zh": "计时器和提醒", "ar": "مؤقتات وتذكيرات"}},
+        {"icon": "media", "label": {"en": "Media control", "es": "Control multimedia", "pt": "Controle de mídia", "zh": "媒体控制", "ar": "التحكم في الوسائط"}},
+        {"icon": "book", "label": {"en": "Facts from Wikipedia", "es": "Datos de Wikipedia", "pt": "Fatos da Wikipédia", "zh": "来自维基百科的事实", "ar": "معلومات من ويكيبيديا"}},
+        {"icon": "code", "label": {"en": "Your own skills", "es": "Tus propias habilidades", "pt": "Suas próprias habilidades", "zh": "你自己的技能", "ar": "مهاراتك الخاصة"}}
+      ]
     },
     {
       "version": "0.2.0",
       "date": "2026-11-13",
       "channel": "stable",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.2.0",
-      "added": {
-        "en": "Your calendar, and news from a source you choose",
-        "es": "Tu calendario y noticias de la fuente que elijas",
-        "pt": "Sua agenda e notícias da fonte que você escolher",
-        "zh": "你的日历，以及来自你所选来源的新闻",
-        "ar": "تقويمك، والأخبار من المصدر الذي تختاره"
-      }
+      "features": [
+        {"icon": "calendar", "label": {"en": "Calendar", "es": "Calendario", "pt": "Agenda", "zh": "日历", "ar": "التقويم"}},
+        {"icon": "news", "label": {"en": "News from a source you choose", "es": "Noticias de la fuente que elijas", "pt": "Notícias da fonte que você escolher", "zh": "来自你所选来源的新闻", "ar": "الأخبار من المصدر الذي تختاره"}}
+      ]
     },
     {
       "version": "0.1.0",
       "date": "2026-11-10",
       "channel": "preview",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.1.0",
-      "added": {
-        "en": "The first release: talk and listen, dictation, skills with approval cards, themes and Settings",
-        "es": "La primera versión: hablar y escuchar, dictado, habilidades con tarjetas de aprobación, temas y Configuración",
-        "pt": "A primeira versão: falar e ouvir, ditado, habilidades com cartões de aprovação, temas e Configurações",
-        "zh": "首个版本：对话与聆听、听写、带确认卡片的技能、主题和设置",
-        "ar": "الإصدار الأول: التحدث والاستماع، والإملاء، ومهارات ببطاقات موافقة، والسمات، والإعدادات"
-      }
+      "features": [
+        {"icon": "voice", "label": {"en": "Talk and listen", "es": "Hablar y escuchar", "pt": "Falar e ouvir", "zh": "对话与聆听", "ar": "التحدث والاستماع"}},
+        {"icon": "dictation", "label": {"en": "Dictation", "es": "Dictado", "pt": "Ditado", "zh": "听写", "ar": "الإملاء"}},
+        {"icon": "approve", "label": {"en": "Skills with approval cards", "es": "Habilidades con tarjetas de aprobación", "pt": "Habilidades com cartões de aprovação", "zh": "带确认卡片的技能", "ar": "مهارات ببطاقات موافقة"}},
+        {"icon": "settings", "label": {"en": "Settings", "es": "Configuración", "pt": "Configurações", "zh": "设置", "ar": "الإعدادات"}},
+        {"icon": "theme", "label": {"en": "Themes", "es": "Temas", "pt": "Temas", "zh": "主题", "ar": "السمات"}}
+      ]
     }
   ]
 }

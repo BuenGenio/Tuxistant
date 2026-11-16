@@ -11,13 +11,9 @@
       "date": "2026-11-17",
       "channel": "preview",
       "planned": true,
-      "added": {
-        "en": "Mail search without Thunderbird, through GNOME Online Accounts",
-        "es": "Búsqueda en el correo sin Thunderbird, a través de Cuentas en línea de GNOME",
-        "pt": "Busca nos e-mails sem o Thunderbird, pelas Contas on-line do GNOME",
-        "zh": "无需 Thunderbird 的邮件搜索，通过 GNOME 在线账户",
-        "ar": "البحث في البريد دون Thunderbird، عبر حسابات GNOME على الإنترنت"
-      }
+      "features": [
+        {"icon": "mail", "label": {"en": "Mail search through Online Accounts, without Thunderbird", "es": "Búsqueda en el correo con Cuentas en línea, sin Thunderbird", "pt": "Busca nos e-mails pelas Contas on-line, sem o Thunderbird", "zh": "通过在线账户搜索邮件，无需 Thunderbird", "ar": "البحث في البريد عبر حسابات الإنترنت دون Thunderbird"}}
+      ]
     }
   ],
   "claims": {

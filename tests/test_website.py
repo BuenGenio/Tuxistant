@@ -23,9 +23,19 @@ def load_build():
 
 
 def releases_shown(html):
-    """Each row of the releases list: version, the rest of the row, and what it added."""
-    return re.findall(r'<li class="release[^"]*"><span class="rel-version">(.*?)</span>(.*?)'
-                      r'<span class="rel-added">([^<]*)</span></li>', html)
+    """Each row of the releases list: version, the rest of the row, and its chips as (icon, label)."""
+    rows = re.findall(r'<li class="release[^"]*"><span class="rel-version">(.*?)</span>(.*?)'
+                      r'<ul class="rel-added">(.*?)</ul></li>', html)
+    return [(version, rest, chips_shown(chips)) for version, rest, chips in rows]
+
+
+def chips_shown(chips):
+    return re.findall(r'<li class="feat"><svg class="feat-icon[^"]*" aria-hidden="true" focusable="false">'
+                      r'<use href="#feat-([\w-]+)"/></svg><span>([^<]*)</span></li>', chips)
+
+
+def chips_for(entry, code):
+    return [(feature["icon"], html_escape(feature["label"][code])) for feature in entry["features"]]
 
 
 class BuiltSite(unittest.TestCase):
@@ -203,12 +213,65 @@ class BuiltSite(unittest.TestCase):
             strings = self.strings(page)
             rows = releases_shown(page.read_text())
             self.assertEqual(len(rows), len(history), page)
-            for entry, (version, rest, added) in zip(history, rows):
+            for entry, (version, rest, chips) in zip(history, rows):
                 self.assertEqual(version, f'<a href="{entry["page"]}">{entry["version"]}</a>', page)
                 self.assertIn(f'<time dir="ltr" datetime="{entry["date"]}">', rest, page)
                 self.assertIn(f'>{strings[entry["channel"]]}</span>', rest, page)
                 self.assertNotIn("chan-planned", rest, "the real site lists only what is out")
-                self.assertEqual(added, html_escape(entry["added"][code]), page)
+                # Every chip, in the order releases.json gives, which is most impact first.
+                self.assertEqual(chips, chips_for(entry, code), (page, entry["version"]))
+
+    def test_mail_search_leads_what_0_3_0_added(self):
+        """The owner's call: Mail search comes first in 0.3.0, with a capital."""
+        rows = {re.sub(r"<[^>]+>", "", version): chips
+                for version, _, chips in releases_shown((self.dist / "index.html").read_text())}
+        self.assertEqual(rows["0.3.0"][0], ("mail", "Mail search"))
+
+    def test_each_chip_icon_is_drawn_once_in_one_hidden_sprite(self):
+        for page in self.pages:
+            html = page.read_text()
+            sprites = re.findall(r'<svg class="feat-sprite" aria-hidden="true" focusable="false">(.*?)</svg>',
+                                 html, re.S)
+            self.assertEqual(len(sprites), 1, page)
+            symbols = re.findall(r'<symbol id="feat-([\w-]+)" viewBox="0 0 24 24">', sprites[0])
+            self.assertEqual(len(symbols), len(set(symbols)), page)
+            used = {icon for _, _, chips in releases_shown(html) for icon, _ in chips}
+            self.assertEqual(set(symbols), used, "the sprite holds what the chips use, and only that")
+            self.assertNotRegex(sprites[0], r"https?:|//|url\(|<image|<script|style=|href=", page)
+
+    def test_every_chip_label_starts_with_a_capital_where_the_script_has_them(self):
+        history = json.loads((ROOT / "website/src/releases.json").read_text())["history"]
+        upcoming = json.loads((ROOT / "website/preview/upcoming.json").read_text())["releases"]
+        labels = [(entry["version"], code, text) for entry in history + upcoming
+                  for feature in entry["features"] for code, text in feature["label"].items()]
+        self.assertTrue(labels)
+        for version, code, text in labels:
+            if text[0].lower() != text[0].upper():
+                self.assertTrue(text[0].isupper(), (version, code, text))
+
+    def test_a_slip_in_the_chips_stops_the_build(self):
+        languages = self.build.load_languages()
+        releases = json.loads((ROOT / "website/src/releases.json").read_text())
+        self.build.check_releases(releases, languages)
+
+        def broken(change):
+            copy = json.loads(json.dumps(releases))
+            change(copy["history"][0])
+            return copy
+        slips = {
+            "an unknown icon": lambda entry: entry["features"][0].update(icon="rocket"),
+            "a missing label": lambda entry: entry["features"][1]["label"].pop("zh"),
+            "a label in no language of the site": lambda entry: entry["features"][1]["label"].update(fr="Questions"),
+            "an empty label": lambda entry: entry["features"][1]["label"].update(es=""),
+            "a small letter first": lambda entry: entry["features"][0]["label"].update(pt="habilidades receita"),
+            "a sentence, not a chip": lambda entry: entry["features"][0]["label"].update(en="Recipe skills " * 5 + "in YAML"),
+            "no features": lambda entry: entry.update(features=[]),
+            "a line instead of features": lambda entry: entry.update(added=entry.pop("features")),
+        }
+        for slip, change in slips.items():
+            with self.subTest(slip), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    self.build.check_releases(broken(change), languages)
 
     def test_every_language_tags_the_preview_claims_as_english_does(self):
         english = [status for status, _ in self.strings(self.pages[0])["previewCaps"]]
@@ -261,8 +324,10 @@ class LocalPreview(unittest.TestCase):
         planned = self.upcoming["releases"]
         for page in self.pages:
             rows = releases_shown(page.read_text())
-            for entry, (version, rest, _) in zip(planned, rows):
+            code = "en" if page.parent == self.build.DIST_PREVIEW else page.parent.name
+            for entry, (version, rest, chips) in zip(planned, rows):
                 self.assertEqual(version, entry["version"], "nothing to link to yet")
+                self.assertEqual(chips, chips_for(entry, code), page)
                 self.assertIn('class="chan chan-planned"', rest, page)
                 self.assertIn(f'<time dir="ltr" datetime="{entry["date"]}">{entry["date"]}</time>', rest, page)
             self.assertEqual(len(rows), len(planned) + len(json.loads(
