@@ -231,7 +231,10 @@ GLUED = ("Hello from Acme. To sign in, use 482913•Verification ends in 10 minu
          "รหัส 482913ใช้ได้ภายใน 5 นาที", "รหัสยืนยันของคุณคือ 482913 ใช้ได้",
          "Din engångskod är 482913", "Din engangskode er 482913", "Din adgangskode er KQ7X9B",
          "Mã xác nhận của bạn là 482913", "सत्यापन कोड 482913", "קוד האימות שלך הוא 482913",
-         "Ο κωδικός σας είναι 482913")
+         "Ο κωδικός σας είναι 482913",
+         # In two groups of three before an amount, which only a code of four to eight digits
+         # in one piece is taken to be the price of.
+         "To sign in, use 482 913 USD 25.00 at ACME SHOP.")
 # Codes a second word for a code is joined to. Matches can't overlap, so "code=482" took the
 # first half of the code after the first word, and 913 was shown.
 TWICE_NAMED = ("Your Acme code below.\n\ncode=482 913\n\nThanks",
@@ -808,7 +811,27 @@ class Secrets(Base):
                 # A code with a space between each character, glued to the Chinese before it.
                 ("验证\n您的验证码是K Q 7 X 9 B，请勿泄露。", "K"),
                 ("Код подтверждения\nВаш код 482913", "482913"),
-                ("認証\n認証コード: 482913", "482913"), ("驗證\n驗證碼482913", "482913")):
+                ("認証\n認証コード: 482913", "482913"), ("驗證\n驗證碼482913", "482913"),
+                # קוד with the letters for "the", "and", "in" before it, or as a plural, as Hebrew
+                # mostly writes it. The subject names no code, or that alone would hide it.
+                ("חשבון\nהקוד שלך הוא 482913", "482913"),
+                ("חשבון\nתודה. והקוד שלך הוא 482913", "482913"),
+                ("חשבון\nהשתמש בקוד האבטחה 1234567 עבור חשבון Acme", "1234567"),
+                ("חשבון\nהקודים שלך: 482913, 559102", "559102"),
+                ("חשבון\nקודי האימות שלך: 482913", "482913"),
+                # The Arabic "is" that goes with رمز, and the English ones in capitals.
+                ("حساب\nرمز المرور الخاص بك هو shamsilyawm", "shamsilyawm"),
+                ("Code\nرمز التحقق الخاص بك هو 2047", "2047"),
+                ("PIN\nYOUR ACME PIN IS 2047. DO NOT SHARE IT.", "2047"),
+                ("Account\nYour temporary password WAS sunshine", "sunshine"),
+                # A colon after a word for "is" in another language: the password is after the
+                # colon, as 0.5.0 had it.
+                ("Compte\nVotre mot de passe est temporaire : soleil", "soleil"),
+                ("Cuenta\nTu contraseña es provisional: girasol", "girasol"),
+                ("Konto\nIhr Passwort (bitte ändern Sie es danach): sonnenschein", "sonnenschein"),
+                # Greek in capitals, which have no accent, and French quotes with spaces inside.
+                ("Λογαριασμός\nΚΩΔΙΚΟΣ ΠΡΟΣΒΑΣΗΣ: ilioskai", "ilioskai"),
+                ("Compte\nVotre mot de passe : « soleil »", "soleil")):
             shown = mail._hide(text)
             self.assertNotIn(secret, shown, text[:50])
             self.assertIn(mail.HIDDEN, shown, text[:50])
@@ -902,6 +925,13 @@ class Secrets(Base):
                 ("Use promo code SPRING10 for the 2024–25 academic year.", "2024–25 academic"),
                 ("Your booking code is HMX4K2. Members since the 1999–00 season.", "1999–00"),
                 ("Hotel Alpenblick\n2024–2025\nThanks", "2024–2025"),
+                # After a colon on the line before, with no word for a code to give it.
+                ("Season:\n2026–2027\nThanks", "2026–2027"),
+                ("Academic year:\n\n2024–25\n\nSee you there.", "2024–25"),
+                # After a word for "is" other than the English one, in a later sentence than the
+                # word for a code.
+                ("Ihr Buchungscode ist HMX4K2. Die Saison ist 2026.", "Die Saison ist 2026."),
+                ("Su código de reserva es HMX4K2. La temporada es 2024–25.", "es 2024–25."),
                 ("Your booking code is HMX4K2. Delivery 2pm–4pm, or call 9am–5pm.",
                  "Delivery 2pm–4pm, or call 9am–5pm."),
                 ("Your booking code is HMX4K2. Delivery is 2pm–4pm.", "is 2pm–4pm."),
@@ -943,10 +973,25 @@ class Secrets(Base):
                  "与用户名相同、有效期至2026年3月12日"),
                 ("ログインID：taro\nパスワード：ご登録時に設定したもの。有効期限は2026年3月12日です。",
                  "ご登録時に設定したもの。有効期限は2026年3月12日です。"),
+                # In quotes, which Chinese writes “” and Japanese and others 「」 or «».
+                ("初始密码：“abc12345”，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
+                ("临时密码：‘abc12345’，有效期至2026年3月12日。", "有效期至2026年3月12日。"),
+                ("仮パスワード：“Abc12345”有効期限は2026年3月12日です。", "有効期限は2026年3月12日です。"),
+                ("パスワード：«Abc12345»有効期限は2026年3月12日です。", "有効期限は2026年3月12日です。"),
+                # A sentence about the password that ends before a colon, and a number glued to a
+                # counter after one, which says how long or when.
+                ("パスワードを再設定しました。有効期限：24時間", "24時間"),
+                ("パスワードを変更しました。変更日時：2026/03/12 10:30", "2026/03/12 10:30"),
+                ("パスワードが変更されました。変更日時：2026年3月12日", "2026年3月12日"),
+                ("您的临时密码已发送到您的手机，有效期：30分钟", "30分钟"),
+                ("您的临时密码已发送到您的手机，有效期：24小时", "24小时"),
+                ("密码有效期：2026年3月12日", "2026年3月12日"),
                 # A postcode, a barcode or points, whose word holds one for a code.
                 ("คำสั่งซื้อ\nที่อยู่จัดส่ง: 99/1 ถนนสุขุมวิท กรุงเทพฯ รหัสไปรษณีย์ 10110\nโทร 0812345678",
                  "รหัสไปรษณีย์ 10110\nโทร 0812345678"),
                 ("Leverans\nStreckkod: 735005385001", "735005385001"),
+                ("Levering\nStregkode: 735005385001", "735005385001"),
+                ("Leverans\nPostkod: 11122, telefon 0812345678", "11122, telefon 0812345678"),
                 ("Pakke\nStrekkode 73123456 på pakken", "73123456"),
                 ("נקודות\nצברת 1500 נקודות בחודש מרץ", "1500"),
                 ("משלוח\nמיקוד 6100000, טלפון 03-1234567", "6100000, טלפון 03-1234567"),

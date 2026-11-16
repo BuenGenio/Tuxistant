@@ -447,6 +447,22 @@ class Secrets(Goa):
             self.assertIn(f"password is {mail.HIDDEN} for the guests", self.read(call))
             self.assertNotIn("Seven", self.read(call))
 
+    async def test_a_code_split_by_inline_tags_is_the_one_number_it_shows(self):
+        """Every tag was a space, so a code a template wrote in spans, which a browser and
+        Thunderbird's index join, reached the model as digit pairs, and a year-like code glued
+        past a tag to the minutes after it as a year. Only between two digits is a tag joined:
+        anywhere else it could glue a label to its code."""
+        self.assertEqual(goamail._untagged("<p>Use <span>48</span><span>29</span><wbr>13</p>"),
+                         " Use  482913 ")
+        self.assertEqual(goamail._untagged("<span>Your code is</span><span>482913</span>"),
+                         " Your code is  482913 ")
+        await self.all_hidden([
+            message(f"About your Acme account, part {n}", ACME, None, html=page)
+            for n, page in enumerate((
+                "<p>To sign in, use <span>48</span><span>29</span><span>13</span> on the page.</p>",
+                "<p>To sign in, use <b>48</b><b>29</b><b>13</b> on the page.</p>",
+                "<p>To sign in, use <b>2005</b>10 minutes left</p>"))])
+
     async def test_a_code_in_two_groups_of_three_is_hidden_with_a_group_of_letters(self):
         """Only groups that both held a digit were hidden."""
         await self.all_hidden([

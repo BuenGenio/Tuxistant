@@ -231,7 +231,7 @@ UNESCAPES = 4
 PASSWORDS = (r"passwort\w*|kennwort\w*|contrase[ñn]a\w*|senha\w*|has[łl][oa]\w*|mot de passe"
              r"|wachtwoord\w*|lösenord\w*|passord\w*|adgangskode\w*|kodeord\w*|şifre\w*|hesl[oa]\w*"
              r"|jelsz[óa]\w*|mật khẩu|kata sandi|पासवर्ड|סיסמ\w*|كلمة (?:ال)?(?:مرور|سر)|رمز المرور"
-             r"|κωδικ\w* πρόσβασ\w*|συνθηματικ\w*")
+             r"|κωδικ\w* πρ[οό]σβασ\w*|συνθηματικ\w*")
 HEBREW_PREFIXES = "\u05d4\u05d1\u05dc\u05d5\u05e9\u05de\u05db"    # the, in, to, and, that, from, as
 HEBREW_CODE = (f"(?<![\u05d0-\u05ea])[{HEBREW_PREFIXES}]{{0,2}}\u05e7\u05d5\u05d3"   # [prefixes]קוד
                "(?:\u05d9\u05dd|\u05d9)?(?![\u05d0-\u05ea])")                     # ים / י
@@ -268,12 +268,13 @@ CROSS_WORD = _secret_words(NAMING, "验证码|驗證碼|校验码|校驗碼|动�
 # là". Not that of one that writes none, as Japanese, Chinese, Korean or Thai do, where the
 # password would take the rest of the line with it. The English words count in capitals too, the
 # others only as written, so "the EST office" or "ES" in capitals is no "is". The same words make
-# a year after a word for a code the code (see JUST_GIVEN).
+# a year after a word for a code the code (see JUST_GIVEN). Where the first is another language's,
+# 0.5.0's first colon or English word is looked for as well (see _passwords).
 PASSWORD_WORD = re.compile(rf"(?:pass(?:words?|phrases?|wd)?|pwd|парол\w*|clave\w*|{PASSWORDS}"
                            r"|パスワード|密码|密碼|비밀번호|รหัสผ่าน)", re.I)
-IS = (r"(?i:is|are|was|will be|(?:changed|set|reset) to)|ist|lautet|est|es|é|è|är|er|je|jest|là"
-      r"|adalah|είναι|هي|هو|היא|הוא")
-GIVEN = re.compile(rf"[^.!?\n]{{0,60}}?(?:\b(?:{IS})\b\s*:?|[:=])\s*(\S{{3,}})")
+ENGLISH_IS = r"(?i:is|are|was|will be|(?:changed|set|reset) to)"
+OTHER_IS = r"ist|lautet|est|es|é|è|är|er|je|jest|là|adalah|είναι|هي|هو|היא|הוא"
+IS = f"{ENGLISH_IS}|{OTHER_IS}"
 # What a secret looks like, next to the word for one.
 # A hyphen-minus joins a number to the rest of a reference, as in "48213-2" or "10482913-ABCDEF",
 # when a digit, a slash, a short group of capitals or what the first pass hid of the rest follows
@@ -311,7 +312,7 @@ WORD_CHAR = rf"[^\W{_letters_of(SPACELESS)}]"
 # ใช้ได้ are: 유 of 유로 starts 유효, "valid", and 만 of 만원 means "only".
 UNITS = ("円元圓圆块角万萬亿億年月日时時分秒个個件名人位枚张張份点號号室泊期階层層次回台岁歳"
          "원년월일개명건점회호층박번엔")
-UNIT = (rf"[{UNITS}]|美元|美金|[欧歐]元|港[币幣元]|[韩韓]元|英[镑鎊]|澳元|加元|[积積]分|ドル|ユーロ"
+UNIT = (rf"[{UNITS}]|小[时時]|美元|美金|[欧歐]元|港[币幣元]|[韩韓]元|英[镑鎊]|澳元|加元|[积積]分|ドル|ユーロ"
         r"|ポイント|ポンド|ウォン|バーツ|달러|유로|파운드|포인트|위안|[만억] ?원|บาท|ກີບ|ကျပ်|រៀល")
 # Nor do they put a space after a password, so one written in ASCII ends where their letters
 # start again, or a bracket (see MADE_MARKS): "パスワード：Abc12345です。有効期限は2026年3月12日です。"
@@ -320,10 +321,28 @@ UNIT = (rf"[{UNITS}]|美元|美金|[欧歐]元|港[币幣元]|[韩韓]元|英[�
 BEYOND = re.compile(
     f"[{_letters_of(SPACELESS, lambda char: unicodedata.category(char)[0] in 'LM')}"
     "\u3008-\u3011\u3014-\u301b]")
-# The brackets and quotes a template puts round a password, "「Abc12345」" or
-# "【abc12345】", which _given looks past to see where it starts, and which end one in
-# ASCII as Japanese does (see BEYOND).
-OPENING = re.compile("[\u3008\u300a\u300c\u300e\u3010\u3014\u3016\u3018\u301a\"'\\[(]*")
+# The brackets and quotes a template puts round a password, "「Abc12345」", "【abc12345】" or
+# "“abc12345”", which _given looks past to see where it starts: every opening bracket, and every
+# quote either way round, as Swedish opens one with ”. A closing one is no BEYOND, as "it’s4me"
+# is one password, but the Chinese or Japanese after it is. Of these blocks, as NFKC has made the
+# wide and small ones plain by then.
+PUNCTUATION = ((0x20, 0xff), (0x2000, 0x206f), (0x2e00, 0x2e7f), (0x3000, 0x303f))
+QUOTE = "\"'" + _letters_of(PUNCTUATION, lambda char: unicodedata.category(char) in ("Pi", "Pf"))
+OPENING = re.compile(
+    f"[{QUOTE}{_letters_of(PUNCTUATION, lambda char: unicodedata.category(char) == 'Ps')}]*")
+COUNTED = re.compile(UNIT)
+
+
+def _given_after(words: str) -> re.Pattern:
+    """What follows the first colon or one of these words for "is" in a sentence (see IS), past a
+    quote and a space too, as French writes "« soleil »". A Chinese or Japanese full stop ends a
+    sentence as well: "パスワードを再設定しました。有効期限：24時間" says how long it is valid."""
+    return re.compile(rf"[^.!?\n。]{{0,60}}?(?:\b(?:{words})\b\s*:?|[:=])\s*"
+                      rf"(?:[{QUOTE}]\s+)?(?P<value>\S{{3,}})")
+
+
+GIVEN = _given_after(f"{ENGLISH_IS}|(?P<other>{OTHER_IS})")
+ENGLISH_GIVEN = _given_after(ENGLISH_IS)    # 0.5.0's
 IN_WORD = "[!#$%^&*+=-]"   # what else a code of letters and digits may hold, "Tr0ub4dor-3"
 SPACED = (rf"(?<!{WORD_CHAR})(?<![.,/-])(?:[A-Za-z0-9] ){{3,13}}[A-Za-z0-9]"   # K Q 7 X 9 B
           rf"(?!{WORD_CHAR}|[/-])")
@@ -352,6 +371,8 @@ SUFFIXED = re.compile(rf"\d+{SUFFIX}", re.I)
 # "code is 2048", "Code: 2048" or "Ihr Code lautet 2048" is no year: after a colon or a word for
 # "is" that GIVEN knows, looked for this far back (see _just_given).
 JUST_GIVEN = re.compile(rf"(?:\b(?:{IS})|[:=])\s*$")
+JUST_GIVEN_THEN = re.compile(r"(?:\bis|[:=])\s*$", re.I)    # 0.5.0's, across sentences
+SENTENCE_END = re.compile(r"[.!?](?=\s)|\u3002")     # NFKC has made the wide ! and ? plain
 GIVEN_BACK = 12
 # A mail that talks of signing in: there, any number of the right length may be the code. A space
 # is a space, a hyphen or neither, and a * any letters after. A mail server is asked for the same
@@ -694,9 +715,7 @@ def _spans(seen: str, talk: bool = False, look: bool = True,
     for word in SECRET_WORD.finditer(text):
         ends.append(word.end())
         if PASSWORD_WORD.fullmatch(word[0]):
-            given = GIVEN.match(seen, word.end(), word.end() + SECRET_REACH)
-            if given and (span := _given(seen, given)):
-                spans.append(span)
+            spans += _passwords(seen, word.end())
         before = max(0, word.start() - SECRET_BEFORE)
         if not DIGIT.search(text, before, word.start()):
             continue    # only saves time: a stranger's mail can hold ten thousand words for a
@@ -715,18 +734,33 @@ def _spans(seen: str, talk: bool = False, look: bool = True,
     return sorted(spans)
 
 
+def _passwords(seen: str, at: int) -> list[tuple[int, int]]:
+    """Where a password given after a word for one that ends at at stands: after the first colon
+    or word for "is" in its sentence (see GIVEN), and where that is a word only another language
+    has, after 0.5.0's first colon or English one too. "Votre mot de passe est temporaire :
+    soleil" or "Ihr Passwort (bitte ändern Sie es danach): sonnenschein" stopped at "est" or "es",
+    and a password of letters only after the colon reached the model."""
+    given = GIVEN.match(seen, at, at + SECRET_REACH)
+    english = given and given["other"] and ENGLISH_GIVEN.match(seen, at, at + SECRET_REACH)
+    return [span for found in (given, english) if found and (span := _given(seen, found))]
+
+
 def _given(seen: str, given: re.Match) -> tuple[int, int] | None:
     """Where a password given after "is" or a colon stands: up to the next space, or for one that
     starts in ASCII, past any bracket or quote before it (see OPENING), up to where Chinese,
     Japanese, Korean or Thai letters or a bracket of theirs start (see BEYOND). None where it
     starts with one of their letters, as a password is written in ASCII, which NFKC has made the
     wide forms: "パスワード：ご登録時に設定したもの。" or "初始密码：与用户名相同，有效期至2026年3月12日"
-    says what the password is, and was hidden to the end of its line, expiry date and all."""
-    start, end = given.span(1)
+    says what the password is, and was hidden to the end of its line, expiry date and all. None
+    too for a number glued to a counter, as SHAPED and NUMBER read one: "有効期限：24時間" or
+    "有效期：30分钟" say how long, and "变更日期：2026年3月12日" when."""
+    start, end = given.span("value")
     first = OPENING.match(seen, start, end).end()
     if first < end and BEYOND.match(seen, first):
         return None
     beyond = BEYOND.search(seen, first + 1, end) if first < end and seen[first].isascii() else None
+    if beyond and seen[first:beyond.start()].isdigit() and COUNTED.match(seen, beyond.start()):
+        return None
     return start, beyond.start() if beyond else end
 
 
@@ -762,8 +796,12 @@ def _shaped(text: str, ends: list[int], lead: int = 0) -> list[tuple[int, int]]:
 
 
 def _just_given(text: str, since: int, at: int) -> bool:
-    """Whether a colon or a word for "is" stands right before at, looked for back to since."""
-    return bool(JUST_GIVEN.search(text, max(since, at - GIVEN_BACK), at))
+    """Whether a colon or a word for "is" stands right before at, looked for back to since: the
+    English "is" or a colon as 0.5.0 had them, the others only in the sentence of the word for a
+    code that since ends, so "Ihr Buchungscode ist HMX4K2. Die Saison ist 2026." keeps its year."""
+    back = max(since, at - GIVEN_BACK)
+    return bool(JUST_GIVEN_THEN.search(text, back, at) or JUST_GIVEN.search(text, back, at)
+                and not SENTENCE_END.search(text, since, at))
 
 
 def _ordinary(found: str) -> bool:
@@ -863,27 +901,40 @@ def _apart(text: str) -> str:
     that way, where it is a slash (see RANGE). Each is one character for one, so what is hidden
     in this is hidden in the text."""
     if DASH in text or DOT in text or ELLIPSIS in text:
-        text = RANGE.sub(_ranged, text)
+        ends = []   # of the words for a secret, looked for once and only if a year needs them
+        text = RANGE.sub(lambda found: _ranged(found, ends), text)
     return text.translate(APART)
 
 
-def _ranged(found: re.Match) -> str:
+def _ranged(found: re.Match, ends: list) -> str:
     """A dash, a dot or an ellipsis between two numbers a slash where no code is written that way
     (see RANGE): from a number of one or two digits, as days, minutes, pence and hours such as
     2pm are, to one of up to three, "6–120"; or from a year to a later one, whole or its last two
     digits, "2024–2025", "2024–25" or "1999–00", but not "2025—10 minutes left", nor from a year
-    given as a code after a colon or "is" (see JUST_GIVEN), "Your PIN is 2005—10 minutes left".
+    given as a code (see _given_year), "Your PIN is 2005—10 minutes left".
     Any other stays as it was."""
     first, start, mark, end = found.groups()
     if len(start) <= 2:
         ranged = len(end) <= 3
-    elif not YEAR.fullmatch(start) or _just_given(found.string, 0, found.start()):
+    elif not YEAR.fullmatch(start) or _given_year(found.string, found.start(), ends):
         ranged = False
     elif len(end) == 2:
         ranged = int(end) > int(start[2:]) or int(end) == (int(start) + 1) % 100
     else:
         ranged = bool(YEAR.fullmatch(end)) and int(end) > int(start)
     return first + ("/" if ranged else mark)
+
+
+def _given_year(text: str, at: int, ends: list) -> bool:
+    """Whether a year at at is given as a code: right after a colon or a word for "is", within
+    reach of a word for a secret before it, as _shaped has it. Anywhere, "Season:\\n2024–25" on
+    a line of its own was a code. ends: those words' ends, filled the first time they are needed."""
+    if not JUST_GIVEN.search(text, max(0, at - GIVEN_BACK), at):
+        return False
+    if not ends:
+        ends += [-1, *(word.end() for word in SECRET_WORD.finditer(text))]
+    since = ends[bisect.bisect_right(ends, at) - 1]
+    return since >= max(0, at - SECRET_REACH) and _just_given(text, since, at)
 
 
 def _seen(text: str, limit: int = CLEANED_CHARS) -> tuple[str, bool]:

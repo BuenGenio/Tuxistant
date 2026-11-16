@@ -105,6 +105,11 @@ SKIPPED_HTML = re.compile(r"(?i)<(script|style|head)\b")
 CLOSER = {name: re.compile(rf"(?i)</{name}\s*>") for name in ("script", "style", "head")}
 BREAK = re.compile(r"(?i)<br\s*/?>|</(?:p|div|tr|li|h\d|table|blockquote)\s*>")
 TAG = re.compile(r"<[^>]*>")
+# Inline tags between two digits, which a browser and Thunderbird's index join: made spaces,
+# "<span>48</span><span>29</span><span>13</span>" read "48 29 13", which no sender wrote. A tag
+# holds no "<", so each is looked for no further than the next one.
+INLINE = re.compile(r"(?i)(?<=\d)(?:</?(?:a|b|big|code|em|font|i|mark|s|small|span|strong|sub"
+                    r"|sup|tt|u|wbr)\b[^<>]*>)+(?=\d)")
 
 
 class Account(NamedTuple):
@@ -601,7 +606,7 @@ def _untagged(text: str) -> str:
     one in turn read on to the end of the text every time, so nothing past the last ">" is
     looked at."""
     end = text.rfind(">") + 1
-    return TAG.sub(" ", text[:end]) + text[end:]
+    return TAG.sub(" ", INLINE.sub("", text[:end + 1])) + text[end + 1:]
 
 
 def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
