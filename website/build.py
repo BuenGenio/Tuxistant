@@ -204,8 +204,70 @@ def planned_html(strings, entry):
             f'<time dir="ltr" datetime="{entry["date"]}">{entry["date"]}</time>')
 
 
+# The release chips' icons, drawn for this site like MODE_ICONS: 24 units square, a 2-unit round
+# stroke and no fill, so each one takes the chip's colour. A feature in releases.json names one.
+FEATURE_ICONS = {
+    "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>',
+    "search": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/>',
+    "home": '<path d="M4 10.5 12 4l8 6.5V20H4z"/><path d="M10 20v-5h4v5"/>',
+    "timer": '<circle cx="12" cy="13.5" r="7.5"/><path d="M12 13.5V10M9.5 2.5h5M12 2.5V6"/>',
+    "media": ('<path d="M9 17.5V5.5l11-2v12"/><circle cx="6.5" cy="17.5" r="2.5"/>'
+              '<circle cx="17.5" cy="15.5" r="2.5"/>'),
+    "book": ('<path d="M12 6.5C10 5 7 4.5 3 5v13.5c4-.5 7 0 9 1.5 2-1.5 5-2 9-1.5V5c-4-.5-7 0-9 1.5z"/>'
+             '<path d="M12 6.5V20"/>'),
+    "code": '<path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14"/>',
+    "recipe": ('<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/>'
+               '<path d="M14 3v5h5M8.5 13h7M8.5 17h4"/>'),
+    "followup": ('<path d="M4 3.5h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H8.5L5 15.5v-3H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/>'
+                 '<path d="M18 8h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-1v3l-3.5-3H11a1 1 0 0 1-1-1v-.5"/>'),
+    "dictation": '<path d="M4 7h9M4 12h6M4 17h8M18 5v14M15.5 5h5M15.5 19h5"/>',
+    "voice": ('<rect x="9" y="3" width="6" height="11" rx="3"/>'
+              '<path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/>'),
+    "approve": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8.5 12 2.5 2.5 5-5"/>',
+    "settings": ('<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/>'
+                 '<circle cx="9" cy="17" r="2"/>'),
+    "theme": ('<path d="M12 3a9 9 0 0 0 0 18c1.4 0 2-1 1.5-2.2-.6-1.4.3-2.8 1.8-2.8H18a3 3 0 0 0 3-3'
+              'c0-5.5-4-10-9-10z"/><path d="M7.5 11.5h.01M10 7.5h.01M15 7.5h.01"/>'),
+    "apps": ('<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/>'
+             '<rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/>'
+             '<rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>'),
+    "shield": '<path d="M12 3 5 6v5.5c0 4.5 3 8 7 9.5 4-1.5 7-5 7-9.5V6z"/><path d="M9.5 12.5h5"/>',
+    "consent": ('<path d="M7 18.5a4.5 4.5 0 0 1-.6-9 6 6 0 0 1 11.4 1.6 3.8 3.8 0 0 1-.3 7.4z"/>'
+                '<path d="m9.5 13.5 2 2 3.5-3.5"/>'),
+    "calendar": '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+    "news": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8.5h10M7 12.5h4M7 16h4M14 12.5h3V16h-3z"/>',
+}
+# The icons with lines of writing, left-aligned on a page or a list, which run the other way right
+# to left, so the Arabic page mirrors them.
+FEATURE_MIRRORED = {"dictation", "news", "recipe"}
+# Characters: a chip, not a sentence. About 40 Latin characters fit one line at 360 px.
+FEATURE_LABEL_LENGTH = (2, 40)
+
+
+def feature_sprite_html(releases):
+    """Every icon the release chips use, drawn once in a sprite the chips point at. Its size is set
+    here as well as in the stylesheet, so without the stylesheet it takes no room."""
+    used = dict.fromkeys(feature["icon"] for entry in releases["history"] for feature in entry["features"])
+    symbols = "".join(f'<symbol id="feat-{icon}" viewBox="0 0 24 24">{FEATURE_ICONS[icon]}</symbol>'
+                      for icon in used)
+    return f'<svg class="feat-sprite" width="0" height="0" aria-hidden="true" focusable="false">{symbols}</svg>'
+
+
+def features_html(code, entry):
+    """What a release added, one chip each, in the order releases.json gives: most impact first.
+    role="list" because WebKit drops a list's role when it has no bullets."""
+    chips = []
+    for feature in entry["features"]:
+        icon = feature["icon"]
+        mirrored = " is-mirrored" if icon in FEATURE_MIRRORED else ""
+        chips.append(f'<li class="feat"><svg class="feat-icon{mirrored}" width="15" height="15" '
+                     f'aria-hidden="true" focusable="false"><use href="#feat-{icon}"/></svg>'
+                     f'<span>{esc(feature["label"][code])}</span></li>')
+    return f'<ul class="rel-added" role="list">{"".join(chips)}</ul>'
+
+
 def releases_html(code, strings, releases):
-    """Newest first: version, date, stable or preview, and one line of what it added."""
+    """Newest first: version, date, stable or preview, and a chip for each thing it added."""
     rows = []
     for entry in releases["history"]:
         version, date = esc(entry["version"]), entry["date"]
@@ -217,7 +279,7 @@ def releases_html(code, strings, releases):
         rows.append(f'<li class="release{" is-planned" if entry.get("planned") else ""}">'
                     f'<span class="rel-version">{version_html}</span><span class="rel-when">{when}</span>'
                     f'<span class="chan chan-{entry["channel"]}">{esc(strings[entry["channel"]])}</span>'
-                    f'<span class="rel-added">{esc(entry["added"][code])}</span></li>')
+                    f'{features_html(code, entry)}</li>')
     return "".join(rows)
 
 
@@ -256,9 +318,7 @@ def check_releases(releases, languages):
             raise SystemExit(f"{where} must be stable or preview")
         if bool(entry.get("planned")) == bool(entry.get("page")):
             raise SystemExit(f"{where} links its release page, or is planned and links nothing")
-        missing = set(languages) - set(entry["added"])
-        if missing:
-            raise SystemExit(f"{where} says what it added in every language, not {sorted(missing)}")
+        check_features(where, entry, languages)
     linux, preview = releases["linux"]["version"], releases["preview"]
     if linux not in versions or release_in(releases, linux).get("planned"):
         raise SystemExit("releases.json: the main download must be a released version in history")
@@ -271,6 +331,32 @@ def check_releases(releases, languages):
     if bool(preview["url"]) != bool(preview["page"]) or (
             bool(preview["url"]) == bool(release_in(releases, preview["version"]).get("planned"))):
         raise SystemExit("releases.json: a released preview has a download and a page, a planned one neither")
+
+
+def check_features(where, entry, languages):
+    """A release's chips: at least one, each with a known icon and a label in every language that
+    starts with a capital where the script has capitals, and is short enough for a chip."""
+    features = entry.get("features")
+    if not isinstance(features, list) or not features:
+        raise SystemExit(f"{where} lists what it added as features, most impact first")
+    shortest, longest = FEATURE_LABEL_LENGTH
+    for feature in features:
+        if not isinstance(feature, dict):
+            raise SystemExit(f"{where}: each feature is an icon and a label, not {feature!r}")
+        label = feature.get("label") if isinstance(feature.get("label"), dict) else {}
+        name = f"{where}: {label.get('en', feature)!r}"
+        if not isinstance(feature.get("icon"), str) or feature["icon"] not in FEATURE_ICONS:
+            raise SystemExit(f"{name} needs an icon from FEATURE_ICONS, not {feature.get('icon')!r}")
+        if set(feature) != {"icon", "label"}:
+            raise SystemExit(f"{name} has only an icon and a label, not {sorted(set(feature) - {'icon', 'label'})}")
+        if set(label) != set(languages):
+            raise SystemExit(f"{name} needs a label in every language and no other: missing "
+                             f"{sorted(set(languages) - set(label))}, unknown {sorted(set(label) - set(languages))}")
+        for code, text in label.items():
+            if not isinstance(text, str) or text != text.strip() or not shortest <= len(text) <= longest:
+                raise SystemExit(f"{name} in {code} needs {shortest} to {longest} characters, not {text!r}")
+            if text[0].lower() != text[0].upper() and not text[0].isupper():
+                raise SystemExit(f"{name} in {code} must start with a capital letter, not {text!r}")
 
 
 def apply_upcoming(path, languages, releases):
@@ -378,6 +464,7 @@ def page(code, strings, languages, releases, detect, policy):
       <tbody>{versions_html(strings, releases)}</tbody>
     </table>
     <h3 class="sub" id="releases-title">{esc(strings['releasesTitle'])}</h3>
+    {feature_sprite_html(releases)}
     <ol class="releases" aria-labelledby="releases-title">{releases_html(code, strings, releases)}</ol>
   </section>
   <section class="wrap">
