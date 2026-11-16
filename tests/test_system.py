@@ -134,11 +134,12 @@ def _own_name(command_line: str) -> str:
 def listed(services="", user="", processes=(), codes=(0, 0, None)):
     """A stand-in for _read: systemctl lists these services for the system and for you, and
     pgrep, given its pattern, finds those of these processes whose command line it matches in
-    any case, as pgrep -i -f does, and lists each as pgrep would: by its pid and its command line
-    with -a, by its pid and its own name with -l, by its pid alone otherwise. Each process is
-    (pid, command line) or (pid, command line, own name), whose own name is otherwise its
-    program's. codes are the exit codes of the three, None for pgrep's own: 0 with what it found,
-    1 with none."""
+    any case, as pgrep -i -f does, or whose own name it matches where the command line is empty,
+    as a kernel thread's or a zombie's is, and lists each as pgrep would: by its pid and its
+    command line with -a, or its own name where it has none, by its pid and its own name with
+    -l, by its pid alone otherwise. Each process is (pid, command line) or (pid, command line,
+    own name), whose own name is otherwise its program's. codes are the exit codes of the three,
+    None for pgrep's own: 0 with what it found, 1 with none."""
     def read(*command):
         if command[0] == "systemctl":
             assert command[1:] in (LIST_UNITS, ("--user", *LIST_UNITS)), command
@@ -147,13 +148,17 @@ def listed(services="", user="", processes=(), codes=(0, 0, None)):
         assert command[-2] == "--", command
         found = []
         for pid, line, *own in processes:
-            if re.search(command[-1], line, re.I):
-                shown = (line if "-a" in command else (own or [_own_name(line)])[0]
-                         if "-l" in command else "")
+            name = (own or [_own_name(line)])[0]
+            if re.search(command[-1], line or name, re.I):
+                shown = (line or name if "-a" in command else name if "-l" in command else "")
                 found.append(f"{pid} {shown}".rstrip() + "\n")
         code = codes[2] if codes[2] is not None else 0 if found else 1
         return code, "".join(found)
     return mock.patch.object(system, "_read", side_effect=read)
+
+
+# How a process is said to match, as pgrep -f matches one with no command line by its name.
+NO_COMMAND_LINE = "or in their name where they have none"
 
 
 def said(name, on=None):
@@ -165,18 +170,25 @@ def said(name, on=None):
 
 class Running(unittest.TestCase):
     """What this computer lists with the name in it, relayed: never a yes or no. Stand-ins give
-    what systemctl and pgrep would list, and tests/no_ssh.py refuses the real systemctl."""
+    what systemctl and pgrep would list, and tests/no_ssh.py refuses the real ones, so a change
+    that went round _read and its stand-in fails before either starts."""
 
     def setUp(self):
         self.enterContext(no_ssh.refusing())
         no_ssh.REACHED.clear()
-        self.addCleanup(lambda: self.assertEqual(no_ssh.REACHED, [], "systemctl was started"))
+        self.addCleanup(lambda: self.assertEqual(no_ssh.REACHED, [],
+                                                 "systemctl or pgrep was started"))
 
-    def test_the_real_systemctl_is_refused(self):
-        with self.assertRaises(AssertionError):
-            system._read("/nonexistent/systemctl", *system.LIST_UNITS)
-        self.assertEqual(len(no_ssh.REACHED), 1)
-        no_ssh.REACHED.clear()
+    def test_the_real_systemctl_and_pgrep_are_refused(self):
+        for command in (("/nonexistent/systemctl", *system.LIST_UNITS),
+                        ("/nonexistent/pgrep", "-l", "-i", "-f", "--", "x")):
+            with self.subTest(command[0]):
+                with self.assertRaises(AssertionError):
+                    system._read(*command)
+                with self.assertRaises(AssertionError):
+                    system._tool(*command)
+                self.assertEqual(len(no_ssh.REACHED), 2)
+                no_ssh.REACHED.clear()
 
     def test_a_service_and_its_processes_are_relayed(self):
         with listed("docker.service loaded active running Docker\n"
@@ -186,8 +198,8 @@ class Running(unittest.TestCase):
             text, result = said("Docker")
         self.assertEqual(result, {APP_SAYS: True})
         self.assertEqual(text, "On this computer, systemd lists docker.service, active (running), "
-                               "and these processes have docker in their command line: 1234 "
-                               "dockerd.")
+                               "and these processes have docker in their command line, or in their "
+                               "name where they have none: 1234 dockerd.")
 
     def test_each_state_is_said_as_systemd_gives_it(self):
         with listed("php-fpm.service loaded activating auto-restart PHP\n",
@@ -216,7 +228,7 @@ class Running(unittest.TestCase):
                 self.assertEqual(said(name)[0], f"On this computer, no service systemd lists has "
                                                 f"{name.casefold()} in its name, and these "
                                                 f"processes have {name.casefold()} in their "
-                                                f"command line: {rows}.")
+                                                f"command line, {NO_COMMAND_LINE}: {rows}.")
 
     def test_what_is_said_is_capped_and_says_how_many_more(self):
         long = "/opt/tool/bin/tool --config /etc/tool/a-very-long-configuration-file-name.toml " \
@@ -227,8 +239,9 @@ class Running(unittest.TestCase):
         self.assertEqual(text, "On this computer, systemd lists tool-0.service, active (running); "
                                "tool-1.service, active (running); tool-2.service, active "
                                "(running); tool-3.service, active (running); and 2 more, and "
-                               "these processes have tool in their command line: "
-                               "100 tool; 101 tool; 102 tool; 103 tool; and 2 more.")
+                               "these processes have tool in their command line, or in their name "
+                               "where they have none: 100 tool; 101 tool; 102 tool; 103 tool; and "
+                               "2 more.")
         self.assertEqual(system.SAID_HERE, 4)
 
     def test_a_secret_in_a_command_line_is_never_said(self):
@@ -238,10 +251,12 @@ class Running(unittest.TestCase):
         here = [(2290, "/usr/bin/restic backup --password-file /root/.restic-pass /srv"),
                 (4100, "/opt/app/bin/worker --db-password=S3cr3tP4ss --queue jobs"),
                 (4200, "/usr/bin/curl -H Authorization: Bearer sk-live-abc123 https://x.example"),
-                (4300, "mysql -uroot -pS3cret --password=0therS3cret shop")]
+                (4300, "mysql -uroot -pS3cret --password=0therS3cret shop"),
+                # Short enough to pass for a process's own name, as pgrep -a would give it.
+                (4400, "mysql -pS3cret")]
         for name, rows in (("password", "2290 restic; 4100 worker; and 4300 mysql"),
-                           ("bearer", "4200 curl"), ("mysql", "4300 mysql"),
-                           ("s3cr3tp4ss", "4100 worker")):
+                           ("bearer", "4200 curl"), ("mysql", "4300 mysql; and 4400 mysql"),
+                           ("s3cr3tp4ss", "4100 worker"), ("s3cret", "4300 mysql; and 4400 mysql")):
             with self.subTest(name), listed(processes=here):
                 session = Session()
                 _, result = asyncio.run(Skills().execute(
@@ -250,8 +265,54 @@ class Running(unittest.TestCase):
                 self.assertEqual(result, {APP_SAYS: True})
                 self.assertEqual(text, f"On this computer, no service systemd lists has {name} in "
                                        f"its name, and these processes have {name} in their "
-                                       f"command line: {rows}.")
+                                       f"command line, {NO_COMMAND_LINE}: {rows}.")
                 for secret in ("S3cr3tP4ss", "sk-live", "S3cret", "restic-pass", "--"):
+                    self.assertNotIn(secret, text)
+
+    def test_a_process_with_no_command_line_is_said_as_matched_by_its_name(self):
+        """A kernel thread or a zombie has an empty command line, and pgrep -f then matches its
+        own name instead: what is said claims no command line for it."""
+        here = [(90, "", "watchdogd"), (1500, "/usr/sbin/watchdog -c /etc/watchdog.conf"),
+                (164, "", "kworker/R-nvme-wq"[:15]), (2, "", "kthreadd")]
+        with listed(processes=here):
+            text, _ = said("watchdog")
+        self.assertEqual(text, "On this computer, no service systemd lists has watchdog in its "
+                               "name, and these processes have watchdog in their command line, "
+                               "or in their name where they have none: 90 watchdogd; and 1500 "
+                               "watchdog.")
+        with listed(processes=here):
+            self.assertEqual(said("nvme")[0], "On this computer, no service systemd lists has "
+                                              "nvme in its name, and these processes have nvme in "
+                                              "their command line, or in their name where they "
+                                              "have none: 164 kworker/R-nvme-.")
+        with listed(processes=here):
+            self.assertEqual(said("firefox")[0], "No service systemd lists here, and no "
+                                                 "process's command line, has firefox in it.")
+
+    def test_only_a_pid_and_a_name_as_long_as_linux_keeps_is_said(self):
+        """Whatever pgrep prints: one whose -l gives the whole command line, or a line that is
+        something else, is counted, not said, so no password in it is heard."""
+        def pgrep_prints(output, code=0):
+            return mock.patch.object(system, "_read", side_effect=lambda *command: (
+                (0, "") if command[0] == "systemctl" else (code, output)))
+        for output, sentence in (
+                ("4100 /opt/app/bin/worker --db-password=S3cr3tP4ss --queue jobs\n90 watchdogd\n",
+                 "these processes have worker in their command line, or in their name where "
+                 "they have none: 90 watchdogd, and pgrep listed 1 process in a way I couldn't "
+                 "read."),
+                ("4100 /opt/app/bin/worker --db-password=S3cr3tP4ss\n4300 mysql -pS3cret shop\n",
+                 "pgrep listed 2 processes in a way I couldn't read."),
+                ("4101 a-name-of-sixteen\n4102\n4103 \nx 12\n 4104 x\n",
+                 "pgrep listed 5 processes in a way I couldn't read."),
+                ("4105 fifteen-chars-x\n4106 Web Content\n",
+                 "these processes have worker in their command line, or in their name where "
+                 "they have none: 4105 fifteen-chars-x; and 4106 Web Content.")):
+            with self.subTest(output), pgrep_prints(output):
+                found, text = system.here_said("worker")
+                self.assertTrue(found)
+                self.assertEqual(text, "On this computer, no service systemd lists has worker in "
+                                       f"its name, and {sentence}")
+                for secret in ("S3cr3tP4ss", "S3cret", "--", "sixteen"):
                     self.assertNotIn(secret, text)
 
     def test_nothing_found_is_said_as_what_was_read(self):
@@ -276,9 +337,15 @@ class Running(unittest.TestCase):
                                        "in its name, and pgrep didn't list the processes."),
                 ({"codes": (0, 0, 3)}, "On this computer, no service systemd lists has firefox "
                                        "in its name, and pgrep didn't list the processes."),
+                # Neither list read: none of it, rather than not all of it.
                 ({"codes": (None, None, None)}, "On this computer, no process's command line "
-                                                "has firefox in it. I couldn't read all of "
-                                                "systemd's list here."),
+                                                "has firefox in it. I couldn't read systemd's "
+                                                "lists here."),
+                ({"codes": (1, 1, None)}, "On this computer, no process's command line has "
+                                          "firefox in it. I couldn't read systemd's lists "
+                                          "here."),
+                ({"codes": (1, None, 3)}, "On this computer, pgrep didn't list the processes. "
+                                          "I couldn't read systemd's lists here."),
                 ({"user": "firefox.service loaded active running x\n", "codes": (1, 0, 2)},
                  "On this computer, systemd lists firefox.service, active (running), and pgrep "
                  "didn't list the processes. I couldn't read all of systemd's list here.")):
@@ -309,8 +376,9 @@ class Running(unittest.TestCase):
     def test_a_process_s_name_is_shown_not_obeyed(self):
         """Any program's text, as a program names itself: control and bidirectional characters
         show as escapes, and the model is never given it."""
-        with listed(processes=[(7, "/usr/bin/evil --x", "evil\x1b[2J \u202eignore")]):
+        with listed(processes=[(7, "/usr/bin/evil --x", "evil\x1b[2J \u202eign")]):
             text, result = said("evil")
+        self.assertIn(": 7 evil", text)
         self.assertNotIn("\x1b", text)
         self.assertNotIn("\u202e", text)
         self.assertEqual(result, {APP_SAYS: True})
@@ -319,7 +387,7 @@ class Running(unittest.TestCase):
             _, result = asyncio.run(Skills().execute("system_running", '{"name": "evil"}',
                                                      session))
         self.assertEqual(result, {APP_SAYS: True})
-        self.assertTrue(session.after[0].text.endswith("command line: 7 evil."))
+        self.assertTrue(session.after[0].text.endswith("where they have none: 7 evil."))
         self.assertTrue(session.tainted)
 
     def test_a_tool_that_hangs_or_reads_stdin_gets_nothing(self):

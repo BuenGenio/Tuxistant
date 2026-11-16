@@ -24,6 +24,7 @@ STOPPED_EARLY = ("Counting stopped after a few seconds, so the real numbers are 
                  "order may change.")
 SAID_HERE = 4           # services and processes said, of each
 LIST_UNITS = ("list-units", "--type=service", "--no-legend", "--plain", "--no-pager")
+PROCESS_LINE = re.compile(r"([0-9]+) (.{1,15})")     # a pid and a name of up to 15 characters
 
 
 def _tool(*command: str) -> str:
@@ -241,38 +242,50 @@ def _pattern(name: str) -> str:
     return "[-_. ]*".join("[+]" if c == "+" else c for c in serverstatus.squeezed(name))
 
 
-def _services_here(name: str) -> tuple[list, bool]:
-    """The services systemd lists here, the system's and yours, that have name in theirs, and
-    whether both lists were read whole."""
-    found, whole = [], True
+def _services_here(name: str) -> tuple[list, int, bool]:
+    """The services systemd lists here, the system's and yours, that have name in theirs, how
+    many of the two lists were read, and whether both were read whole."""
+    found, read, whole = [], 0, True
     for scope in ([], ["--user"]):
         code, output = _read("systemctl", *scope, *LIST_UNITS)
         if code != 0:
             whole = False
             continue
+        read += 1
         listing = serverstatus.units(output.splitlines(), False)
         found += [unit for unit in listing.rows if serverstatus.matches(name, unit)]
         whole = whole and not listing.odd
-    return found, whole
+    return found, read, whole
 
 
-def _processes_here(name: str) -> list[str] | None:
-    """Each process whose command line has name in it, by its pid and its own name as pgrep -l
-    gives them, or None when pgrep didn't list them. Never the command line itself: another
-    program's arguments may hold a password or a token, as in mysql -pS3cret, and what Tux says
-    is heard, sent to the speech server and kept in History."""
+def _processes_here(name: str) -> tuple[list[str], int] | None:
+    """Each process pgrep -f matches: by its command line, or by its own name where it has none,
+    as a kernel thread or a zombie. Each is said by its pid and its own name as pgrep -l gives
+    them, with how many lines weren't that, or None when pgrep didn't list them. Never the
+    command line itself: another program's arguments may hold a password or a token, as in
+    mysql -pS3cret, and what Tux says is heard, sent to the speech server and kept in History.
+    A line is read only as a pid and a name of up to 15 characters, as long as Linux keeps a
+    process's own name, so a pgrep whose -l gives more, such as the whole command line, gets
+    that line counted, not said."""
     code, output = _read("pgrep", "-l", "-i", "-f", "--", _pattern(name))
     if code not in (0, 1):
         return None
-    return [line.strip() for line in output.splitlines() if line.strip()]
+    lines = [line for line in output.split("\n") if line]
+    rows = [line for line in lines if PROCESS_LINE.fullmatch(line)]
+    return rows, len(lines) - len(rows)
+
+
+def _processes(count: int) -> str:
+    return f"{count} process" + ("" if count == 1 else "es")
 
 
 def here_said(name: str) -> tuple[bool, str]:
     """What this computer lists with name in it, relayed: the services as systemd gives them and
     the processes by pid and name as pgrep does, and whether there was any."""
-    units, whole = _services_here(name)
-    processes = _processes_here(name)
-    if not units and whole and processes == []:
+    units, read, whole = _services_here(name)
+    found = _processes_here(name)
+    processes, odd = found if found is not None else (None, 0)
+    if not units and whole and processes == [] and not odd:
         return False, (f"No service systemd lists here, and no process's command line, has {name} "
                        "in it.")
     said = []
@@ -282,16 +295,20 @@ def here_said(name: str) -> tuple[bool, str]:
     elif whole:
         said.append(f"no service systemd lists has {name} in its name")
     if processes:
-        said.append(f"these processes have {name} in their command line: "
-                    + serverstatus.said_rows(processes, SAID_HERE))
-    elif processes == []:
-        said.append(f"no process's command line has {name} in it")
-    else:
+        said.append(f"these processes have {name} in their command line, or in their name where "
+                    "they have none: " + serverstatus.said_rows(processes, SAID_HERE))
+    elif processes is None:
         said.append("pgrep didn't list the processes")
+    elif not odd:
+        said.append(f"no process's command line has {name} in it")
+    if odd:
+        said.append(f"pgrep listed {_processes(odd)} in a way I couldn't read")
     text = f"On this computer, {', and '.join(said)}."
-    if not whole:
+    if not read:
+        text += " I couldn't read systemd's lists here."
+    elif not whole:
         text += " I couldn't read all of systemd's list here."
-    return bool(units or processes), text
+    return bool(units or processes or odd), text
 
 
 def running(args: dict, config, session=None) -> dict:

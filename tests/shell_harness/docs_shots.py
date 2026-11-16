@@ -42,7 +42,8 @@ TURNS = [
     ("How do you say thank you in Ukrainian?", "Dyakuyu.", ["translate.text"]),
     ("Which folder is the biggest?", "Videos, at 41 gigabytes.", ["disk.folders"]),
     ("Is docker running?", "On this computer, systemd lists docker.service, active (running), "
-     "and these processes have docker in their command line: 1187 dockerd.",
+     "and these processes have docker in their command line, or in their name where they have "
+     "none: 1187 dockerd.",
      ["system.running"]),
     ("Where's my phone?", "Ringing your Pixel now.", ["phone.ring"]),
 ]

@@ -57,10 +57,10 @@ NGINX = ("On your server, none of the 2 containers docker lists has nginx in its
 NOTHING_HERE = "No service systemd lists here, and no process's command line, has {} in it."
 # What Tux must never say: each is a judgment of whether something works, which no list gives.
 # A state as its list gives it, as "active (running)", "Up 3 hours" or "systemctl says
-# docker.service is inactive", isn't one. nmcli's "yes:" in system.py is a field it reads, an
-# ssh option's "=yes" a setting, "what's running" what you ask, and "a key that works on its own"
-# is about ssh's key.
-VERDICTS = re.compile(r"(?<!=)\byes\b(?!:)|\b(Partly|Not really|really up|keeps restarting|I see|"
+# docker.service is inactive", isn't one. nmcli's "yes:" in system.py is a field it reads, a
+# string of its own, unlike a "Yes: plex" that starts a sentence, an ssh option's "=yes" a
+# setting, "what's running" what you ask, and "a key that works on its own" is about ssh's key.
+VERDICTS = re.compile(r"(?<!=)\byes\b(?!:\Z)|\b(Partly|Not really|really up|keeps restarting|I see|"
                       r"crash-?looping)\b"
                       r"|(\bis|\bare|\bwas|\bwere|n't|(?<!what)['’]s)( not)? (running|stopped|"
                       r"working|up|down|crashing|restarting|healthy|broken|dead|alive)\b"
@@ -68,9 +68,12 @@ VERDICTS = re.compile(r"(?<!=)\byes\b(?!:)|\b(Partly|Not really|really up|keeps 
                       r"|\brunning (service|process|container|app|program)s?\b"
                       r"|(?<!key that )\bworks\b", re.I)
 # What TESTING.md says of the scan, word for word, and what it catches is pinned beside it.
-VERDICT_SCAN = ("for a verdict, and fails on any: a yes in any case other than nmcli's \"yes:\" "
-                "field or an ssh option's \"=yes\", \"Partly\", \"Not really\", \"keeps "
-                "restarting\", \"crash-looping\", \"works\" other than in \"a key that works\", "
+VERDICT_SCAN = ("reads every string but docstrings in `tuxistant/serverstatus.py` and "
+                "`tuxistant/system.py`, and every answer to lists in each state, for a verdict, "
+                "and fails on any: a yes in any case other than a \"yes:\" that ends a string, as "
+                "nmcli's field does, or an \"=yes\", as in an ssh option, \"Partly\", \"Not "
+                "really\", \"keeps restarting\", \"crash-looping\", \"works\" other than in \"a "
+                "key that works\", "
                 "a \"running\" service or process, \"not running\", \"not up\" or \"not "
                 "working\", and \"is\", \"are\", \"was\", \"were\", \"n't\" or \"'s\" other than "
                 "in \"what's\", with or without \"not\", before running, stopped, working, up, "
@@ -653,7 +656,8 @@ class Relay(Case):
                         "a running process", "nothing is running", "not running",
                         "it keeps restarting", "I see plex", "plex is healthy", "web was dead",
                         "it isn't working", "the app is broken", "ssh is alive",
-                        "plex's running", "Yes=yes, yes"):
+                        "plex's running", "Yes=yes, yes", "Yes: docker lists plex.", "yes:\n",
+                        "On this computer, yes: 4242 plex."):
             with self.subTest(verdict):
                 self.assertRegex(verdict, VERDICTS)
         for relayed in ("nginx.service, active (running)", "web, Up 3 hours (healthy)",
@@ -1198,6 +1202,13 @@ class BoundedRun(Case):
         popen.assert_not_called()
         self.assertIn("makes a `~/.ssh` folder when your home folder has none, so then Tux "
                       "doesn't start it", _skills_section())
+        # With no ~/.ssh nothing in ssh_config runs: the ProxyCommand clause goes with the ssh
+        # that is started, before the sentence on the folder.
+        changelog = _changelog_entry()
+        self.assertIn("without writing to `known_hosts`; a `ProxyCommand` of yours still runs. "
+                      "With no `~/.ssh` folder in your home folder, ssh isn't started, as it would "
+                      "make one, and Tux says so.", changelog)
+        self.assertNotIn("Tux says so; a `ProxyCommand`", changelog)
 
     def test_no_ssh_program(self):
         """Not called ssh, which no test may start, even where there is none."""
@@ -1975,19 +1986,43 @@ class Docs(Case):
             ("systemctl", "list-units", "--type=service", "--no-legend", "--plain"),
             ("systemctl", "--user", "list-units", "--type=service", "--no-legend", "--plain"),
             ("pgrep", "-l", "-i", "-f", "--")])
-        # What a list it couldn't get is said as, rather than as having none.
+        # What a list it couldn't get is said as, rather than as having none: neither of
+        # systemd's lists, one of them, and a line of pgrep's that isn't a pid and a name.
         with mock.patch.object(system, "_read", return_value=(3, "")):
             failed = system.here_said("php-fpm")[1]
-        for quote in ("pgrep didn't list the processes", "I couldn't read all of systemd's list "
-                                                         "here."):
-            self.assertIn(quote, failed)
+        with mock.patch.object(system, "_read", side_effect=lambda *command: (
+                (1, "") if "--user" in command else (0, "") if command[0] == "systemctl"
+                else (0, "4100 /usr/sbin/php-fpm --db-password=x\n"))):
+            partly = system.here_said("php-fpm")[1]
+        self.assertEqual(partly, "On this computer, pgrep listed 1 process in a way I couldn't "
+                                 "read. I couldn't read all of systemd's list here.")
+        for quote, text in (("pgrep didn't list the processes", failed),
+                            ("I couldn't read systemd's lists here.", failed),
+                            ("I couldn't read all of systemd's list here.", partly),
+                            ("pgrep listed 1 process in a way I couldn't read", partly)):
+            self.assertIn(quote, text)
             self.assertIn(f'"{quote}"', skills)
+        # A process with no command line, which pgrep -f matches by its own name.
+        self.assertIn("`pgrep -f` matches a process whose command line is empty, as a kernel "
+                      "thread's or a zombie's is, by its own name instead", skills)
+        self.assertIn("or in their own name where the command line is empty, as a kernel thread's "
+                      "or a zombie's is", _changelog_entry())
+        self.assertIn("a line from pgrep that isn't a pid and a name of up to 15 characters is "
+                      "counted, not said", _changelog_entry())
         # The local step of check 31: localai is the local-ai process, with or without its dash.
         self.assertIn("as the check here takes \"localai\" for `local-ai` with or without the "
                       "dash", _check_31())
 
     def test_the_command_and_what_it_reads_are_described_as_they_are(self):
         skills = _skills_section()
+        # docker ps with no -a: an exited container isn't in what a no counts.
+        self.assertRegex(serverstatus.INNER, r" ps --format ")
+        self.assertNotRegex(serverstatus.INNER, r"docker [^;]* (-a|--all)\b")
+        for text in (skills, _changelog_entry()):
+            self.assertIn("`docker ps`, with no `-a`, lists the containers that are running, "
+                          "restarting or paused, so one that has exited or was only created isn't "
+                          "among them.", text)
+        self.assertIn("so a plex container that has exited isn't among the 31.", skills)
         self.assertIn(f"`systemctl {' '.join(SYSTEMCTL_CALL[:2])}`, with no `--state`", skills)
         self.assertIn("`systemctl is-active docker.service`", skills)
         self.assertIn("there each of the three reads runs under `timeout 8`", skills)
@@ -2059,6 +2094,9 @@ class Docs(Case):
                       "which `RemoteCommandWithoutBwrap` checks", testing)
         self.assertIn(RemoteCommandWithoutBwrap.__name__, testing)
         self.assertIn("sets that environment again with `env -i` in the command line", testing)
+        self.assertIn("refuses one with ssh, docker, systemctl or pgrep as a word", testing)
+        self.assertLessEqual({"ssh", "docker", "systemctl", "pgrep"}, no_ssh.REFUSED)
+        self.assertIn("and `Running` in `tests/test_system.py` for each of its tests", testing)
         self.assertIn(f"`{Relay.__name__}` in `tests/test_serverstatus.py` checks that every row "
                       "that matches is said with its state as listed", testing)
         self.assertTrue(hasattr(Relay, "test_no_sentence_judges_whether_anything_works"))
@@ -2083,6 +2121,18 @@ class Docs(Case):
             return 0, "1187 dockerd\n"
         with mock.patch.object(system, "_read", side_effect=docker_here):
             self.assertEqual(running[0], system.here_said("docker")[1])
+
+    def test_security_md_says_the_command_line_leak_was_found_before_release(self):
+        """No release read a command line aloud: 0.5.0 gave the model pgrep -x's yes or no."""
+        security = _flat("docs/SECURITY.md")
+        start = security.index("### The password in another program's command line")
+        section = security[start:security.index("## ", start + 4)]
+        self.assertIn("Before release, the relay first answered \"Is docker running?\"", section)
+        self.assertIn("No release did this: 0.5.0 asked `pgrep -x`", section)
+        self.assertNotIn("\"Is docker running?\" on this computer was answered", section)
+        self.assertIn("no more than 15 characters of a line after its pid can be read out",
+                      section)
+        self.assertEqual(system.PROCESS_LINE.pattern, r"([0-9]+) (.{1,15})")
 
     def test_what_it_needs_of_ssh_and_what_marks_the_conversation(self):
         text = (ROOT / "docs" / "SKILLS.md").read_text()
@@ -2217,7 +2267,8 @@ def running_here(*command):
 
 def found_here(name: str) -> str:
     return (f"On this computer, no service systemd lists has {name} in its name, and these "
-            f"processes have {name} in their command line: 4242 thing.")
+            f"processes have {name} in their command line, or in their name where they have "
+            "none: 4242 thing.")
 
 
 def asked(args, config=CONFIG, here=nothing_here, answer=(0, FULL, b"")):
@@ -2522,7 +2573,8 @@ class SystemRunning(Case):
                 result, text, run, _ = asked({"name": name, "on": "my server"}, config, tool)
                 self.assertEqual(result, {APP_SAYS: True})
                 self.assertIn("these processes have", text)
-                self.assertTrue(text.endswith("in their command line: 123 local-ai."), text)
+                self.assertTrue(text.endswith("in their command line, or in their name where "
+                                              "they have none: 123 local-ai."), text)
                 run.assert_not_called()
         self.assertEqual(asked({"name": "localaix"}, config, tool)[1],
                          NOTHING_HERE.format("localaix"))

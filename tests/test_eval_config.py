@@ -438,7 +438,8 @@ class EveryActionIsCutOff(unittest.TestCase):
         self.assertEqual(result, {APP_SAYS: True})
         self.assertEqual([said.text for said in session.after],
                          ["On this computer, systemd lists docker.service, active (running), and "
-                          "these processes have docker in their command line: 1187 dockerd."])
+                          "these processes have docker in their command line, or in their name "
+                          "where they have none: 1187 dockerd."])
         self.assertIn("made-up services and processes in place of `systemctl` and `pgrep` here, "
                       "so no evaluation prints your own",
                       " ".join((ROOT / "docs" / "SKILLS.md").read_text().split()))

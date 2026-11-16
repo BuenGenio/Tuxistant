@@ -1,9 +1,11 @@
-"""Refuses ssh, docker and systemctl while switched on, started any of the ways listed here,
-and the programs that start ssh themselves by its name: scp, sftp, slogin, sshpass and autossh.
+"""Refuses ssh, docker, systemctl and pgrep while switched on, started any of the ways listed
+here, and the programs that start ssh themselves by its name: scp, sftp, slogin, sshpass and
+autossh. pgrep is among them as system.running's tests give a stand-in for _read, and a change
+that went round it would list the developer's own processes.
 
 An audit hook sees each start before it happens: subprocess.Popen, which subprocess.run and a
 Popen imported by name both start through, os.posix_spawn, os.exec* and os.system. A start is
-refused when one of its words is ssh, docker or systemctl, by name or by path, as in timeout 5
+refused when one of its words is one of these, by name or by path, as in timeout 5
 ssh x or env /usr/bin/ssh x, or when a word of a script one of its words holds is, one level
 down, split as a shell splits it at spaces and at ; & | ( ) < > and backquotes, as in
 sh -c "cd /&&ssh x" or o=$(ssh x). Double quotes don't keep a script's words together here, as
@@ -22,7 +24,7 @@ import re
 import shlex
 import sys
 
-REFUSED = {"ssh", "scp", "sftp", "slogin", "sshpass", "autossh", "docker", "systemctl"}
+REFUSED = {"ssh", "scp", "sftp", "slogin", "sshpass", "autossh", "docker", "systemctl", "pgrep"}
 REACHED = []        # what was refused, for the test to check
 # Where each event has the program and its words: os.system has only a command line.
 WATCHED = {"subprocess.Popen": (0, 1), "os.posix_spawn": (0, 1), "os.exec": (0, 1),
