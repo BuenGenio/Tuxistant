@@ -1033,6 +1033,7 @@ class InstalledTests(RegistryCase):
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
         self.assertEqual(self.host.problems[str(self.file)],
                          "The skills registry has switched it off: Its host was lost.")
+        self.assertIn(str(self.file), self.host.offered, "it keeps its place among the six")
         self.accept(self.index(seq=2, skills=self.base["skills"], lifted=[self.lift(1)]))
         changes = self.reg.apply()
         self.assertEqual([change["off"] for change in changes], [False])
@@ -1044,6 +1045,19 @@ class InstalledTests(RegistryCase):
         self.suspend({"skill": "io.github.ada.bluetooth"})
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
         self.assertNotIn("still in use", self.host.problems[str(self.file)])
+
+    def test_a_switched_off_recipe_never_holds_back_another_taken_out(self):
+        """Its id is known though it doesn't load, so it isn't taken for a skill renamed onto a
+        broken file, and a recipe of yours taken out in the same reload counts as taken out."""
+        self.file.unlink()
+        mine = self.skills / "tides.yaml"
+        mine.write_text(TIDES.format(version="1.0.0").replace("ada.tides", "me.tides"))
+        self.assertIn("io.github.me.tides", self.loaded())
+        self.reg.install(self.reg.check("io.github.ada.bluetooth", "1.0.0"))
+        self.suspend({"skill": "io.github.ada.bluetooth"})
+        mine.unlink()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertTrue(self.host.grants.records["io.github.me.tides"].get("removed"))
 
     def test_a_ban_says_it_can_be_removed(self):
         self.suspend({"author": "ada"}, kind="ban")
