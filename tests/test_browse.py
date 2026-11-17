@@ -128,7 +128,7 @@ class BrowseCase(RegistryCase, unittest.IsolatedAsyncioTestCase):
         made.notify = notify
         return made
 
-    def restarted(self) -> Browse:
+    def restarted(self, address: str = ADDRESS) -> Browse:
         """The daemon started again: nothing it held in memory, and a new SkillHost and
         Controller reading the files."""
         registry._UNWRITTEN.pop(self.skills.parent / registry.INSTALLED, None)
@@ -137,7 +137,7 @@ class BrowseCase(RegistryCase, unittest.IsolatedAsyncioTestCase):
         self.host.reload()
         self.ctl = Controller(self.config, None, self.host, emit=self.emitted)
         self.ctl.face = True
-        return self.new_browse()
+        return self.new_browse(address)
 
     def emitted(self, name, *args):
         self.signals.append(name)
@@ -511,6 +511,72 @@ class CheckTests(BrowseCase):
         self.assertIn("io.github.ada.bluetooth", self.loaded())
         self.assertEqual(self.notices[1:], [("Tuxistant switched io.github.ada.bluetooth back on",
                                              "The skills registry lifted what switched it off.")])
+
+    async def test_with_no_usable_address_what_a_start_couldnt_record_is_tried_again(self):
+        """A review cleared registry_url, then restarted the daemon with a switch-off saved in
+        state.json but not in the record, which couldn't be written: NOT_RECORDED said Tux
+        tries again within an hour, but with no address there was no check, so nothing did."""
+        await self.installed_v1()
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
+        ledger, name = self.skills.parent / registry.INSTALLED, self.file("bluetooth").name
+        with self.full(ledger):
+            await self.browse.check()
+        later, now = self.restarted(""), [NOW]
+        later.clock = lambda: now[0]
+        self.fetched.clear()
+        with mock.patch.object(browse, "WAKE_S", 0.01):
+            with self.full(ledger):
+                running = asyncio.create_task(later.run())
+                async with asyncio.timeout(10):
+                    while "state" not in later.listing()["problems"]:
+                        await asyncio.sleep(0.01)
+                self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+                now[0] = NOW + browse.FIRST_CHECK_S
+                async with asyncio.timeout(10):
+                    while later.last is None and not running.done():
+                        await asyncio.sleep(0.01)
+                self.assertFalse(running.done(), "it carries on while the record isn't written")
+                self.assertEqual(later._due(), now[0] + browse.RETRY_S, "then hourly")
+            self.assertIn("state", later.listing()["problems"])
+            self.assertNotIn("off", json.loads(ledger.read_text())[name])
+            view = await later.check()      # Check now, with room on the disk
+            self.assertEqual(view["problems"], {})
+            self.assertIn("off", json.loads(ledger.read_text())[name])
+            async with asyncio.timeout(10):
+                await running       # nothing left to try
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.fetched, [])
+
+    async def test_an_update_the_check_installs_writes_what_was_held(self):
+        """The check's own update wrote the record, the held switch-off with it, but Settings
+        still said it couldn't be written, and a lift waited, until the next check an hour
+        later."""
+        await self.installed_v1()
+        tides = [self.tides_release("1.0.0")]
+        self.publish(self.index(seq=2, skills=[self.skill("bluetooth", [self.v1]),
+                                               self.skill("tides", tides)]))
+        await self.browse.check()
+        await self.answer(self.browse.install("io.github.ada.tides"))
+        self.publish(self.index(seq=3, skills=[
+            self.skill("bluetooth", [self.v1]),
+            self.skill("tides", tides + [self.tides_release("1.1.0")])]))
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"})])
+        ledger, real, failed = self.skills.parent / registry.INSTALLED, registry._write, []
+
+        def once(file, data, mode=0o600):     # room on the disk again by the update
+            if file == ledger and not failed:
+                failed.append(file)
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+            real(file, data, mode)
+
+        with mock.patch.object(registry, "_write", once):
+            view = await self.browse.check()
+        self.assertEqual(failed, [ledger])
+        self.assertIn('"1.1.0"', self.file("tides").read_text(), "updated by the check")
+        self.assertEqual(view["problems"], {}, "written with the update")
+        self.assertNotIn(ledger, registry._UNWRITTEN)
+        self.assertIn("off", json.loads(ledger.read_text())[self.file("bluetooth").name])
+        self.assertEqual(self.browse._due(), self.browse.last[0] + browse.CHECK_EVERY_S)
 
     async def test_a_list_saved_without_its_state_isnt_used_after_a_restart(self):
         """A known limit: index.json is written before state.json, which names it, so a new

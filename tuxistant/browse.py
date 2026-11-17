@@ -254,11 +254,10 @@ class Browse:
 
     async def run(self) -> None:
         """start(), then the daily check while the daemon runs. With no usable address there
-        is no check."""
+        is no check, but what start() couldn't write to the record is tried again at the same
+        times, by check(), until it is written."""
         await self.start()
-        if not self.address:
-            return
-        while True:
+        while self.address or "state" in self.registry.unsaved:
             wait = self._due() - self.clock()
             if wait > 0:
                 await asyncio.sleep(min(wait, WAKE_S))
@@ -280,10 +279,15 @@ class Browse:
 
     async def check(self) -> dict:
         """The daily check now: the index and the revocations, what they switch off or back on,
-        then the updates. Returns what BrowseSkills shows, and never fails."""
+        then the updates. Returns what BrowseSkills shows, and never fails. With no usable
+        address there is none, and only what start() couldn't write is tried again."""
         if not self.address:
-            async with self.lock:
-                await self._new_view()
+            if "state" in self.registry.unsaved:    # start()'s apply() again, fetching nothing
+                await self.start()
+                self.last = (self.clock(), "state" not in self.registry.unsaved)
+            else:
+                async with self.lock:
+                    await self._new_view()
             return self.view
         changes = []
         try:
@@ -349,6 +353,7 @@ class Browse:
             update["new"] = self._new(checked, name, record)
             if not update["new"] and not record.get("off"):
                 self._put(checked, allow=False)
+                await self._held_written()
                 self.updates.pop(skill_id, None)
         except Refused as e:
             update["problem"] = str(e)
