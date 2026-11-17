@@ -422,6 +422,16 @@ An answer is only read when the action picks something from it. The same request
 
 **Risk and what it was allowed.** Risk comes from the permissions as for any skill: medium with hosts, low without. A recipe never marks the conversation as having read something private. What it was first allowed is kept by its id and its hosts. A new version that names a host it didn't have is refused, and the last version that worked carries on, until you take the file out of the folder, wait a moment, and put it back. That holds for an example you copied in too, so change its hosts in a copy outside the folder first. A broken edit keeps the last version that worked too, and Settings lists the problem under "Skills with problems".
 
+**Recipes from the skills registry.** Once the registry exists, Browse in Settings installs a recipe from it into the same folder, as `io.github.<publisher>.<skill>.yaml`. The daemon's side is built, in `tuxistant/browse.py`, but does nothing as installed: `registry_url` in `config.json` is empty, and while it is, nothing is fetched. With an address set by hand:
+
+- **Checked before it is written.** Every recipe is checked by `tuxistant/registry.py` against the index the registry key signed: its size and SHA-256, its publisher's signature and this loader. See [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md).
+- **A card for an install, and for an update that asks for more.** The shell's approval card names the skill's id and GitHub account, its version, its hosts, its risk and why, its actions, the apps and Settings pages it opens and its desktop actions, all from the checked file and never from the publisher's summary or descriptions. Allow sets what the skill is allowed to exactly what that version asks for, then writes the file, so it loads at once. That is the one way past "take the file out and put it back", and it is open only to a click on the card: no model, planner or skill can install or update.
+- **Updates once a day.** One that asks for no host the skill isn't allowed and no action, app, Settings page or desktop action its installed version lacks installs by itself. One that asks for more waits for Update and its card. A file you changed is never updated or removed, and a hand edit that asks for more is refused as above.
+- **Switched off when revoked.** A recipe the registry revokes is switched off at the daily check, with a notification giving the reason, and comes back on if the revocation is lifted. Only files Tux installed are touched.
+- **Remove** takes out the file Tux installed and its record, with no card.
+
+`tuxistant doctor` has a line for the registry: none set, an address it can't use, or the list it holds.
+
 ## Planned
 
 None of this exists yet.
@@ -431,5 +441,5 @@ None of this exists yet.
 - **Recipe switch in Settings.** Turning a recipe off, and "don't ask again" for one, instead of a card every time for a device at home.
 - **Network by host.** A code skill that names hosts gets the whole network today. Holding it to those hosts needs a proxy in front of the sandbox.
 - **Process and CPU limits.** A cgroup for each skill, with a limit on its tasks and its CPU time.
-- **Approving on a card.** A skill that asks for more than it had should show a card, rather than need taking out and putting back.
-- **Sharing.** Code skills stay local to the machine. They are not for sharing. Recipes are the ones meant for sharing, as what one does can be read from its file and checked by the same loader, but there is no registry yet.
+- **Approving on a card.** A skill you added that asks for more than it had should show a card, rather than need taking out and putting back. Only an update from the skills registry has one so far.
+- **Sharing.** Code skills stay local to the machine. They are not for sharing. Recipes are the ones meant for sharing, as what one does can be read from its file and checked by the same loader. The registry they will be shared through doesn't exist yet: see "Recipes from the skills registry" above.

@@ -54,7 +54,7 @@ Methods:
 | `GetHistory` | `(i limit) -> s` | `History.recent()` |
 | `ClearHistory` | `() -> ()` | Emits `HistoryChanged` |
 | `OpenSettings` | `() -> ()` | Launch `tuxistant settings` |
-| `BrowseSkills`, `BrowseSkill`, `FetchSkill`, `InstallSkill`, `UpdateSkill`, `RemoveSkill`, `CheckRegistry` | See "Skills registry: Browse" | Browse in Settings. Not built yet |
+| `BrowseSkills`, `BrowseSkill`, `FetchSkill`, `InstallSkill`, `UpdateSkill`, `RemoveSkill`, `CheckRegistry` | See "Skills registry: Browse" | Browse in Settings. The daemon's side is built, in `tuxistant/browse.py` |
 
 Signals:
 
@@ -77,7 +77,7 @@ Signals:
 | `DictationMode` | `s id, s mode` | How this go stops: `hold` (let go of Fn), `tap` (tap Fn) or `shortcut` (the dictate shortcut again). Sent once known, never before `DictationStarted` for that id, and again only if it changes. Holds no words |
 | `TypeText` | `s id, s text, b only_copy` | Put the words where the cursor is, then reply with `Typed`. Sent to the shell alone, not broadcast. `only_copy` is true after the time limit |
 | `FollowUp` | `s question, s hint, i seconds` | The hold turn that just ended asked the user something. Sent after `StateChanged` `idle` and `Presence` false: show the blob, and the question with the hint under it, for `seconds`, whatever `Presence` says. A turn starting takes them down, and so does `FollowUp` with `seconds` 0. Plain text, like `Reply` |
-| `RegistryChanged` | none | See "Skills registry: Browse". Not built yet |
+| `RegistryChanged` | none | See "Skills registry: Browse". The daemon sends it |
 
 ### Cloud agreement
 
@@ -198,7 +198,7 @@ The search has 4 seconds, the sender lookups 2 more and the whole action 20, and
 
 ## Skills registry: Browse
 
-Browse in Settings, to [REGISTRY.md](REGISTRY.md) and [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). Not built yet: this is what the daemon and Settings build to. `tuxistant/registry.py` does every check. The daemon fetches, checks, installs, updates, removes and switches off. Settings only shows what the daemon sends and calls the methods below. It never fetches anything itself: no index, recipe, logo or link.
+Browse in Settings, to [REGISTRY.md](REGISTRY.md) and [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). This is what the daemon and Settings build to. The daemon's side is built, in `tuxistant/browse.py`, and tested offline in `tests/test_browse.py` and `tests/test_daemon_dbus.py`. `tuxistant/registry.py` does every check. The daemon fetches, checks, installs, updates, removes and switches off. Settings only shows what the daemon sends and calls the methods below. It never fetches anything itself: no index, recipe, logo or link.
 
 ### The address
 
@@ -206,13 +206,13 @@ Browse in Settings, to [REGISTRY.md](REGISTRY.md) and [REGISTRY-FORMAT.md](REGIS
 
 ### Fetching
 
-The daemon gives `Registry` its own `fetch(path, limit)`. It fetches the address followed by `index.json`, `index.json.sig`, `revocations.json`, `revocations.json.sig` or `recipes/<64 small hex digits>.yaml`, and refuses any other path. Each is one HTTPS GET with the system's certificates, at most 30 seconds for the whole file. A redirect, any status but 200, or more than `limit` bytes is a failure. It sends `Host`, `User-Agent: Tuxistant` with no version, and `Accept-Encoding: identity`, and nothing else: no cookie, `Referer`, `Accept-Language`, `If-None-Match` or `If-Modified-Since`, as an ETag can serve as an identifier. Tests pass a fake fetch, or a loopback server inside the test. None reaches the network.
+The daemon gives `Registry` its own `fetch(path, limit)`. It fetches the address followed by `index.json`, `index.json.sig`, `revocations.json`, `revocations.json.sig` or `recipes/<64 small hex digits>.yaml`, and refuses any other path. Each is one HTTPS GET with the system's certificates, at most 30 seconds for the whole file, through `webfetch.get_file`. A redirect, any status but 200, a compressed answer, or more than `limit` bytes is a failure, and so is a host whose name doesn't resolve. The address isn't held to the open internet, as only a hand edit of `config.json` sets it. It sends `Host`, `User-Agent: Tuxistant` with no version, and `Accept-Encoding: identity`, and nothing else: no cookie, `Referer`, `Accept-Language`, `If-None-Match` or `If-Modified-Since`, as an ETag can serve as an identifier. Tests pass a fake fetch, or a loopback server inside the test. None reaches the network.
 
 ### The daily check
 
-The check is `Registry.refresh()`: `index.json` and its signature, then `revocations.json` and its signature. Those four requests are the same for every Tux and say nothing about the person or their skills. The daemon checks 5 minutes after it starts, unless the index it holds (`$XDG_STATE_HOME/tuxistant/registry/index.json`) was accepted less than 24 hours ago. It checks again every 24 hours while it runs, an hour later after a check that couldn't reach the registry, and whenever `CheckRegistry` is called. After each check:
+The check is `Registry.refresh()`: `index.json` and its signature, then `revocations.json` and its signature. Those four requests are the same for every Tux and say nothing about the person or their skills. The daemon checks 5 minutes after it starts, unless the index it holds (`$XDG_STATE_HOME/tuxistant/registry/index.json`) was accepted less than 24 hours ago: then once it is 24 hours old. It checks again 24 hours after each check while it runs, an hour later after a check that couldn't reach the registry, and whenever `CheckRegistry` is called. After each check:
 
-1. Each change `apply()` returns is a desktop notification, sent as `timers.notify` sends one (`org.freedesktop.Notifications`, no autostart). A switch-off has the title "Tuxistant switched off <id>" and the body `switched_off_because(kind, reason)`: `SUSPENDED` or `BANNED` with the reason from the revocation entry. A lift has "Tuxistant switched <id> back on" and "The skills registry lifted what switched it off." The reason is text(300) with no `<` or `>`, and its `&` is escaped, as GNOME reads markup in a body. Then a reload, which shows the same sentence as the file's problem.
+1. If `apply()` changed anything, a reload, which switches the skill off at once and shows the same sentence as the file's problem. Then each change is a desktop notification, sent as `timers.notify` sends one (`timers.send_notice`: `org.freedesktop.Notifications`, no autostart). A switch-off has the title "Tuxistant switched off <id>" and the body `switched_off_because(kind, reason)`: `SUSPENDED` or `BANNED` with the reason from the revocation entry. A lift has "Tuxistant switched <id> back on" and "The skills registry lifted what switched it off." The reason is text(300) with no `<` or `>`, and its `&` is escaped, as GNOME reads markup in a body.
 2. Updates, as below. One that asks for nothing new is installed, and Browse shows the new version. One that asks for more waits in Browse. No card ever comes up unasked.
 3. `RegistryChanged` is emitted.
 
@@ -222,7 +222,7 @@ The check is `Registry.refresh()`: `index.json` and its signature, then `revocat
 
 ### The card
 
-An install, and an update that asks for more, are approved on the shell's approval card, the path every risky action takes (see "Approvals"). The D-Bus method calls `Controller.ask()` itself, with no model turn behind it. The extension shows every `Approval` it gets, and `Answer` is taken only from the owner of `org.gnome.Shell` (`Daemon.guard`), so no other program, Settings included, can click Allow. A Deny on this card doesn't end a conversation, as it belongs to none. Before asking, the daemon refuses with a sentence when the screen is locked, another card is open, or no extension has said level 1. Any program on the bus can call `InstallSkill` and so put up a card, as a model can; only a click installs.
+An install, and an update that asks for more, are approved on the shell's approval card, the path every risky action takes (see "Approvals"). The D-Bus method puts the card up itself, with no model turn behind it, through `Controller.card(ask, alone=True)`, which `Controller.ask()` uses too and which says how the card was answered: allowed, denied, unanswered, or locked when the screen locked while it was up, which answers a card no turn is behind. The extension shows every `Approval` it gets, and `Answer` is taken only from the owner of `org.gnome.Shell` (`Daemon.guard`), so no other program, Settings included, can click Allow. A Deny on this card doesn't end a conversation, as it belongs to none. Before asking, the daemon refuses with a sentence when the screen is locked, another card is open, or no extension has said level 1. Any program on the bus can call `InstallSkill` and so put up a card, as a model can; only a click installs.
 
 Daemon code writes the card from the `Checked` that `Registry.check()` returned: the exact bytes that will be written, after their size, SHA-256, publisher signature and Tux's own loader all passed. It never uses `meta.yaml`, the summary, the recipe's `name` or `description`, or an action's description, which are the publisher's words.
 
@@ -231,14 +231,14 @@ Daemon code writes the card from the `Checked` that `Registry.check()` returned:
   - "io.github.ada.tides, version 1.1.0, from the GitHub account ada."
   - "It reaches tides.example.org." or "It reaches nothing on the network."
   - "Risk: medium, because it reaches the network." or "Risk: low.", from `risk_of()` and `risk_because()`.
-  - "Its actions: tides.next.", then "It can open <app id or Settings page>." and "Its desktop actions: <entries>." when it has any.
+  - "Its actions: tides.next.", then "It can open <app id or Settings page>." and "Its desktop actions: <entries>." when it has any. A page is named from Tux's own table of pages, as "Bluetooth in Settings".
   - For an update, "New in this version:" and the phrases below. For a skill that is switched off, "It is switched off now, and this switches it back on."
 
 Each line goes through `printable()`, as on every card. Allow installs that same `Checked`, never a fresh download, and `install()` still refuses it if a revocation landed while the card was up.
 
 ### Grants
 
-Apart from taking a file out and putting it back, as now, only an allowed card widens what a skill is allowed. `SkillHost.allow(manifest, file) -> str` is new. It sets the `_Grants` record of `manifest["id"]` to what the checked manifest asks for, `{"permissions": manifest["permissions"], "config": [], "folder": file.name}`, saves it, and returns "" or the sentence why it couldn't: `BROKEN_GRANTS` while the grants file is broken, or why it couldn't be saved. The daemon calls it after Allow and before `Registry.install()` writes the file. If the install then fails, the record is put back as it was and saved. The reload that follows loads the new version, because its record now allows it.
+Apart from taking a file out and putting it back, as now, only an allowed card widens what a skill is allowed. `SkillHost.allow(manifest, file) -> str` is new. It sets the `_Grants` record of `manifest["id"]` to what the checked manifest asks for, `{"permissions": manifest["permissions"], "config": [], "folder": file.name}`, saves it, and returns "" or the sentence why it couldn't: `BROKEN_GRANTS` while the grants file is broken, or why it couldn't be saved. The daemon calls it after Allow and before `Registry.install()` writes the file. If the install then fails, the record is put back as it was and saved: the daemon takes a copy with `SkillHost.granted(id)` before `allow()` and hands it to `SkillHost.put_back(id, record)`, which removes the record when there was none. A write of the file that fails also puts `registry-installed.json` back as it was. The reload that follows loads the new version, because its record now allows it.
 
 Nothing else in `_Grants` changes. A hand edit to that file, or to any recipe, that asks for more than its record allows is refused as before, until the file is taken out and put back. `install()` won't update a file whose SHA-256 is no longer the one it recorded. An update that asks for nothing new is installed without `allow()`, as its record already covers it. Install and update are never tools: only these D-Bus methods start them, so no model, planner or skill can.
 
@@ -251,7 +251,7 @@ Browse offers the newest version in the index's list that no revocation in effec
 - a desktop entry (`manifest["desktop"]`) it doesn't have: "the desktop action night_light";
 - an app or Settings page to open that it doesn't open: "to open org.gnome.Calendar".
 
-An installed file that no longer loads counts as having none of these. An update that asks for nothing new installs without a card, at the daily check or from `UpdateSkill`. One that asks for more waits until the person presses Update. A file the person edited is never updated, and one that is switched off is never updated without a card.
+An installed file that no longer loads counts as having none of these. An installed version the index doesn't list can't be placed in its order, so no update is offered over it. An update that asks for nothing new installs without a card, at the daily check or from `UpdateSkill`. One that asks for more waits until the person presses Update. A file the person edited is never updated, and one that is switched off is never updated without a card.
 
 ### D-Bus
 
@@ -291,7 +291,7 @@ Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed`
 
 - `address` is `""` when none is usable. `index` is null until one was accepted, and `accepted` is when Tux last accepted it, from the held copy's time. `problems` has `address`, `index`, `revocations` or `state`, each a sentence, only while there is one (`Registry.problems`).
 - `skills` follows the index's order. A skill whose every version a revocation covers is left out, unless it is installed. `version`, `date`, `hosts`, `risk` and `risk_because` are those of the version Browse offers, or null when it offers none. `name`, `summary`, `tags` and `links` are the publisher's words: plain text, and never on a card.
-- `installed` is null, or the record: `version`, `file`, `edited` (true when the file's SHA-256 is no longer the record's), and `off`, null or `{"kind": "suspend" or "ban", "reason"}`.
+- `installed` is null, or the record: `version`, `file`, `edited` (true when the file's SHA-256 is no longer the record's), and `off`, null or `{"kind": "suspend" or "ban", "reason"}`. It is null too when the record's file is no longer there, as after taking it out by hand.
 - `update` is null, or the version Browse offers to an installed skill. `new` is null until the daemon has fetched and checked that version, then the phrases above. `problem` is why it couldn't be fetched or checked, or `""`.
 
 `BrowseSkill` returns one entry as above, plus `versions`: `[{"version", "date", "revoked"}]`, oldest first, where `revoked` is null or `{"kind", "reason"}`. `FetchSkill` returns `{"id", "version", "text", "actions"}`: `text` is the whole checked `recipe.yaml`, and `actions` is `[{"name", "tool"}]`, with `tool` made by the code that builds the model's list (`Skills.tool()`), so it is what the model would be sent. `InstallSkill` may use the `Checked` of a `FetchSkill` of the same version in the same run. `InstallSkill` and `UpdateSkill` return `{"id", "version", "file", "problem"}`, where `problem` is the reload's for that file, or `""` when it loaded: the budget of six actions can still refuse it. `RemoveSkill` returns `{"id", "file"}`.
@@ -305,8 +305,10 @@ The errors, beside the `Refused` sentences of `registry.py`, which pass through 
 - From `install()`: "You've changed <file>, so Tux won't update it." and "You already have a skill file called <file>, so Tux left it alone."
 - From `RemoveSkill`: "You've changed <file>, so Tux left it. Take it out of your skills folder yourself if you want it gone."
 - Before the card: "The screen is locked, so nothing was installed.", "Another approval card is open. Answer it, then try again." and "Tux can't show an approval card on this desktop yet, so nothing was installed. Log out and back in once, then try again."
-- After it: "You didn't allow it, so nothing was installed." and "The card wasn't answered in time, so nothing was installed."
-- What `allow()` returns when what the skill is allowed couldn't be saved.
+- After it: "You didn't allow it, so nothing was installed.", "The card wasn't answered in time, so nothing was installed." and, when the screen locked while it was up, "The screen is locked, so nothing was installed."
+- What `allow()` returns when what the skill is allowed couldn't be saved: `BROKEN_GRANTS`, or "Tux couldn't save what that skill is allowed to <file> (<why>), so nothing was installed."
+- When writing the file fails: "Tux couldn't write the skill into your skills folder (<why>), so nothing changed."
+- Anything unforeseen: "Something went wrong with the skills registry. The log has the details.", with the details in the daemon's log.
 
 ### Settings
 

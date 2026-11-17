@@ -14,10 +14,12 @@ from dbus_fast.service import ServiceInterface, method, signal
 
 from . import BUS_NAME, BUS_PATH, calendars, phone, themes, timers, voices
 from .audio import Mic, Speaker
+from .browse import NO_REGISTRY, Browse
 from .config import DATA_DIR, Config
 from .controller import Controller
 from .fnclient import FnClient
 from .history import History
+from .registry import Refused
 from .skillhost import SkillHost
 
 log = logging.getLogger(__name__)
@@ -47,6 +49,8 @@ SHIELD_XML = f"""<node><interface name="{SHIELD_INTERFACE}">
 </interface></node>"""
 START_GRACE_S = 15      # at login the sound server and the shell are still coming up
 RESTART_S = 5           # after the scheduler fails. Sooner would be a loop if it fails again
+NOTHING_HELD = {"address": "", "index": None, "problems": {}, "categories": [], "skills": []}
+BROWSE_FAILED = "Something went wrong with the skills registry. The log has the details."
 
 
 class Daemon(ServiceInterface):
@@ -56,6 +60,9 @@ class Daemon(ServiceInterface):
         self.config, self.history = config, history
         self.host = skills if callable(getattr(skills, "reload", None)) else None
         self.controller = Controller(config, history, skills, emit=self.send, **audio)
+        # Browse needs the skills folder and its grants, so a fixed Skills has none
+        self.browse = Browse(config, self.host, self.controller, emit=self.send) if (
+            isinstance(self.host, SkillHost)) else None
         self.last_level = 0.0
         self.children = set()
         self.shell_owner = None     # the unique bus name of the running GNOME Shell
@@ -118,6 +125,18 @@ class Daemon(ServiceInterface):
 
     def skills_changed(self):
         self.SkillsChanged()
+
+    async def browsing(self, call) -> str:
+        """A Browse method's answer as JSON, or its refusal as a sentence Settings shows."""
+        if self.browse is None:
+            raise DBusError(FAILED, NO_REGISTRY)
+        try:
+            return json.dumps(await call(self.browse))
+        except Refused as e:
+            raise DBusError(FAILED, str(e)) from None
+        except Exception:
+            log.exception("a skills registry call failed")
+            raise DBusError(FAILED, BROWSE_FAILED) from None
 
     async def launch_settings(self):
         env = dict(os.environ)
@@ -263,6 +282,43 @@ class Daemon(ServiceInterface):
     async def OpenSettings(self):
         await self.launch_settings()
 
+    @method()
+    def BrowseSkills(self) -> "s":
+        return json.dumps(self.browse.listing() if self.browse else NOTHING_HELD)
+
+    @method()
+    def BrowseSkill(self, id: "s") -> "s":
+        if self.browse is None:
+            raise DBusError(FAILED, NO_REGISTRY)
+        try:
+            return json.dumps(self.browse.page(id))
+        except Refused as e:
+            raise DBusError(FAILED, str(e)) from None
+
+    @method()
+    async def FetchSkill(self, id: "s") -> "s":
+        return await self.browsing(lambda browse: browse.fetch(id))
+
+    @method()
+    async def InstallSkill(self, id: "s") -> "s":
+        return await self.browsing(lambda browse: browse.install(id))
+
+    @method()
+    async def UpdateSkill(self, id: "s") -> "s":
+        return await self.browsing(lambda browse: browse.update(id))
+
+    @method()
+    async def RemoveSkill(self, id: "s") -> "s":
+        return await self.browsing(lambda browse: browse.remove(id))
+
+    @method()
+    async def CheckRegistry(self) -> "s":
+        return json.dumps(await self.browse.check() if self.browse else NOTHING_HELD)
+
+    @signal()
+    def RegistryChanged(self):
+        pass
+
     @signal()
     def StateChanged(self, state) -> "s":
         return state
@@ -397,6 +453,19 @@ async def tick(store, crier, lock_known) -> None:
             await asyncio.sleep(RESTART_S)
 
 
+async def _check_registry(browse, bus) -> None:
+    """The skills registry's daily check, with its notifications on this bus. Nothing at all
+    while no registry is set."""
+    if browse is None:
+        return
+    browse.notify = lambda summary, body: timers.send_notice(bus, summary, body,
+                                                             "dialog-warning-symbolic")
+    try:
+        await browse.run()
+    except Exception:   # Browse is one part; the rest of the daemon carries on without it
+        log.exception("the skills registry's daily check stopped")
+
+
 def _timers_stopped(task):
     if not task.cancelled() and (error := task.exception()) is not None:
         log.error("The timer scheduler stopped", exc_info=(type(error), error, error.__traceback__))
@@ -446,15 +515,16 @@ async def _serve_until_stopped(daemon) -> int:
     lock = asyncio.create_task(watch_lock(bus, controller))
     ticking = asyncio.create_task(tick(store, crier, lock))
     ticking.add_done_callback(_timers_stopped)
+    browsing = asyncio.create_task(_check_registry(daemon.browse, bus))
     stop = asyncio.Event()
     for number in (signals.SIGINT, signals.SIGTERM):
         asyncio.get_running_loop().add_signal_handler(number, stop.set)
     waits = {asyncio.create_task(stop.wait()), asyncio.create_task(bus.wait_for_disconnect())}
     await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
-    for task in (ticking, fn, lock, *waits):
+    for task in (ticking, fn, lock, browsing, *waits):
         task.cancel()
     await controller.cancel()
-    await asyncio.gather(ticking, fn, lock, *waits, return_exceptions=True)
+    await asyncio.gather(ticking, fn, lock, browsing, *waits, return_exceptions=True)
     timers.attach(None)
     bus.disconnect()
     return 0

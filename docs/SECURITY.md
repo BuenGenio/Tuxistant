@@ -122,7 +122,7 @@ It also found two tests whose stand-ins for the network ended before a thread th
 
 ## Skills from the registry
 
-The registry repo doesn't exist yet, but Tux's side of the checks is built and tested offline, in `tuxistant/registry.py`, to [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). Nothing calls it yet: there is no fetching and no Browse page. The registry key in `tuxistant/registry_allowed_signers` is a **placeholder**. Its private half was thrown away when it was made, so no index verifies with it until a release ships the real key there.
+The registry repo doesn't exist yet, but Tux's side of the checks is built and tested offline, in `tuxistant/registry.py`, to [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). The daemon's side of Browse calls it, in `tuxistant/browse.py`, but only once `registry_url` is set by hand in `config.json`: it is empty as installed, and while it is, nothing is fetched. The Browse page in Settings is built separately. The registry key in `tuxistant/registry_allowed_signers` is a **placeholder**. Its private half was thrown away when it was made, so no index verifies with it until a release ships the real key there.
 
 What each check stops:
 
@@ -137,7 +137,7 @@ What each check stops:
 - **Revocations on what is installed.** A recipe installed from the registry and covered by a revocation in effect is switched off at the next reload, with the reason as its problem in Settings, and stays on disk. A broken recipe keeps its last version that worked, but a switched-off one doesn't, as that would keep it running. It keeps its place among your six actions, as any refused skill does, so it comes back in its place when lifted, and its id stays known, so it is never taken for a skill renamed onto a broken file. A switch-off outlasts a lost state folder or a retired moderation key: only a lift ends it, and an update to a version Tux can't show is uncovered is refused. Tux records the exact copy that made it, so another copy of the same id, narrower, doesn't end it (a review did that after a lost state). A revocation that lands between the check and the allowed card stops the install. Only what Tux installed is touched, matched by the file name, id, version and key it recorded, so a recipe you wrote or copied in is left alone, as the format says.
 - **ssh-keygen itself.** It is taken from `/usr/bin` or `/bin`, never from `PATH`, run with a fixed argv and no shell, for at most 10 seconds, with the data, the signature and an `allowed_signers` written for that one check into a fresh 0700 folder, and its output thrown away. A signature has to be armored text of at most 4 KiB before it runs, and every file is bounded before it is read: the index 8 MiB, revocations 5 MiB, a recipe its listed size.
 
-**How Browse gets its approval.** Decided, not built yet. The interface is "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md).
+**How Browse gets its approval.** Built in the daemon and tested offline, with throwaway keys, a fake card and the real `Controller`, and once over a private session bus where only the shell's `Answer` installs. Not yet tried on a real desktop. The interface is "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md).
 
 - **The shell's card, not a dialog in Settings.** Installing, and an update that asks for more, take a click on the approval card, the path every risky action takes. The card needs no model turn behind it: the D-Bus method asks for it, and `Answer` is taken only from GNOME Shell, so no program on the session bus can click Allow, Settings included. A confirmation inside Settings would end in a D-Bus call that any program running as you could make without a click.
 - **Written from the checked bytes.** The daemon writes the card from the recipe it checked, the bytes it will write: the checked id and its GitHub account, the version, the hosts, the actions, the apps and Settings pages it opens and its desktop entries, and the risk with its reason. Never from `meta.yaml`, the summary, the recipe's name or description, or an action's description, which are the publisher's words and could say anything. Allow writes those same bytes, not a fresh download, and a revocation that lands while the card is up still stops it.
@@ -149,9 +149,10 @@ What doesn't hold yet:
 - **Freshness.** Whoever serves the files can keep serving the last ones Tux accepted, and Tux can't tell (see "Not decided yet" in the format).
 - **A leaked registry key** can name a new key for a publisher and sign recipes with it. The publisher's signature only adds to the hash when the registry key is safe.
 - **A renamed copy.** A recipe from the registry that you rename or copy by hand is no longer one Tux installed, so revocations don't reach it.
-- **No caller.** Nothing fetches, notifies or installs yet. `install()` writes only what `check()` passed, and Browse is to call it only as above.
+- **Nothing has run against a real registry.** None exists yet, and the shipped key is a placeholder, so a daemon with `registry_url` set takes no index. The fetch has only met a server inside a test.
+- **The fetch goes wherever the address says,** on the open internet or not, as only a hand edit of `config.json` sets it. It sends a GET with no cookie or key, and everything it reads is checked against the shipped key.
 - **A download says what you wanted.** The daily check is the same four requests from every Tux. An install, an update or "Show the recipe" downloads that one recipe, so the host can tell that someone at your address wanted it.
-- **Something already running as you** can write the state folder or the record of what was installed, as it can write any recipe.
+- **Something already running as you** can write the state folder or the record of what was installed, as it can write any recipe. It can also call `InstallSkill` and so put up a card, as a model can, but not click Allow.
 
 ## A hostile model
 

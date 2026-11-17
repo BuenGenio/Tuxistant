@@ -46,6 +46,9 @@ DEFAULTS = {
     "cloud_api_key": "",
     "cloud_model": "claude-opus-5-5",
     "cloud_consent": {},          # what was agreed to, and when: see agree_to_cloud
+    # the skills registry's address. Empty fetches nothing. Not in EDITABLE: set by hand until
+    # the registry exists and its address ships here
+    "registry_url": "",
     "instructions": (
         "You are Tux, a concise desktop voice assistant. Replies are spoken aloud, so keep "
         "them short and plain, with no markdown or numbered lists. Use a tool whenever one fits. Your tools are "

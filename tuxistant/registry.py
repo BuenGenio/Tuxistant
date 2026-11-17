@@ -30,6 +30,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -125,6 +126,12 @@ STATE_DAMAGED = ("Tux's record of the skills registry is damaged, so it won't ta
                  "again.")
 TOO_MANY = ("The skills registry has more revoked skills than Tux can keep track of, so Tux kept "
             "the list it had.")
+NOT_LISTED = "The skills registry doesn't list that skill."
+NOT_OURS = "Tux didn't install that skill from the registry, so it left it alone."
+CHANGED = "You've changed {name}, so Tux won't update it."
+CHANGED_LEFT = ("You've changed {name}, so Tux left it. Take it out of your skills folder yourself "
+                "if you want it gone.")
+YOURS = "You already have a skill file called {name}, so Tux left it alone."
 
 
 class Refused(ValueError):
@@ -317,6 +324,14 @@ def _day(value, where: str) -> str:
     except ValueError:
         raise _bad(where) from None
     return value
+
+
+def is_skill_id(value) -> bool:
+    try:
+        _skill_id(value, "skill id")
+        return True
+    except Refused:
+        return False
 
 
 def _skill_id(value, where: str) -> str:
@@ -775,7 +790,7 @@ class Registry:
         entry = next((v for v in skill["versions"] if v["version"] == version), None) \
             if skill else None
         if entry is None:
-            raise Refused("The skills registry doesn't list that skill.")
+            raise Refused(NOT_LISTED)
         revoked = self.covering(skill_id, version, entry["key"])
         if revoked:
             raise Refused(switched_off_because(revoked["kind"], revoked["reason"]))
@@ -827,24 +842,58 @@ class Registry:
         # narrower, isn't enough, and after a lost state Tux holds none: only a lift ends it
         if off and not self._ended_or_held(off):
             raise Refused(switched_off_because(off["kind"], off["reason"]))
-        if target.exists() or target.is_symlink():
+        if os.path.lexists(target):
             if not record or record["id"] != checked.skill_id or target.is_symlink():
-                raise Refused(f"You already have a skill file called {name}, so Tux left it "
-                              "alone.")
-            try:
-                ours = hashlib.sha256(target.read_bytes()).hexdigest() == record["sha256"]
-            except OSError:
-                ours = False
-            if not ours:
-                raise Refused(f"You've changed {name}, so Tux won't update it.")
+                raise Refused(YOURS.format(name=name))
+            if _ours(target, record) is None:
+                raise Refused(CHANGED.format(name=name))
         # the record first: a crash before the file leaves a record of nothing, never a file
         # from the registry that revocations can't reach
+        ledger = self.skills.parent / INSTALLED
+        was = _kept_bytes(ledger)
         records[name] = {"id": checked.skill_id, "version": checked.version,
                          "key": checked.key, "sha256": checked.sha256}
-        _write(self.skills.parent / INSTALLED, _dumps(records))
-        self.skills.mkdir(parents=True, exist_ok=True)
-        _write(target, checked.data, 0o644)
+        _write(ledger, _dumps(records))
+        try:
+            self.skills.mkdir(parents=True, exist_ok=True)
+            _write(target, checked.data, 0o644)
+        except OSError:     # the record goes back to what is still on disk
+            _put_back(ledger, was)
+            raise
         return target
+
+    def remove(self, skill_id: str) -> Path:
+        """Take out a file Tux installed, then its record, so a crash between the two leaves a
+        record of nothing. A file changed since it was installed is left, and so is its record."""
+        name = f"{skill_id}.yaml"
+        records = installed(self.skills)
+        record = records.get(name)
+        if not record or record["id"] != skill_id:
+            raise Refused(NOT_OURS)
+        target = self.skills / name
+        if os.path.lexists(target):
+            if _ours(target, record) is None:
+                raise Refused(CHANGED_LEFT.format(name=name))
+            target.unlink()
+        del records[name]
+        _write(self.skills.parent / INSTALLED, _dumps(records))
+        return target
+
+    def edited(self, name: str, record: dict) -> bool:
+        """Whether a file Tux installed is there but no longer the bytes it wrote."""
+        target = self.skills / name
+        return os.path.lexists(target) and _ours(target, record) is None
+
+    def load_installed(self, name: str, record: dict) -> dict | None:
+        """What a file Tux installed asks for, read from its bytes once they are the ones it
+        wrote, or None: changed, gone, or no longer one Tux's loader takes."""
+        data = _ours(self.skills / name, record)
+        if data is None:
+            return None
+        try:
+            return self._loaded(data, record["id"])
+        except Refused:
+            return None
 
     # Switching off
 
@@ -912,6 +961,38 @@ def _not_older(held: dict | None, seq: int, digest: str, what: str) -> None:
     if seq == held["seq"] and digest != held["sha256"]:
         raise Refused(f"The skills registry sent a different {what} with the same number as "
                       "the one Tux has, so Tux kept its own.")
+
+
+def _ours(target: Path, record: dict) -> bytes | None:
+    """The bytes of a file Tux installed, if they are still the ones it recorded. A link, a
+    pipe or a file too big to be a recipe is not, and is never read."""
+    try:
+        handle = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    with os.fdopen(handle, "rb") as file:
+        info = os.fstat(handle)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RECIPE_BYTES:
+            return None
+        data = file.read(MAX_RECIPE_BYTES + 1)
+    return data if hashlib.sha256(data).hexdigest() == record["sha256"] else None
+
+
+def _kept_bytes(file: Path) -> bytes | None:
+    try:
+        return file.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _put_back(file: Path, data: bytes | None) -> None:
+    try:
+        if data is None:
+            file.unlink(missing_ok=True)
+        else:
+            _write(file, data)
+    except OSError as e:
+        log.warning("could not put back %s: %s", file, e)
 
 
 def no_network(_path: str, _limit: int) -> bytes:

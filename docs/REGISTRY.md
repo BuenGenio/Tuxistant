@@ -1,6 +1,6 @@
 # The skills registry
 
-Where people share recipe skills, and how Tux finds, installs, updates and removes them. This is the plan agreed with the owner on 2026-11-13. Nothing here is built yet. The exact file formats are in [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md).
+Where people share recipe skills, and how Tux finds, installs, updates and removes them. This is the plan agreed with the owner on 2026-11-13. Tux's checks and the daemon's side of Browse are built and tested offline; the registry repo, the portal, Settings' Browse page and moderation aren't in this tree yet. "Building it, in order" below says where each step stands. The exact file formats are in [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md).
 
 The plan starts from the same assumption as the rest of Tuxistant: a bad skill will eventually get past review. Review, signing and moderation make that rarer and shorter. What protects you when it happens is what Tux itself enforces: risk computed from permissions, a card for every risky action, recipes that can only reach the hosts they name, and no shell.
 
@@ -130,10 +130,10 @@ Use Suspend while looking into a report, since it costs a user only a skill that
 
 ## Building it, in order
 
-1. **The registry repo**, with the layout above, CI running Tux's loader as a check, signature checks against GitHub's published keys, the index build, and `tags.yaml` and categories. Three example recipes from the owner.
-2. **Signing in Tux:** checking the index and recipe signatures with `ssh-keygen -Y verify`, the pinned hashes, the sequence number and the revocation list. All of it is tested offline.
+1. **The registry repo**, waiting for the owner to name and create it, with the layout above, CI running Tux's loader as a check, signature checks against GitHub's published keys, the index build, and `tags.yaml` and categories. Three example recipes from the owner.
+2. **Signing in Tux:** checking the index and recipe signatures with `ssh-keygen -Y verify`, the pinned hashes, the sequence number and the revocation list. All of it is tested offline. Built, in `tuxistant/registry.py`.
 3. **The portal:** browse, search, categories and skill pages, built into the existing GitHub Pages site.
-4. **Browse in Settings:** search, skill pages, install, update, remove, Report.
+4. **Browse in Settings:** search, skill pages, install, update, remove, Report. The daemon's side is built, in `tuxistant/browse.py`: the `registry_url` setting, empty as installed, the fetch, the daily check with its notifications, and the D-Bus methods, which install and update through the shell's card. Settings' page is built separately. Report waits for the repo's issue form.
 5. **Moderation:** the report form, the moderation screen, and the workflows behind each action.
 6. **A private trial:** a handful of people publish and install through it before any announcement.
 

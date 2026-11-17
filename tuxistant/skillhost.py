@@ -18,6 +18,7 @@ sentences tuxistant/recipes.py knows how to make. Recipes and code skills you ad
 budget of actions, as every tool the small model is offered costs it some of its other answers.
 """
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -81,6 +82,8 @@ BROKEN_GRANTS = ("Tux couldn't read what your skills were allowed, in {file}, so
 UNSAVED_GRANTS = ("Tux couldn't save what your skills were allowed to {file} ({why}), so a "
                   "skill of yours it hasn't allowed this before can't have it until it can. "
                   "Skills it allowed before carry on, and it tries again at the next reload.")
+NOT_ALLOWED = ("Tux couldn't save what that skill is allowed to {file} ({why}), so nothing was "
+               "installed.")
 NOT_A_SKILL = ("It is no longer a recipe or a skill folder, so nothing of it is in use, but it "
                "keeps its place and its names until you take it out.")
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
@@ -973,6 +976,43 @@ class SkillHost:
             entry.retired = True
         await asyncio.gather(*(self._stop_one(entry) for entry in everything),
                              *self.stopping, return_exceptions=True)
+
+    # Browse's approval card, the one other way what a skill is allowed changes
+
+    def granted(self, skill_id: str) -> dict | None:
+        """A copy of the record of what a skill of yours is allowed, from the grants file as it
+        is now, or None: no record, or a file that can't be read."""
+        self.grants.refresh()
+        record = self.grants.records.get(skill_id)
+        return None if self.grants.broken or record is None else copy.deepcopy(record)
+
+    def allow(self, manifest: dict, file: Path) -> str:
+        """After Allow on Browse's card and before the file is written: the record of the
+        checked manifest's id becomes what it asks for, and is saved, so the reload after the
+        write loads it. Nothing else changes. "" or why it couldn't be saved."""
+        return self._set_grant(manifest["id"], {
+            "permissions": copy.deepcopy(manifest["permissions"]), "config": [],
+            "folder": file.name})
+
+    def put_back(self, skill_id: str, record: dict | None) -> str:
+        """The record as granted() gave it before allow(), after the file couldn't be written."""
+        return self._set_grant(skill_id, record)
+
+    def _set_grant(self, skill_id: str, record: dict | None) -> str:
+        grants = self.grants
+        grants.refresh()
+        records = grants.records    # reads the file, which may find it broken
+        if grants.broken:
+            return grants.broken
+        if not grants.writable:
+            return NOT_ALLOWED.format(file=grants.file, why="nothing is saved here")
+        if record is None:
+            records.pop(skill_id, None)
+        else:
+            records[skill_id] = record
+        grants._dirty = True
+        why = grants.save()
+        return NOT_ALLOWED.format(file=grants.file, why=why) if why else ""
 
     def _changed(self) -> None:
         problems = self.reload()
