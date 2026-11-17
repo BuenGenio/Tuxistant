@@ -2,6 +2,12 @@
 
 ## Not yet released
 
+One change reaches what 0.5.0 already did:
+
+- Each reload of the skills also reads `registry-installed.json`, next to your skills folder, and switches off a recipe it marks as revoked. Nothing writes that file yet, so every skill loads as it did.
+
+After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension and the Settings app are unchanged.
+
 - Signing for the skills registry, Tux's side, tested offline and not yet called by anything: `tuxistant/registry.py` checks the index against the registry key that ships with Tuxistant, `revocations.json` against a moderation key the index names, and each recipe against its pinned size and SHA-256, its publisher's signature and Tux's own loader, all with `ssh-keygen -Y verify`. An older index or list of revocations than one already seen is refused, and a state file that can't be read refuses both until it is fixed. Every differing copy of a revocation is in effect until its id is lifted, so one the moderation key signed first can't hide the registry's. The moderation key's copies are kept apart from the index's and never stop an index, and an index that retires the key drops them and its sequence number. The index and `revocations.json` list only the revocations in effect, and the index lists lifts by id, so at the format's limits they fit in what Tux reads, with room left in the index for the skills. Recipes installed from the registry that a revocation covers are switched off with its reason and come back on when it is lifted. It takes the logo fields of the index as the format gives them, but fetches and decodes no image. The registry key shipped now is a placeholder that nothing verifies with. See "Skills from the registry" in SECURITY.md.
 
 ## 0.5.0
