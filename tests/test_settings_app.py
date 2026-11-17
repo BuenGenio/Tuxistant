@@ -932,7 +932,17 @@ def reset_registry():
     settle()
 
 
+def browse_tab(window):
+    return window.views.get_page(window.browse)
+
+
+def sidebar_titles(window):
+    """The pages the sidebar offers, as shown."""
+    return [label.get_text() for label in labels_of(window.sidebar) if label.get_mapped()]
+
+
 def open_browse(window):
+    wait(lambda: browse_tab(window).get_visible(), "the Browse tab, once the daemon has a registry")
     window.views.set_visible_child_name("browse")
     page = window.browse
     wait(lambda: page.listing is not None and page.stack.get_visible_child_name() == "list",
@@ -3306,27 +3316,46 @@ class Inner(unittest.TestCase):
         wait(lambda: "io.github.mal.spy" not in shown_ids(browse_rows(self.win.browse)),
              "a banned skill taken out to leave the list")
 
-    def test_27_b_g_with_no_registry_set_up_it_says_so_and_fetches_nothing(self):
-        page = self.win.browse
+    def test_27_b_g_with_no_registry_set_up_browse_is_no_tab_and_nothing_is_fetched(self):
+        from tests.shell_harness_settings_fake import REGISTRY_ADDRESS
+        page, tab = self.win.browse, browse_tab(self.win)
         self.addCleanup(reset_registry)
-        self.win.views.set_visible_child_name("browse")
+        open_browse(self.win)
+        self.assertIn("Browse", sidebar_titles(self.win))
+        dialog = open_registry_skill(self.win, "io.github.ada.tides")
         forget()
         empty = {"address": "", "index": None, "problems": {}, "categories": [], "skills": []}
         control("SetRegistry", json.dumps(empty), signature="s")
-        wait(lambda: page.stack.get_visible_child_name() == "none", "the page to say so")
-        self.assertEqual(page.none_page.get_title(), sa.NO_REGISTRY)
-        self.assertIn(sa.NO_REGISTRY_NOTE, texts_of(page.none_page))
-        self.assertFalse(page.bar.get_visible(), "nothing to search")
-        self.assertFalse(page.check.get_mapped(), "and nothing to check")
+        wait(lambda: not tab.get_visible(), "the tab to go")
+        self.assertNotIn("Browse", sidebar_titles(self.win))
+        self.assertEqual(sidebar_titles(self.win),
+                         ["General", "Voice", "Appearance", "Skills", "History"])
+        self.assertNotEqual(self.win.views.get_visible_child_name(), "browse",
+                            "another page is shown in its place")
+        self.assertIsNone(page.dialog, "a skill's page from it goes with it")
+        self.assertIsNot(self.win.get_visible_dialog(), dialog)
+        self.assertEqual(self.win.state, "ready", "the rest of Settings carries on")
         shot(self.win, "browse-none")
+        # An address the daemon can't use is no address: tuxistant doctor says why.
         unusable = {**empty, "problems": {"address": "The skills registry address in config.json "
                                                      "isn't one Tux can use, so Tux fetches "
                                                      "nothing."}}
         control("SetRegistry", json.dumps(unusable), signature="s")
-        wait(lambda: unusable["problems"]["address"] in texts_of(page.none_page),
-             "the daemon's sentence, as it wrote it")
-        self.assertTrue(calls("BrowseSkills"))
+        wait(lambda: len(calls("BrowseSkills")) > 1, "Browse to read it again")
+        page.load()     # as each time the window becomes active
+        wait(lambda: len(calls("BrowseSkills")) > 2, "and again")
+        settle()
+        self.assertFalse(tab.get_visible())
+        self.assertNotIn("Browse", sidebar_titles(self.win))
         self.assertEqual(fetching_calls(), [])
+        # Once a registry address is set, the tab comes, with the registry's list.
+        reset_registry()
+        wait(lambda: tab.get_visible(), "the tab with an address")
+        self.assertEqual(sidebar_titles(self.win),
+                         ["General", "Voice", "Appearance", "Skills", "Browse", "History"])
+        open_browse(self.win)
+        self.assertIn(REGISTRY_ADDRESS, texts_of(page.registry))
+        self.assertTrue(browse_rows(page))
 
     def test_27_b_g2_with_an_address_but_no_list_it_says_why_once(self):
         from tests.shell_harness_settings_fake import REGISTRY_ADDRESS
@@ -3349,25 +3378,44 @@ class Inner(unittest.TestCase):
         reset_registry()
         self.assertTrue(page.bar.get_visible(), "a list to search again")
 
-    def test_27_b_h_a_daemon_older_than_browse_gets_a_sentence(self):
-        page = self.win.browse
+    def test_27_b_h_a_daemon_older_than_browse_or_not_answering_has_no_browse_tab(self):
+        page, tab = self.win.browse, browse_tab(self.win)
         self.addCleanup(reset_registry)
-        self.win.views.set_visible_child_name("browse")
+        open_browse(self.win)
         control("FailNextAs", "BrowseSkills", "org.freedesktop.DBus.Error.UnknownMethod",
                 "No such method", signature="sss")
         with mock.patch.object(self.win, "toast") as toast:
             page.load()
-            wait(lambda: page.stack.get_visible_child_name() == "older", "the sentence")
+            wait(lambda: not tab.get_visible(), "the tab to go")
         toast.assert_not_called()
         self.assertEqual(self.win.state, "ready", "the rest of Settings carries on")
-        self.assertIn(f"{sa.BROWSE_OLDER}. {sa.RESTART_HOW}", texts_of(page))
+        self.assertNotIn("Browse", sidebar_titles(self.win))
+        self.assertNotEqual(self.win.views.get_visible_child_name(), "browse")
+        page.load()     # as when the window becomes active after the daemon was restarted
+        wait(lambda: tab.get_visible(), "the tab once the daemon has Browse")
+        open_browse(self.win)
+        # Any other failure keeps the tab, as the daemon has a registry, with Try again.
         control("FailNext", "BrowseSkills", "The disk is <full> & more", signature="ss")
         page.load()
         wait(lambda: page.stack.get_visible_child_name() == "failed", "the failure")
+        self.assertTrue(tab.get_visible())
         self.assertIn("The disk is <full> & more", texts_of(page.failed_page), "as written")
         retry = next(c for c in iter_children(page.failed_page) if isinstance(c, Gtk.Button))
         retry.emit("clicked")
         wait(lambda: page.stack.get_visible_child_name() == "list", "Try again to work")
+
+        def back():     # so a failure below leaves the window as the next test needs it
+            if self.win.state != "ready":
+                self.win.reload()
+                wait(lambda: self.win.state == "ready", "the window back")
+        self.addCleanup(back)
+        control("FailNextAs", "BrowseSkills", "org.freedesktop.DBus.Error.NoReply", "No reply",
+                signature="sss")
+        page.load()
+        wait(lambda: self.win.state == "offline", "the window to say Tuxistant isn't answering")
+        self.assertFalse(tab.get_visible())
+        self.win.reload()
+        wait(lambda: self.win.state == "ready" and tab.get_visible(), "Browse back once it answers")
 
     def test_27_b_i_what_the_registry_says_is_never_markup_and_links_wait_for_a_click(self):
         from tests.shell_harness_settings_fake import MARKUP_NAME, MARKUP_SUMMARY
@@ -3511,6 +3559,7 @@ class Inner(unittest.TestCase):
     def test_27_b_m_browse_fits_a_narrow_window(self):
         reset_registry()
         window = open_window(self.app, 360, 720)
+        self.assertFalse(browse_tab(window).get_visible(), "no tab until the daemon has answered")
         wait(lambda: ready(window) and window.split.get_collapsed(), "a collapsed window")
         window.split.set_show_content(True)
         open_browse(window)
@@ -3622,7 +3671,7 @@ class Inner(unittest.TestCase):
                                            (Adw.ColorScheme.FORCE_LIGHT, "narrow", 360, 720)):
             styles.set_color_scheme(scheme)
             window = open_window(self.app, width, height)
-            wait(lambda: ready(window), "a screenshot window")
+            wait(lambda: ready(window) and browse_tab(window).get_visible(), "a screenshot window")
             shot(window, f"start-{tag}")
             for name in pages:
                 window.views.set_visible_child_name(name)

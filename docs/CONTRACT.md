@@ -202,7 +202,7 @@ Browse in Settings, to [REGISTRY.md](REGISTRY.md) and [REGISTRY-FORMAT.md](REGIS
 
 ### The address
 
-`registry_url` in `config.json`: a string, `""` by default. While it is empty Tux fetches nothing from any registry. It isn't in `EDITABLE`, so `SetConfig` refuses it: until the registry repo exists and its address ships as the default, it is set by hand, and the daemon reads it at start. A usable address is `https://`, a host, an optional port and a path ending in `/`, at most 200 characters, with no user, password, query or fragment. Anything else counts as empty, and `problems.address` says "The skills registry address in config.json isn't one Tux can use, so Tux fetches nothing." The address is never trusted: everything from it is checked against the registry key that ships with Tux. Until a release ships the real key, the placeholder in `tuxistant/registry_allowed_signers` verifies nothing, so every index is refused there; tests use a signers file of their own.
+`registry_url` in `config.json`: a string, `""` by default. While it is empty Tux fetches nothing from any registry. It isn't in `EDITABLE`, so `SetConfig` refuses it: until the registry repo exists and its address ships as the default, it is set by hand, and the daemon reads it at start. While there is no usable address Settings has no Browse page ("Settings" below). A usable address is `https://`, a host, an optional port and a path ending in `/`, at most 200 characters, with no user, password, query or fragment. Anything else counts as empty, and `problems.address` says "The skills registry address in config.json isn't one Tux can use, so Tux fetches nothing." The address is never trusted: everything from it is checked against the registry key that ships with Tux. Until a release ships the real key, the placeholder in `tuxistant/registry_allowed_signers` verifies nothing, so every index is refused there; tests use a signers file of their own.
 
 ### Fetching
 
@@ -255,7 +255,7 @@ An installed file that no longer loads counts as having none of these. An instal
 
 ### D-Bus
 
-Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed` with a sentence that Settings shows as it is. None of these is in `SHELL_ONLY`, since Settings calls them. A daemon older than them answers with an unknown-method error, and Settings then shows, in place of Browse, that the Tuxistant running is older than Settings and needs a restart.
+Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed` with a sentence that Settings shows as it is. None of these is in `SHELL_ONLY`, since Settings calls them. A daemon older than them answers with an unknown-method error, and Settings then leaves the Browse page out ("Settings" below).
 
 | Method | Signature | Meaning |
 |---|---|---|
@@ -313,6 +313,8 @@ The errors, beside the `Refused` sentences of `registry.py`, which pass through 
 
 ### Settings
 
+The Browse page is in Settings' sidebar, between Skills and History, only while the daemon has a registry it can use: Settings starts without it and adds it when `BrowseSkills` answers with an `address`. While `address` is `""`, as installed, the page isn't there, so nobody is shown a page they can't do anything with. The same goes for an address the daemon can't use, which is `""` too: `problems.address` isn't shown in Settings, and `tuxistant doctor` says it instead. A daemon older than Browse (an unknown-method error) and one that doesn't answer take the page away too. When it goes, a skill's page opened from it closes, and if Browse was showing, Settings shows another page. Any other failure of `BrowseSkills` leaves the page as it was, and an open Browse then says what failed, with Try again. The daemon reads `registry_url` only when it starts, and Settings calls `BrowseSkills` again whenever the daemon restarts, so once an address ships as the default, or is set by hand and the daemon restarted, the page appears with the first answer that has it.
+
 The Browse page shows `BrowseSkills`: the categories, a search box that filters the list it already has by id, name, summary and tags, and the skills, with "Check now" for `CheckRegistry`. A skill's page shows `BrowseSkill`: the publisher, licence, tags, links (shown as text, opened in the browser only on a click), the hosts and the risk with its reason in plain words, and the versions. "Show the recipe" calls `FetchSkill` and shows each action's tool as the Skills page does, and the whole file read-only as the Skills page shows a manifest. Every string from the registry is plain text, never markup. Install, Update and Remove call their methods. While Install or Update waits, the page says "Checking it. Then allow it on the approval card when it comes up.", as the card comes up only once the daemon has checked the recipe. Problems and errors are shown as the daemon wrote them.
 
 Built in `tuxistant/settings_app.py` (`BrowsePage`, `BrowseDialog`) and tested against the fake daemon in `tests/shell_harness_settings_fake.py`. Settings' own choices within the above:
@@ -328,7 +330,7 @@ Built in `tuxistant/settings_app.py` (`BrowsePage`, `BrowseDialog`) and tested a
 
 ### Tests
 
-Offline, as `tests/test_registry.py` is: throwaway keys, a fake fetch or a loopback server, a fake bus and card, temporary folders. At least: nothing is fetched while `registry_url` is empty or unusable; the fetch sends only the headers above and refuses a redirect, another path and a file past its limit; an update allowed on the card with a new host loads, while the same file put there by hand without `allow()` is refused; a Deny, a card that times out and a failed write each leave the file and the grant record as they were; an update that asks for nothing new installs at the check with no card, and one that asks for more doesn't; an edited file is never updated or removed; a revocation at the check sends one notification with its reason, and the reload switches the skill off; the card's words come from the checked recipe, so a `meta.yaml` summary or recipe description never appears in it; and Settings opens no socket of its own.
+Offline, as `tests/test_registry.py` is: throwaway keys, a fake fetch or a loopback server, a fake bus and card, temporary folders. At least: nothing is fetched while `registry_url` is empty or unusable; the fetch sends only the headers above and refuses a redirect, another path and a file past its limit; an update allowed on the card with a new host loads, while the same file put there by hand without `allow()` is refused; a Deny, a card that times out and a failed write each leave the file and the grant record as they were; an update that asks for nothing new installs at the check with no card, and one that asks for more doesn't; an edited file is never updated or removed; a revocation at the check sends one notification with its reason, and the reload switches the skill off; the card's words come from the checked recipe, so a `meta.yaml` summary or recipe description never appears in it; and Settings opens no socket of its own and has no Browse page while there is no usable address.
 
 ### Later
 

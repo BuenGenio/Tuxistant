@@ -130,12 +130,8 @@ SETTINGS_TITLES = {
 }
 NOT_LOADED = ("The skill these settings are for isn't loaded now, so Tux can't use it. They are "
               "kept, and Skills with problems says why")
-NO_REGISTRY = "The skills registry isn't open yet"
-NO_REGISTRY_NOTE = ("There is nothing to set up: Tux fetches nothing until a Tuxistant release "
-                    "names the registry. Skills you add yourself are under Skills")
 BROWSE_OLDER = ("The Tuxistant running now is older than these Settings, so it can't browse the "
                 "skills registry")
-RESTART_HOW = "Log out and back in, or run systemctl --user restart tuxistant"
 NO_INDEX_YET = "Tux has no list of skills from the registry yet"
 ON_THE_CARD = "Checking it. Then allow it on the approval card when it comes up."
 TO_THE_CARD = "Press Update to see it on an approval card"
@@ -2523,12 +2519,16 @@ class BrowsePage(Adw.Bin):
     search, the categories with their tags, what you installed and the newest.
 
     Settings fetches nothing itself. Everything here came in a reply from the daemon, which
-    fetches and checks, and the approval card is the shell's, never a dialog here."""
+    fetches and checks, and the approval card is the shell's, never a dialog here.
+
+    The page is a tab only while the daemon has a registry address it can use. With none set,
+    as installed, with a daemon older than Browse or with none answering, it would be a page
+    with nothing to do, so it isn't shown at all."""
 
     def __init__(self, win):
         super().__init__()
         self.win = win
-        self.listing = None         # BrowseSkills as it last came
+        self.listing = None         # BrowseSkills as it last came, while it names an address
         self.installed_rows, self.newest_rows, self.category_rows = [], [], []
         self.registry_rows = []
         self.narrowed = None        # (words, tags) a category or a tag narrows the list to
@@ -2564,12 +2564,6 @@ class BrowsePage(Adw.Bin):
         self.stack.add_named(Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER,
                                          width_request=32, height_request=32), "loading")
         self.stack.add_named(self.list, "list")
-        self.none_page = Adw.StatusPage(icon_name="system-software-install-symbolic",
-                                        title=NO_REGISTRY)
-        self.stack.add_named(self.none_page, "none")
-        self.stack.add_named(Adw.StatusPage(
-            icon_name="view-refresh-symbolic", title="Restart Tuxistant to browse skills",
-            description=f"{BROWSE_OLDER}. {RESTART_HOW}"), "older")
         retry = Gtk.Button(label="Try again", halign=Gtk.Align.CENTER, css_classes=["pill"])
         retry.connect("clicked", lambda _button: self.load())
         self.failed_page = Adw.StatusPage(icon_name="dialog-warning-symbolic",
@@ -2589,28 +2583,39 @@ class BrowsePage(Adw.Bin):
         if self.dialog:
             self.dialog.load()
 
+    def offer(self, visible):
+        """Show or hide the tab. A skill's page open when it goes would be left with nothing to
+        ask, so it closes with it."""
+        tab = self.win.views.get_page(self)
+        if tab.get_visible() == visible:
+            return
+        tab.set_visible(visible)
+        if not visible and self.dialog:
+            self.dialog.force_close()
+
     def failed(self, error):
-        if not_answering(error):
-            self.win.on_error(error)
-            return
         self.listing = None
-        if error.matches(Gio.DBusError.quark(), Gio.DBusError.UNKNOWN_METHOD):
-            self.show("older")
+        older = error.matches(Gio.DBusError.quark(), Gio.DBusError.UNKNOWN_METHOD)
+        if older or not_answering(error):
+            self.offer(False)
+            if not older:
+                self.win.on_error(error)
             return
-        # A status page's description is read as markup, and the error came from elsewhere.
+        # Any other failure leaves the tab as it was. A status page's description is read as
+        # markup, and the error came from elsewhere.
         self.failed_page.set_description(GLib.markup_escape_text(shown(failed_words(error))))
         self.show("failed")
 
     def fill(self, listing):
+        usable = isinstance(listing, dict) and bool(listing.get("address"))
+        self.offer(usable)
+        if not usable:      # the daemon's problems.address is for tuxistant doctor to say
+            self.listing = None
+            return
         # Read again each time the window becomes active, and mostly unchanged.
-        if listing == self.listing or not isinstance(listing, dict):
+        if listing == self.listing:
             return
         self.listing = listing
-        if not listing.get("address"):
-            words = (listing.get("problems") or {}).get("address") or NO_REGISTRY_NOTE
-            self.none_page.set_description(GLib.markup_escape_text(shown(str(words))))
-            self.show("none")
-            return
         self.fill_registry(listing)
         skills = [skill for skill in listing.get("skills") or []
                   if isinstance(skill, dict) and skill.get("id")]
@@ -2884,6 +2889,7 @@ class SettingsWindow(Adw.ApplicationWindow):
                 ("browse", "Browse", "system-software-install-symbolic", self.browse),
                 ("history", "History", "document-open-recent-symbolic", self.history)):
             self.views.add_titled_with_icon(page, name, title, icon)
+        self.views.get_page(self.browse).set_visible(False)  # until the daemon names a registry
         self.views.connect("notify::visible-child", self.on_page_changed)
         self.sidebar = Adw.ViewSwitcherSidebar(stack=self.views)
         self.sidebar.connect("activated", lambda *_: self.split.set_show_content(True))

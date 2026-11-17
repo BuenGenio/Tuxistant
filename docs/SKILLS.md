@@ -92,7 +92,7 @@ A setting two skills use is on both their pages. Each page is built when it open
 
 ## Browsing the skills registry in Settings
 
-Browse, beside Skills in Settings, is where recipes from the [skills registry](REGISTRY.md) are found, installed, updated and removed. The registry doesn't exist yet, and no address is set, so today the page says "The skills registry isn't open yet" and nothing is fetched. Settings' half is tested against a stand-in for the daemon, in a headless Settings, and the daemon's half, which fetches and checks, offline with throwaway keys and a loopback server ("Recipes from the skills registry" below). None of it has been tried on a real desktop. "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md) is the interface.
+Browse, beside Skills in Settings, is where recipes from the [skills registry](REGISTRY.md) are found, installed, updated and removed. The registry doesn't exist yet, and no address is set, so today nothing is fetched and Settings doesn't show Browse at all. The page appears beside Skills once the daemon has a registry address it can use: when a Tuxistant release names the registry, or after `registry_url` is set by hand in `config.json` and the daemon restarted. An address it can't use counts as none, and `tuxistant doctor` says why. Settings' half is tested against a stand-in for the daemon, in a headless Settings, and the daemon's half, which fetches and checks, offline with throwaway keys and a loopback server ("Recipes from the skills registry" below). None of it has been tried on a real desktop. "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md) is the interface.
 
 Settings fetches nothing itself, not even a link. Everything on the page comes from the daemon, which checks every file against the registry's signatures before Settings sees any of it.
 
@@ -101,7 +101,7 @@ Settings fetches nothing itself, not even a link. Everything on the page comes f
 - **Show the recipe.** Only on a click, as the registry's host can tell that someone asked for that recipe: the daemon downloads and checks it, and the page shows each action as the model would be given it, the same rows as a skill's page under Skills, and the whole `recipe.yaml`, read-only, with Copy.
 - **Install, and an update that asks for more,** go to the shell's approval card, which the daemon writes from the recipe it checked; nothing in Settings can click Allow. Meanwhile the page says "Checking it. Then allow it on the approval card when it comes up." and how it went is said in the daemon's words, such as "You didn't allow it, so nothing was installed." An update that asks for nothing new needs no card. Remove asks first, in Settings.
 
-What the registry sends is a stranger's text, so names, summaries, tags, links and reasons are plain text, never markup, as on the Skills page. A Tuxistant that hasn't been restarted since Settings was updated doesn't have Browse, and the page says so. Everything works from the keyboard: when a button goes away or waits, the focus moves to what the page now says.
+What the registry sends is a stranger's text, so names, summaries, tags, links and reasons are plain text, never markup, as on the Skills page. A Tuxistant that hasn't been restarted since Settings was updated doesn't have Browse, so Settings leaves the page out until it is restarted, and while Tuxistant isn't answering. Everything works from the keyboard: when a button goes away or waits, the focus moves to what the page now says.
 
 ## Manifest format
 
