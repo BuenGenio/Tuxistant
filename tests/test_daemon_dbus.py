@@ -4,8 +4,10 @@ The test class below re-runs this file under dbus-run-session. The service tests
 and check that the bus really is not the user's before touching anything.
 """
 import asyncio
+import hashlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -31,6 +33,10 @@ from tuxistant.config import CLOUD_CONSENT_VERSION, NOT_THE_CONSENT, Config, clo
 from tuxistant.gate import Ask  # noqa: E402
 from tuxistant.history import History  # noqa: E402
 from tuxistant.service import Daemon, serve  # noqa: E402
+from tuxistant.browse import Browse  # noqa: E402
+from tuxistant.registry import INDEX_NS, NOT_LISTED, RECIPE_NS  # noqa: E402
+from tuxistant.skillhost import SkillHost  # noqa: E402
+from tuxistant.skills import BUILTIN  # noqa: E402
 
 PRIVATE = "TUXISTANT_TEST_PRIVATE_BUS"
 REAL_BUS = "TUXISTANT_TEST_REAL_BUS"
@@ -47,6 +53,9 @@ METHODS = {
     "ListPhones": ("", "s"), "ListCalendars": ("", "s"),
     "Hello": ("i", ""), "CanAsk": ("", "b"), "Answer": ("sb", ""),
     "SelectionText": ("ss", ""),
+    "BrowseSkills": ("", "s"), "BrowseSkill": ("s", "s"), "FetchSkill": ("s", "s"),
+    "InstallSkill": ("s", "s"), "UpdateSkill": ("s", "s"), "RemoveSkill": ("s", "s"),
+    "CheckRegistry": ("", "s"),
 }
 SIGNALS = {
     "StateChanged": "s", "Presence": "b", "Level": "d", "Transcript": "sb", "Reply": "s",
@@ -54,6 +63,7 @@ SIGNALS = {
     "SkillsChanged": "",
     "Approval": "ssssi", "ApprovalClosed": "s", "SelectionWanted": "s",
     "DictationStarted": "s", "DictationMode": "ss", "TypeText": "ssb", "FollowUp": "ssi",
+    "RegistryChanged": "",
 }
 
 
@@ -69,7 +79,8 @@ class RunsOnPrivateBus(unittest.TestCase):
                 ["dbus-run-session", "--", sys.executable, "-m", "unittest",
                  "tests.test_daemon_dbus.Service", "tests.test_daemon_dbus.Process",
                  "tests.test_daemon_dbus.Lock", "tests.test_daemon_dbus.OnlyTheShellClicks",
-                 "tests.test_daemon_dbus.OnlyTheShellTypes", "tests.test_daemon_dbus.Timers"],
+                 "tests.test_daemon_dbus.OnlyTheShellTypes", "tests.test_daemon_dbus.Timers",
+                 "tests.test_daemon_dbus.OnlyTheShellInstalls"],
                 cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr[-4000:])
         self.assertIn("OK", done.stderr)
@@ -759,6 +770,132 @@ class OnlyTheShellClicks(OnPrivateBus):
         while self.daemon.shell_owner:
             await asyncio.sleep(0.01)
         self.assertFalse(self.daemon.controller.face)
+
+
+@unittest.skipUnless(os.environ.get(PRIVATE), "needs dbus-run-session")
+@unittest.skipUnless(shutil.which("ssh-keygen"), "ssh-keygen isn't installed")
+class OnlyTheShellInstalls(OnPrivateBus):
+    """Any program on the bus can ask Browse to install a skill, and so put up a card, as a
+    model can. Only a click from the shell installs it."""
+
+    async def asyncSetUp(self):
+        from tests.test_registry import BLUETOOTH, NOW, dumped, fingerprint, make_key, sign
+        keys = self.folder / "keys"
+        keys.mkdir()
+        ada, registry_key = make_key(keys, "ada"), make_key(keys, "registry")
+        data = BLUETOOTH.format(version="1.0.0").encode()
+        digest = hashlib.sha256(data).hexdigest()
+        version = {"version": "1.0.0", "date": "2026-11-14T10:00:00Z", "sha256": digest,
+                   "size": len(data), "key": fingerprint(ada[1]),
+                   "sig": sign(ada[0], RECIPE_NS, data).decode(), "permissions": {},
+                   "risk": "low"}
+        index = dumped({
+            "format": 1, "seq": 1, "date": "2026-11-20T09:00:00Z", "commit": "a" * 40,
+            "moderation_keys": [registry_key[1]],
+            "categories": [{"id": "desktop", "name": "Desktop", "tags": ["settings"]}],
+            "authors": {"ada": {"status": "active", "keys": [
+                {"key": ada[1], "fingerprint": fingerprint(ada[1]), "added": "2026-11-14",
+                 "removed": None}]}},
+            "skills": [{"id": "io.github.ada.bluetooth", "author": "ada", "name": "Bluetooth",
+                        "summary": "Opens Bluetooth", "tags": ["settings"], "licence": "MIT",
+                        "links": [], "versions": [version]}],
+            "revocations": [], "lifted": []})
+        self.served = {"index.json": index, f"recipes/{digest}.yaml": data,
+                       "index.json.sig": sign(registry_key[0], INDEX_NS, index)}
+        signers = self.folder / "signers"
+        signers.write_text(f'tuxistant-registry namespaces="{INDEX_NS}" {registry_key[1]}\n')
+        builtin, self.skills = self.folder / "builtin", self.folder / "data" / "skills"
+        builtin.mkdir()
+        self.skills.mkdir(parents=True)
+        shutil.copy(BUILTIN / "time.yaml", builtin / "time.yaml")
+        config = Config(self.folder / "config.json")
+        config.values["registry_url"] = "https://registry.example/skills/"
+        host = SkillHost(config, builtin, self.folder / "bundled", self.skills,
+                         launcher=lambda *_: None)
+        host.reload()
+        history = History(self.folder / "history.db")
+        self.addCleanup(history.db.close)
+        self.daemon = Daemon(config, history, host)
+        self.daemon.browse = Browse(config, host, self.daemon.controller, emit=self.daemon.send,
+                                    state=self.folder / "state", signers=signers,
+                                    fetch=self.fetch, clock=lambda: NOW)
+        self.bus = await MessageBus().connect()
+        self.assertTrue(await serve(self.bus, self.daemon))
+        self.addCleanup(self.bus.disconnect)
+        self.client = await MessageBus().connect()
+        self.addCleanup(self.client.disconnect)
+        self.cards = []
+        self.daemon.controller.emit = self.spy
+        await self.daemon.browse.check()
+
+    def fetch(self, path, _limit):
+        if path not in self.served:
+            raise OSError("not found")
+        return self.served[path]
+
+    def spy(self, name, *args):
+        if name == "Approval":
+            self.cards.append(args[0])
+        self.daemon.send(name, *args)
+
+    async def call(self, member, signature="", body=(), bus=None):
+        return await (bus or self.client).call(Message(
+            destination=BUS_NAME, path=BUS_PATH, interface=BUS_NAME, member=member,
+            signature=signature, body=list(body)))
+
+    async def the_shell(self):
+        shell = await MessageBus().connect()
+        self.addCleanup(shell.disconnect)
+        await shell.request_name(service.SHELL_NAME)
+        while self.daemon.shell_owner != shell.unique_name:
+            await asyncio.sleep(0.01)
+        self.daemon.controller.face = True
+        return shell
+
+    async def card_for(self, task):
+        async with asyncio.timeout(10):
+            while not self.cards and not task.done():
+                await asyncio.sleep(0.01)
+        self.assertFalse(task.done(), "no card came up")
+        return self.cards[-1]
+
+    async def test_only_the_shells_click_installs(self):
+        shell = await self.the_shell()
+        changed = []
+        await self.client.call(Message(
+            destination="org.freedesktop.DBus", path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus", member="AddMatch", signature="s",
+            body=[f"type='signal',interface='{BUS_NAME}',member='RegistryChanged'"]))
+        self.client.add_message_handler(
+            lambda message: changed.append(message.member)
+            if message.member == "RegistryChanged" else None)
+        task = asyncio.create_task(self.call("InstallSkill", "s", ["io.github.ada.bluetooth"]))
+        card = await self.card_for(task)
+        refused = await self.call("Answer", "sb", [card, True])
+        self.assertEqual(refused.error_name, service.DENIED)
+        await asyncio.sleep(0.05)
+        self.assertFalse(task.done(), "a stranger answered the card")
+        self.assertFalse((self.skills / "io.github.ada.bluetooth.yaml").exists())
+        await self.call("Answer", "sb", [card, True], bus=shell)
+        reply = await task
+        self.assertEqual(reply.message_type, MessageType.METHOD_RETURN, reply.body)
+        self.assertEqual(json.loads(reply.body[0])["version"], "1.0.0")
+        self.assertTrue((self.skills / "io.github.ada.bluetooth.yaml").exists())
+        async with asyncio.timeout(5):
+            while not changed:
+                await asyncio.sleep(0.01)
+        listing = json.loads((await self.call("BrowseSkills")).body[0])
+        self.assertEqual(listing["skills"][0]["installed"]["version"], "1.0.0")
+
+    async def test_a_deny_and_an_unknown_skill_come_back_as_sentences(self):
+        shell = await self.the_shell()
+        task = asyncio.create_task(self.call("InstallSkill", "s", ["io.github.ada.bluetooth"]))
+        await self.call("Answer", "sb", [await self.card_for(task), False], bus=shell)
+        reply = await task
+        self.assertEqual((reply.error_name, reply.body),
+                         (service.FAILED, ["You didn't allow it, so nothing was installed."]))
+        reply = await self.call("BrowseSkill", "s", ["io.github.ada.other"])
+        self.assertEqual((reply.error_name, reply.body), (service.FAILED, [NOT_LISTED]))
 
 
 class FakeDesktop(ServiceInterface):

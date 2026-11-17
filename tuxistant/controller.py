@@ -37,6 +37,7 @@ ANSWER_HINT = "Hold Fn to answer"
 NO_CARD = ("I can't show an approval card on this desktop yet, so I didn't do that. Log out and "
            "back in once, then try again.")
 NO_TYPING = "Dictation needs the new desktop extension. Log out and back in once, then try again."
+ALLOWED, DENIED, UNANSWERED, LOCKED, BUSY = "allowed", "denied", "unanswered", "locked", "busy"
 
 
 def describe(error: Exception) -> str:
@@ -481,6 +482,7 @@ class Controller:
         self.deliveries = []    # dictated audio on its way to the window, oldest first
         self.lock = asyncio.Lock()
         self.approval = None    # (id, future) of the card on screen
+        self.alone = False      # whether no turn is behind it
         self.reading = None     # (id, future) of the selection the shell was asked for
         self.typing = None      # (id, future) of the words the shell was asked to type
         self.face = False       # an extension that can draw cards has said hello
@@ -514,13 +516,22 @@ class Controller:
         """Puts an approval card on screen and waits for a click. No answer, a cancel or a lock
         all mean no. One card at a time: actions in a turn run one after the other. With nothing
         to draw the card, the user hears why rather than waiting for a card that never comes."""
+        answer = await self.card(ask)
+        if answer == DENIED and self.turn:  # a no means stop, so nothing carries on after it
+            self.turn.ends_talk = True
+        return answer == ALLOWED
+
+    async def card(self, ask: Ask, alone: bool = False) -> str:
+        """The card, and how it was answered: ALLOWED, DENIED, UNANSWERED, LOCKED, or BUSY when
+        it couldn't go up, the screen being locked or another card being open. alone: no turn
+        is behind it, as for Browse, so a lock answers it; a turn's card goes with the turn."""
         if self.locked or self.approval:
-            return False
+            return BUSY
         if not self.face:
             raise RuntimeError(NO_CARD)
         request = secrets.token_hex(16)
         answer = asyncio.get_running_loop().create_future()
-        self.approval = (request, answer)
+        self.approval, self.alone = (request, answer), alone
         was_visible = self.presence
         self.set_presence(True)
         self.emit("Approval", request, printable(ask.title, MAX_TITLE_CHARS),
@@ -528,11 +539,9 @@ class Controller:
         try:
             allowed = await asyncio.wait_for(answer, APPROVAL_WAIT_S)
         except TimeoutError:
-            return False
+            return UNANSWERED
         else:
-            if not allowed and self.turn:   # a no means stop, so nothing carries on after it
-                self.turn.ends_talk = True
-            return allowed
+            return LOCKED if allowed is None else ALLOWED if allowed else DENIED
         finally:
             self.approval = None
             self.emit("ApprovalClosed", request)
@@ -699,6 +708,8 @@ class Controller:
         """The shell disables the extension at lock, so a turn would have no blob and no way to
         stop it. Nothing listens or speaks on a locked screen, wherever the request came from."""
         self.locked = locked
+        if locked and self.approval and self.alone and not self.approval[1].done():
+            self.approval[1].set_result(None)
         if locked:
             await self.cancel()
 

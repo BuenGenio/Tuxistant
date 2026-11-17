@@ -661,10 +661,11 @@ class _Plain(http.client.HTTPConnection):
 
 
 class _Tls(http.client.HTTPSConnection):
-    """The same over TLS. The certificate is checked against the name, not the address."""
+    """The same over TLS. The certificate is checked against the name, not the address, with
+    the system's certificates unless a test hands in a context of its own."""
 
-    def __init__(self, target: Target, raw: socket.socket):
-        self.tls = ssl.create_default_context()
+    def __init__(self, target: Target, raw: socket.socket, tls: ssl.SSLContext | None = None):
+        self.tls = tls or ssl.create_default_context()
         super().__init__(target.host, target.port, context=self.tls)
         self.raw = raw
 
@@ -708,7 +709,7 @@ def _read(reply: http.client.HTTPResponse) -> tuple[str, str]:
 
 
 def _exchange(target: Target, method: str, body: bytes | None, headers: dict, deadline: float,
-              read):
+              read, tls: ssl.SSLContext | None = None):
     """One request, with read(reply) run while the connection is open. A timeout on the socket
     only bounds each read, so a server dripping a byte at a time would go on for ever. Hanging up
     at the deadline ends it wherever it has got to, including the TLS handshake, which is why it
@@ -718,7 +719,10 @@ def _exchange(target: Target, method: str, body: bytes | None, headers: dict, de
     watch, late = raw.dup(), threading.Event()
     timer = threading.Timer(max(deadline - time.monotonic(), 0), _hang_up, [watch, late])
     timer.daemon = True
-    connection = (_Tls if target.scheme == "https" else _Plain)(target, raw)
+    if target.scheme != "https":
+        connection = _Plain(target, raw)
+    else:   # tls only when given, so a test that stands in for _Tls needs no third argument
+        connection = _Tls(target, raw, tls) if tls else _Tls(target, raw)
     raw.settimeout(CONNECT_S)
     timer.start()
     try:
@@ -770,6 +774,26 @@ def send(where: Place, scheme: str, host: str, port: int, path: str, method: str
         headers["Content-Type"] = content_type or "application/octet-stream"
     target = Target(scheme, host, port, path, list(where.addresses))
     return _exchange(target, method, body, headers, time.monotonic() + seconds, _reply)
+
+
+def get_file(host: str, port: int, path: str, limit: int, seconds: float,
+             tls: ssl.SSLContext | None = None) -> bytes:
+    """One HTTPS GET of a file the same for everyone, as the skills registry serves them. No
+    redirect is followed, any status but 200 is a failure, and the only headers are Host,
+    Accept-Encoding: identity and User-Agent: Tuxistant, so nothing sent tells one Tux from
+    another: no cookie, language, referrer or ETag. seconds is for the whole file. At most
+    limit + 1 bytes come back, so the caller can refuse one that is too big."""
+    def read(reply):
+        encoding = (reply.getheader("Content-Encoding") or "identity").strip().lower()
+        if reply.status != 200 or encoding != "identity":
+            raise PageError(UNREADABLE)
+        data = reply.read(limit + 1)
+        if _cut(reply, data, limit + 1):
+            raise PageError(UNREADABLE)
+        return data
+    deadline = time.monotonic() + seconds
+    target = Target("https", host, port, path, _resolve(host, port))
+    return _exchange(target, "GET", None, {"User-Agent": RECIPE_AGENT}, deadline, read, tls)
 
 
 class _Text(HTMLParser):
