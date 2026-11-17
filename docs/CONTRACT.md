@@ -54,7 +54,7 @@ Methods:
 | `GetHistory` | `(i limit) -> s` | `History.recent()` |
 | `ClearHistory` | `() -> ()` | Emits `HistoryChanged` |
 | `OpenSettings` | `() -> ()` | Launch `tuxistant settings` |
-| `BrowseSkills`, `BrowseSkill`, `FetchSkill`, `InstallSkill`, `UpdateSkill`, `RemoveSkill`, `CheckRegistry` | See "Skills registry: Browse" | Browse in Settings. The daemon's side is built, in `tuxistant/browse.py` |
+| `BrowseSkills`, `BrowseSkill`, `FetchSkill`, `InstallSkill`, `UpdateSkill`, `RemoveSkill`, `CheckRegistry` | See "Skills registry: Browse" | Browse in Settings. The daemon's side is in `tuxistant/browse.py`, Settings' in `tuxistant/settings_app.py` |
 
 Signals:
 
@@ -198,7 +198,7 @@ The search has 4 seconds, the sender lookups 2 more and the whole action 20, and
 
 ## Skills registry: Browse
 
-Browse in Settings, to [REGISTRY.md](REGISTRY.md) and [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). This is what the daemon and Settings build to. The daemon's side is built, in `tuxistant/browse.py`, and tested offline in `tests/test_browse.py` and `tests/test_daemon_dbus.py`. `tuxistant/registry.py` does every check. The daemon fetches, checks, installs, updates, removes and switches off. Settings only shows what the daemon sends and calls the methods below. It never fetches anything itself: no index, recipe, logo or link.
+Browse in Settings, to [REGISTRY.md](REGISTRY.md) and [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). This is what the daemon and Settings build to. The daemon's side is built, in `tuxistant/browse.py`, and tested offline in `tests/test_browse.py` and `tests/test_daemon_dbus.py`. Settings' side is built too: see "Settings" below. `tuxistant/registry.py` does every check. The daemon fetches, checks, installs, updates, removes and switches off. Settings only shows what the daemon sends and calls the methods below. It never fetches anything itself: no index, recipe, logo or link.
 
 ### The address
 
@@ -264,7 +264,7 @@ Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed`
 | `FetchSkill` | `(s id) -> s` | Fetch and check the version Browse offers, for "Show the recipe". Allow 60 s |
 | `InstallSkill` | `(s id) -> s` | Check, card, `allow()`, `install()`, reload. Allow 150 s |
 | `UpdateSkill` | `(s id) -> s` | The same for a skill installed from the registry, with the card only when the update asks for more or the skill is switched off. Allow 150 s |
-| `RemoveSkill` | `(s id) -> s` | Take out the file Tux installed, then its record, then reload. No card: taking a skill away is the safe direction |
+| `RemoveSkill` | `(s id) -> s` | Take out the file Tux installed, then its record, then reload. No card: taking a skill away is the safe direction. Allow 150 s, as it may wait behind a check |
 | `CheckRegistry` | `() -> s` | The daily check now. Returns what `BrowseSkills` returns, with any failure in `problems`, and never fails itself. Allow 120 s |
 
 | Signal | Signature | Meaning |

@@ -122,7 +122,7 @@ It also found two tests whose stand-ins for the network ended before a thread th
 
 ## Skills from the registry
 
-The registry repo doesn't exist yet, but Tux's side of the checks is built and tested offline, in `tuxistant/registry.py`, to [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). The daemon's side of Browse calls it, in `tuxistant/browse.py`, but only once `registry_url` is set by hand in `config.json`: it is empty as installed, and while it is, nothing is fetched. The Browse page in Settings is built separately. The registry key in `tuxistant/registry_allowed_signers` is a **placeholder**. Its private half was thrown away when it was made, so no index verifies with it until a release ships the real key there.
+The registry repo doesn't exist yet, but Tux's side of the checks is built and tested offline, in `tuxistant/registry.py`, to [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). The daemon's side of Browse calls it, in `tuxistant/browse.py`, but only once `registry_url` is set by hand in `config.json`: it is empty as installed, and while it is, nothing is fetched. The Browse page in Settings only shows what the daemon sends and calls its methods: it fetches nothing itself, and a test checks that it opens no socket of its own. The registry key in `tuxistant/registry_allowed_signers` is a **placeholder**. Its private half was thrown away when it was made, so no index verifies with it until a release ships the real key there.
 
 What each check stops:
 

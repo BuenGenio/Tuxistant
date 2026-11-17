@@ -33,7 +33,7 @@ Steps 1 to 3 of the plan below are built, and most of step 4. Step 5, recipe ski
 | Local code skills and their sandbox | Built and tested: your own skills load, change and go while the daemon runs, each in bubblewrap. Lights now runs this way. Not yet tried on the real desktop |
 | Follow-ups across Fn holds | Built: a hold within 2 minutes carries on the conversation, and a question stays on screen with "Hold Fn to answer". Tested with a stand-in server, and in an isolated GNOME Shell through the real service and extension. Not yet on the real desktop or the real server (check 29) |
 | Recipe skills | Built for 0.5.0 and tested with a pretend internet, a made-up app list and temporary folders. Not yet tried on the real desktop (checks 23 to 25), and desktop actions not yet tried on a real desktop (check 26). Run through `eval_routing` on the real model on 2026-11-13 (check 27). Tighter wordings for the gold and Wi-Fi misses each cost other cases, so none was kept (see "Wording follow-ups" in [TESTING.md](TESTING.md)) |
-| Community registry | Planned, not built: [REGISTRY.md](REGISTRY.md) is the plan the owner agreed on 2026-11-13 |
+| Community registry | Under way: [REGISTRY.md](REGISTRY.md) is the plan the owner agreed on 2026-11-13. Tux's checks and Browse in Settings, the daemon's side and Settings' page, are built and tested offline, and do nothing as installed, as no registry address is set. The registry repo waits for the owner, and the portal and moderation aren't built. Not yet tried on a real desktop |
 
 The code is public under GPL-3.0.
 

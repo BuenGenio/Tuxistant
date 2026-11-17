@@ -87,6 +87,26 @@ class RunsOnPrivateBus(unittest.TestCase):
         self.assertNotIn("skipped", done.stderr.splitlines()[-1])
 
 
+class SettingsStandIn(unittest.TestCase):
+    """Settings is tested against a stand-in daemon, so a signature that differs there from the
+    daemon's would pass Settings' tests and fail on the real bus."""
+
+    def test_it_serves_the_daemons_signatures(self):
+        from tests.shell_harness_settings_fake import Daemon as StandIn
+        with tempfile.TemporaryDirectory() as folder:
+            stand_in = StandIn(Path(folder))
+            stand_in.history.db.close()
+        interface = stand_in.introspect()
+        methods = {m.name: (m.in_signature, m.out_signature) for m in interface.methods}
+        signals = {s.name: s.signature for s in interface.signals}
+        self.assertEqual({name: METHODS.get(name) for name in methods}, methods)
+        self.assertEqual({name: SIGNALS.get(name) for name in signals}, signals)
+        browse = {"BrowseSkills", "BrowseSkill", "FetchSkill", "InstallSkill", "UpdateSkill",
+                  "RemoveSkill", "CheckRegistry"}
+        self.assertLessEqual(browse, set(methods))
+        self.assertIn("RegistryChanged", signals)
+
+
 class BlockedMic:
     """A microphone that opens and has nothing to say."""
 

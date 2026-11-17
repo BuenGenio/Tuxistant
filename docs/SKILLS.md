@@ -92,7 +92,7 @@ A setting two skills use is on both their pages. Each page is built when it open
 
 ## Browsing the skills registry in Settings
 
-Browse, beside Skills in Settings, is where recipes from the [skills registry](REGISTRY.md) are found, installed, updated and removed. The registry doesn't exist yet, and no address is set, so today the page says "No skills registry is set up yet" and nothing is fetched. Settings' half is built and tested against a stand-in for the daemon, in a headless Settings; the daemon's half, which fetches and checks, isn't built yet, and none of it has been tried on a real desktop. "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md) is the interface.
+Browse, beside Skills in Settings, is where recipes from the [skills registry](REGISTRY.md) are found, installed, updated and removed. The registry doesn't exist yet, and no address is set, so today the page says "No skills registry is set up yet" and nothing is fetched. Settings' half is tested against a stand-in for the daemon, in a headless Settings, and the daemon's half, which fetches and checks, offline with throwaway keys and a loopback server ("Recipes from the skills registry" below). None of it has been tried on a real desktop. "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md) is the interface.
 
 Settings fetches nothing itself, not even a link. Everything on the page comes from the daemon, which checks every file against the registry's signatures before Settings sees any of it.
 
