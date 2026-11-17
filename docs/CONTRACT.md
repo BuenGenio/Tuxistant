@@ -54,6 +54,7 @@ Methods:
 | `GetHistory` | `(i limit) -> s` | `History.recent()` |
 | `ClearHistory` | `() -> ()` | Emits `HistoryChanged` |
 | `OpenSettings` | `() -> ()` | Launch `tuxistant settings` |
+| `BrowseSkills`, `BrowseSkill`, `FetchSkill`, `InstallSkill`, `UpdateSkill`, `RemoveSkill`, `CheckRegistry` | See "Skills registry: Browse" | Browse in Settings. Not built yet |
 
 Signals:
 
@@ -76,6 +77,7 @@ Signals:
 | `DictationMode` | `s id, s mode` | How this go stops: `hold` (let go of Fn), `tap` (tap Fn) or `shortcut` (the dictate shortcut again). Sent once known, never before `DictationStarted` for that id, and again only if it changes. Holds no words |
 | `TypeText` | `s id, s text, b only_copy` | Put the words where the cursor is, then reply with `Typed`. Sent to the shell alone, not broadcast. `only_copy` is true after the time limit |
 | `FollowUp` | `s question, s hint, i seconds` | The hold turn that just ended asked the user something. Sent after `StateChanged` `idle` and `Presence` false: show the blob, and the question with the hint under it, for `seconds`, whatever `Presence` says. A turn starting takes them down, and so does `FollowUp` with `seconds` 0. Plain text, like `Reply` |
+| `RegistryChanged` | none | See "Skills registry: Browse". Not built yet |
 
 ### Cloud agreement
 
@@ -193,6 +195,134 @@ The search has 4 seconds, the sender lookups 2 more and the whole action 20, and
 - An action of yours may not start like a built-in or bundled action: `_namespace()`, the first word of its tool name up to a `.` or `_`, less a trailing `s`, may not be one of theirs, so `file.delete`, `files.delete` and `file_trash.now` are refused. Yours bring at most `USER_TOOLS`, 6, actions in all. `offered` maps each skill the last reload loaded, built-in and bundled ones included, and each of yours it kept a place for, or at start each of yours in `skills-loaded.json`, to a `_Place`: the count it was offered with, the SHA-256 of the text of the manifest offered, its id and its actions; only yours are saved. Yours in it are counted first, of them the ones whose text has that digest before those edited (`_order()`, `_edited()`), then those of them with more actions than they were offered with, then new ones in load order, and a code skill that can't run for want of a sandbox isn't counted. Without that file, as after 0.4.0, all are new. `_save_loaded()` writes it when it changes, but not from `offline()`, and a reload where your folder couldn't be listed keeps `offered` as it was; counts that add up past `USER_TOOLS` make `_read_loaded()` ignore the file, and `_unshared()` drops an id, action or tool name that two entries claim. `_read_json()` reads it, and `skill-grants.json`, only as a regular file, or a link to one, of at most `MAX_STATE_BYTES`, 1 MB, opened without blocking so a pipe can't stop start. A `skills-loaded.json` that isn't one, can't be parsed or is nested too deep is treated as missing. A `skill-grants.json` like that, a link to one that leads nowhere, or one that isn't a mapping of skill ids to mappings (`_grant_records()`), such as another app's settings behind a link, sets `_Grants.broken`: it is never written over. `refresh()` reads the file again at a reload when it is broken or its device, inode, size or time changed (`_identity()`), so a fix, a hand edit or damage counts at the next reload. While it is broken `problem()` refuses any skill of yours that asks for the network or a setting, allowed before or not, with `BROKEN_GRANTS`, and `denies()` refuses a kept `_Found` the same way, or one that asks for what its record no longer allows. `save()` doesn't write when the file changed since it was read, which is read again instead, and through a link it writes, by a temporary file and a rename, only the file the link led to when read, resolved once, beside the link; a link into another folder counts as broken. When the file changed between the read and the save, `save()` keeps nothing and `_reload_once()` makes the reload again from the file as it is now; when the write fails with an `OSError`, such as a full disk or a folder that can't be written, it isn't made again. Either way, if what the reload allowed still isn't saved, `hold()` reads the records from the file again and holds one more pass in which a skill of yours with no record that allows it gets nothing it asks for (`UNSAVED_GRANTS`), while those recorded carry on; the save is tried again at the next reload, and state is cleared only after a save. An edit in the moment between `_target()`'s check and the rename is written over; one after the rename is seen, as the identity of what was written is compared with the file's. The watcher watches the file too (`files=`), so an edit to it reloads at once, but not a change that leaves it as Tux last read or wrote it (`as_seen()`), as after its own save. A record of the wrong shape becomes one that allowed nothing (`_grant_record()`), and a `removed_at` that isn't a finite float or an int whose abs is below 2**53 is dropped (`_a_time()`). A folder name with a NUL, a lone surrogate or a `/` is no plain name (`_plain_name()`), and `_there()` says it can't be told for any other error, so no name from either file stops a reload. `gone()` runs only when your folder could be listed, and marks a record removed only when no skill found in that reload has its id and `lstat` finds nothing at its folder, or its folder name is empty or not a plain name (`_there()`); it dates a removed record with no date as now. `problem()`, and `grant()` for a skill that loads, point a record at another folder only when the one it names is surely gone, not when that can't be told, so a rename or the copy left of two keeps what was allowed. `gone()` also counts as there the id each file of yours was last read with while the daemon runs, refused ones included (`seen_ids`, with the digest of that text), and that of each `_Place`, but only while the file's text still has that digest (`_known_id()`). It doesn't mark removed a record while a file of yours that won't read and has no known id began failing, as it is now and as the same entry (its text digest and its device and inode, so a folder renamed onto an empty one starts a clock of its own), no earlier than the record's folder went missing (`_held_back()`, `unknown_since`, `missing_since`), and `problem()` then names that file, as it stood at the last reload. A record's `missing_since` is kept while a copy with its id stands in, so taking that copy out later still holds it back. An exception in a reload also drops a broken grants file's state, so a file fixed meanwhile counts at the next read. In memory those clocks start again at a restart, so after one a draft that was already failing holds a skill taken out while Tux was off until it reads or is taken out. A code skill with no record is new, so its state is cleared after the save that notes it, and while a save is held it doesn't load at all (`_asks()`). A reload that raises drops the records in memory, so nothing half noted is saved later. `prune()` keeps the `MAX_REMOVED`, 1000, records of skills taken out last, dates in the future counted as now, and clears the state of those it drops, but never drops one marked or dated in the same reload, one whose id a skill found in that reload or a `_Place` in `offered` has, one whose folder is there, or one starting with `org.tuxistant.`. Counts alone, as an earlier 0.5 build kept, give no digest or names, so all count as edited; a list of names gives no counts either, so one of those keeps no place until it has loaded once. A skill that would go past it is refused whole, by `over_budget()`, which says how many are taken, and for one with more than `USER_TOOLS` how many it may keep beside them; one that grew past it, to `USER_TOOLS` or fewer, is refused with `GREW`. Each of yours in `offered` whose file or folder is still there reserves the id and actions of its `_Place`, whatever an edit to it says, unless it is a code skill without a sandbox, and a new or edited one of yours that would take another key's is refused (`_holders()`, `_held_reason()`, which names the holder), whatever the order. `_settle()` then runs `_resolve()` again, up to `MAX_PASSES`, 16, times, with the reservation of every edited holder that blocked another (`_holders()`, `_owners()`), by a reservation or by the version of it that loads, cut to what its edit still has (`_still_held()`), when that edit loaded or was refused for a name another of yours has, widening the set each pass and dropping from it those that fail when there is none left to add. A pass counts only if every holder cut so loads its edit, and the last that counted stands, so swaps and rings load at once and a name never leaves a skill that ends up on its kept version or its place. If one still waits for a name whose holder's edit loaded in the pass that counted, its reason says the name is free from the next reload. `reload()` runs again at once, up to twice, whenever that happens or what `offered` holds of yours changed while some of yours were refused, so a reload with nothing changed changes nothing, and tells `on_change` once, after the last. Reloads run on the event loop: with 1500 recipes in the folder a first reload took 0.84 s, in two passes, and one that changed nothing 0.41 s, on an aarch64 laptop; with the grants file changing under every save, the worst case, it took four passes, 1.64 s. A hand edit marking a skill of yours that is there `removed` gets it allowed afresh, as if taken out and put back; that is the person who can edit the file allowing it, not a way past what was allowed. Each refused for a name or the budget gets its reason from the reload's end state (`_name_reasons()`, `_over()`), not from the order things were counted in, and a name another of yours has is said with that skill's file, so a reload that changes nothing changes no reason. One refused keeps its whole `_Place`. One in `offered` whose path is there but no longer a recipe or a skill folder gets `NOT_A_SKILL`. One of yours refused for any reason keeps the `_Found` the last reload offered while the daemon runs, if that is still allowed, with `KEPT` after the reason; one whose file can't be loaded falls back to that `_Found` too, and if that is refused the reason is why the file failed (`failed`). A reload that couldn't list your folder keeps those `_Found` as well. Room for the count it was offered with of each one that grew and is counted later is held, so one's growth never takes the place of another's last version. One in `offered` that is refused with no `_Found` to keep, as after a restart, or whose file or folder is still there but failed to load (`_unloaded()`), keeps its `_Place` in `offered` and `skills-loaded.json`, and the count is used up, so neither a new skill nor another's growth takes its place. Only taking the file or folder out frees it, and a code skill refused for want of a sandbox keeps none. `offline()`, which `tuxistant doctor` uses, reads the same file, so it refuses the same skills, without the `_Found` the daemon keeps, except that it doesn't check the sandbox, which the doctor reports on its own. A `.yml` or `.json` file in your folder is a problem, not skipped.
 - A recipe's actions are async handlers from `recipes.handlers(manifest)`, in the same handler table. It runs no process and keeps no state. Its grant is its list of hosts, and one host more is refused until the file is taken out and put back. `skillhost.offline()` gives recipes `recipes.offline_handlers`, which only answer that they aren't running, so `tuxistant doctor` and the evaluations send nothing.
 - Changed code (any file in the folder but byte code) means a new process for that skill. The old one finishes the calls it has and stops; a turn still holding the old `Skills` is told to ask again. Changing a built-in manifest reloads live, but a new built-in handler needs a daemon restart.
+
+## Skills registry: Browse
+
+Browse in Settings, to [REGISTRY.md](REGISTRY.md) and [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md). Not built yet: this is what the daemon and Settings build to. `tuxistant/registry.py` does every check. The daemon fetches, checks, installs, updates, removes and switches off. Settings only shows what the daemon sends and calls the methods below. It never fetches anything itself: no index, recipe, logo or link.
+
+### The address
+
+`registry_url` in `config.json`: a string, `""` by default. While it is empty Tux fetches nothing from any registry. It isn't in `EDITABLE`, so `SetConfig` refuses it: until the registry repo exists and its address ships as the default, it is set by hand, and the daemon reads it at start. A usable address is `https://`, a host, an optional port and a path ending in `/`, at most 200 characters, with no user, password, query or fragment. Anything else counts as empty, and `problems.address` says "The skills registry address in config.json isn't one Tux can use, so Tux fetches nothing." The address is never trusted: everything from it is checked against the registry key that ships with Tux. Until a release ships the real key, the placeholder in `tuxistant/registry_allowed_signers` verifies nothing, so every index is refused there; tests use a signers file of their own.
+
+### Fetching
+
+The daemon gives `Registry` its own `fetch(path, limit)`. It fetches the address followed by `index.json`, `index.json.sig`, `revocations.json`, `revocations.json.sig` or `recipes/<64 small hex digits>.yaml`, and refuses any other path. Each is one HTTPS GET with the system's certificates, at most 30 seconds for the whole file. A redirect, any status but 200, or more than `limit` bytes is a failure. It sends `Host`, `User-Agent: Tuxistant` with no version, and `Accept-Encoding: identity`, and nothing else: no cookie, `Referer`, `Accept-Language`, `If-None-Match` or `If-Modified-Since`, as an ETag can serve as an identifier. Tests pass a fake fetch, or a loopback server inside the test. None reaches the network.
+
+### The daily check
+
+The check is `Registry.refresh()`: `index.json` and its signature, then `revocations.json` and its signature. Those four requests are the same for every Tux and say nothing about the person or their skills. The daemon checks 5 minutes after it starts, unless the index it holds (`$XDG_STATE_HOME/tuxistant/registry/index.json`) was accepted less than 24 hours ago. It checks again every 24 hours while it runs, an hour later after a check that couldn't reach the registry, and whenever `CheckRegistry` is called. After each check:
+
+1. Each change `apply()` returns is a desktop notification, sent as `timers.notify` sends one (`org.freedesktop.Notifications`, no autostart). A switch-off has the title "Tuxistant switched off <id>" and the body `switched_off_because(kind, reason)`: `SUSPENDED` or `BANNED` with the reason from the revocation entry. A lift has "Tuxistant switched <id> back on" and "The skills registry lifted what switched it off." The reason is text(300) with no `<` or `>`, and its `&` is escaped, as GNOME reads markup in a body. Then a reload, which shows the same sentence as the file's problem.
+2. Updates, as below. One that asks for nothing new is installed, and Browse shows the new version. One that asks for more waits in Browse. No card ever comes up unasked.
+3. `RegistryChanged` is emitted.
+
+### One at a time
+
+`Registry`'s calls block on the network and on `ssh-keygen`, so they run in `asyncio.to_thread`, one at a time, under one `asyncio.Lock`. The lock isn't held while a card waits. What touches the skills folder and the grants runs on the event loop, under the lock, with no `await` between the steps: `SkillHost.allow()`, `Registry.install()` or `Registry.remove()` (new: the file first, then its record), then `SkillHost.reload()`. So no reload sees a grant without its file, or a file without its grant. `BrowseSkills` and `BrowseSkill` read a copy the daemon makes under the lock after each change, so they never wait for a fetch.
+
+### The card
+
+An install, and an update that asks for more, are approved on the shell's approval card, the path every risky action takes (see "Approvals"). The D-Bus method calls `Controller.ask()` itself, with no model turn behind it. The extension shows every `Approval` it gets, and `Answer` is taken only from the owner of `org.gnome.Shell` (`Daemon.guard`), so no other program, Settings included, can click Allow. A Deny on this card doesn't end a conversation, as it belongs to none. Before asking, the daemon refuses with a sentence when the screen is locked, another card is open, or no extension has said level 1. Any program on the bus can call `InstallSkill` and so put up a card, as a model can; only a click installs.
+
+Daemon code writes the card from the `Checked` that `Registry.check()` returned: the exact bytes that will be written, after their size, SHA-256, publisher signature and Tux's own loader all passed. It never uses `meta.yaml`, the summary, the recipe's `name` or `description`, or an action's description, which are the publisher's words.
+
+- Title: "Install a skill from the skills registry?" or "Update a skill from the skills registry?"
+- Detail, a line each:
+  - "io.github.ada.tides, version 1.1.0, from the GitHub account ada."
+  - "It reaches tides.example.org." or "It reaches nothing on the network."
+  - "Risk: medium, because it reaches the network." or "Risk: low.", from `risk_of()` and `risk_because()`.
+  - "Its actions: tides.next.", then "It can open <app id or Settings page>." and "Its desktop actions: <entries>." when it has any.
+  - For an update, "New in this version:" and the phrases below. For a skill that is switched off, "It is switched off now, and this switches it back on."
+
+Each line goes through `printable()`, as on every card. Allow installs that same `Checked`, never a fresh download, and `install()` still refuses it if a revocation landed while the card was up.
+
+### Grants
+
+Apart from taking a file out and putting it back, as now, only an allowed card widens what a skill is allowed. `SkillHost.allow(manifest, file) -> str` is new. It sets the `_Grants` record of `manifest["id"]` to what the checked manifest asks for, `{"permissions": manifest["permissions"], "config": [], "folder": file.name}`, saves it, and returns "" or the sentence why it couldn't: `BROKEN_GRANTS` while the grants file is broken, or why it couldn't be saved. The daemon calls it after Allow and before `Registry.install()` writes the file. If the install then fails, the record is put back as it was and saved. The reload that follows loads the new version, because its record now allows it.
+
+Nothing else in `_Grants` changes. A hand edit to that file, or to any recipe, that asks for more than its record allows is refused as before, until the file is taken out and put back. `install()` won't update a file whose SHA-256 is no longer the one it recorded. An update that asks for nothing new is installed without `allow()`, as its record already covers it. Install and update are never tools: only these D-Bus methods start them, so no model, planner or skill can.
+
+### What an update asks for
+
+Browse offers the newest version in the index's list that no revocation in effect covers; versions are listed in the order they were merged. For an installed skill that version is an update when it comes after the installed one in the list. Daemon code compares it, checked, with the grant record and with the installed version, loaded from its file once its SHA-256 matched the record. It asks for more when it has any of these, each said as a phrase:
+
+- a host its grant record doesn't allow: "to reach api.example.org";
+- an action name the installed version doesn't have: "the action tides.later";
+- a desktop entry (`manifest["desktop"]`) it doesn't have: "the desktop action night_light";
+- an app or Settings page to open that it doesn't open: "to open org.gnome.Calendar".
+
+An installed file that no longer loads counts as having none of these. An update that asks for nothing new installs without a card, at the daily check or from `UpdateSkill`. One that asks for more waits until the person presses Update. A file the person edited is never updated, and one that is switched off is never updated without a card.
+
+### D-Bus
+
+Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed` with a sentence that Settings shows as it is. None of these is in `SHELL_ONLY`, since Settings calls them. A daemon older than them answers with an unknown-method error, and Settings then leaves Browse out.
+
+| Method | Signature | Meaning |
+|---|---|---|
+| `BrowseSkills` | `() -> s` | What the daemon holds, without fetching. See below |
+| `BrowseSkill` | `(s id) -> s` | One skill's page from the index, without fetching. Refused when the index doesn't list it |
+| `FetchSkill` | `(s id) -> s` | Fetch and check the version Browse offers, for "Show the recipe". Allow 60 s |
+| `InstallSkill` | `(s id) -> s` | Check, card, `allow()`, `install()`, reload. Allow 150 s |
+| `UpdateSkill` | `(s id) -> s` | The same for a skill installed from the registry, with the card only when the update asks for more or the skill is switched off. Allow 150 s |
+| `RemoveSkill` | `(s id) -> s` | Take out the file Tux installed, then its record, then reload. No card: taking a skill away is the safe direction |
+| `CheckRegistry` | `() -> s` | The daily check now. Returns what `BrowseSkills` returns, with any failure in `problems`, and never fails itself. Allow 120 s |
+
+| Signal | Signature | Meaning |
+|---|---|---|
+| `RegistryChanged` | none | After a check, an install, an update, a removal, or a switch-off or back on. Settings calls `BrowseSkills` again |
+
+`BrowseSkills` returns:
+
+```json
+{"address": "https://example.org/registry/",
+ "index": {"seq": 4, "date": "2026-11-20T09:00:00Z", "accepted": "2026-11-20T10:02:11Z"},
+ "problems": {"revocations": "Tux couldn't reach the skills registry."},
+ "categories": [{"id": "information", "name": "Information", "tags": ["weather", "prices"]}],
+ "skills": [
+   {"id": "io.github.ada.tides", "author": "ada", "name": "Tides",
+    "summary": "Says when the next high tide is at a seaside town", "tags": ["weather"],
+    "licence": "MIT", "links": [{"title": "Source", "url": "https://github.com/ada/tides"}],
+    "version": "1.1.0", "date": "2026-11-20T08:41:00Z", "hosts": ["tides.example.org"],
+    "risk": "medium", "risk_because": ["network"],
+    "installed": {"version": "1.0.0", "file": "<skills folder>/io.github.ada.tides.yaml",
+                  "edited": false, "off": null},
+    "update": {"version": "1.1.0", "new": ["to reach tides.example.org"], "problem": ""}}]}
+```
+
+- `address` is `""` when none is usable. `index` is null until one was accepted, and `accepted` is when Tux last accepted it, from the held copy's time. `problems` has `address`, `index`, `revocations` or `state`, each a sentence, only while there is one (`Registry.problems`).
+- `skills` follows the index's order. A skill whose every version a revocation covers is left out, unless it is installed. `version`, `date`, `hosts`, `risk` and `risk_because` are those of the version Browse offers, or null when it offers none. `name`, `summary`, `tags` and `links` are the publisher's words: plain text, and never on a card.
+- `installed` is null, or the record: `version`, `file`, `edited` (true when the file's SHA-256 is no longer the record's), and `off`, null or `{"kind": "suspend" or "ban", "reason"}`.
+- `update` is null, or the version Browse offers to an installed skill. `new` is null until the daemon has fetched and checked that version, then the phrases above. `problem` is why it couldn't be fetched or checked, or `""`.
+
+`BrowseSkill` returns one entry as above, plus `versions`: `[{"version", "date", "revoked"}]`, oldest first, where `revoked` is null or `{"kind", "reason"}`. `FetchSkill` returns `{"id", "version", "text", "actions"}`: `text` is the whole checked `recipe.yaml`, and `actions` is `[{"name", "tool"}]`, with `tool` made by the code that builds the model's list (`Skills.tool()`), so it is what the model would be sent. `InstallSkill` may use the `Checked` of a `FetchSkill` of the same version in the same run. `InstallSkill` and `UpdateSkill` return `{"id", "version", "file", "problem"}`, where `problem` is the reload's for that file, or `""` when it loaded: the budget of six actions can still refuse it. `RemoveSkill` returns `{"id", "file"}`.
+
+The errors, beside the `Refused` sentences of `registry.py`, which pass through as they are:
+
+- "No skills registry is set, so Tux fetches nothing." from any method that would fetch while there is no usable address.
+- "That skill is already installed. Update it instead.", "Tux didn't install that skill from the registry, so it left it alone." and "That skill is up to date."
+- When a revocation covers every version, `switched_off_because()` of the one that covers the newest.
+- "You already have a skill with the id <id>, so Tux left it alone." when one of yours from another file has it.
+- From `install()`: "You've changed <file>, so Tux won't update it." and "You already have a skill file called <file>, so Tux left it alone."
+- From `RemoveSkill`: "You've changed <file>, so Tux left it. Take it out of your skills folder yourself if you want it gone."
+- Before the card: "The screen is locked, so nothing was installed.", "Another approval card is open. Answer it, then try again." and "Tux can't show an approval card on this desktop yet, so nothing was installed. Log out and back in once, then try again."
+- After it: "You didn't allow it, so nothing was installed." and "The card wasn't answered in time, so nothing was installed."
+- What `allow()` returns when what the skill is allowed couldn't be saved.
+
+### Settings
+
+The Browse page shows `BrowseSkills`: the categories, a search box that filters the list it already has by id, name, summary and tags, and the skills, with "Check now" for `CheckRegistry`. A skill's page shows `BrowseSkill`: the publisher, licence, tags, links (shown as text, opened in the browser only on a click), the hosts and the risk with its reason in plain words, and the versions. "Show the recipe" calls `FetchSkill` and shows each action's tool as the Skills page does, and the whole file read-only as the Skills page shows a manifest. Every string from the registry is plain text, never markup. Install, Update and Remove call their methods. While Install or Update waits, the page says "Allow it on the approval card." Problems and errors are shown as the daemon wrote them.
+
+### Tests
+
+Offline, as `tests/test_registry.py` is: throwaway keys, a fake fetch or a loopback server, a fake bus and card, temporary folders. At least: nothing is fetched while `registry_url` is empty or unusable; the fetch sends only the headers above and refuses a redirect, another path and a file past its limit; an update allowed on the card with a new host loads, while the same file put there by hand without `allow()` is refused; a Deny, a card that times out and a failed write each leave the file and the grant record as they were; an update that asks for nothing new installs at the check with no card, and one that asks for more doesn't; an edited file is never updated or removed; a revocation at the check sends one notification with its reason, and the reload switches the skill off; the card's words come from the checked recipe, so a `meta.yaml` summary or recipe description never appears in it; and Settings opens no socket of its own.
+
+### Later
+
+Report, as the registry repo and its issue form aren't named yet; logos; diffs between versions; install counts; Settings changing the address; and offering to remove a banned skill from the notification itself.
+
+### Not decided
+
+Freshness of revocations, publisher key pinning and how a publisher withdraws a skill stay open, as REGISTRY-FORMAT.md lists them. One more: an install, an update and "Show the recipe" download `recipes/<sha256>.yaml` for that one skill, so the host can tell that someone at your address wanted it. REGISTRY.md's "Fetching the index is the only request" holds for the daily check only. Fetching every new version at each check, whether you have it or not, would hide which skills you update, at the cost of more traffic.
 
 ## Dictation
 
