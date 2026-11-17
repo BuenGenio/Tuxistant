@@ -210,15 +210,15 @@ The daemon gives `Registry` its own `fetch(path, limit)`. It fetches the address
 
 ### The daily check
 
-The check is `Registry.refresh()`: `index.json` and its signature, then `revocations.json` and its signature. Those four requests are the same for every Tux and say nothing about the person or their skills. The daemon checks 5 minutes after it starts, unless the index it holds (`$XDG_STATE_HOME/tuxistant/registry/index.json`) was accepted less than 24 hours ago: then once it is 24 hours old. It checks again 24 hours after each check while it runs, an hour later after a check that couldn't reach the registry, and whenever `CheckRegistry` is called. After each check:
+The check is `Registry.refresh()`: `index.json` and its signature, then `revocations.json` and its signature. Those four requests are the same for every Tux. Step 2 below adds one for each skill you installed from the registry that has a newer version in the index: the check downloads that version's `recipes/<sha256>.yaml`, so the registry's host can tell which skills are installed at your address. `tests/test_browse.py` pins that list of requests. Whether the check should give that away is for the owner to decide (see "Not decided" below). A file Tux can't save, as on a full disk or with a state folder it can't make, is a sentence in `problems` (`registry.UNSAVED`), and the check carries on to the revocations; one that fails some other way is logged, and the next check is an hour later, not at once. The daemon checks 5 minutes after it starts, unless the index it holds (`$XDG_STATE_HOME/tuxistant/registry/index.json`) was accepted less than 24 hours ago: then once it is 24 hours old. It checks again 24 hours after each check while it runs, an hour later after a check that couldn't reach the registry, and whenever `CheckRegistry` is called. After each check:
 
 1. If `apply()` changed anything, a reload, which switches the skill off at once and shows the same sentence as the file's problem. Then each change is a desktop notification, sent as `timers.notify` sends one (`timers.send_notice`: `org.freedesktop.Notifications`, no autostart). A switch-off has the title "Tuxistant switched off <id>" and the body `switched_off_because(kind, reason)`: `SUSPENDED` or `BANNED` with the reason from the revocation entry. A lift has "Tuxistant switched <id> back on" and "The skills registry lifted what switched it off." The reason is text(300) with no `<` or `>`, and its `&` is escaped, as GNOME reads markup in a body.
-2. Updates, as below. One that asks for nothing new is installed, and Browse shows the new version. One that asks for more waits in Browse. No card ever comes up unasked.
+2. Updates, as below, each downloaded and checked with no click. One that asks for nothing new is installed, and Browse shows the new version. One that asks for more waits in Browse. No card ever comes up unasked.
 3. `RegistryChanged` is emitted.
 
 ### One at a time
 
-`Registry`'s calls block on the network and on `ssh-keygen`, so they run in `asyncio.to_thread`, one at a time, under one `asyncio.Lock`. The lock isn't held while a card waits. What touches the skills folder and the grants runs on the event loop, under the lock, with no `await` between the steps: `SkillHost.allow()`, `Registry.install()` or `Registry.remove()` (new: the file first, then its record), then `SkillHost.reload()`. So no reload sees a grant without its file, or a file without its grant. `BrowseSkills` and `BrowseSkill` read a copy the daemon makes under the lock after each change, so they never wait for a fetch.
+`Registry`'s calls block on the network and on `ssh-keygen`, so they run in `asyncio.to_thread`, one at a time, under one `asyncio.Lock`. The lock isn't held while a card waits. What touches the skills folder and the grants runs on the event loop, under the lock, with no `await` between the steps: `SkillHost.allow()`, `Registry.install()` or `Registry.remove()` (new: the file first, then its record), then `SkillHost.reload()`. So no reload sees a grant without its file, or a file without its grant. `Registry.install()` writes the record first, so a crash before the file is written leaves no file revocations can't reach. Over a file it installed before, the record names that version too, as `was`, until the new file is there, and `registry.installed()` reads whichever of the two is on disk, its switch-off included. `BrowseSkills` and `BrowseSkill` read a copy the daemon makes under the lock after each change, so they never wait for a fetch.
 
 ### The card
 
@@ -234,7 +234,7 @@ Daemon code writes the card from the `Checked` that `Registry.check()` returned:
   - "Its actions: tides.next.", then "It can open <app id or Settings page>." and "Its desktop actions: <entries>." when it has any. A page is named from Tux's own table of pages, as "Bluetooth in Settings".
   - For an update, "New in this version:" and the phrases below. For a skill that is switched off, "It is switched off now, and this switches it back on."
 
-Each line goes through `printable()`, as on every card. Allow installs that same `Checked`, never a fresh download, and `install()` still refuses it if a revocation landed while the card was up.
+Each line goes through `printable()`, as on every card, and the detail is never cut, as Allow grants everything in it: one that wouldn't fit whole in the 4000 characters a card shows is refused with "That skill asks for more than an approval card can show whole, so nothing was installed." Four hosts of 253 characters, the format's most, fit whole. Allow installs that same `Checked`, never a fresh download, and `install()` still refuses it if a revocation landed while the card was up, or if the index Tux holds by then no longer lists that version with that SHA-256. `InstallSkill` looks again after the card at whether the skill is listed and not one of yours under another file, and `UpdateSkill` at whether it is still installed from the registry.
 
 ### Grants
 
@@ -264,12 +264,12 @@ Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed`
 | `FetchSkill` | `(s id) -> s` | Fetch and check the version Browse offers, for "Show the recipe". Allow 60 s |
 | `InstallSkill` | `(s id) -> s` | Check, card, `allow()`, `install()`, reload. Allow 150 s |
 | `UpdateSkill` | `(s id) -> s` | The same for a skill installed from the registry, with the card only when the update asks for more or the skill is switched off. Allow 150 s |
-| `RemoveSkill` | `(s id) -> s` | Take out the file Tux installed, then its record, then reload. No card: taking a skill away is the safe direction. Allow 150 s, as it may wait behind a check |
+| `RemoveSkill` | `(s id) -> s` | Take out the file Tux installed, then its record, then reload. No card: taking a skill away is the safe direction. A switch-off Tux can't tell has ended, after a lost state or a retired moderation key, keeps its record with no file, so `InstallSkill` refuses it before any card until the registry lifts it. Allow 150 s, as it may wait behind a check |
 | `CheckRegistry` | `() -> s` | The daily check now. Returns what `BrowseSkills` returns, with any failure in `problems`, and never fails itself. Allow 120 s |
 
 | Signal | Signature | Meaning |
 |---|---|---|
-| `RegistryChanged` | none | After a check, an install, an update, a removal, or a switch-off or back on. Settings calls `BrowseSkills` again |
+| `RegistryChanged` | none | After a check, an install, an update, a removal, or a switch-off or back on, and once the daemon has read what it holds after it starts, as `BrowseSkills` answers with nothing held until then. Settings calls `BrowseSkills` again |
 
 `BrowseSkills` returns:
 
@@ -289,7 +289,7 @@ Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed`
     "update": {"version": "1.1.0", "new": ["to reach tides.example.org"], "problem": ""}}]}
 ```
 
-- `address` is `""` when none is usable. `index` is null until one was accepted, and `accepted` is when Tux last accepted it, from the held copy's time. `problems` has `address`, `index`, `revocations` or `state`, each a sentence, only while there is one (`Registry.problems`).
+- `address` is `""` when none is usable. `index` is null until one was accepted, and `accepted` is when Tux last accepted it, from the held copy's time. `problems` has `address`, `index`, `revocations` or `state`, each a sentence, only while there is one (`Registry.problems`). A file that couldn't be saved is one too: `registry.UNSAVED` under `index` or `revocations`, and `registry.NOT_RECORDED` under `state` when `registry-installed.json` couldn't be written, so what was switched off or back on hasn't changed.
 - `skills` follows the index's order. A skill whose every version a revocation covers is left out, unless it is installed. `version`, `date`, `hosts`, `risk` and `risk_because` are those of the version Browse offers, or null when it offers none. `name`, `summary`, `tags` and `links` are the publisher's words: plain text, and never on a card.
 - `installed` is null, or the record: `version`, `file`, `edited` (true when the file's SHA-256 is no longer the record's), and `off`, null or `{"kind": "suspend" or "ban", "reason"}`. It is null too when the record's file is no longer there, as after taking it out by hand.
 - `update` is null, or the version Browse offers to an installed skill. `new` is null until the daemon has fetched and checked that version, then the phrases above. `problem` is why it couldn't be fetched or checked, or `""`.
@@ -302,7 +302,8 @@ The errors, beside the `Refused` sentences of `registry.py`, which pass through 
 - "That skill is already installed. Update it instead.", "Tux didn't install that skill from the registry, so it left it alone." and "That skill is up to date."
 - When a revocation covers every version, `switched_off_because()` of the one that covers the newest.
 - "You already have a skill with the id <id>, so Tux left it alone." when one of yours from another file has it.
-- From `install()`: "You've changed <file>, so Tux won't update it." and "You already have a skill file called <file>, so Tux left it alone."
+- From `install()`: "You've changed <file>, so Tux won't update it.", "You already have a skill file called <file>, so Tux left it alone." and "The skills registry's list no longer has that version, so Tux didn't install it."
+- "That skill asks for more than an approval card can show whole, so nothing was installed."
 - From `RemoveSkill`: "You've changed <file>, so Tux left it. Take it out of your skills folder yourself if you want it gone."
 - Before the card: "The screen is locked, so nothing was installed.", "Another approval card is open. Answer it, then try again." and "Tux can't show an approval card on this desktop yet, so nothing was installed. Log out and back in once, then try again."
 - After it: "You didn't allow it, so nothing was installed.", "The card wasn't answered in time, so nothing was installed." and, when the screen locked while it was up, "The screen is locked, so nothing was installed."
@@ -312,15 +313,17 @@ The errors, beside the `Refused` sentences of `registry.py`, which pass through 
 
 ### Settings
 
-The Browse page shows `BrowseSkills`: the categories, a search box that filters the list it already has by id, name, summary and tags, and the skills, with "Check now" for `CheckRegistry`. A skill's page shows `BrowseSkill`: the publisher, licence, tags, links (shown as text, opened in the browser only on a click), the hosts and the risk with its reason in plain words, and the versions. "Show the recipe" calls `FetchSkill` and shows each action's tool as the Skills page does, and the whole file read-only as the Skills page shows a manifest. Every string from the registry is plain text, never markup. Install, Update and Remove call their methods. While Install or Update waits, the page says "Allow it on the approval card." Problems and errors are shown as the daemon wrote them.
+The Browse page shows `BrowseSkills`: the categories, a search box that filters the list it already has by id, name, summary and tags, and the skills, with "Check now" for `CheckRegistry`. A skill's page shows `BrowseSkill`: the publisher, licence, tags, links (shown as text, opened in the browser only on a click), the hosts and the risk with its reason in plain words, and the versions. "Show the recipe" calls `FetchSkill` and shows each action's tool as the Skills page does, and the whole file read-only as the Skills page shows a manifest. Every string from the registry is plain text, never markup. Install, Update and Remove call their methods. While Install or Update waits, the page says "Checking it. Then allow it on the approval card when it comes up.", as the card comes up only once the daemon has checked the recipe. Problems and errors are shown as the daemon wrote them.
 
 Built in `tuxistant/settings_app.py` (`BrowsePage`, `BrowseDialog`) and tested against the fake daemon in `tests/shell_harness_settings_fake.py`. Settings' own choices within the above:
 
 - A category opens to its tags, and choosing the category or one tag narrows the list to it. The list is in two parts, "Installed from the registry" in the index's order and "Newest", by the `date` of the version offered.
-- "Allow it on the approval card." is said for an install, and for an update whose `new` isn't empty or whose skill is switched off. For an update whose `new` is `[]` the page says "Updating…", and for one whose `new` is still null "Updating. If an approval card comes up, allow it there".
+- "Checking it. Then allow it on the approval card when it comes up." is said for an install, and for an update whose `new` isn't empty or whose skill is switched off. For an update whose `new` is `[]` the page says "Updating…", and for one whose `new` is still null "Updating. If an approval card comes up, allow it there".
 - Remove asks first in Settings, as Clear history does. That is a question in Settings, not an approval: the daemon needs none.
 - A link opens only if it is `https://`, as the format allows, so a click can't hand another scheme to another app.
 - `off` and `revoked` are said with the words of `switched_off_because()`. A test keeps Settings' copy of them the same.
+- A recipe shown with "Show the recipe" goes when the daemon offers another version, so the page never shows one version's actions under another's number. When the version offered isn't the one installed, the Permissions group says whose they are: "Permissions of version 1.1.0".
+- With an address and no list yet, the registry's group says why once, in its "List of skills" row, leaves out the revocations' problem, which can only repeat it, as revocations are checked against the list, and hides the search.
 - Settings calls `BrowseSkills` again on `RegistryChanged`, on `SkillsChanged` and whenever its window becomes active, so it must stay as cheap as the rest of this section says.
 
 ### Tests
@@ -333,7 +336,7 @@ Report, as the registry repo and its issue form aren't named yet; logos; diffs b
 
 ### Not decided
 
-Freshness of revocations, publisher key pinning and how a publisher withdraws a skill stay open, as REGISTRY-FORMAT.md lists them. One more: an install, an update and "Show the recipe" download `recipes/<sha256>.yaml` for that one skill, so the host can tell that someone at your address wanted it. REGISTRY.md's "Fetching the index is the only request" holds for the daily check only. Fetching every new version at each check, whether you have it or not, would hide which skills you update, at the cost of more traffic.
+Freshness of revocations, publisher key pinning and how a publisher withdraws a skill stay open, as REGISTRY-FORMAT.md lists them. One more, built one way and not decided: an install, an update and "Show the recipe" download `recipes/<sha256>.yaml` for that one skill, and so does the daily check for each installed skill with a newer version, so the host can tell which skills someone at your address wanted or has. REGISTRY.md says so now. Fetching every new version at each check, whether you have it or not, would hide which skills you have, at the cost of more traffic; fetching an update only when you press Update would hide it too, but an update that asks for nothing new would then wait for you.
 
 ## Dictation
 

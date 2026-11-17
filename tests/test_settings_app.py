@@ -590,8 +590,9 @@ class Logic(unittest.TestCase):
         self.assertEqual(sa.browse_status(skill), "Installed, version 1.0.0")
         more = {**skill, "update": {"version": "1.1.0", "new": ["to reach a.org", "the action t.b"],
                                     "problem": ""}}
-        self.assertEqual(sa.browse_status(more), "Version 1.1.0 is waiting for your OK. New in "
-                                                 "this version: to reach a.org, the action t.b")
+        self.assertEqual(sa.browse_status(more), "Version 1.1.0 asks for more: to reach a.org, the "
+                                                 "action t.b. Press Update to see it on an "
+                                                 "approval card")
         self.assertTrue(sa.needs_card(more))
         nothing_new = {**skill, "update": {"version": "1.1.0", "new": [], "problem": ""}}
         self.assertEqual(sa.update_words(nothing_new), "Version 1.1.0 is out, and it asks for "
@@ -607,16 +608,24 @@ class Logic(unittest.TestCase):
         off = {"kind": "suspend", "reason": "Too much"}
         switched_off = {"installed": {**installed, "off": off}, "update": nothing_new["update"]}
         self.assertTrue(sa.needs_card(switched_off), "one switched off always takes the card")
-        self.assertEqual(sa.update_words(switched_off), "Version 1.1.0 is waiting for your OK. "
-                                                        "Installing it switches the skill back on")
+        self.assertEqual(sa.update_words(switched_off), "Version 1.1.0 is out. Press Update to see "
+                                                        "it on an approval card. Installing it "
+                                                        "switches the skill back on")
         self.assertEqual(sa.browse_status(switched_off), sa.off_words(off))
         edited = {"installed": {**installed, "edited": True}, "update": more["update"]}
         self.assertEqual(sa.browse_status(edited), sa.EDITED)
+        self.assertIn("Take it out of your skills folder yourself", sa.EDITED, "what to do")
+        self.assertEqual(sa.permissions_title({**more, "version": "1.1.0"}),
+                         "Permissions of version 1.1.0", "the version offered, not the one here")
+        self.assertEqual(sa.permissions_title({**skill, "version": "1.0.0"}), "Permissions")
+        self.assertEqual(sa.permissions_title({"installed": None, "version": "1.0.0"}),
+                         "Permissions")
 
     def test_what_the_page_says_while_the_daemon_works(self):
         skill = {"installed": None, "update": None}
         self.assertEqual(sa.waiting_words("InstallSkill", skill), sa.ON_THE_CARD)
-        self.assertEqual(sa.ON_THE_CARD, "Allow it on the approval card.", "as the contract says")
+        self.assertEqual(sa.ON_THE_CARD, "Checking it. Then allow it on the approval card when it "
+                         "comes up.", "as the contract says: there is no card yet")
         installed = {"version": "1.0.0", "edited": False, "off": None}
         for new, words in ((["to reach a.org"], sa.ON_THE_CARD), ([], "Updating…"),
                            (None, "Updating. If an approval card comes up, allow it there")):
@@ -2996,8 +3005,8 @@ class Inner(unittest.TestCase):
         tides = browse_row(page, "io.github.ada.tides")
         self.assertEqual(tides.get_title(), "Tides")
         self.assertEqual(tides.get_subtitle(), "Says when the next high tide is at a seaside town"
-                         "\nFrom the GitHub account ada\nVersion 1.1.0 is waiting for your OK. "
-                         "New in this version: to reach tides.example.org")
+                         "\nFrom the GitHub account ada\nVersion 1.1.0 asks for more: to reach "
+                         "tides.example.org. Press Update to see it on an approval card")
         self.assertIn(registry.switched_off_because("ban", SPY_REASON),
                       browse_row(page, "io.github.mal.spy").get_subtitle())
         self.assertIn(sa.EDITED, browse_row(page, "io.github.ada.notes").get_subtitle())
@@ -3136,6 +3145,32 @@ class Inner(unittest.TestCase):
         self.assertTrue(dialog.show_recipe.get_sensitive(), "it can be asked for again")
         self.assertIsNone(dialog.recipe)
 
+    def test_27_b_c2_a_recipe_shown_goes_when_another_version_is_offered(self):
+        """A review showed one version's recipe, then had the daemon offer another: the old
+        actions stayed under the new version, as if Install would install them."""
+        reset_registry()
+        dialog = open_registry_skill(self.win, "io.github.bob.prices")
+        dialog.show_recipe.emit("activated")
+        wait(lambda: dialog.recipe is not None, "the recipe")
+        dialog.manifest_row.activate()
+        settle()
+        listing = json.loads(json.dumps(self.win.browse.listing))
+        prices = next(s for s in listing["skills"] if s["id"] == "io.github.bob.prices")
+        prices.update(version="1.2.0", hosts=["other.example.net"])
+        control("SetRegistry", json.dumps(listing), signature="s")
+        wait(lambda: dialog.recipe is None, "the old recipe to go")
+        self.assertIn("1.2.0, from 12 November 2026", texts_of(dialog.facts))
+        self.assertEqual([row for row in iter_children(dialog.actions)
+                          if isinstance(row, sa.SkillActionRow)], [])
+        self.assertFalse(dialog.manifest.get_visible())
+        wait(lambda: not any(isinstance(w, Gtk.TextView) for w in iter_children(dialog)),
+             "its text to close too")
+        self.assertIn(dialog.show_recipe, list(iter_children(dialog.actions)))
+        self.assertEqual(dialog.show_recipe.get_title(), "Show the recipe")
+        dialog.show_recipe.emit("activated")
+        wait(lambda: dialog.recipe is not None, "the recipe of the version offered")
+        self.assertEqual(dialog.recipe["version"], "1.2.0")
+
     def test_27_b_d_install_waits_for_the_card_and_says_what_the_daemon_said(self):
         reset_registry()
         dialog = open_registry_skill(self.win, "io.github.eve.lunar")
@@ -3168,6 +3203,8 @@ class Inner(unittest.TestCase):
         control("AnswerCard", "allow", signature="s")
         wait(lambda: "Installed Moon phase, version 2.0.0. It didn't load: Your skills already "
              "have 6 actions." in texts_of(dialog.state), "what the reload said")
+        self.assertEqual(icons_of(dialog.state), ["dialog-warning-symbolic"],
+                         "installed, but it didn't load")
         wait(lambda: not dialog.install.get_visible(), "the page to show it installed")
         self.assertTrue(dialog.remove.get_visible())
         self.assertIn("Installed", texts_of(dialog.state))
@@ -3187,8 +3224,9 @@ class Inner(unittest.TestCase):
         reset_registry()
         dialog = open_registry_skill(self.win, "io.github.ada.tides")
         state = texts_of(dialog.state)
-        self.assertIn("Version 1.1.0 is waiting for your OK. New in this version: to reach "
-                      "tides.example.org", state)
+        self.assertIn("Version 1.1.0 asks for more: to reach tides.example.org. Press Update to "
+                      "see it on an approval card", state)
+        self.assertEqual(dialog.permissions.get_title(), "Permissions of version 1.1.0")
         self.assertTrue(any(text.startswith("Version 1.0.0\n") and text.endswith(
             "/io.github.ada.tides.yaml") for text in state))
         self.assertTrue(dialog.update.get_visible() and dialog.remove.get_visible())
@@ -3200,6 +3238,9 @@ class Inner(unittest.TestCase):
         self.assertIn(sa.ON_THE_CARD, texts_of(dialog.state))
         control("AnswerCard", "allow", signature="s")
         wait(lambda: "Updated Tides, version 1.1.0" in texts_of(dialog.state), "the update")
+        self.assertEqual(icons_of(dialog.state), ["object-select-symbolic"])
+        self.assertTrue(Gtk.IconTheme.get_for_display(dialog.get_display()).has_icon(
+            "object-select-symbolic"), "drawn, not the missing-image glyph")
         wait(lambda: not dialog.update.get_visible(), "the page to show it up to date")
         self.assertIn("Version 1.1.0\n", "\n".join(texts_of(dialog.state)))
         close_browse(self.win)
@@ -3287,6 +3328,27 @@ class Inner(unittest.TestCase):
         self.assertTrue(calls("BrowseSkills"))
         self.assertEqual(fetching_calls(), [])
 
+    def test_27_b_g2_with_an_address_but_no_list_it_says_why_once(self):
+        from tests.shell_harness_settings_fake import REGISTRY_ADDRESS
+        page = self.win.browse
+        self.addCleanup(reset_registry)
+        self.win.views.set_visible_child_name("browse")
+        why = "The skills registry's list isn't signed by the key it has to be, so it wasn't used."
+        listing = {"address": REGISTRY_ADDRESS, "index": None, "categories": [], "skills": [],
+                   "problems": {"index": why,
+                                "revocations": "Tux has no list of skills from the registry yet."}}
+        control("SetRegistry", json.dumps(listing), signature="s")
+        wait(lambda: why in texts_of(page.registry), "the reason")
+        self.assertEqual([row.get_title() for row in page.registry_rows],
+                         ["Address", "List of skills"], "said once, with nothing repeated")
+        self.assertFalse(page.bar.get_visible(), "nothing to search")
+        self.assertFalse(page.nothing.get_visible())
+        listing["problems"] = {}
+        control("SetRegistry", json.dumps(listing), signature="s")
+        wait(lambda: sa.NO_INDEX_YET in texts_of(page.registry), "no reason, and no list yet")
+        reset_registry()
+        self.assertTrue(page.bar.get_visible(), "a list to search again")
+
     def test_27_b_h_a_daemon_older_than_browse_gets_a_sentence(self):
         page = self.win.browse
         self.addCleanup(reset_registry)
@@ -3298,7 +3360,7 @@ class Inner(unittest.TestCase):
             wait(lambda: page.stack.get_visible_child_name() == "older", "the sentence")
         toast.assert_not_called()
         self.assertEqual(self.win.state, "ready", "the rest of Settings carries on")
-        self.assertIn(sa.BROWSE_OLDER, texts_of(page))
+        self.assertIn(f"{sa.BROWSE_OLDER}. {sa.RESTART_HOW}", texts_of(page))
         control("FailNext", "BrowseSkills", "The disk is <full> & more", signature="ss")
         page.load()
         wait(lambda: page.stack.get_visible_child_name() == "failed", "the failure")
@@ -3731,6 +3793,11 @@ def labels_of(widget):
 
 def texts_of(widget):
     return [label.get_text() for label in labels_of(widget)]
+
+
+def icons_of(widget):
+    return [image.get_icon_name() for image in iter_children(widget)
+            if isinstance(image, Gtk.Image) and image.get_icon_name()]
 
 
 def holder(window, rows):

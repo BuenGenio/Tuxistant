@@ -3,6 +3,8 @@ and installing, updating and removing with the shell's card. Offline: throwaway 
 test_registry's fixtures, a fake fetch or a loopback HTTPS server with a key made here, a fake
 card answered in the test, and temporary folders. Skipped without ssh-keygen."""
 import asyncio
+import contextlib
+import errno
 import hashlib
 import http.server
 import json
@@ -21,7 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_registry import (BLUETOOTH, EXAMPLE, KEYGEN, NOW, QUIET,  # noqa: E402
                                  RegistryCase, fingerprint, sign)
-from tuxistant import browse, controller, registry, webfetch  # noqa: E402
+from tuxistant import browse, controller, registry, skillhost, webfetch  # noqa: E402
 from tuxistant.browse import Browse, Fetcher, usable  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.controller import Controller  # noqa: E402
@@ -65,12 +67,36 @@ EVENING_MORE = """  evening.night:
     description: Open the calendar
     open: { app: org.gnome.Calendar }
 """
+WIDE = """id: io.github.ada.wide
+name: Wide
+description: Asks four hosts
+version: "{version}"
+permissions:
+  network: [{hosts}]
+actions:
+{actions}"""
+WIDE_ACTION = """  wide.{name}:
+    description: Ask one of the four hosts
+    get: https://{host}/v1/now
+    say: "Done."
+"""
 WORDS = {"name": "Tides", "description": "Says when the next high tide is",
          "action": "Say when the next high tide is at a seaside town"}
 
 
 def tides(version: str, host: str = "api.tides.example", **words) -> bytes:
     return TIDES.format(version=version, host=host, **{**WORDS, **words}).encode()
+
+
+def longest_host(letter: str) -> str:
+    """253 characters, the most a recipe's host may have."""
+    return ".".join([letter * 63] * 3 + [letter * 61])
+
+
+def wide(version: str, hosts: list) -> bytes:
+    actions = "".join(WIDE_ACTION.format(name=name, host=host)
+                      for name, host in zip(("one", "two", "three", "four"), hosts))
+    return WIDE.format(version=version, hosts=", ".join(hosts), actions=actions).encode()
 
 
 class BrowseCase(RegistryCase, unittest.IsolatedAsyncioTestCase):
@@ -131,6 +157,16 @@ class BrowseCase(RegistryCase, unittest.IsolatedAsyncioTestCase):
         if len(self.cards) > before:
             self.ctl.answer(self.cards[-1][0], allow)
         return await task
+
+    async def card_for(self, call) -> asyncio.Task:
+        """Starts call and waits for the card it puts up, which it leaves unanswered."""
+        before = len(self.cards)
+        task = asyncio.create_task(call)
+        async with asyncio.timeout(20):
+            while len(self.cards) == before and not task.done():
+                await asyncio.sleep(0.005)
+        self.assertFalse(task.done(), "no card came up")
+        return task
 
     async def refuses(self, call, contains: str) -> str:
         with self.assertRaises(Refused) as caught:
@@ -222,6 +258,107 @@ class CheckTests(BrowseCase):
                          ("1.0.0", [], "low", [], None, None))
         self.assertIn("RegistryChanged", self.signals)
         self.assertEqual(json.loads(json.dumps(view)), view)
+
+    async def test_the_daily_check_downloads_the_new_version_of_each_skill_installed(self):
+        """So the host can tell which skills are installed at an address. CONTRACT.md and
+        SECURITY.md say so; whether the check should hide it is the owner's to decide."""
+        await self.installed_v1()
+        self.revoked(1, [])
+        self.publish(self.bluetooth_index(self.v1, self.v2, seq=2))
+        four = ["index.json", "index.json.sig", "revocations.json", "revocations.json.sig"]
+        self.fetched.clear()
+        await self.browse.check()
+        self.assertEqual([path for path, _ in self.fetched],
+                         four + [f"recipes/{self.v2['sha256']}.yaml"])
+        self.fetched.clear()
+        await self.browse.check()
+        self.assertEqual([path for path, _ in self.fetched], four, "it is installed now")
+
+    async def test_a_check_that_cant_save_says_so_and_still_takes_the_revocations(self):
+        """A review filled the disk: the check stopped before the revocations, and Settings
+        showed nothing wrong."""
+        self.publish(self.bluetooth_index(self.v1))
+        await self.browse.check()
+        self.publish(self.bluetooth_index(self.v1, seq=2))
+        self.revoked(1, [])
+        real = registry._write
+
+        def full(file, data, mode=0o600):
+            if file.parent == self.state:
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+            real(file, data, mode)
+
+        self.fetched.clear()
+        with mock.patch.object(registry, "_write", full):
+            view = await self.browse.check()
+        self.assertEqual(view["problems"]["index"], registry.UNSAVED.format(
+            folder=self.state, why=os.strerror(errno.ENOSPC)))
+        self.assertIn("revocations.json", [path for path, _ in self.fetched])
+        self.assertIn("revocations", view["problems"])
+        self.assertEqual(view["index"]["seq"], 1)
+        view = await self.browse.check()
+        self.assertEqual((view["problems"], view["index"]["seq"]), ({}, 2))
+
+    @unittest.skipIf(os.geteuid() == 0, "root can write a folder that is 0500")
+    async def test_a_state_folder_that_cant_be_made_is_a_problem(self):
+        self.publish(self.bluetooth_index(self.v1))
+        os.chmod(self.root, 0o500)
+        self.addCleanup(os.chmod, self.root, 0o755)
+        view = await self.browse.check()
+        self.assertIn("Tux couldn't save what it took from the skills registry",
+                      view["problems"]["index"])
+        self.assertIsNone(view["index"])
+
+    async def test_a_check_that_fails_tries_again_an_hour_later_not_at_once(self):
+        tries = []
+
+        def fails():
+            tries.append(1)
+            raise RuntimeError("something unforeseen")
+
+        self.browse.registry.refresh = fails
+        with mock.patch.object(browse, "FIRST_CHECK_S", 0), self.assertLogs("tuxistant", "ERROR"):
+            running = asyncio.create_task(self.browse.run())
+            async with asyncio.timeout(10):
+                while self.browse.last is None:
+                    await asyncio.sleep(0.01)
+            await asyncio.sleep(0.2)
+            running.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await running
+        self.assertEqual(len(tries), 1, "not again and again while it fails")
+        self.assertEqual(self.browse._due(), NOW + browse.RETRY_S)
+
+    async def test_after_a_restart_settings_is_told_once_the_held_list_is_read(self):
+        await self.installed_v1()
+        later = self.new_browse()
+        self.signals.clear()
+        self.assertIsNone(later.listing()["index"], "nothing is read before start")
+        await later.start()
+        self.assertEqual(self.signals, ["RegistryChanged"])
+        self.assertEqual(later.listing()["skills"][0]["installed"]["version"], "1.0.0")
+
+    async def test_a_skill_taken_out_while_switched_off_installs_again_only_after_a_lift(self):
+        """A review took out a skill a retired moderation key had switched off and put it back
+        with one Allow."""
+        await self.installed_v1()
+        self.revoked(1, [self.entry(7, {"author": "ada"}, reason="Junk.")])
+        await self.browse.check()
+        self.publish(self.bluetooth_index(self.v1, seq=2, moderation_keys=[self.other[1]]))
+        await self.browse.check()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        await self.browse.remove("io.github.ada.bluetooth")
+        cards, notices = len(self.cards), len(self.notices)
+        await self.refuses(self.browse.install("io.github.ada.bluetooth"), "switched it off: Junk.")
+        self.assertEqual(len(self.cards), cards, "refused before any card")
+        self.assertFalse(self.file("bluetooth").exists())
+        self.publish(self.bluetooth_index(self.v1, seq=3, moderation_keys=[self.other[1]],
+                                          lifted=[7]))
+        await self.browse.check()
+        self.assertEqual(len(self.notices), notices, "nothing was there to switch back on")
+        result = await self.answer(self.browse.install("io.github.ada.bluetooth"))
+        self.assertEqual(result["problem"], "")
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
 
     async def test_a_registry_that_cant_be_reached_is_a_problem_not_a_failure(self):
         view = await self.browse.check()
@@ -377,6 +514,83 @@ class InstallTests(BrowseCase):
             "Its actions: tides.next."])
         for words in ("Quokka", "Wombat", "Platypus", "Echidna", "Numbat"):
             self.assertNotIn(words, title + detail)
+
+    async def test_four_hosts_at_their_longest_are_on_the_card_whole(self):
+        """A review cut the line at 600 characters, so the fourth host was granted on Allow
+        without being on the card."""
+        hosts = [longest_host(letter) for letter in "abcd"]
+        first = self.release(wide("1.0.0", hosts), "1.0.0", {"network": hosts})
+        self.publish(self.index(seq=2, skills=[self.skill("wide", [first])]))
+        await self.browse.check()
+        await self.answer(self.browse.install("io.github.ada.wide"))
+        detail = self.cards[-1][2]
+        self.assertEqual(detail.splitlines()[1],
+                         f"It reaches {hosts[0]}, {hosts[1]}, {hosts[2]} and {hosts[3]}.")
+        self.assertNotIn("more characters", detail)
+        self.assertEqual(self.grant("io.github.ada.wide")["permissions"], {"network": hosts})
+        others = [longest_host(letter) for letter in "efgh"]
+        second = self.release(wide("1.1.0", others), "1.1.0", {"network": others})
+        self.publish(self.index(seq=3, skills=[self.skill("wide", [first, second])]))
+        await self.browse.check()
+        await self.answer(self.browse.update("io.github.ada.wide"))
+        new = ", ".join(f"to reach {host}" for host in others[:3]) + f" and to reach {others[3]}"
+        self.assertIn(f"New in this version: {new}.", self.cards[-1][2].splitlines())
+
+    async def test_a_card_that_cant_be_shown_whole_is_refused(self):
+        """No recipe the format allows comes near the 4000 characters a card shows, so the
+        limit is lowered here to see the refusal."""
+        with mock.patch.object(browse, "MAX_DETAIL_CHARS", 100):
+            await self.refuses(self.browse.install("io.github.ada.tides"), browse.TOO_LONG)
+        self.assertEqual(self.cards, [])
+        self.assertFalse(self.file("tides").exists())
+
+    async def test_a_version_the_registry_drops_while_the_card_is_up_isnt_installed(self):
+        task = await self.card_for(self.browse.install("io.github.ada.tides"))
+        self.publish(self.index(seq=2, skills=[self.skill("tides", [self.t1])]))
+        await self.browse.check()       # the lock isn't held while the card waits
+        self.ctl.answer(self.cards[-1][0], True)
+        await self.refuses(task, registry.DROPPED)
+        self.assertFalse(self.file("tides").exists())
+        self.assertIsNone(self.grant("io.github.ada.tides"), "the grant was put back")
+        self.assertEqual(self.browse.listing()["skills"][0]["installed"], None)
+
+    async def test_install_looks_again_after_the_card(self):
+        task = await self.card_for(self.browse.install("io.github.ada.tides"))
+        self.publish(self.index(seq=2, skills=[self.skill("bluetooth", [self.bluetooth("1.0.0")])]))
+        await self.browse.check()
+        self.ctl.answer(self.cards[-1][0], True)
+        await self.refuses(task, registry.NOT_LISTED)
+        self.publish(self.index(seq=3, skills=[self.skill("tides", [self.t1, self.t2])]))
+        await self.browse.check()
+        task = await self.card_for(self.browse.install("io.github.ada.tides"))
+        (self.skills / "mine.yaml").write_bytes(tides("1.0.0"))
+        self.host.reload()
+        self.ctl.answer(self.cards[-1][0], True)
+        await self.refuses(task, browse.SAME_ID.format(id="io.github.ada.tides"))
+        self.assertFalse(self.file("tides").exists())
+        self.assertEqual(registry.installed(self.skills), {})
+
+    async def test_an_id_a_file_of_yours_has_is_yours_while_it_doesnt_load(self):
+        self.host.grants.file.write_text(json.dumps({"io.github.ada.tides": {
+            "permissions": {}, "config": [], "folder": "mine.yaml"}}))
+        (self.skills / "mine.yaml").write_bytes(tides("1.0.0"))
+        problems = self.host.reload()
+        self.assertIn("It now asks to reach api.tides.example",
+                      problems[str(self.skills / "mine.yaml")])
+        self.assertNotIn("io.github.ada.tides", self.loaded())
+        await self.refuses(self.browse.install("io.github.ada.tides"),
+                           browse.SAME_ID.format(id="io.github.ada.tides"))
+        self.assertEqual(self.cards, [])
+
+    async def test_a_new_index_drops_what_was_checked_against_the_old_one(self):
+        await self.browse.fetch("io.github.ada.tides")
+        republished = self.tides_release("1.1.0", "tides.example.org", action="Say the high tide")
+        self.publish(self.index(seq=2, skills=[self.skill("tides", [self.t1, republished])]))
+        await self.browse.check()
+        result = await self.answer(self.browse.install("io.github.ada.tides"))
+        self.assertEqual(result["problem"], "")
+        self.assertIn(b"Say the high tide", self.file("tides").read_bytes())
+        self.assertEqual(len(self.recipe_fetches()), 2)
 
     async def test_fetch_skill_shows_the_recipe_and_install_uses_what_it_checked(self):
         fetched = await self.browse.fetch("io.github.ada.tides")
@@ -559,6 +773,27 @@ class UpdateTests(BrowseCase):
                            "Tux couldn't read what your skills were allowed")
         self.assertEqual(self.file("tides").read_bytes(), tides("1.0.0"))
         self.assertEqual(self.host.grants.file.read_text(), "[broken")
+
+    async def test_a_removal_while_the_card_is_up_stops_the_update(self):
+        task = await self.card_for(self.browse.update("io.github.ada.tides"))
+        await self.browse.remove("io.github.ada.tides")     # needs no card, so it needn't wait
+        self.ctl.answer(self.cards[-1][0], True)
+        await self.refuses(task, registry.NOT_OURS)
+        self.assertFalse(self.file("tides").exists())
+        self.assertEqual(registry.installed(self.skills), {})
+
+    async def test_what_it_is_allowed_that_cant_be_saved_installs_nothing(self):
+        full = OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+        with mock.patch.object(skillhost, "_write_json", side_effect=full):
+            why = await self.refuses(self.answer(self.browse.update("io.github.ada.tides")),
+                                     "so nothing was installed")
+        self.assertEqual(why, skillhost.NOT_ALLOWED.format(file=self.host.grants.file,
+                                                           why=os.strerror(errno.ENOSPC)))
+        self.unchanged()
+        self.host.grants.writable = False
+        await self.refuses(self.answer(self.browse.update("io.github.ada.tides")),
+                           "(nothing is saved here), so nothing was installed")
+        self.unchanged()
 
     async def test_what_counts_as_new(self):
         v1 = self.release(EVENING.format(version="1.0.0", more="").encode(), "1.0.0")

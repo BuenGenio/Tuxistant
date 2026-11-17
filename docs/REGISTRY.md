@@ -56,7 +56,7 @@ The site and its host are never trusted. If GitHub Pages served something else, 
 
 ## Logos
 
-A skill can have a logo, still or animated: PNG and APNG, WebP, AVIF or GIF, square, up to 512 pixels and 512 KiB, signed by the publisher like the recipe. [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md#logos) has the exact rules.
+Not built yet: Browse shows no logos, and Tux fetches and decodes none. This is the plan for them. A skill can have a logo, still or animated: PNG and APNG, WebP, AVIF or GIF, square, up to 512 pixels and 512 KiB, signed by the publisher like the recipe. [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md#logos) has the exact rules.
 
 - **No SVG.** An SVG can carry scripts and links to other servers. The raster formats are only pixels.
 - **Decoded in a sandbox.** Image decoders are a common way in, so Settings and Browse decode logos with glycin, GNOME's image library. It runs each decoder in a sandbox of its own, not in Settings. The daemon never decodes a logo, and the model never sees one.
@@ -80,7 +80,7 @@ A Browse page, close to GNOME's Extension Manager:
 - **Remove.** It removes the file.
 - **Revoked skills.** They are switched off at once, with a notification that names the reason from the revocation list.
 
-Nothing about you is sent to the registry. Fetching the index is the only request, and it is the same for everyone.
+Nothing about you is sent to the registry: no identifier, cookie or account. The daily check's requests for the index and the revocations are the same for everyone. Downloading a recipe isn't: an install, an update and "Show the recipe" each fetch that skill's recipe, and so does the daily check for a skill you installed that has a new version, so the registry's host can tell which skills someone at your address has. Whether the daily check should hide that is still open ("Not decided" under "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md)).
 
 ## Moderation
 
@@ -133,7 +133,7 @@ Use Suspend while looking into a report, since it costs a user only a skill that
 1. **The registry repo**, waiting for the owner to name and create it, with the layout above, CI running Tux's loader as a check, signature checks against GitHub's published keys, the index build, and `tags.yaml` and categories. Three example recipes from the owner.
 2. **Signing in Tux:** checking the index and recipe signatures with `ssh-keygen -Y verify`, the pinned hashes, the sequence number and the revocation list. All of it is tested offline. Built, in `tuxistant/registry.py`.
 3. **The portal:** browse, search, categories and skill pages, built into the existing GitHub Pages site.
-4. **Browse in Settings:** search, skill pages, install, update, remove, Report. The daemon's side is built, in `tuxistant/browse.py`: the `registry_url` setting, empty as installed, the fetch, the daily check with its notifications, and the D-Bus methods, which install and update through the shell's card. Settings' page is built too, in `tuxistant/settings_app.py`, and tested in a headless Settings against a stand-in daemon. Report waits for the repo's issue form.
+4. **Browse in Settings:** search, skill pages, install, update, remove, Report. The daemon's side is built, in `tuxistant/browse.py`: the `registry_url` setting, empty as installed, the fetch, the daily check with its notifications, and the D-Bus methods, which install and update through the shell's card. Settings' page is built too, in `tuxistant/settings_app.py`, and tested in a headless Settings against a stand-in daemon. Report waits for the repo's issue form, and logos aren't shown yet.
 5. **Moderation:** the report form, the moderation screen, and the workflows behind each action.
 6. **A private trial:** a handful of people publish and install through it before any announcement.
 

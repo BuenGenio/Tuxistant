@@ -1138,6 +1138,10 @@ class SkillHost:
             problem = str(e) if isinstance(e, ValueError) else f"It could not be loaded: {e}"
             self.failed[key] = problems[key] = problem
             last = self.last_offered.get(key)
+            off = last and self._off(key, last.manifest["id"])
+            if off:     # a file that broke as it was switched off isn't kept running either
+                self.failed[key] = problems[key] = off
+                return []
             if last and Path(key).exists():     # what is in use stays, if it is still allowed
                 problems[key] = f"{problem} {KEPT}"
                 return [last]
@@ -1177,15 +1181,21 @@ class SkillHost:
     def _recipe(self, file: Path) -> _Found:
         from . import recipes
         manifest, text = _as_loaded(file, lambda: recipes.load(file))
-        off = self.switched_off.get(file.name)
-        if off and off[0] == manifest["id"]:
+        off = self._off(str(file), manifest["id"])
+        if off:
             self.seen_ids[str(file)] = (manifest["id"], _text_digest(text))
-            raise registry.SwitchedOff(off[1])
+            raise registry.SwitchedOff(off)
         problem = self.grants.problem(manifest, file)
         if problem:     # it read, so its id is known, though it doesn't load
             self.seen_ids[str(file)] = (manifest["id"], _text_digest(text))
             raise ValueError(problem)
         return _Found(str(file), manifest, kind="recipe", text=text)
+
+    def _off(self, key: str, skill_id: str) -> str:
+        """Why the registry switched off the file of yours at key, if it did and the file still
+        has the id Tux installed there: a recipe you saved over it under another id is yours."""
+        off = self.switched_off.get(Path(key).name) if Path(key).parent == self.user else None
+        return off[1] if off and off[0] == skill_id else ""
 
     def _grant(self, chosen: list[_Found], found: list[_Found], listed: bool) -> str:
         """Notes what is allowed, and clears the state of those new, back with more or pruned,

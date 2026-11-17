@@ -1,6 +1,7 @@
 """Signing in Tux: the registry's index, its revocations and each recipe, checked offline with
 ssh-keygen. Every key is made here in a temporary folder and thrown away, every file is served
 by a fake fetch, and the state and skills folders are temporary. Skipped without ssh-keygen."""
+import errno
 import hashlib
 import json
 import os
@@ -1045,6 +1046,110 @@ class InstalledTests(RegistryCase):
         self.suspend({"skill": "io.github.ada.bluetooth"})
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
         self.assertNotIn("still in use", self.host.problems[str(self.file)])
+
+    def test_a_recipe_that_breaks_as_it_is_switched_off_isnt_kept_running_either(self):
+        """A review half-saved the file of a recipe in use, then revoked it: the last version
+        that worked was kept, so it ran on, switched off in Browse and the notification."""
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        self.file.write_text(self.file.read_text() + "  broken: [\n")
+        self.assertIn("io.github.ada.bluetooth", self.loaded(), "a broken file keeps it")
+        self.suspend({"skill": "io.github.ada.bluetooth"}, reason="Its host was lost.")
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.host.problems[str(self.file)],
+                         "The skills registry has switched it off: Its host was lost.")
+        self.assertNotIn("bluetooth.open", self.host.current().actions)
+
+    def test_a_recipe_you_saved_over_one_switched_off_is_yours(self):
+        self.suspend({"skill": "io.github.ada.bluetooth"})
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.file.write_text(TIDES.format(version="1.0.0").replace("ada.tides", "me.tides"))
+        self.assertIn("io.github.me.tides", self.loaded())
+        self.assertNotIn(str(self.file), self.host.problems)
+
+    def test_a_crash_in_the_middle_of_an_update_leaves_a_record_of_what_is_on_disk(self):
+        """A review stopped an update between its two writes: the record named the new version
+        over the old file, so a revocation of the old one didn't reach it."""
+        def dies_at(target, nth=1):
+            real, seen = registry._write, []
+
+            def write(file, data, mode=0o600):
+                if file == target:
+                    seen.append(file)
+                    if len(seen) == nth:
+                        raise SystemExit("the daemon died here")
+                real(file, data, mode)
+            return mock.patch.object(registry, "_write", write)
+
+        def record():
+            return registry.installed(self.skills)[self.file.name]
+
+        update = self.reg.check("io.github.ada.bluetooth", "1.1.0")
+        with dies_at(self.file), self.assertRaises(SystemExit):
+            self.reg.install(update)
+        self.assertIn('"1.0.0"', self.file.read_text())
+        self.assertEqual((record()["version"], record()["sha256"]), ("1.0.0", self.v1["sha256"]))
+        self.assertFalse(self.reg.edited(self.file.name, record()))
+        self.suspend({"skill": "io.github.ada.bluetooth", "versions": ["1.0.0"]})
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        with dies_at(self.file), self.assertRaises(SystemExit):
+            self.reg.install(update)
+        self.assertIn("off", record(), "a switch-off isn't lost either")
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        with dies_at(self.skills.parent / registry.INSTALLED, nth=2):    # after the file
+            with self.assertRaises(SystemExit):
+                self.reg.install(update)
+        self.assertIn('"1.1.0"', self.file.read_text())
+        self.assertEqual((record()["version"], record()["sha256"]), ("1.1.0", update.sha256))
+        self.assertNotIn("off", record(), "the update its revocation doesn't cover ended it")
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+
+    def test_a_switch_off_that_cant_be_written_says_so(self):
+        real = registry._write
+
+        def full(file, data, mode=0o600):
+            if file.name == registry.INSTALLED:
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+            real(file, data, mode)
+
+        with mock.patch.object(registry, "_write", full):
+            self.assertEqual(self.suspend({"skill": "io.github.ada.bluetooth"}), [])
+        self.assertEqual(self.reg.problems["state"], registry.NOT_RECORDED.format(
+            file=self.skills.parent / registry.INSTALLED, why=os.strerror(errno.ENOSPC)))
+        self.assertEqual([change["off"] for change in self.reg.refresh()], [True],
+                         "the next check does it")
+        self.assertNotIn("state", self.reg.problems)
+
+    def test_a_version_the_index_no_longer_lists_isnt_installed(self):
+        checked = self.reg.check("io.github.ada.bluetooth", "1.1.0")
+        self.accept(self.index(seq=2, skills=[self.skill("bluetooth", [self.v1])]))
+        self.refused(self.reg.install, checked, contains=registry.DROPPED)
+        republished = self.version(BLUETOOTH.replace("Opens", "Shows"), "1.1.0")
+        self.accept(self.index(seq=3, skills=[self.skill("bluetooth", [self.v1, republished])]))
+        self.refused(self.reg.install, checked, contains=registry.DROPPED)
+        self.assertIn('"1.0.0"', self.file.read_text())
+
+    def test_remove_keeps_a_switch_off_only_a_lift_can_end(self):
+        self.suspend({"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")
+        (self.state / "state.json").unlink()
+        self.reg = self.new_registry()
+        self.accept(self.index(seq=2, skills=self.base["skills"]))
+        self.reg.remove("io.github.ada.bluetooth")
+        self.assertFalse(self.file.exists())
+        self.assertIn("off", registry.installed(self.skills)[self.file.name])
+        self.assertEqual(self.reg.held_off("io.github.ada.bluetooth")["reason"], "Gone bad.")
+        self.refused(self.reg.install, self.reg.check("io.github.ada.bluetooth", "1.1.0"),
+                     contains="Gone bad.")
+        self.accept(self.index(seq=3, skills=self.base["skills"], lifted=[self.lift(1)]))
+        self.assertEqual(self.reg.apply(), [], "nothing is there to switch back on")
+        self.assertIsNone(self.reg.held_off("io.github.ada.bluetooth"))
+        self.reg.install(self.reg.check("io.github.ada.bluetooth", "1.1.0"))
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+
+    def test_remove_drops_the_record_of_a_switch_off_tux_can_still_follow(self):
+        self.suspend({"skill": "io.github.ada.bluetooth", "versions": ["1.0.0"]})
+        self.reg.remove("io.github.ada.bluetooth")
+        self.assertEqual(registry.installed(self.skills), {})
+        self.refused(self.reg.check, "io.github.ada.bluetooth", "1.0.0", contains="It went bad.")
 
     def test_a_switched_off_recipe_never_holds_back_another_taken_out(self):
         """Its id is known though it doesn't load, so it isn't taken for a skill renamed onto a

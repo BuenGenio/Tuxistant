@@ -130,15 +130,18 @@ SETTINGS_TITLES = {
 }
 NOT_LOADED = ("The skill these settings are for isn't loaded now, so Tux can't use it. They are "
               "kept, and Skills with problems says why")
-NO_REGISTRY = "No skills registry is set up yet"
-NO_REGISTRY_NOTE = ("Tux fetches nothing from a registry until one is. Skills you add yourself "
-                    "are under Skills")
+NO_REGISTRY = "The skills registry isn't open yet"
+NO_REGISTRY_NOTE = ("There is nothing to set up: Tux fetches nothing until a Tuxistant release "
+                    "names the registry. Skills you add yourself are under Skills")
 BROWSE_OLDER = ("The Tuxistant running now is older than these Settings, so it can't browse the "
                 "skills registry")
+RESTART_HOW = "Log out and back in, or run systemctl --user restart tuxistant"
 NO_INDEX_YET = "Tux has no list of skills from the registry yet"
-ON_THE_CARD = "Allow it on the approval card."
+ON_THE_CARD = "Checking it. Then allow it on the approval card when it comes up."
+TO_THE_CARD = "Press Update to see it on an approval card"
 NO_ANSWER = "Tuxistant didn't answer in time. Look again in a moment"
-EDITED = "You've changed its file, so Tux won't update or remove it"
+EDITED = ("Its file was changed since Tux installed it, so Tux won't update or remove it. Take it "
+          "out of your skills folder yourself to remove it or to install it again")
 UNREADABLE_DATE = "a date that can't be read"
 # The daemon's words for what the registry switched off, as registry.switched_off_because. Not
 # imported: registry.py would bring the whole skills module into Settings.
@@ -151,7 +154,7 @@ PROBLEM_TITLES = {"address": "Address", "index": "List of skills", "revocations"
 FETCH_NOTE = ("Each action as the model would be given it, and the whole recipe. Tux downloads "
               "the recipe and checks it only when you ask, as the registry's host can tell that "
               "you asked for it")
-ACTION_NOTE = "What the model is given once this version is installed"
+ACTION_NOTE = "What the model is given by this version"
 INSTALL_NOTE = "Installing it takes your OK on an approval card"
 REMOVE_BODY = "Tux takes the file it installed out of your skills folder."
 # A manifest's colours, light and dark, each at least 5:1 on libadwaita's view background.
@@ -1664,6 +1667,14 @@ def registry_permissions(hosts) -> dict:
     return {"network": [str(host) for host in hosts]} if hosts else {}
 
 
+def permissions_title(skill: dict) -> str:
+    """Whose permissions the page shows: the version offered, which isn't always the one
+    installed."""
+    installed, offered = (skill.get("installed") or {}).get("version"), skill.get("version")
+    return f"Permissions of version {offered}" if installed and offered != installed else (
+        "Permissions")
+
+
 def off_words(off: dict) -> str:
     """Why the registry switched a skill or a version off, in the words the daemon uses."""
     words = SWITCHED_OFF["ban" if off.get("kind") == "ban" else "suspend"]
@@ -1689,9 +1700,9 @@ def update_words(skill: dict) -> str:
         return f"{head} is out. {update['problem']}"
     new = update.get("new")
     if new:
-        words = f"{head} is waiting for your OK. New in this version: {', '.join(map(str, new))}"
+        words = f"{head} asks for more: {', '.join(map(str, new))}. {TO_THE_CARD}"
     elif needs_card(skill):
-        words = f"{head} is waiting for your OK"
+        words = f"{head} is out. {TO_THE_CARD}"
     elif new is None:
         return f"{head} is out. Tux hasn't checked yet what it asks for"
     else:
@@ -2282,6 +2293,7 @@ class BrowseDialog(Adw.PreferencesDialog):
         self.show_recipe = button_row("Show the recipe", self.fetch_recipe)
         self.fetching = False
         self.manifest_row = None
+        self.recipe_rows = []
         self.actions.add(self.show_recipe)
         self.manifest = Adw.PreferencesGroup(title="Recipe", visible=False)
         self.versions = Adw.PreferencesGroup(title="Versions", visible=False)
@@ -2325,7 +2337,10 @@ class BrowseDialog(Adw.PreferencesDialog):
         self.links.set_visible(self.put("links", self.links, [
             self.link_row(link) for link in skill.get("links") or [] if isinstance(link, dict)]))
         self.state.set_visible(self.put("state", self.state, self.state_rows(skill)))
+        if self.recipe is not None and self.recipe.get("version") != skill.get("version"):
+            self.drop_recipe()
         permissions = registry_permissions(skill.get("hosts"))
+        self.permissions.set_title(permissions_title(skill))
         self.permissions.set_visible(self.put("permissions", self.permissions, permission_rows(
             permissions, skill["risk"], skill.get("risk_because")) if skill.get("risk") else []))
         self.versions.set_visible(self.put("versions", self.versions, self.version_rows(skill)))
@@ -2357,7 +2372,7 @@ class BrowseDialog(Adw.PreferencesDialog):
             if installed.get("off"):
                 rows.append(warning_row("Switched off", off_words(installed["off"])))
             if installed.get("edited"):
-                rows.append(warning_row("Changed by you", EDITED))
+                rows.append(warning_row("Changed since it was installed", EDITED))
             elif skill.get("update"):
                 rows.append(plain_row("Update", update_words(skill)))
         elif skill.get("version"):
@@ -2372,7 +2387,7 @@ class BrowseDialog(Adw.PreferencesDialog):
         elif self.outcome:
             words, worked = self.outcome
             row = plain_row(words, "")
-            row.add_prefix(Gtk.Image(icon_name="emblem-ok-symbolic" if worked
+            row.add_prefix(Gtk.Image(icon_name="object-select-symbolic" if worked
                                      else "dialog-warning-symbolic"))
             rows.append(row)
         return rows
@@ -2441,11 +2456,16 @@ class BrowseDialog(Adw.PreferencesDialog):
             warning_row("Tux didn't show the recipe", failed_words(error))])
 
     def fill_recipe(self, recipe):
-        self.recipe = recipe = recipe if isinstance(recipe, dict) else {}
+        recipe = recipe if isinstance(recipe, dict) else {}
         self.fetching = False
+        if recipe.get("version") != self.skill.get("version"):     # the page moved on meanwhile
+            self.show_recipe.set_title("Show the recipe")
+            return
+        self.recipe = recipe
         had = focused_row([self.show_recipe])
         self.put("recipe_problem", self.actions, [])
-        rows = [SkillActionRow(action, ACTION_NOTE) for action in recipe.get("actions") or []]
+        rows = self.recipe_rows = [SkillActionRow(action, ACTION_NOTE)
+                                   for action in recipe.get("actions") or []]
         for row in rows:
             self.actions.add(row)
         text = str(recipe.get("text") or "")
@@ -2464,6 +2484,22 @@ class BrowseDialog(Adw.PreferencesDialog):
         if had is not None:     # before the button that has it goes
             (rows or [read])[0].grab_focus()
         self.actions.remove(self.show_recipe)
+
+    def drop_recipe(self):
+        """The recipe shown is of a version no longer offered, so it goes, and "Show the
+        recipe" fetches the one that is."""
+        had = focused_row(self.recipe_rows + [self.manifest_row])
+        self.actions.add(self.show_recipe)
+        for row in self.recipe_rows:
+            self.actions.remove(row)
+        self.manifest.remove(self.manifest_row)
+        self.manifest.set_header_suffix(None)
+        self.manifest.set_visible(False)
+        self.recipe, self.recipe_rows, self.manifest_row = None, [], None
+        self.show_recipe.set_title("Show the recipe")
+        self.pop_subpage()      # its text, if that is open
+        if had is not None:
+            self.show_recipe.grab_focus()
 
     def copy_manifest(self):
         self.get_clipboard().set_content(
@@ -2533,7 +2569,7 @@ class BrowsePage(Adw.Bin):
         self.stack.add_named(self.none_page, "none")
         self.stack.add_named(Adw.StatusPage(
             icon_name="view-refresh-symbolic", title="Restart Tuxistant to browse skills",
-            description=BROWSE_OLDER), "older")
+            description=f"{BROWSE_OLDER}. {RESTART_HOW}"), "older")
         retry = Gtk.Button(label="Try again", halign=Gtk.Align.CENTER, css_classes=["pill"])
         retry.connect("clicked", lambda _button: self.load())
         self.failed_page = Adw.StatusPage(icon_name="dialog-warning-symbolic",
@@ -2546,7 +2582,7 @@ class BrowsePage(Adw.Bin):
 
     def show(self, name):
         self.stack.set_visible_child_name(name)
-        self.bar.set_visible(name == "list")
+        self.bar.set_visible(name == "list" and bool((self.listing or {}).get("index")))
 
     def load(self):
         self.win.daemon.fetch("BrowseSkills", self.fill, fail=self.failed)
@@ -2590,10 +2626,16 @@ class BrowsePage(Adw.Bin):
         self.show("list")
 
     def fill_registry(self, listing):
-        index = listing.get("index")
-        rows = [detail_row("Address", str(listing["address"])),
-                detail_row("List of skills", index_words(index) if index else NO_INDEX_YET)]
-        for key, problem in (listing.get("problems") or {}).items():
+        index, problems = listing.get("index"), dict(listing.get("problems") or {})
+        rows = [detail_row("Address", str(listing["address"]))]
+        if index:
+            rows.append(detail_row("List of skills", index_words(index)))
+        else:   # the revoked ones are read with the list, so only why there is none is said
+            problems.pop("revocations", None)
+            why = problems.pop("index", None)
+            rows.append(warning_row(PROBLEM_TITLES["index"], str(why)) if why
+                        else detail_row(PROBLEM_TITLES["index"], NO_INDEX_YET))
+        for key, problem in problems.items():
             rows.append(warning_row(PROBLEM_TITLES.get(key, str(key)), str(problem)))
         self.registry_rows = refill(self.registry, self.registry_rows, rows,
                                     lambda row: row.get_title())
@@ -2707,7 +2749,8 @@ class BrowsePage(Adw.Bin):
                 reply = json.loads(text)
             except ValueError:
                 reply = None
-            finish(done_words(method, name, reply if isinstance(reply, dict) else {}), True)
+            reply = reply if isinstance(reply, dict) else {}
+            finish(done_words(method, name, reply), not reply.get("problem"))
 
         self.win.daemon.call(method, (skill_id,), "s", done,
                              lambda error: finish(failed_words(error), False),

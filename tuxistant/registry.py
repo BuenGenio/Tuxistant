@@ -132,6 +132,11 @@ CHANGED = "You've changed {name}, so Tux won't update it."
 CHANGED_LEFT = ("You've changed {name}, so Tux left it. Take it out of your skills folder yourself "
                 "if you want it gone.")
 YOURS = "You already have a skill file called {name}, so Tux left it alone."
+DROPPED = "The skills registry's list no longer has that version, so Tux didn't install it."
+UNSAVED = ("Tux couldn't save what it took from the skills registry in {folder} ({why}), so it "
+           "kept what it had.")
+NOT_RECORDED = ("Tux couldn't write {file} ({why}), so what the skills registry switched off or "
+                "back on is still as it was here.")
 
 
 class Refused(ValueError):
@@ -665,20 +670,27 @@ class Registry:
 
     def refresh(self) -> list[dict]:
         """Fetch and check the index, then the revocations, and switch off what they cover.
-        A file that fails keeps the one Tux had, and problems says why."""
+        A file that fails keeps the one Tux had, and problems says why, as it does for a disk
+        that is full or a state folder that can't be made."""
         for name, step in (("index", self._refresh_index), ("revocations", self._refresh_revoked)):
             try:
                 step()
                 self.problems.pop(name, None)
             except Refused as e:
                 self.problems[name] = str(e)
+            except OSError as e:
+                self.problems[name] = UNSAVED.format(folder=_shown(self.state),
+                                                     why=e.strerror or e)
         try:
             changes = self.apply()
             self.problems.pop("state", None)
             return changes
         except Refused as e:
             self.problems["state"] = str(e)
-            return []
+        except OSError as e:
+            self.problems["state"] = NOT_RECORDED.format(
+                file=_shown(self.skills.parent / INSTALLED), why=e.strerror or e)
+        return []
 
     def _refresh_index(self) -> None:
         data = self._fetched("index.json", MAX_INDEX_BYTES)
@@ -828,31 +840,21 @@ class Registry:
         """Write a checked recipe into the skills folder, where the loader picks it up. Browse
         calls this only after its card is allowed. A file of the same name that isn't one Tux
         installed, or that was changed since, is left alone."""
-        # a revocation can land between check() and the card being allowed
-        revoked = self.covering(checked.skill_id, checked.version, checked.key)
-        if revoked:
-            raise Refused(switched_off_because(revoked["kind"], revoked["reason"]))
         name = f"{checked.skill_id}.yaml"
-        target = self.skills / name
         records = installed(self.skills)
         record = records.get(name)
-        off = record.get("off") if record else None
-        # an update ends a switch-off only if Tux holds the very copy that made it, which the
-        # check above found doesn't cover the new version. Another copy of the same id, maybe
-        # narrower, isn't enough, and after a lost state Tux holds none: only a lift ends it
-        if off and not self._ended_or_held(off):
-            raise Refused(switched_off_because(off["kind"], off["reason"]))
-        if os.path.lexists(target):
-            if not record or record["id"] != checked.skill_id or target.is_symlink():
-                raise Refused(YOURS.format(name=name))
-            if _ours(target, record) is None:
-                raise Refused(CHANGED.format(name=name))
-        # the record first: a crash before the file leaves a record of nothing, never a file
-        # from the registry that revocations can't reach
+        self._may_write(checked, name, record)
+        new = {"id": checked.skill_id, "version": checked.version, "key": checked.key,
+               "sha256": checked.sha256}
+        target = self.skills / name
         ledger = self.skills.parent / INSTALLED
         was = _kept_bytes(ledger)
-        records[name] = {"id": checked.skill_id, "version": checked.version,
-                         "key": checked.key, "sha256": checked.sha256}
+        # the record first, so a crash before the file is written never leaves a file from the
+        # registry that revocations can't reach. Over a file Tux installed, the record names the
+        # version on disk as well until the new one is there, and installed() reads the one whose
+        # bytes are there, switch-off and all
+        old = record if record and os.path.lexists(target) else None
+        records[name] = {**new, "was": {k: v for k, v in old.items() if k != "id"}} if old else new
         _write(ledger, _dumps(records))
         try:
             self.skills.mkdir(parents=True, exist_ok=True)
@@ -860,11 +862,46 @@ class Registry:
         except OSError:     # the record goes back to what is still on disk
             _put_back(ledger, was)
             raise
+        if old:
+            records[name] = new
+            try:
+                _write(ledger, _dumps(records))
+            except OSError as e:    # the record naming both still reads as what is on disk
+                log.warning("could not finish the record of %s: %s", name, e)
         return target
+
+    def _may_write(self, checked: Checked, name: str, record: dict | None) -> None:
+        """Refused unless the index Tux holds now still lists exactly this version, no
+        revocation covers it, and the file there, if any, is the one Tux installed. Both can
+        change while a card is up."""
+        index = self.index()
+        skill = next((s for s in index["skills"] if s["id"] == checked.skill_id), None) if (
+            index) else None
+        if not skill or not any(entry["version"] == checked.version and entry["key"] == checked.key
+                                and entry["sha256"] == checked.sha256
+                                for entry in skill["versions"]):
+            raise Refused(DROPPED)
+        revoked = self.covering(checked.skill_id, checked.version, checked.key)
+        if revoked:
+            raise Refused(switched_off_because(revoked["kind"], revoked["reason"]))
+        # an update ends a switch-off only if Tux holds the very copy that made it, which the
+        # check above found doesn't cover the new version. Another copy of the same id, maybe
+        # narrower, isn't enough, and after a lost state Tux holds none: only a lift ends it
+        off = self._still_off(record)
+        if off:
+            raise Refused(switched_off_because(off["kind"], off["reason"]))
+        target = self.skills / name
+        if os.path.lexists(target):
+            if not record or record["id"] != checked.skill_id or target.is_symlink():
+                raise Refused(YOURS.format(name=name))
+            if _ours(target, record) is None:
+                raise Refused(CHANGED.format(name=name))
 
     def remove(self, skill_id: str) -> Path:
         """Take out a file Tux installed, then its record, so a crash between the two leaves a
-        record of nothing. A file changed since it was installed is left, and so is its record."""
+        record of nothing. A file changed since it was installed is left, and so is its record.
+        A switch-off Tux can't tell has ended keeps its record, with no file, so installing the
+        skill again waits for a lift, as it does after the file is deleted by hand."""
         name = f"{skill_id}.yaml"
         records = installed(self.skills)
         record = records.get(name)
@@ -875,9 +912,23 @@ class Registry:
             if _ours(target, record) is None:
                 raise Refused(CHANGED_LEFT.format(name=name))
             target.unlink()
-        del records[name]
-        _write(self.skills.parent / INSTALLED, _dumps(records))
+        if not self._still_off(record):
+            del records[name]
+            _write(self.skills.parent / INSTALLED, _dumps(records))
         return target
+
+    def held_off(self, skill_id: str) -> dict | None:
+        """The switch-off of a skill Tux installed, its file there or not, that only a lift can
+        end now, or None. Browse refuses an install over it before any card."""
+        record = installed(self.skills).get(f"{skill_id}.yaml")
+        return self._still_off(record) if record and record["id"] == skill_id else None
+
+    def _still_off(self, record: dict | None) -> dict | None:
+        off = record.get("off") if record else None
+        try:
+            return off if off and not self._ended_or_held(off) else None
+        except Refused:     # a state Tux can't read can't say it ended
+            return off
 
     def edited(self, name: str, record: dict) -> bool:
         """Whether a file Tux installed is there but no longer the bytes it wrote."""
@@ -902,7 +953,7 @@ class Registry:
         whose revocation was lifted. Returns what changed, for a notification."""
         self.kept()     # a damaged state is refused here too, with nothing installed
         records = installed(self.skills)
-        changes = []
+        changes, dirty = [], False
         for name, record in records.items():
             was = record.get("off")
             # a switch-off whose copy Tux no longer holds, after a lost state or a retired
@@ -918,12 +969,14 @@ class Registry:
                 record["off"] = now
             else:
                 record.pop("off", None)
-            changes.append({"file": name, "id": record["id"], "off": bool(now),
-                            "kind": (now or was)["kind"], "reason": (now or was)["reason"]})
-        if changes:
+            dirty = True
+            if os.path.lexists(self.skills / name):     # one taken out has nothing to switch
+                changes.append({"file": name, "id": record["id"], "off": bool(now),
+                                "kind": (now or was)["kind"], "reason": (now or was)["reason"]})
+        if dirty:
             _write(self.skills.parent / INSTALLED, _dumps(records))
-            if self.on_change:
-                self.on_change()
+        if changes and self.on_change:
+            self.on_change()
         return changes
 
     def _ended_or_held(self, off: dict) -> bool:
@@ -1113,11 +1166,27 @@ def installed(skills: Path) -> dict:
     records = {}
     for name, record in (data.items() if isinstance(data, dict) else ()):
         if (isinstance(name, str) and "/" not in name and name.endswith(".yaml")
-                and isinstance(record, dict)
-                and all(isinstance(record.get(f), str) for f in ("id", "version", "key", "sha256"))
-                and _off_ok(record.get("off"))):
-            records[name] = record
+                and _record_ok(record, ("id", "version", "key", "sha256"))
+                and (record.get("was") is None
+                     or _record_ok(record["was"], ("version", "key", "sha256")))):
+            records[name] = _on_disk(skills / name, record)
     return records
+
+
+def _record_ok(record, fields: tuple) -> bool:
+    return (isinstance(record, dict) and all(isinstance(record.get(f), str) for f in fields)
+            and _off_ok(record.get("off")))
+
+
+def _on_disk(file: Path, record: dict) -> dict:
+    """The record of the version on disk. During an update the record names the one it replaces
+    as "was" until the new file is written, so after a crash between the two, the one whose
+    bytes are there."""
+    record = dict(record)
+    was = record.pop("was", None)
+    if was is not None and _ours(file, was) is not None:
+        return {"id": record["id"], **was}
+    return record
 
 
 def _off_ok(off) -> bool:

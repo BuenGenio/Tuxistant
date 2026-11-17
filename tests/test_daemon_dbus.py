@@ -33,8 +33,8 @@ from tuxistant.config import CLOUD_CONSENT_VERSION, NOT_THE_CONSENT, Config, clo
 from tuxistant.gate import Ask  # noqa: E402
 from tuxistant.history import History  # noqa: E402
 from tuxistant.service import Daemon, serve  # noqa: E402
-from tuxistant.browse import Browse  # noqa: E402
-from tuxistant.registry import INDEX_NS, NOT_LISTED, RECIPE_NS  # noqa: E402
+from tuxistant.browse import NO_REGISTRY, Browse  # noqa: E402
+from tuxistant.registry import INDEX_NS, NOT_LISTED, RECIPE_NS, REVOCATIONS_NS  # noqa: E402
 from tuxistant.skillhost import SkillHost  # noqa: E402
 from tuxistant.skills import BUILTIN  # noqa: E402
 
@@ -803,6 +803,7 @@ class OnlyTheShellInstalls(OnPrivateBus):
         keys = self.folder / "keys"
         keys.mkdir()
         ada, registry_key = make_key(keys, "ada"), make_key(keys, "registry")
+        self.registry_key = registry_key    # moderation's too, here
         data = BLUETOOTH.format(version="1.0.0").encode()
         digest = hashlib.sha256(data).hexdigest()
         version = {"version": "1.0.0", "date": "2026-11-14T10:00:00Z", "sha256": digest,
@@ -917,18 +918,66 @@ class OnlyTheShellInstalls(OnPrivateBus):
         reply = await self.call("BrowseSkill", "s", ["io.github.ada.other"])
         self.assertEqual((reply.error_name, reply.body), (service.FAILED, [NOT_LISTED]))
 
+    async def test_a_switch_off_at_the_daily_check_is_a_notification_on_the_desktop(self):
+        from tests.test_registry import dumped, sign
+        browse = self.daemon.browse
+        browse.registry.install(browse.registry.check("io.github.ada.bluetooth", "1.0.0"))
+        revocations = dumped({"format": 1, "seq": 1, "date": "2026-11-20T10:00:00Z",
+                              "revocations": [{
+                                  "id": 1, "kind": "suspend",
+                                  "scope": {"skill": "io.github.ada.bluetooth"},
+                                  "reason": "Its host & owner changed.",
+                                  "date": "2026-11-19T16:05:00Z", "actor": "mod",
+                                  "report": None}]})
+        self.served["revocations.json"] = revocations
+        self.served["revocations.json.sig"] = sign(self.registry_key[0], REVOCATIONS_NS,
+                                                   revocations)
+        desktop = FakeDesktop()
+        bus = await MessageBus().connect()
+        self.addCleanup(bus.disconnect)
+        bus.export("/org/freedesktop/Notifications", desktop)
+        await bus.request_name("org.freedesktop.Notifications")
+
+        async def once():
+            await browse.check()
+        browse.run = once       # the daily check, once and now
+        await service._check_registry(browse, self.bus)
+        self.assertEqual(desktop.notices, [(
+            "Tuxistant switched off io.github.ada.bluetooth",
+            "The skills registry has switched it off: Its host &amp; owner changed.")])
+
+    async def test_a_failure_in_browse_is_a_sentence_and_the_daemon_carries_on(self):
+        async def fails(*_args):
+            raise RuntimeError("something unforeseen")
+        self.daemon.browse.fetch = fails
+        with self.assertLogs("tuxistant", "ERROR"):
+            reply = await self.call("FetchSkill", "s", ["io.github.ada.bluetooth"])
+        self.assertEqual((reply.error_name, reply.body), (service.FAILED, [service.BROWSE_FAILED]))
+        self.daemon.browse.run = fails
+        with self.assertLogs("tuxistant", "ERROR"):
+            await service._check_registry(self.daemon.browse, self.bus)
+        self.daemon.browse = None       # as for a fixed set of skills, which has no folder
+        await service._check_registry(None, self.bus)
+        for member in ("BrowseSkills", "CheckRegistry"):
+            reply = await self.call(member)
+            self.assertEqual(json.loads(reply.body[0]), service.NOTHING_HELD, member)
+        for member in ("BrowseSkill", "InstallSkill"):
+            reply = await self.call(member, "s", ["io.github.ada.bluetooth"])
+            self.assertEqual((reply.error_name, reply.body), (service.FAILED, [NO_REGISTRY]))
+
 
 class FakeDesktop(ServiceInterface):
     """What takes a notification, in place of GNOME Shell."""
 
     def __init__(self):
         super().__init__("org.freedesktop.Notifications")
-        self.shown = []
+        self.shown, self.notices = [], []
 
     @method()
     def Notify(self, app: "s", replaces: "u", icon: "s", summary: "s", body: "s",
                actions: "as", hints: "a{sv}", expires: "i") -> "u":
         self.shown.append(summary)
+        self.notices.append((summary, body))
         return 1
 
 

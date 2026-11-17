@@ -21,7 +21,7 @@ from pathlib import Path
 
 from . import apps, registry, webfetch
 from .controller import ALLOWED, DENIED, LOCKED, UNANSWERED
-from .gate import Ask, shown
+from .gate import MAX_DETAIL_CHARS, Ask, shown
 from .registry import Refused
 from .skills import Skills, risk_because, risk_of
 
@@ -34,7 +34,6 @@ WAKE_S = 600            # the wall clock is looked at this often, so a suspend d
 FETCH_S = 30            # for the whole file
 MAX_CHECKED = 32        # recipes kept checked for an install, at most 64 KiB each
 MAX_ADDRESS_CHARS = 200
-MAX_LINE_CHARS = 600
 ADDRESS = re.compile(r"https://(?P<host>[A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\])"
                      r"(?::(?P<port>[0-9]{1,5}))?(?P<path>/(?:[A-Za-z0-9._~!$&'()*+,;=:@%-]+/)*)")
 PATHS = re.compile(r"(?:index|revocations)\.json(?:\.sig)?|recipes/[0-9a-f]{64}\.yaml")
@@ -54,6 +53,8 @@ NOT_ALLOWED = "You didn't allow it, so nothing was installed."
 TOO_LATE = "The card wasn't answered in time, so nothing was installed."
 NOT_WRITTEN = "Tux couldn't write the skill into your skills folder ({why}), so nothing changed."
 TOO_BIG = "The skills registry sent a file too big to be what it says, so Tux didn't use it."
+TOO_LONG = ("That skill asks for more than an approval card can show whole, so nothing was "
+            "installed.")
 INSTALL_TITLE = "Install a skill from the skills registry?"
 UPDATE_TITLE = "Update a skill from the skills registry?"
 SWITCHES_ON = "It is switched off now, and this switches it back on."
@@ -143,8 +144,13 @@ class Browse:
         return page
 
     async def start(self) -> None:
+        """The view of what Tux holds, read once the daemon is up. Settings may have asked
+        before it was ready, and had nothing, so it is told to ask again."""
+        before = self.view
         async with self.lock:
             await self._new_view()
+        if self.view != before:
+            self.emit("RegistryChanged")
 
     async def _new_view(self) -> None:
         self.view, self.pages = await asyncio.to_thread(self._snapshot)
@@ -412,6 +418,9 @@ class Browse:
         if os.path.lexists(self.host.user / name):
             raise Refused(registry.YOURS.format(name=name))
         self._not_yours(skill_id, name)
+        off = self.registry.held_off(skill_id)     # removed while switched off: only a lift
+        if off:
+            raise Refused(registry.switched_off_because(off["kind"], off["reason"]))
         return self._offered(skill)
 
     def _may_update(self, skill_id: str, version: str | None = None) -> tuple:
@@ -513,7 +522,8 @@ class Browse:
 def card(checked: registry.Checked, new: list | None = None, off: bool = False) -> Ask:
     """The card for installing a checked recipe, or with new, what an update asks for that its
     installed version doesn't, for updating to it. Written from what was checked and will be
-    written: never the publisher's words, so no name, summary or description."""
+    written: never the publisher's words, so no name, summary or description. Refused when it
+    can't be shown whole, as a cut card would hide what it cut and Allow would still grant it."""
     manifest = checked.manifest
     hosts = manifest["permissions"].get("network", [])
     lines = [f"{checked.skill_id}, version {checked.version}, from the GitHub account "
@@ -529,8 +539,10 @@ def card(checked: registry.Checked, new: list | None = None, off: bool = False) 
         lines.append(f"New in this version: {_listed(new)}.")
     if off:
         lines.append(SWITCHES_ON)
-    return Ask(INSTALL_TITLE if new is None else UPDATE_TITLE,
-               "\n".join(shown(line, MAX_LINE_CHARS) for line in lines), dict)
+    detail = "\n".join(shown(line, MAX_DETAIL_CHARS) for line in lines)
+    if len(detail) > MAX_DETAIL_CHARS:
+        raise Refused(TOO_LONG)
+    return Ask(INSTALL_TITLE if new is None else UPDATE_TITLE, detail, dict)
 
 
 def _risk(permissions: dict) -> str:
