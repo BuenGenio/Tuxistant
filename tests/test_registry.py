@@ -306,6 +306,10 @@ class IndexTests(RegistryCase):
         self.publish(self.index(), signer=self.moderation, namespace=INDEX_NS)
         self.refused(self.reg.accept_index, self.files["index.json"],
                      self.files["index.json.sig"])
+        # the registry key also signs skipped.yaml for the index build, which Tux never reads
+        self.publish(self.index(), namespace="tuxistant-skip")
+        self.refused(self.reg.accept_index, self.files["index.json"],
+                     self.files["index.json.sig"], contains="isn't signed")
         self.assertIsNone(self.reg.index())
 
     def accept(self, index, **publish):     # signed by the registry key unless told otherwise
@@ -570,6 +574,54 @@ class IndexTests(RegistryCase):
                             authors={"ada": {**author, "status": "banned"}})
         self.accept(banned)
 
+    def logo(self, **changes) -> dict:
+        data = b"never fetched, so never decoded"
+        return {"type": "webp", "sha256": hashlib.sha256(data).hexdigest(), "size": 4096,
+                "width": 256, "height": 256, "frames": 1, "duration_ms": 0,
+                "key": fingerprint(self.ada[1]),
+                "sig": sign(self.ada[0], "tuxistant-logo", data).decode(),
+                "still_sha256": "b" * 64, **changes}
+
+    def test_a_logo_is_taken_as_the_format_gives_it_and_never_fetched(self):
+        still, animated = self.version(BLUETOOTH, "1.0.0"), self.version(BLUETOOTH, "1.1.0")
+        longest = self.logo(type="gif", frames=120, duration_ms=8000, size=512 * 1024,
+                            width=512, height=512)
+        self.accept(self.index(skills=[self.skill("bluetooth", [
+            {**still, "logo": self.logo(width=128, height=128, size=256 * 1024)},
+            {**animated, "logo": longest}])]))
+        self.fetched.clear()
+        self.reg.check("io.github.ada.bluetooth", "1.1.0")
+        self.assertEqual(self.fetched, [(f"recipes/{animated['sha256']}.yaml", animated["size"])])
+        self.accept(self.index(seq=2, skills=[self.skill("bluetooth", [{**still, "logo": None}])]))
+
+    def test_a_logo_out_of_the_format_refuses_the_index(self):
+        good = self.version(BLUETOOTH, "1.0.0")
+        bad = {
+            "an SVG": self.logo(type="svg"),
+            "not square": self.logo(height=255),
+            "too small": self.logo(width=64, height=64),
+            "too big": self.logo(width=1024, height=1024),
+            "a still over 256 KiB": self.logo(size=256 * 1024 + 1),
+            "an animation over 512 KiB": self.logo(frames=2, duration_ms=100,
+                                                   size=512 * 1024 + 1),
+            "a still with a duration": self.logo(duration_ms=40),
+            "frames under 20 ms": self.logo(frames=10, duration_ms=199),
+            "a loop over 8 seconds": self.logo(frames=10, duration_ms=8001),
+            "121 frames": self.logo(frames=121, duration_ms=8000),
+            "a key its author doesn't list": self.logo(key=fingerprint(self.eve[1])),
+            "a hash in capitals": self.logo(still_sha256="B" * 64),
+            "no still": {k: v for k, v in self.logo().items() if k != "still_sha256"},
+            "the image itself": {**self.logo(), "data": "UklGRg=="},
+            "a size as text": self.logo(size="4096"),
+            "a bad signature": self.logo(sig="hello"),
+            "a file name": "logo.png",
+        }
+        for name, logo in bad.items():
+            with self.subTest(name):
+                self.refused(self.accept, self.index(skills=[self.skill("bluetooth", [
+                    {**good, "logo": logo}])]), contains="logo")
+        self.assertIsNone(self.reg.index())
+
     def test_refresh_keeps_the_index_it_had_and_says_why(self):
         self.publish(self.index(seq=2))
         self.reg.refresh()
@@ -627,7 +679,8 @@ class RevocationTests(RegistryCase):
     def test_no_other_key_or_namespace_will_do(self):
         entries = [self.entry(1, {"skill": "io.github.ada.bluetooth"})]
         for signer, namespace in ((self.registry, REVOCATIONS_NS), (self.eve, REVOCATIONS_NS),
-                                  (self.moderation, INDEX_NS), (self.ada, RECIPE_NS)):
+                                  (self.moderation, INDEX_NS), (self.ada, RECIPE_NS),
+                                  (self.moderation, "git")):
             with self.subTest(signer=signer[0].name, namespace=namespace):
                 self.refused(self.take, 1, entries, signer=signer, namespace=namespace)
         self.assertEqual(self.reg.in_effect(), [])
@@ -888,7 +941,10 @@ class RecipeTests(RegistryCase):
     def test_a_signature_from_another_key_or_namespace_is_refused(self):
         for version in (self.version(BLUETOOTH, "1.0.0", signer=self.eve),
                         self.version(BLUETOOTH, "1.0.0", namespace=INDEX_NS),
-                        self.version(BLUETOOTH, "1.0.0", namespace="git")):
+                        self.version(BLUETOOTH, "1.0.0", namespace="git"),
+                        # what else a publisher's key signs: a logo, and allowed_signers
+                        self.version(BLUETOOTH, "1.0.0", namespace="tuxistant-logo"),
+                        self.version(BLUETOOTH, "1.0.0", namespace="tuxistant-keys")):
             self.with_versions(version)
             self.refused(self.reg.check, "io.github.ada.bluetooth", "1.0.0",
                          contains="isn't signed")

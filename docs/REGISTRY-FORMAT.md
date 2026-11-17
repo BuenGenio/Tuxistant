@@ -236,7 +236,7 @@ They also keep the files small enough. Written as above, 1000 revocations with e
 | `versions[].sig` | string | The whole of `recipe.yaml.sig` at that commit, with its line breaks and final newline |
 | `versions[].permissions` | object | `{}` or `{"network": [<1 to 4 hosts>]}`, exactly as the loader returns it. The hosts are what Browse lists |
 | `versions[].risk` | string | `risk_of()` of those permissions: `low` without hosts, `medium` with them |
-| `versions[].logo` | object or null | null without a logo. Otherwise `type` (`png`, `webp`, `avif`, `gif`), `sha256`, `size`, `width`, `height`, `frames` (1 for a still), `duration_ms` (0 for a still), `key` and `sig` as for the recipe (namespace `tuxistant-logo`), and `still_sha256` for `logo-still.png`. A new logo makes a new version, and the change summary says so |
+| `versions[].logo` | object or null | null without a logo. Tux reads a version that leaves the field out, as the signed example does, as having none. Otherwise `type` (`png`, `webp`, `avif`, `gif`), `sha256`, `size`, `width`, `height`, `frames` (1 for a still), `duration_ms` (0 for a still), `key` and `sig` as for the recipe (namespace `tuxistant-logo`), and `still_sha256` for `logo-still.png`. A new logo makes a new version, and the change summary says so |
 
 A skill whose folder is deleted keeps its entry, so installed copies can still be checked against it.
 
@@ -290,7 +290,7 @@ The moderation workflow publishes it after every change to `moderation/revocatio
 
 ## Signatures and keys
 
-Every signature is `ssh-keygen -Y sign`, checked with `ssh-keygen -Y verify` against an `allowed_signers` file written for that one check. Tux checks the first four kinds below; the last two are checked only by the registry's CI and index build, and Tux never reads them. The namespace is fixed per kind of file, so a signature made for one kind is refused for another.
+Every signature is `ssh-keygen -Y sign`, checked with `ssh-keygen -Y verify` against an `allowed_signers` file written for that one check. Tux checks the recipe, index and revocations signatures. It shows no logos yet, so it doesn't check a logo's: see "How Tux checks". The last two are checked only by the registry's CI and index build, and Tux never reads them. The namespace is fixed per kind of file, so a signature made for one kind is refused for another.
 
 | File | Namespace | Principal | Key |
 |---|---|---|---|
@@ -344,6 +344,8 @@ Tux keeps at most 1000 copies from indexes, the limit the index itself has, 1000
 2. `recipes/<sha256>.yaml` has exactly `size` bytes and that SHA-256.
 3. Its `key` is in `authors.<author>.keys`, and `versions[].sig` verifies over the bytes for `io.github.<author>` in namespace `tuxistant-recipe`, against a one-line `allowed_signers` with that key and no dates. A signature carries no time, and the registry checked the key's dates when the version was merged.
 4. Tux's loader accepts it, and the id, version and permissions it loads match the entry, and `risk_of()` gives the entry's `risk`.
+
+**A logo.** Not yet. Tux shows no logos, so it never fetches `logo.<ext>` or decodes an image. It checks each version's `logo` entry in the index as this page gives it: one of the four types, both hashes, at most 256 KiB for a still and 512 KiB for an animation, square and 128 to 512 pixels a side, at most 120 frames, a loop of at most 8 seconds with at least 20 ms a frame, a key listed for the author, and an armored signature. So an index with logos is taken, one with a logo out of the format is refused, and the logo is otherwise left alone.
 
 ## Example
 

@@ -102,6 +102,14 @@ AUTHOR_KEY_FIELDS = {"key", "fingerprint", "added", "removed"}
 CATEGORY_FIELDS = {"id", "name", "tags"}
 SKILL_FIELDS = {"id", "author", "name", "summary", "tags", "licence", "links", "versions"}
 VERSION_FIELDS = {"version", "date", "sha256", "size", "key", "sig", "permissions", "risk"}
+LOGO_FIELDS = {"type", "sha256", "size", "width", "height", "frames", "duration_ms", "key", "sig",
+               "still_sha256"}
+LOGO_TYPES = ("png", "webp", "avif", "gif")
+LOGO_SIDE = (128, 512)
+MAX_LOGO_BYTES = {True: 256 * 1024, False: 512 * 1024}     # still or not
+MAX_LOGO_FRAMES = 120
+MAX_LOGO_LOOP_MS = 8000
+MIN_FRAME_MS = 20
 SCOPES = ({"skill"}, {"skill", "versions"}, {"author"}, {"key"})
 
 NO_KEYGEN = ("ssh-keygen isn't installed, so Tux can't check what the skills registry signed. "
@@ -468,7 +476,9 @@ def _link(url, where: str) -> None:
 
 
 def _version(entry, keys: set, where: str) -> str:
-    _exact(entry, VERSION_FIELDS, where)
+    # the signed example predates logos, so a version may leave the field out
+    optional = {"logo"} & set(entry) if isinstance(entry, dict) else set()
+    _exact(entry, VERSION_FIELDS | optional, where)
     _matching(VERSION, entry["version"], where)
     _time(entry["date"], f"{where} date")
     _matching(SHA256, entry["sha256"], f"{where} hash")
@@ -480,7 +490,32 @@ def _version(entry, keys: set, where: str) -> str:
     _permissions(entry["permissions"], f"{where} permissions")
     if entry["risk"] != risk_of(entry["permissions"]):
         raise _bad(f"{where} risk")
+    _logo(entry.get("logo"), keys, f"{where} logo")
     return entry["version"]
+
+
+def _logo(logo, keys: set, where: str) -> None:
+    """A logo's entry, checked as the format gives it. Tux shows no logo yet, so nothing here
+    fetches or decodes one: these are numbers and hashes, never image bytes."""
+    if logo is None:
+        return
+    _exact(logo, LOGO_FIELDS, where)
+    if logo["type"] not in LOGO_TYPES:
+        raise _bad(where)
+    for field in ("sha256", "still_sha256"):
+        _matching(SHA256, logo[field], where)
+    still = _int(logo["frames"], where, 1, MAX_LOGO_FRAMES) == 1
+    _int(logo["size"], where, 1, MAX_LOGO_BYTES[still])
+    if _int(logo["width"], where, *LOGO_SIDE) != _int(logo["height"], where, *LOGO_SIDE):
+        raise _bad(where)
+    if still:
+        _int(logo["duration_ms"], where, 0, 0)
+    else:
+        _int(logo["duration_ms"], where, MIN_FRAME_MS * logo["frames"], MAX_LOGO_LOOP_MS)
+    if logo["key"] not in keys:
+        raise _bad(where)
+    if not isinstance(logo["sig"], str) or not ARMOR.fullmatch(logo["sig"].encode()):
+        raise _bad(where)
 
 
 def _permissions(permissions, where: str) -> None:
