@@ -11,9 +11,7 @@ if [ -e dist/LOCAL-PREVIEW ]; then echo "dist/ holds a local preview: not publis
 cd dist
 git init -q -b gh-pages
 git add -A
-git commit -q -m "Publish the site from $revision
-
-Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>"
+git commit -q -m "Publish the site from $revision"
 git push -q -f "$remote" gh-pages
 rm -rf .git
 echo "published $revision"

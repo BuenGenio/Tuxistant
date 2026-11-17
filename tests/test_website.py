@@ -837,6 +837,7 @@ class LocalPreview(unittest.TestCase):
         self.assertRegex(deploy, r"python3 build\.py\n")
         self.assertRegex(deploy, r"if \[ -e dist/LOCAL-PREVIEW \]; then .*exit 1")
         self.assertLess(deploy.index("LOCAL-PREVIEW"), deploy.index("git push"))
+        self.assertNotIn("Co-Authored-By", deploy, "the published commit is the owner's alone")
         self.assertIn("dist-preview/", (ROOT / "website/.gitignore").read_text().split())
 
 
