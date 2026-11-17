@@ -8,6 +8,7 @@ import errno
 import hashlib
 import http.server
 import json
+import logging
 import os
 import shutil
 import ssl
@@ -423,6 +424,100 @@ class CheckTests(BrowseCase):
         self.assertNotEqual(json.loads(state.read_text())["moderated"], {})
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
         self.assertEqual(len(self.notices), 1, "a switch-off is told once")
+
+    async def test_a_switch_off_neither_file_could_keep_is_said_to_last_until_a_restart(self):
+        """A review filled the disk under state.json and the record as a revocation came, then
+        restarted the daemon: the recipe Tux had said it switched off ran again, shown as on,
+        with nothing said, and the CONTRACT said it was still off after a restart. That is a
+        known limit, so the words say so while it holds."""
+        await self.installed_v1()
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
+        state, ledger = self.state / registry.STATE, self.skills.parent / registry.INSTALLED
+        with self.full(state), self.full(ledger):
+            view = await self.browse.check()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.notices, [(
+            "Tuxistant switched off io.github.ada.bluetooth",
+            "The skills registry has switched it off: Gone bad.\n"
+            "Tux couldn't save this yet, so for now it is off only until Tux restarts.")])
+        self.assertEqual(view["problems"]["state"], registry.NOT_RECORDED.format(
+            file=registry._shown(ledger), why=os.strerror(errno.ENOSPC)) + (
+            " Tux couldn't save what switched off io.github.ada.bluetooth either, so it is off "
+            "only until Tux restarts."))
+        os.utime(self.state / registry.HELD_INDEX, (NOW - 3600,) * 2)    # last saved then
+        later = self.restarted()
+        await later.start()
+        self.assertIn("io.github.ada.bluetooth", self.loaded(), "lost at the restart")
+        view = later.listing()
+        self.assertEqual((view["problems"], view["skills"][0]["installed"]["off"]), ({}, None))
+        self.assertEqual(len(self.notices), 1)
+        self.assertEqual(later._due(), NOW - 3600 + browse.CHECK_EVERY_S,
+                         "a day after the last check that saved the list")
+        view = await later.check()      # that check, or Check now, takes it again
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(view["problems"], {})
+        self.assertEqual(self.notices[1:], [("Tuxistant switched off io.github.ada.bluetooth",
+                                             "The skills registry has switched it off: Gone bad.")])
+
+    async def test_once_its_revocation_is_saved_a_switch_off_held_in_memory_outlasts_a_restart(
+            self):
+        await self.installed_v1()
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
+        state, ledger = self.state / registry.STATE, self.skills.parent / registry.INSTALLED
+        recorded = {"state": registry.NOT_RECORDED.format(file=registry._shown(ledger),
+                                                          why=os.strerror(errno.ENOSPC))}
+        with self.full(state), self.full(ledger):
+            await self.browse.check()
+        with self.full(ledger):
+            view = await self.browse.check()
+            self.assertEqual(view["problems"], recorded, "no longer only until a restart")
+            later = self.restarted()
+            await later.start()
+            self.assertNotIn("io.github.ada.bluetooth", self.loaded(), "made again at the start")
+        self.assertEqual(later.listing()["problems"], recorded)
+        self.assertEqual(self.notices[1:], [("Tuxistant switched off io.github.ada.bluetooth",
+                                             "The skills registry has switched it off: Gone bad.")])
+
+    async def test_a_list_saved_without_its_state_isnt_used_after_a_restart(self):
+        """A known limit: index.json is written before state.json, which names it, so a new
+        list Tux saved when state.json couldn't be is no list at all after a restart, and the
+        first check waits until that index.json is a day old."""
+        await self.installed_v1()
+        self.revoked(1, [])
+        self.publish(self.bluetooth_index(self.v1, seq=2))
+        with self.full(self.state / registry.STATE):
+            view = await self.browse.check()
+        self.assertEqual(view["index"]["seq"], 1, "while it runs, the list it saved before")
+        os.utime(self.state / registry.HELD_INDEX, (NOW - 3600,) * 2)
+        later = self.restarted()
+        await later.start()
+        view = later.listing()
+        self.assertEqual((view["index"], view["skills"], view["problems"]), (None, [], {}))
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(later._due(), NOW - 3600 + browse.CHECK_EVERY_S)
+        view = await later.check()      # Check now
+        self.assertEqual((view["index"]["seq"], view["problems"]), (2, {}))
+
+    async def test_a_damaged_state_at_a_start_leaves_the_daily_check_running(self):
+        """start() runs apply(), which refuses a damaged state.json. Were that to end run(), no
+        check would run all session, and Settings would never be told why."""
+        await self.installed_v1()
+        (self.state / registry.STATE).write_text("damaged")
+        later = self.restarted()
+        with mock.patch.object(browse, "FIRST_CHECK_S", 0), self.assertLogs(
+                "tuxistant", "WARNING") as logged:
+            running = asyncio.create_task(later.run())
+            async with asyncio.timeout(10):
+                while later.last is None and not running.done():
+                    await asyncio.sleep(0.01)
+            self.assertFalse(running.done(), "the daily check carries on")
+            running.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await running
+        self.assertEqual(later.listing()["problems"]["state"], registry.STATE_DAMAGED.format(
+            folder=registry._shown(self.state)))
+        self.assertEqual([r.getMessage() for r in logged.records if r.levelno >= logging.ERROR],
+                         [], "a damaged state is Settings' to say, not a failure")
 
     @unittest.skipIf(os.geteuid() == 0, "root can write a folder that is 0500")
     async def test_a_state_folder_that_cant_be_made_is_a_problem(self):

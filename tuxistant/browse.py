@@ -59,6 +59,7 @@ INSTALL_TITLE = "Install a skill from the skills registry?"
 UPDATE_TITLE = "Update a skill from the skills registry?"
 SWITCHES_ON = "It is switched off now, and this switches it back on."
 LIFTED = "The skills registry lifted what switched it off."
+UNTIL_RESTART = "Tux couldn't save this yet, so for now it is off only until Tux restarts."
 ANSWERS = {DENIED: NOT_ALLOWED, UNANSWERED: TOO_LATE, LOCKED: SCREEN_LOCKED}
 
 
@@ -251,7 +252,8 @@ class Browse:
     # The daily check
 
     async def run(self) -> None:
-        """The daily check, while the daemon runs. With no usable address there is none."""
+        """start(), then the daily check while the daemon runs. With no usable address there
+        is no check."""
         await self.start()
         if not self.address:
             return
@@ -354,6 +356,8 @@ class Browse:
         if change["off"]:
             summary = f"Tuxistant switched off {change['id']}"
             body = registry.switched_off_because(change["kind"], change["reason"])
+            if change["until_restart"]:     # held in memory alone, revocation and all
+                body += "\n" + UNTIL_RESTART
         else:
             summary, body = f"Tuxistant switched {change['id']} back on", LIFTED
         try:

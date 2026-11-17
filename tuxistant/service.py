@@ -454,8 +454,9 @@ async def tick(store, crier, lock_known) -> None:
 
 
 async def _check_registry(browse, bus) -> None:
-    """The skills registry's daily check, with its notifications on this bus. Nothing at all
-    while no registry is set."""
+    """The skills registry's daily check, with its notifications on this bus. With no registry
+    set there is no check, but Browse.start() still switches off what the revocations Tux saved
+    cover, and that is told here too. Nothing at all for a fixed set of skills, with no Browse."""
     if browse is None:
         return
     browse.notify = lambda summary, body: timers.send_notice(bus, summary, body,

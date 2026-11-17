@@ -1041,7 +1041,7 @@ class InstalledTests(RegistryCase):
         changes = self.suspend({"skill": "io.github.ada.bluetooth"}, reason="Its host was lost.")
         self.assertEqual(changes, [{"file": self.file.name, "id": "io.github.ada.bluetooth",
                                     "off": True, "kind": "suspend",
-                                    "reason": "Its host was lost."}])
+                                    "reason": "Its host was lost.", "until_restart": False}])
         self.assertEqual(self.changed, 1)
         self.assertTrue(self.file.exists())
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
@@ -1139,6 +1139,64 @@ class InstalledTests(RegistryCase):
         self.assertNotIn("state", self.reg.problems)
         self.assertEqual(self.reg.unsaved, set())
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+
+    def test_a_switch_off_in_memory_alone_is_said_to_last_until_a_restart(self):
+        """With state.json full as well, a restart reads neither the switch-off nor what made
+        it, so the recipe runs again: a known limit, which the words say while it holds."""
+        tides = self.version(TIDES, "1.0.0", TIDES_HOSTS)
+        self.accept(self.index(seq=2, skills=[*self.base["skills"], self.skill("tides", [tides])],
+                               revocations=[self.entry(1, {"skill": "io.github.ada.bluetooth"})]))
+        self.reg.install(self.reg.check("io.github.ada.tides", "1.0.0"))
+        ledger, state = self.skills.parent / registry.INSTALLED, self.state / registry.STATE
+        recorded = registry.NOT_RECORDED.format(file=registry._shown(ledger),
+                                                why=os.strerror(errno.ENOSPC))
+        with self.full(ledger):     # its revocation is in state.json, so a start makes it again
+            self.assertEqual([change["until_restart"] for change in self.reg.apply()], [False])
+            self.assertEqual(self.reg.problems["state"], recorded)
+            with self.full(state):
+                self.revoked(1, [self.entry(2, {"skill": "io.github.ada.tides"})])
+                changes = self.reg.refresh()
+            self.assertEqual([(change["id"], change["until_restart"]) for change in changes],
+                             [("io.github.ada.tides", True)])
+            self.assertEqual(self.reg.problems["state"], recorded + (
+                " Tux couldn't save what switched off io.github.ada.tides either, so it is off "
+                "only until Tux restarts."))
+            with self.full(state):
+                self.revoked(2, [self.entry(3, {"author": "ada"})])
+                self.reg.refresh()
+            self.assertTrue(self.reg.problems["state"].endswith(
+                " Tux couldn't save what switched off io.github.ada.tides either, so it is off "
+                "only until Tux restarts."), "the author's revocation is unsaved, but bluetooth's "
+                                            "first one is saved and still covers it")
+        self.assertEqual(self.reg.apply(), [], "written now")
+        self.assertNotIn("state", self.reg.problems)
+
+    def test_the_words_name_each_switch_off_a_restart_would_lose(self):
+        tides = self.version(TIDES, "1.0.0", TIDES_HOSTS)
+        self.accept(self.index(seq=2, skills=[*self.base["skills"], self.skill("tides", [tides])]))
+        self.reg.install(self.reg.check("io.github.ada.tides", "1.0.0"))
+        ledger, state = self.skills.parent / registry.INSTALLED, self.state / registry.STATE
+        with self.full(ledger), self.full(state):
+            self.revoked(1, [self.entry(1, {"author": "ada"})])
+            changes = self.reg.refresh()
+        self.assertEqual([change["until_restart"] for change in changes], [True, True])
+        self.assertTrue(self.reg.problems["state"].endswith(
+            " Tux couldn't save what switched off io.github.ada.bluetooth and "
+            "io.github.ada.tides either, so they are off only until Tux restarts."))
+
+    def test_a_state_a_restart_cant_read_holds_only_what_the_record_has(self):
+        """A restart refuses a damaged state.json, so only a switch-off written to the record
+        holds then."""
+        ledger, state = self.skills.parent / registry.INSTALLED, self.state / registry.STATE
+        with self.full(ledger):
+            self.assertEqual([change["until_restart"] for change in self.suspend(
+                {"skill": "io.github.ada.bluetooth"})], [False])
+            state.write_text("damaged")
+            with self.assertLogs("tuxistant", "WARNING"):
+                self.assertEqual(self.reg.apply(), [])
+        self.assertTrue(self.reg.problems["state"].endswith(
+            " Tux couldn't save what switched off io.github.ada.bluetooth either, so it is off "
+            "only until Tux restarts."))
 
     def test_a_lift_that_cant_be_written_waits_for_the_write(self):
         ledger = self.skills.parent / registry.INSTALLED

@@ -946,6 +946,40 @@ class OnlyTheShellInstalls(OnPrivateBus):
             "Tuxistant switched off io.github.ada.bluetooth",
             "The skills registry has switched it off: Its host &amp; owner changed.")])
 
+    async def test_with_no_registry_set_a_start_still_switches_off_what_tux_saved(self):
+        """No check without an address, but what the revocations saved before cover is switched
+        off at the start, and told on this bus, as the record may not say so."""
+        from tests.test_registry import NOW, dumped, sign
+        browse = self.daemon.browse
+        browse.registry.install(browse.registry.check("io.github.ada.bluetooth", "1.0.0"))
+        revocations = dumped({"format": 1, "seq": 1, "date": "2026-11-20T10:00:00Z",
+                              "revocations": [{
+                                  "id": 1, "kind": "suspend",
+                                  "scope": {"skill": "io.github.ada.bluetooth"},
+                                  "reason": "Gone bad.", "date": "2026-11-19T16:05:00Z",
+                                  "actor": "mod", "report": None}]})
+        browse.registry.accept_revocations(     # saved, and never applied to the record
+            revocations, sign(self.registry_key[0], REVOCATIONS_NS, revocations))
+        host = browse.host
+        host.reload()
+
+        def loaded():
+            return {skill["id"] for skill in host.current().listing()}
+        self.assertIn("io.github.ada.bluetooth", loaded())
+        desktop = FakeDesktop()
+        bus = await MessageBus().connect()
+        self.addCleanup(bus.disconnect)
+        bus.export("/org/freedesktop/Notifications", desktop)
+        await bus.request_name("org.freedesktop.Notifications")
+        unset = Browse({"registry_url": ""}, host, self.daemon.controller,
+                       emit=self.daemon.send, state=self.folder / "state",
+                       signers=self.folder / "signers", clock=lambda: NOW)
+        await asyncio.wait_for(service._check_registry(unset, self.bus), 10)
+        self.assertEqual(desktop.notices, [("Tuxistant switched off io.github.ada.bluetooth",
+                                            "The skills registry has switched it off: Gone bad.")])
+        self.assertNotIn("io.github.ada.bluetooth", loaded())
+        self.assertEqual(unset.listing()["address"], "")
+
     async def test_a_failure_in_browse_is_a_sentence_and_the_daemon_carries_on(self):
         async def fails(*_args):
             raise RuntimeError("something unforeseen")

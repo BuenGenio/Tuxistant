@@ -138,6 +138,8 @@ UNSAVED = ("Tux couldn't save what it took from the skills registry in {folder} 
 NOT_RECORDED = ("Tux couldn't write {file} ({why}). What the skills registry switched off is off "
                 "all the same, but what it switched back on stays off until Tux can write it. Tux "
                 "tries again within an hour.")
+ONLY_TILL_RESTART = ("Tux couldn't save what switched off {ids} either, so {it_is} off only "
+                     "until Tux restarts.")
 RECORD_FIELDS = ("id", "version", "key", "sha256")
 
 # Switch-offs apply() couldn't write to registry-installed.json, by that file, then by file
@@ -642,6 +644,23 @@ def covers(entry: dict, skill_id: str, version: str, key: str) -> bool:
     return scope["key"] == key
 
 
+def _in_effect(kept: dict) -> list[dict]:
+    lifted = set(kept["lifted"])
+    return sorted((entry for entry in _held_copies(kept).values() if entry["id"] not in lifted),
+                  key=lambda entry: entry["id"])
+
+
+def _covering(kept: dict, skill_id: str, version: str, key: str) -> dict | None:
+    hits = [entry for entry in _in_effect(kept) if covers(entry, skill_id, version, key)]
+    return min(hits, key=lambda entry: (entry["kind"] != "ban", entry["id"]), default=None)
+
+
+def _known(off: dict, kept: dict) -> bool:
+    """Whether kept tells how a switch-off stands: its id was lifted, or it holds the copy that
+    made it. A record without the copy is from before Tux kept it, and is held on."""
+    return off["revocation"] in kept["lifted"] or off.get("copy") in _held_copies(kept)
+
+
 # What Tux keeps
 
 @dataclass(frozen=True)
@@ -800,14 +819,11 @@ class Registry:
                     raise
 
     def in_effect(self) -> list[dict]:
-        lifted = set(self.kept()["lifted"])
-        return sorted((entry for entry in _held_copies(self.kept()).values()
-                       if entry["id"] not in lifted), key=lambda entry: entry["id"])
+        return _in_effect(self.kept())
 
     def covering(self, skill_id: str, version: str, key: str) -> dict | None:
         """The revocation in effect that covers this version, a ban before a suspension."""
-        hits = [entry for entry in self.in_effect() if covers(entry, skill_id, version, key)]
-        return min(hits, key=lambda entry: (entry["kind"] != "ban", entry["id"]), default=None)
+        return _covering(self.kept(), skill_id, version, key)
 
     # A recipe
 
@@ -971,11 +987,13 @@ class Registry:
         whose revocation was lifted. Returns what changed, for a notification. When
         registry-installed.json can't be written, problems says so, and each switch-off holds
         in memory all the same until a later apply() writes it (_UNWRITTEN), while a lift waits
-        for that write and is returned then."""
+        for that write and is returned then. A switch-off a restart would lose, as state.json
+        on disk doesn't have its revocation either, is said to be off only until Tux restarts,
+        in problems and as until_restart in its change."""
         self.kept()     # a damaged state is refused here too, with nothing installed
         ledger = self.skills.parent / INSTALLED
         records = installed(self.skills)    # with what couldn't be written before
-        changes, dirty, held = [], ledger in _UNWRITTEN, {}
+        changes, dirty, held, lost = [], ledger in _UNWRITTEN, {}, set()
         for name, record in records.items():
             was = record.get("off")
             if was:
@@ -1006,17 +1024,44 @@ class Registry:
         except OSError as e:
             _UNWRITTEN[ledger] = held
             changes = [change for change in changes if change["off"]]
-            self._problem("state", NOT_RECORDED.format(file=_shown(ledger), why=e.strerror or e),
-                          unsaved=True)
+            lost = self._lost_at_restart(held)
+            problem = NOT_RECORDED.format(file=_shown(ledger), why=e.strerror or e)
+            if lost:
+                ids = [held[name]["id"] for name in sorted(lost)]
+                problem += " " + ONLY_TILL_RESTART.format(
+                    ids=_named(ids), it_is="it is" if len(ids) == 1 else "they are")
+            self._problem("state", problem, unsaved=True)
+        for change in changes:
+            change["until_restart"] = change["file"] in lost
         if changes and self.on_change:
             self.on_change()
         return changes
 
     def _ended_or_held(self, off: dict) -> bool:
-        """Whether Tux knows how a switch-off stands: its id was lifted, or Tux holds the copy
-        that made it. A record without the copy is from before Tux kept it, and is held on."""
-        return (off["revocation"] in self.kept()["lifted"]
-                or off.get("copy") in _held_copies(self.kept()))
+        return _known(off, self.kept())
+
+    def _lost_at_restart(self, held: dict) -> set[str]:
+        """The files whose switch-off is in memory alone, which a restart's apply() wouldn't
+        make again: the record on disk doesn't have it, and state.json on disk doesn't cover it,
+        as Tux couldn't save the revocation either."""
+        try:
+            saved = _read_state(self.state / STATE)
+        except Refused:     # then apply() refuses at a start, and only the record holds
+            saved = None
+        written = installed(self.skills, unwritten=False)
+        lost = set()
+        for name, record in held.items():
+            on_disk = written.get(name)
+            off = on_disk.get("off") if on_disk and all(
+                on_disk[field] == record[field] for field in RECORD_FIELDS) else None
+            if off and (saved is None or not _known(off, saved)):
+                continue
+            if saved is not None and _covering(saved, record["id"], record["version"],
+                                               record["key"]):
+                continue
+            if os.path.lexists(self.skills / name):
+                lost.add(name)
+        return lost
 
     # The state folder
 
@@ -1193,9 +1238,14 @@ def _held(value, more: set = frozenset()) -> dict | None:
     return value
 
 
-def installed(skills: Path) -> dict:
+def _named(things: list[str]) -> str:
+    return things[0] if len(things) == 1 else ", ".join(things[:-1]) + " and " + things[-1]
+
+
+def installed(skills: Path, unwritten: bool = True) -> dict:
     """What Tux installed from the registry, by file name in the skills folder, with each
-    switch-off apply() couldn't write while the daemon runs, on the version it was made for."""
+    switch-off apply() couldn't write while the daemon runs, on the version it was made for,
+    unless unwritten is False: then only what the file says."""
     data = _read_json(skills.parent / INSTALLED, MAX_STATE_BYTES)
     records = {}
     for name, record in (data.items() if isinstance(data, dict) else ()):
@@ -1204,7 +1254,7 @@ def installed(skills: Path) -> dict:
                 and (record.get("was") is None
                      or _record_ok(record["was"], RECORD_FIELDS[1:]))):
             records[name] = _on_disk(skills / name, record)
-    for name, held in _UNWRITTEN.get(skills.parent / INSTALLED, {}).items():
+    for name, held in _UNWRITTEN.get(skills.parent / INSTALLED, {}).items() if unwritten else ():
         record = records.get(name)
         if record and all(record[field] == held[field] for field in RECORD_FIELDS):
             records[name] = {**record, "off": held["off"]}
