@@ -38,6 +38,11 @@ THEMES_TIMEOUT_MS = 30000   # a theme not seen before gets test-compiled first
 PREVIEW_TIMEOUT_MS = 90000  # the daemon replies once the sample has been spoken, or has failed
 PHONES_TIMEOUT_MS = 10000   # the daemon gives GSConnect 6 seconds to answer
 SAVE_DELAY_MS = 400
+FETCH_SKILL_TIMEOUT_MS = 60000  # the daemon downloads the recipe and checks it
+CHECK_TIMEOUT_MS = 120000       # four files from the registry, each checked
+# An install or update waits for a click on the card. A removal may wait behind a check, as the
+# daemon does one thing at a time.
+ACT_TIMEOUTS_MS = {"InstallSkill": 150000, "UpdateSkill": 150000, "RemoveSkill": 150000}
 
 RISK_CLASSES = {"low": "success", "medium": "warning", "high": "error"}
 STATUS_WORDS = {"cancelled": "Cancelled", "error": "Ended with an error"}
@@ -125,6 +130,30 @@ SETTINGS_TITLES = {
 }
 NOT_LOADED = ("The skill these settings are for isn't loaded now, so Tux can't use it. They are "
               "kept, and Skills with problems says why")
+NO_REGISTRY = "No skills registry is set up yet"
+NO_REGISTRY_NOTE = ("Tux fetches nothing from a registry until one is. Skills you add yourself "
+                    "are under Skills")
+BROWSE_OLDER = ("The Tuxistant running now is older than these Settings, so it can't browse the "
+                "skills registry")
+NO_INDEX_YET = "Tux has no list of skills from the registry yet"
+ON_THE_CARD = "Allow it on the approval card."
+NO_ANSWER = "Tuxistant didn't answer in time. Look again in a moment"
+EDITED = "You've changed its file, so Tux won't update or remove it"
+UNREADABLE_DATE = "a date that can't be read"
+# The daemon's words for what the registry switched off, as registry.switched_off_because. Not
+# imported: registry.py would bring the whole skills module into Settings.
+SWITCHED_OFF = {
+    "suspend": "The skills registry has switched it off: {reason}",
+    "ban": "The skills registry has switched it off for good, and you can remove it: {reason}",
+}
+PROBLEM_TITLES = {"address": "Address", "index": "List of skills", "revocations": "Revoked skills",
+                  "state": "What Tux keeps of the registry"}
+FETCH_NOTE = ("Each action as the model would be given it, and the whole recipe. Tux downloads "
+              "the recipe and checks it only when you ask, as the registry's host can tell that "
+              "you asked for it")
+ACTION_NOTE = "What the model is given once this version is installed"
+INSTALL_NOTE = "Installing it takes your OK on an approval card"
+REMOVE_BODY = "Tux takes the file it installed out of your skills folder."
 # A manifest's colours, light and dark, each at least 5:1 on libadwaita's view background.
 SYNTAX = {
     highlight.KEY: ("#1a5fb4", "#99c1f1"),
@@ -1572,6 +1601,194 @@ def manifest_size(text: str) -> str:
     return f"{size} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
 
 
+def moment(text) -> float | None:
+    """A timestamp from the registry as seconds, or None when it can't be read."""
+    try:
+        return datetime.fromisoformat(str(text)).timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def stamp_day(text) -> str:
+    """The day of a timestamp from the registry, where you are."""
+    try:
+        day = datetime.fromisoformat(str(text)).astimezone().date()
+    except (ValueError, OverflowError, OSError):
+        return UNREADABLE_DATE
+    return day_words(day.isoformat())
+
+
+def stamp_time(text) -> str:
+    try:
+        return format_time(moment(text))
+    except (TypeError, ValueError, OverflowError, OSError):
+        return UNREADABLE_DATE
+
+
+def count_words(count: int) -> str:
+    return "1 skill" if count == 1 else f"{count} skills"
+
+
+def skill_tags(skill: dict) -> list[str]:
+    return [str(tag) for tag in skill.get("tags") or []]
+
+
+def browse_matches(skill: dict, query: str) -> bool:
+    """Every word must be in the id, the name, the summary or a tag."""
+    fields = [str(skill.get(key) or "").casefold() for key in ("id", "name", "summary")]
+    fields += [tag.casefold() for tag in skill_tags(skill)]
+    return all(any(word in field for field in fields) for word in query.casefold().split())
+
+
+def newest_first(skills: list[dict]) -> list[dict]:
+    """By the date of the version Browse offers. One with none goes last, and the index's order,
+    which is by id, settles a tie."""
+    return sorted(skills, key=lambda skill: moment(skill.get("date")) or 0, reverse=True)
+
+
+def categories_shown(categories, skills: list[dict]) -> list[tuple[dict, int, list]]:
+    """(category, how many skills it holds, [(tag, how many)]) for each that holds any, with only
+    the tags some skill has."""
+    found = []
+    for category in categories or []:
+        tags = [str(tag) for tag in category.get("tags") or []]
+        counts = [(tag, sum(tag in skill_tags(skill) for skill in skills)) for tag in tags]
+        total = sum(any(tag in skill_tags(skill) for tag in tags) for skill in skills)
+        if total:
+            found.append((category, total, [(tag, n) for tag, n in counts if n]))
+    return found
+
+
+def registry_permissions(hosts) -> dict:
+    """What a recipe from the registry may do, as the loader gives it: reach its hosts."""
+    return {"network": [str(host) for host in hosts]} if hosts else {}
+
+
+def off_words(off: dict) -> str:
+    """Why the registry switched a skill or a version off, in the words the daemon uses."""
+    words = SWITCHED_OFF["ban" if off.get("kind") == "ban" else "suspend"]
+    return words.format(reason=str(off.get("reason") or ""))
+
+
+def needs_card(skill: dict) -> bool | None:
+    """Whether the update Browse offers needs your OK on the card, or None until the daemon has
+    checked what it asks for. A skill that is switched off always does."""
+    if (skill.get("installed") or {}).get("off"):
+        return True
+    new = (skill.get("update") or {}).get("new")
+    return None if new is None else bool(new)
+
+
+def update_words(skill: dict) -> str:
+    """Where the update to an installed skill stands, in the daemon's words where it has some."""
+    update = skill.get("update")
+    if not update:
+        return ""
+    head = f"Version {update.get('version')}"
+    if update.get("problem"):
+        return f"{head} is out. {update['problem']}"
+    new = update.get("new")
+    if new:
+        words = f"{head} is waiting for your OK. New in this version: {', '.join(map(str, new))}"
+    elif needs_card(skill):
+        words = f"{head} is waiting for your OK"
+    elif new is None:
+        return f"{head} is out. Tux hasn't checked yet what it asks for"
+    else:
+        return f"{head} is out, and it asks for nothing new"
+    if (skill.get("installed") or {}).get("off"):
+        words += ". Installing it switches the skill back on"
+    return words
+
+
+def browse_status(skill: dict) -> str:
+    """The line a skill's row gives about it on this computer, if any."""
+    installed = skill.get("installed")
+    if not installed:
+        return ""
+    if installed.get("off"):
+        return off_words(installed["off"])
+    if installed.get("edited"):
+        return EDITED
+    return update_words(skill) or f"Installed, version {installed.get('version')}"
+
+
+def browse_subtitle(skill: dict, busy: str = "") -> str:
+    lines = [str(skill.get("summary") or ""), f"From the GitHub account {skill.get('author')}"]
+    status = busy or browse_status(skill)
+    return "\n".join(lines + [status] if status else lines)
+
+
+def version_words(skill: dict) -> str:
+    if not skill.get("version"):
+        return "None to install: the skills registry has switched off every version"
+    return f"{skill['version']}, from {stamp_day(skill.get('date'))}"
+
+
+def index_words(index: dict) -> str:
+    return (f"Number {index.get('seq')}, made {stamp_day(index.get('date'))}\n"
+            f"Accepted: {stamp_time(index.get('accepted'))}")
+
+
+def waiting_words(method: str, skill: dict) -> str:
+    """What the page says while the daemon works. Only an install, or an update that asks for
+    more, puts up a card, so only then does it send you there."""
+    if method == "RemoveSkill":
+        return "Removing…"
+    card = True if method == "InstallSkill" else needs_card(skill)
+    if card is None:
+        return "Updating. If an approval card comes up, allow it there"
+    return ON_THE_CARD if card else "Updating…"
+
+
+def done_words(method: str, name: str, reply: dict) -> str:
+    if method == "RemoveSkill":
+        return f"Removed {name}"
+    verb = "Installed" if method == "InstallSkill" else "Updated"
+    words = f"{verb} {name}, version {reply.get('version')}"
+    return f"{words}. It didn't load: {reply['problem']}" if reply.get("problem") else words
+
+
+def failed_words(error: GLib.Error) -> str:
+    """A refusal as the daemon wrote it. A timeout says nothing about what was done."""
+    if error.matches(Gio.DBusError.quark(), Gio.DBusError.UNKNOWN_METHOD):
+        return BROWSE_OLDER
+    if not_answering(error):
+        return NO_ANSWER
+    return error_text(error.message)
+
+
+def link_url(url) -> str | None:
+    """A link the browser may open: https as the format allows, so that a click never hands a
+    file, a command or another scheme to some other app."""
+    if (not isinstance(url, str) or len(url) > 200 or not url.startswith("https://")
+            or any(c.isspace() for c in url)):
+        return None
+    authority = url[len("https://"):].split("/", 1)[0]
+    return url if authority and "@" not in authority else None
+
+
+def risk_badge(risk: str) -> Gtk.Label:
+    return Gtk.Label(label=risk_label(risk), valign=Gtk.Align.CENTER,
+                     css_classes=["risk-badge", RISK_CLASSES.get(risk, "error")])
+
+
+def permission_rows(permissions: dict, risk: str, because: list | None) -> list:
+    """A row for each permission in words, then the risk and why it is that."""
+    rows = [plain_row(what, where) for what, where in permission_list(permissions)]
+    if not rows:
+        rows.append(plain_row("None", "It needs no special permissions"))
+    row = plain_row(risk_label(risk), risk_words(risk, because, permissions))
+    row.add_prefix(Gtk.Image(icon_name="dialog-information-symbolic"))
+    return rows + [row]
+
+
+def warning_row(title, subtitle):
+    row = plain_row(title, subtitle)
+    row.add_prefix(Gtk.Image(icon_name="dialog-warning-symbolic", css_classes=["warning"]))
+    return row
+
+
 class SkillRow(Adw.ActionRow):
     """One skill. Activating it opens its page."""
 
@@ -1580,10 +1797,7 @@ class SkillRow(Adw.ActionRow):
         self.skill = skill
         self.set_title(shown(skill["name"]))
         self.set_subtitle(shown(skill_subtitle(skill)))
-        risk = skill["risk"]
-        self.add_suffix(Gtk.Label(
-            label=risk_label(risk), valign=Gtk.Align.CENTER,
-            css_classes=["risk-badge", RISK_CLASSES.get(risk, "error")]))
+        self.add_suffix(risk_badge(skill["risk"]))
         self.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
 
 
@@ -1666,13 +1880,7 @@ class SkillDialog(Adw.PreferencesDialog):
     def show_permissions(self, skill, because):
         for row in self.permission_rows:
             self.permissions.remove(row)
-        rows = [plain_row(what, where) for what, where in permission_list(skill["permissions"])]
-        if not rows:
-            rows.append(plain_row("None", "It needs no special permissions"))
-        risk = plain_row(risk_label(skill["risk"]),
-                         risk_words(skill["risk"], because, skill["permissions"]))
-        risk.add_prefix(Gtk.Image(icon_name="dialog-information-symbolic"))
-        rows.append(risk)
+        rows = permission_rows(skill["permissions"], skill["risk"], because)
         self.permission_rows = rows
         for row in rows:
             self.permissions.add(row)
@@ -1771,11 +1979,11 @@ class SkillDialog(Adw.PreferencesDialog):
 class SkillActionRow(Adw.ExpanderRow):
     """One action, as the model is given it. Built on opening: a page can hold many."""
 
-    def __init__(self, action):
+    def __init__(self, action, note=None):
         super().__init__(use_markup=False)
         self.action, self.built = action, False
         self.set_title(shown(action["tool"]["name"]))
-        self.set_subtitle(shown(f"{action['name']}\n{held_back_words(action)}"))
+        self.set_subtitle(shown(f"{action['name']}\n{note or held_back_words(action)}"))
         self.connect("notify::expanded", self.on_expanded)
 
     def on_expanded(self, *_):
@@ -2013,6 +2221,524 @@ class SkillsPage(Adw.PreferencesPage):
             self.dialog.sync(config)
 
 
+class BrowseRow(Adw.ActionRow):
+    """A skill in the registry. Activating it opens its page."""
+
+    def __init__(self, skill, busy=""):
+        super().__init__(use_markup=False, activatable=True)
+        self.skill = skill
+        self.set_title(shown(skill.get("name") or skill["id"]))
+        if skill.get("risk"):
+            self.add_suffix(risk_badge(skill["risk"]))
+        self.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        self.show_busy(busy)
+
+    def show_busy(self, busy):
+        self.set_subtitle(shown(browse_subtitle(self.skill, busy)))
+
+
+def browse_item(row) -> str:
+    return row.skill["id"]
+
+
+def button_row(title, on_activate, style=None):
+    row = Adw.ButtonRow(title=title, use_markup=False)
+    if style:   # added, as css_classes would take away the row's own
+        row.add_css_class(style)
+    row.connect("activated", lambda _row: on_activate())
+    return row
+
+
+class BrowseDialog(Adw.PreferencesDialog):
+    """One skill from the registry: what its publisher says, what it may do and why that is its
+    risk, where it stands here, its versions, and, when asked for, what the model would be given
+    and the whole recipe. Every string came from the registry by way of the daemon, so each shows
+    as plain text, and its links open only on a click."""
+
+    def __init__(self, browse, skill):
+        super().__init__(search_enabled=False, content_width=680, content_height=760)
+        self.browse, self.win = browse, browse.win
+        self.skill_id, self.skill = skill["id"], skill
+        self.details = None     # BrowseSkill, once it answers
+        self.recipe = None      # FetchSkill, once asked for and answered
+        self.problem = ""       # why BrowseSkill sent nothing
+        self.outcome = None     # (words, worked) of the last install, update or removal
+        self.shown_rows = {}
+        self.set_title(shown(skill.get("name") or skill["id"]))
+        self.about = Adw.PreferencesGroup()
+        self.facts = Adw.PreferencesGroup(title="Details")
+        self.links = Adw.PreferencesGroup(title="Links", visible=False)
+        self.state = Adw.PreferencesGroup(title="On this computer")
+        self.buttons = Adw.PreferencesGroup()
+        self.install = button_row("Install", lambda: self.browse.act("InstallSkill", self.skill),
+                                  "suggested-action")
+        self.update = button_row("Update", lambda: self.browse.act("UpdateSkill", self.skill),
+                                 "suggested-action")
+        self.remove = button_row("Remove", self.ask_remove, "destructive-action")
+        for row in (self.install, self.update, self.remove):
+            self.buttons.add(row)
+        self.permissions = Adw.PreferencesGroup(title="Permissions")
+        self.actions = Adw.PreferencesGroup(title="What the model is given", description=FETCH_NOTE)
+        self.show_recipe = button_row("Show the recipe", self.fetch_recipe)
+        self.fetching = False
+        self.manifest_row = None
+        self.actions.add(self.show_recipe)
+        self.manifest = Adw.PreferencesGroup(title="Recipe", visible=False)
+        self.versions = Adw.PreferencesGroup(title="Versions", visible=False)
+        page = Adw.PreferencesPage()
+        for group in (self.about, self.state, self.buttons, self.permissions, self.facts,
+                      self.links, self.actions, self.manifest, self.versions):
+            page.add(group)
+        self.add(page)
+        self.show(skill)
+        self.load()
+
+    def load(self):
+        self.win.daemon.fetch("BrowseSkill", self.fill, (self.skill_id,), "s", fail=self.failed)
+
+    def fill(self, details):
+        if details == self.details and not self.problem:
+            return      # read again each time the window becomes active, and mostly unchanged
+        if isinstance(details, dict) and details.get("id") == self.skill_id:
+            self.details, self.problem = details, ""
+            self.show(details)
+
+    def failed(self, error):
+        if not_answering(error):
+            self.win.on_error(error)
+            return
+        self.problem = failed_words(error)
+        self.show(self.skill)
+
+    def put(self, name, group, rows):
+        """Rows in place of the ones shown before, keeping the focus on the same one."""
+        self.shown_rows[name] = refill(group, self.shown_rows.get(name, []), rows,
+                                       lambda row: row.get_title())
+        return bool(rows)
+
+    def show(self, skill):
+        self.skill = skill
+        self.put("about", self.about, [
+            detail_row("What its publisher says it does", str(skill.get("summary") or "")),
+            detail_row("Publisher", f"The GitHub account {skill.get('author')}")])
+        self.put("facts", self.facts, self.fact_rows(skill))
+        self.links.set_visible(self.put("links", self.links, [
+            self.link_row(link) for link in skill.get("links") or [] if isinstance(link, dict)]))
+        self.state.set_visible(self.put("state", self.state, self.state_rows(skill)))
+        permissions = registry_permissions(skill.get("hosts"))
+        self.permissions.set_visible(self.put("permissions", self.permissions, permission_rows(
+            permissions, skill["risk"], skill.get("risk_because")) if skill.get("risk") else []))
+        self.versions.set_visible(self.put("versions", self.versions, self.version_rows(skill)))
+        self.actions.set_visible(bool(skill.get("version")) or self.recipe is not None)
+        self.show_buttons()
+
+    def fact_rows(self, skill):
+        return [detail_row("Id", skill["id"]),
+                detail_row("Version", version_words(skill)),
+                detail_row("Licence", str(skill.get("licence") or "")),
+                detail_row("Tags", ", ".join(skill_tags(skill)))]
+
+    def link_row(self, link):
+        url = link_url(link.get("url"))
+        row = plain_row(str(link.get("title") or ""), str(link.get("url") or ""),
+                        activatable=url is not None)
+        if url:
+            row.add_suffix(Gtk.Image(icon_name="external-link-symbolic"))
+            row.set_tooltip_text(shown(f"Open {url} in your browser"))
+            row.connect("activated", lambda _row: self.open_link(url))
+        return row
+
+    def state_rows(self, skill):
+        installed = skill.get("installed")
+        rows = []
+        if installed:
+            rows.append(plain_row("Installed", f"Version {installed.get('version')}\n"
+                                               f"{path_shown(installed.get('file') or '')}"))
+            if installed.get("off"):
+                rows.append(warning_row("Switched off", off_words(installed["off"])))
+            if installed.get("edited"):
+                rows.append(warning_row("Changed by you", EDITED))
+            elif skill.get("update"):
+                rows.append(plain_row("Update", update_words(skill)))
+        elif skill.get("version"):
+            rows.append(plain_row("Not installed", INSTALL_NOTE))
+        if self.problem:
+            rows.append(warning_row("Tuxistant didn't send this skill's page", self.problem))
+        busy = self.browse.busy.get(self.skill_id)
+        if busy:
+            row = plain_row(busy, "")
+            row.add_prefix(Adw.Spinner())
+            rows.append(row)
+        elif self.outcome:
+            words, worked = self.outcome
+            row = plain_row(words, "")
+            row.add_prefix(Gtk.Image(icon_name="emblem-ok-symbolic" if worked
+                                     else "dialog-warning-symbolic"))
+            rows.append(row)
+        return rows
+
+    def version_rows(self, skill):
+        installed = (skill.get("installed") or {}).get("version")
+        rows = []
+        for entry in reversed([v for v in skill.get("versions") or [] if isinstance(v, dict)]):
+            lines = [stamp_day(entry.get("date"))]
+            if entry.get("version") == installed:
+                lines.append("Installed")
+            if entry.get("revoked"):
+                lines.append(off_words(entry["revoked"]))
+            row = plain_row(f"Version {entry.get('version')}", "\n".join(lines))
+            if entry.get("revoked"):
+                row.add_prefix(Gtk.Image(icon_name="dialog-warning-symbolic",
+                                         css_classes=["warning"]))
+            rows.append(row)
+        return rows
+
+    def show_buttons(self):
+        installed, busy = self.skill.get("installed"), self.skill_id in self.browse.busy
+        mine = bool(installed) and not installed.get("edited")
+        rows = (self.install, self.update, self.remove)
+        had = focused_row(list(rows))
+        self.install.set_visible(not installed and bool(self.skill.get("version")))
+        self.update.set_visible(mine and bool(self.skill.get("update")))
+        self.remove.set_visible(mine)
+        for row in rows:
+            row.set_sensitive(not busy)
+        self.buttons.set_visible(any(row.get_visible() for row in rows))
+        state = self.shown_rows.get("state")
+        if had is not None and not (had.get_visible() and had.get_sensitive()) and state:
+            # A button that goes takes the focus with it, and Escape stops working. What the
+            # page says now is where a keyboard or screen reader user wants it.
+            state[-1].grab_focus()
+
+    def ask_remove(self):
+        name = self.skill.get("name") or self.skill_id
+        dialog = Adw.AlertDialog(heading=shown(f"Remove {name}?"), body=REMOVE_BODY)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("remove", "Remove")
+        dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self.on_remove_response)
+        dialog.present(self)
+
+    def on_remove_response(self, _dialog, response):
+        if response == "remove":
+            self.browse.act("RemoveSkill", self.skill)
+
+    def fetch_recipe(self):
+        """Not made insensitive while it waits, as that would drop the keyboard focus."""
+        if self.fetching:
+            return
+        self.fetching = True
+        self.show_recipe.set_title("Fetching the recipe…")
+        self.win.daemon.fetch("FetchSkill", self.fill_recipe, (self.skill_id,), "s",
+                              fail=self.recipe_failed, timeout=FETCH_SKILL_TIMEOUT_MS)
+
+    def recipe_failed(self, error):
+        self.fetching = False
+        self.show_recipe.set_title("Show the recipe")
+        self.put("recipe_problem", self.actions, [
+            warning_row("Tux didn't show the recipe", failed_words(error))])
+
+    def fill_recipe(self, recipe):
+        self.recipe = recipe = recipe if isinstance(recipe, dict) else {}
+        self.fetching = False
+        had = focused_row([self.show_recipe])
+        self.put("recipe_problem", self.actions, [])
+        rows = [SkillActionRow(action, ACTION_NOTE) for action in recipe.get("actions") or []]
+        for row in rows:
+            self.actions.add(row)
+        text = str(recipe.get("text") or "")
+        copy = Gtk.Button(label="Copy", valign=Gtk.Align.CENTER,
+                          tooltip_text="Copy the whole recipe")
+        copy.connect("clicked", lambda _button: self.copy_manifest())
+        self.manifest.set_header_suffix(copy)
+        read = plain_row("recipe.yaml", f"Version {recipe.get('version')}, {manifest_size(text)}",
+                         activatable=True)
+        read.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        read.connect("activated", lambda _row: self.push_subpage(
+            ManifestPage(self, {"file": "recipe.yaml", "manifest": text})))
+        self.manifest_row = read
+        self.manifest.add(read)
+        self.manifest.set_visible(True)
+        if had is not None:     # before the button that has it goes
+            (rows or [read])[0].grab_focus()
+        self.actions.remove(self.show_recipe)
+
+    def copy_manifest(self):
+        self.get_clipboard().set_content(
+            Gdk.ContentProvider.new_for_value(str(self.recipe.get("text") or "")))
+        self.add_toast(Adw.Toast(title="Copied the recipe", use_markup=False))
+
+    def open_link(self, url):
+        Gtk.UriLauncher.new(url).launch(self.win, None, self.on_opened)
+
+    def on_opened(self, launcher, result):
+        try:
+            launcher.launch_finish(result)
+        except GLib.Error as e:
+            if not e.matches(Gtk.DialogError.quark(), Gtk.DialogError.DISMISSED):
+                self.add_toast(Adw.Toast(title=f"Could not open it: {e.message}",
+                                         use_markup=False))
+
+
+class BrowsePage(Adw.Bin):
+    """Skills from the registry, as the daemon holds them, close to GNOME's Extension Manager: a
+    search, the categories with their tags, what you installed and the newest.
+
+    Settings fetches nothing itself. Everything here came in a reply from the daemon, which
+    fetches and checks, and the approval card is the shell's, never a dialog here."""
+
+    def __init__(self, win):
+        super().__init__()
+        self.win = win
+        self.listing = None         # BrowseSkills as it last came
+        self.installed_rows, self.newest_rows, self.category_rows = [], [], []
+        self.registry_rows = []
+        self.narrowed = None        # (words, tags) a category or a tag narrows the list to
+        self.busy = {}              # skill id: what the page says while the daemon works
+        self.checking = False
+        self.dialog = None
+        self.opened_from = None
+        self.search = Gtk.SearchEntry(placeholder_text="Search skills", margin_start=12,
+                                      margin_end=12)
+        self.search.update_property([Gtk.AccessibleProperty.LABEL], ["Search skills"])
+        self.search.connect("search-changed", lambda _entry: self.apply_filter())
+        self.check = Gtk.Button(label="Check now", valign=Gtk.Align.CENTER,
+                                tooltip_text="Fetch the registry's list of skills again now")
+        self.check.connect("clicked", self.on_check)
+        self.registry = Adw.PreferencesGroup(title="Skills registry", header_suffix=self.check)
+        self.categories = Adw.PreferencesGroup(title="Categories")
+        self.narrowing = Adw.PreferencesGroup(visible=False)
+        self.narrow_row = plain_row("", "")
+        show_all = Gtk.Button(label="Show all", valign=Gtk.Align.CENTER)
+        show_all.connect("clicked", lambda _button: self.narrow(None))
+        self.narrow_row.add_suffix(show_all)
+        self.narrowing.add(self.narrow_row)
+        self.installed = Adw.PreferencesGroup(title="Installed from the registry")
+        self.newest = Adw.PreferencesGroup(title="Newest")
+        self.nothing = Adw.PreferencesGroup(visible=False)
+        self.nothing_row = plain_row("No skill matches", "")
+        self.nothing.add(self.nothing_row)
+        self.list = Adw.PreferencesPage()
+        for group in (self.categories, self.narrowing, self.installed, self.newest,
+                      self.nothing, self.registry):
+            self.list.add(group)
+        self.stack = Gtk.Stack()
+        self.stack.add_named(Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER,
+                                         width_request=32, height_request=32), "loading")
+        self.stack.add_named(self.list, "list")
+        self.none_page = Adw.StatusPage(icon_name="system-software-install-symbolic",
+                                        title=NO_REGISTRY)
+        self.stack.add_named(self.none_page, "none")
+        self.stack.add_named(Adw.StatusPage(
+            icon_name="view-refresh-symbolic", title="Restart Tuxistant to browse skills",
+            description=BROWSE_OLDER), "older")
+        retry = Gtk.Button(label="Try again", halign=Gtk.Align.CENTER, css_classes=["pill"])
+        retry.connect("clicked", lambda _button: self.load())
+        self.failed_page = Adw.StatusPage(icon_name="dialog-warning-symbolic",
+                                          title="Tuxistant didn't send the skills", child=retry)
+        self.stack.add_named(self.failed_page, "failed")
+        self.bar = Adw.Clamp(child=self.search, margin_top=12, visible=False)
+        view = Adw.ToolbarView(content=self.stack)
+        view.add_top_bar(self.bar)
+        self.set_child(view)
+
+    def show(self, name):
+        self.stack.set_visible_child_name(name)
+        self.bar.set_visible(name == "list")
+
+    def load(self):
+        self.win.daemon.fetch("BrowseSkills", self.fill, fail=self.failed)
+        if self.dialog:
+            self.dialog.load()
+
+    def failed(self, error):
+        if not_answering(error):
+            self.win.on_error(error)
+            return
+        self.listing = None
+        if error.matches(Gio.DBusError.quark(), Gio.DBusError.UNKNOWN_METHOD):
+            self.show("older")
+            return
+        # A status page's description is read as markup, and the error came from elsewhere.
+        self.failed_page.set_description(GLib.markup_escape_text(shown(failed_words(error))))
+        self.show("failed")
+
+    def fill(self, listing):
+        # Read again each time the window becomes active, and mostly unchanged.
+        if listing == self.listing or not isinstance(listing, dict):
+            return
+        self.listing = listing
+        if not listing.get("address"):
+            words = (listing.get("problems") or {}).get("address") or NO_REGISTRY_NOTE
+            self.none_page.set_description(GLib.markup_escape_text(shown(str(words))))
+            self.show("none")
+            return
+        self.fill_registry(listing)
+        skills = [skill for skill in listing.get("skills") or []
+                  if isinstance(skill, dict) and skill.get("id")]
+        self.installed_rows = refill(
+            self.installed, self.installed_rows,
+            [self.make_row(skill) for skill in skills if skill.get("installed")], browse_item)
+        self.newest_rows = refill(
+            self.newest, self.newest_rows,
+            [self.make_row(skill) for skill in newest_first(skills) if not skill.get("installed")],
+            browse_item)
+        self.fill_categories(listing.get("categories"), skills)
+        self.apply_filter()
+        self.show("list")
+
+    def fill_registry(self, listing):
+        index = listing.get("index")
+        rows = [detail_row("Address", str(listing["address"])),
+                detail_row("List of skills", index_words(index) if index else NO_INDEX_YET)]
+        for key, problem in (listing.get("problems") or {}).items():
+            rows.append(warning_row(PROBLEM_TITLES.get(key, str(key)), str(problem)))
+        self.registry_rows = refill(self.registry, self.registry_rows, rows,
+                                    lambda row: row.get_title())
+
+    def fill_categories(self, categories, skills):
+        opened = {row.category for row in self.category_rows if row.get_expanded()}
+        self.category_rows = refill(
+            self.categories, self.category_rows,
+            [self.make_category(*found) for found in categories_shown(categories, skills)],
+            lambda row: row.category)
+        for row in self.category_rows:
+            row.set_expanded(row.category in opened)
+
+    def make_category(self, category, total, tags):
+        name = str(category.get("name") or category.get("id"))
+        row = Adw.ExpanderRow(use_markup=False)
+        row.category = str(category.get("id"))
+        row.set_title(shown(name))
+        row.set_subtitle(count_words(total))
+        every = frozenset(str(tag) for tag in category.get("tags") or [])
+        row.choices = [self.narrow_choice(f"Everything in {name}", count_words(total),
+                                          (f"In {name}", every))]
+        row.choices += [self.narrow_choice(tag, count_words(count),
+                                           (f"Tagged {tag}", frozenset({tag})))
+                        for tag, count in tags]
+        for choice in row.choices:
+            row.add_row(choice)
+        return row
+
+    def narrow_choice(self, title, subtitle, choice):
+        row = plain_row(title, subtitle, activatable=True)
+        row.connect("activated", lambda _row: self.narrow(choice))
+        return row
+
+    def make_row(self, skill):
+        row = BrowseRow(skill, self.busy.get(skill["id"], ""))
+        row.connect("activated", lambda row: self.open(row.skill))
+        return row
+
+    def narrow(self, choice):
+        self.narrowed = choice
+        self.apply_filter()
+        if choice is None:
+            self.search.grab_focus()
+
+    def apply_filter(self):
+        query = self.search.get_text()
+        tags = self.narrowed[1] if self.narrowed else None
+        listed = self.listing and self.listing.get("index")
+        found = 0
+        for group, rows in ((self.installed, self.installed_rows),
+                            (self.newest, self.newest_rows)):
+            count = 0
+            for row in rows:
+                visible = browse_matches(row.skill, query) and (
+                    tags is None or bool(tags & set(skill_tags(row.skill))))
+                row.set_visible(visible)
+                count += visible
+            group.set_visible(count > 0)
+            found += count
+        self.narrowing.set_visible(self.narrowed is not None)
+        if self.narrowed:
+            self.narrow_row.set_title(shown(self.narrowed[0]))
+        self.categories.set_visible(bool(self.category_rows) and not query.strip())
+        everything = self.installed_rows + self.newest_rows
+        self.nothing_row.set_title("No skill matches" if everything else
+                                   "The registry lists no skills yet")
+        self.nothing.set_visible(bool(listed) and found == 0)
+
+    def on_check(self, _button):
+        """Not made insensitive while it waits, as that would drop the keyboard focus."""
+        if self.checking:
+            return
+        self.checking = True
+        self.check.set_label("Checking…")
+
+        def finish():
+            self.checking = False
+            self.check.set_label("Check now")
+
+        def done(listing):
+            finish()
+            self.fill(listing)
+
+        def failed(error):
+            finish()
+            self.win.toast(failed_words(error))
+
+        self.win.daemon.fetch("CheckRegistry", done, fail=failed, timeout=CHECK_TIMEOUT_MS)
+
+    def act(self, method, skill):
+        """Install, update or remove, by the daemon. Its reply comes here, so a page closed
+        meanwhile loses nothing, and one skill waiting never holds up another."""
+        skill_id, name = skill["id"], skill.get("name") or skill["id"]
+        if skill_id in self.busy:
+            return
+        self.busy[skill_id] = waiting_words(method, skill)
+        self.show_busy(skill_id)
+
+        def finish(words, worked):
+            self.busy.pop(skill_id, None)
+            if self.dialog and self.dialog.skill_id == skill_id:
+                self.dialog.outcome = (words, worked)   # in the place of the waiting words
+            else:
+                self.win.toast(words)
+            self.show_busy(skill_id)
+            self.load()
+
+        def done(text):
+            try:
+                reply = json.loads(text)
+            except ValueError:
+                reply = None
+            finish(done_words(method, name, reply if isinstance(reply, dict) else {}), True)
+
+        self.win.daemon.call(method, (skill_id,), "s", done,
+                             lambda error: finish(failed_words(error), False),
+                             timeout=ACT_TIMEOUTS_MS[method])
+
+    def show_busy(self, skill_id):
+        for row in self.installed_rows + self.newest_rows:
+            if row.skill["id"] == skill_id:
+                row.show_busy(self.busy.get(skill_id, ""))
+        if self.dialog and self.dialog.skill_id == skill_id:
+            self.dialog.show(self.dialog.skill)
+
+    def open(self, skill):
+        rows = self.installed_rows + self.newest_rows
+        row = focused_row(rows)
+        self.opened_from = (row, rows.index(row)) if row is not None else None
+        dialog = self.dialog = BrowseDialog(self, skill)
+        dialog.connect("closed", self.on_closed)
+        dialog.present(self.win)
+        return dialog
+
+    def on_closed(self, dialog):
+        if self.dialog is not dialog:
+            return
+        self.dialog = None
+        rows, came = self.installed_rows + self.newest_rows, self.opened_from
+        self.opened_from = None
+        if came is not None and came[0] not in rows:
+            refocus(rows, browse_item, browse_item(came[0]), came[1])
+
+
 class HistoryPage(Adw.Bin):
     def __init__(self, win):
         super().__init__()
@@ -2084,6 +2810,7 @@ class SettingsWindow(Adw.ApplicationWindow):
         self.voices = VoicePage(self)
         self.appearance = AppearancePage(self)
         self.skills = SkillsPage(self)
+        self.browse = BrowsePage(self)
         self.history = HistoryPage(self)
 
         self.root = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
@@ -2111,6 +2838,7 @@ class SettingsWindow(Adw.ApplicationWindow):
                 ("voice", "Voice", "audio-speakers-symbolic", self.voices),
                 ("appearance", "Appearance", "applications-graphics-symbolic", self.appearance),
                 ("skills", "Skills", "applications-system-symbolic", self.skills),
+                ("browse", "Browse", "system-software-install-symbolic", self.browse),
                 ("history", "History", "document-open-recent-symbolic", self.history)):
             self.views.add_titled_with_icon(page, name, title, icon)
         self.views.connect("notify::visible-child", self.on_page_changed)
@@ -2164,7 +2892,8 @@ class SettingsWindow(Adw.ApplicationWindow):
     def on_first_config(self, config):
         self.apply_config(config)
         self.show_state("ready")
-        for page in (self.general, self.voices, self.appearance, self.skills, self.history):
+        for page in (self.general, self.voices, self.appearance, self.skills, self.browse,
+                     self.history):
             page.load()
 
     def apply_config(self, config):
@@ -2186,6 +2915,9 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.history.load()
         elif name == "SkillsChanged":
             self.skills.load()
+            self.browse.load()
+        elif name == "RegistryChanged":
+            self.browse.load()
 
     def on_owner(self, owner):
         if owner is None:
@@ -2206,6 +2938,7 @@ class SettingsWindow(Adw.ApplicationWindow):
             self.general.load()
             self.appearance.load()
             self.skills.load()
+            self.browse.load()
 
     def save(self, key, value):
         """Write a setting. If the daemon refuses, say so and show what it really holds."""
