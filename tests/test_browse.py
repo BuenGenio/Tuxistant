@@ -22,8 +22,8 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tests.test_registry import (BLUETOOTH, EXAMPLE, KEYGEN, NOW, QUIET,  # noqa: E402
-                                 RegistryCase, fingerprint, sign)
+from tests.test_registry import (BLUETOOTH, EXAMPLE, KEYGEN, NOT_RECORDED, NOW,  # noqa: E402
+                                 QUIET, RegistryCase, fingerprint, sign)
 from tuxistant import browse, controller, registry, skillhost, webfetch  # noqa: E402
 from tuxistant.browse import Browse, Fetcher, usable  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
@@ -328,7 +328,8 @@ class CheckTests(BrowseCase):
         self.assertEqual(view["problems"], {"state": registry.NOT_RECORDED.format(
             file=registry._shown(ledger), why=os.strerror(errno.ENOSPC))})
         self.assertEqual(self.notices, [("Tuxistant switched off io.github.ada.bluetooth",
-                                         "The skills registry has switched it off: Gone bad.")])
+                                         "The skills registry has switched it off: Gone bad.\n"
+                                         + browse.NOT_RECORDED_YET)])
         self.assertEqual(view["skills"][0]["installed"]["off"],
                          {"kind": "suspend", "reason": "Gone bad."})
         name = self.file("bluetooth").name
@@ -350,7 +351,7 @@ class CheckTests(BrowseCase):
         with self.full(ledger):
             await self.browse.check()
         told = [("Tuxistant switched off io.github.ada.bluetooth",
-                 "The skills registry has switched it off: Gone bad.")]
+                 "The skills registry has switched it off: Gone bad.\n" + browse.NOT_RECORDED_YET)]
         self.assertEqual(self.notices, told)
         self.assertNotIn("off", json.loads(ledger.read_text())[name])
         held = self.state / registry.HELD_INDEX
@@ -374,7 +375,8 @@ class CheckTests(BrowseCase):
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
         self.assertIn("off", json.loads(ledger.read_text())[name])
         self.assertEqual(later.listing()["problems"], {})
-        self.assertEqual(len(self.notices), 3)
+        self.assertEqual(self.notices[2:], [(told[0][0], told[0][1].partition("\n")[0])],
+                         "written this time, so with nothing more to say")
         self.assertEqual(later._due(), NOW - 3600 + browse.CHECK_EVERY_S)
         later = self.restarted()    # written now, so nothing more to do or say
         await later.start()
@@ -425,25 +427,24 @@ class CheckTests(BrowseCase):
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
         self.assertEqual(len(self.notices), 1, "a switch-off is told once")
 
-    async def test_a_switch_off_neither_file_could_keep_is_said_to_last_until_a_restart(self):
+    async def test_a_switch_off_neither_file_could_keep_is_said_a_restart_may_lose(self):
         """A review filled the disk under state.json and the record as a revocation came, then
         restarted the daemon: the recipe Tux had said it switched off ran again, shown as on,
         with nothing said, and the CONTRACT said it was still off after a restart. That is a
-        known limit, so the words say so while it holds."""
+        known limit, so the words say a restart may lose it while it isn't written."""
         await self.installed_v1()
         self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
         state, ledger = self.state / registry.STATE, self.skills.parent / registry.INSTALLED
         with self.full(state), self.full(ledger):
             view = await self.browse.check()
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(view["problems"]["state"], NOT_RECORDED.format(
+            file=registry._shown(ledger), why=os.strerror(errno.ENOSPC)))
         self.assertEqual(self.notices, [(
             "Tuxistant switched off io.github.ada.bluetooth",
-            "The skills registry has switched it off: Gone bad.\n"
-            "Tux couldn't save this yet, so for now it is off only until Tux restarts.")])
-        self.assertEqual(view["problems"]["state"], registry.NOT_RECORDED.format(
-            file=registry._shown(ledger), why=os.strerror(errno.ENOSPC)) + (
-            " Tux couldn't save what switched off io.github.ada.bluetooth either, so it is off "
-            "only until Tux restarts."))
+            "The skills registry has switched it off: Gone bad.\nTux couldn't record this yet, "
+            "so if Tux restarts before it can, it may run again until a check gets the "
+            "registry's list of revoked skills again.")])
         os.utime(self.state / registry.HELD_INDEX, (NOW - 3600,) * 2)    # last saved then
         later = self.restarted()
         await later.start()
@@ -470,13 +471,46 @@ class CheckTests(BrowseCase):
             await self.browse.check()
         with self.full(ledger):
             view = await self.browse.check()
-            self.assertEqual(view["problems"], recorded, "no longer only until a restart")
+            self.assertEqual(view["problems"], recorded, "the same words, whatever was saved")
             later = self.restarted()
             await later.start()
             self.assertNotIn("io.github.ada.bluetooth", self.loaded(), "made again at the start")
         self.assertEqual(later.listing()["problems"], recorded)
         self.assertEqual(self.notices[1:], [("Tuxistant switched off io.github.ada.bluetooth",
-                                             "The skills registry has switched it off: Gone bad.")])
+                                             "The skills registry has switched it off: Gone bad.\n"
+                                             + browse.NOT_RECORDED_YET)])
+
+    async def test_an_install_or_a_removal_that_writes_the_record_writes_what_was_held(self):
+        """A review let the record be written again, then installed a skill: the held
+        switch-off was written with it, but Settings still said the record couldn't be, and
+        that a restart might lose it, until the next check an hour later."""
+        await self.installed_v1()
+        self.publish(self.index(seq=2, skills=[self.skill("bluetooth", [self.v1]),
+                                               self.skill("tides", [self.tides_release("1.0.0")])]))
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
+        ledger, name = self.skills.parent / registry.INSTALLED, self.file("bluetooth").name
+        with self.full(ledger):
+            view = await self.browse.check()
+        self.assertIn("state", view["problems"])
+        await self.answer(self.browse.install("io.github.ada.tides"))
+        view = self.browse.listing()
+        self.assertEqual(view["problems"], {}, "written with the install")
+        self.assertIn("off", json.loads(ledger.read_text())[name])
+        self.assertNotIn(ledger, registry._UNWRITTEN)
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.publish(self.index(seq=3, skills=[self.skill("bluetooth", [self.v1]),
+                                               self.skill("tides", [self.tides_release("1.0.0")])],
+                                lifted=[1]))
+        with self.full(ledger):
+            view = await self.browse.check()
+        self.assertIn("state", view["problems"])
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded(), "a lift waits for the write")
+        await self.browse.remove("io.github.ada.tides")
+        self.assertEqual(self.browse.listing()["problems"], {}, "written with the removal")
+        self.assertNotIn("off", json.loads(ledger.read_text())[name])
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.notices[1:], [("Tuxistant switched io.github.ada.bluetooth back on",
+                                             "The skills registry lifted what switched it off.")])
 
     async def test_a_list_saved_without_its_state_isnt_used_after_a_restart(self):
         """A known limit: index.json is written before state.json, which names it, so a new
@@ -915,6 +949,20 @@ class InstallTests(BrowseCase):
         self.assertEqual(self.signals.count("RegistryChanged"), signals + 1)
         self.assertIsNone(self.browse.listing()["skills"][0]["installed"])
 
+
+    async def test_a_damaged_state_doesnt_fail_a_removal(self):
+        """Browse runs apply() after a removal only while the record couldn't be written, as
+        apply() refuses a damaged state.json, and would fail a removal already done."""
+        await self.answer(self.browse.install("io.github.ada.tides"))
+        (self.state / registry.STATE).write_text("damaged")
+        later = self.restarted()
+        await later.start()
+        self.assertEqual(await later.remove("io.github.ada.tides"),
+                         {"id": "io.github.ada.tides", "file": str(self.file("tides"))})
+        self.assertFalse(self.file("tides").exists())
+        self.assertEqual(registry.installed(self.skills), {})
+        self.assertEqual(later.listing()["problems"]["state"], registry.STATE_DAMAGED.format(
+            folder=registry._shown(self.state)))
 
 @unittest.skipUnless(KEYGEN, "ssh-keygen isn't installed")
 class UpdateTests(BrowseCase):

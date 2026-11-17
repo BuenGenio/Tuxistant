@@ -300,7 +300,7 @@ Move site claims from Soon to Now only after the matching check passes.
 
 **Skills registry:**
 
-- On a disk too full for both `state.json` and `registry-installed.json`, a switch-off made by a list of revocations Tux couldn't save is held in memory alone, and a restart loses it: the recipe runs again, shown as on in Settings with no problem, until a check takes the list again. The first check after a start is 5 minutes after it, or a day after `index.json` was last written, whichever is later, so it can be most of a day away. Check now in Settings makes it at once. Until the restart, the notification and Settings say it is off only until Tux restarts.
+- On a disk too full for both `state.json` and `registry-installed.json`, a switch-off made by a list of revocations Tux couldn't save is held in memory alone, and a restart loses it: the recipe runs again, shown as on in Settings with no problem, until a check takes the list again. The first check after a start is 5 minutes after it, or a day after `index.json` was last written, whichever is later, so it can be most of a day away. Check now in Settings makes it at once. Before the restart, Settings says a skill switched off since `registry-installed.json` was last written may run again after one, and so does the notification of a switch-off Tux couldn't write.
 - `index.json` is written just before `state.json`, which names it. A new list written when `state.json` couldn't be, on a full disk or at a crash between the two, isn't used after a restart: Browse has no list, with no problem shown, and the first check waits until that `index.json` is a day old. Check now fetches the list again.
 
 **Elsewhere:**

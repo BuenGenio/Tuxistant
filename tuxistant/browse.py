@@ -59,7 +59,8 @@ INSTALL_TITLE = "Install a skill from the skills registry?"
 UPDATE_TITLE = "Update a skill from the skills registry?"
 SWITCHES_ON = "It is switched off now, and this switches it back on."
 LIFTED = "The skills registry lifted what switched it off."
-UNTIL_RESTART = "Tux couldn't save this yet, so for now it is off only until Tux restarts."
+NOT_RECORDED_YET = ("Tux couldn't record this yet, so if Tux restarts before it can, it may run "
+                    "again until a check gets the registry's list of revoked skills again.")
 ANSWERS = {DENIED: NOT_ALLOWED, UNANSWERED: TOO_LATE, LOCKED: SCREEN_LOCKED}
 
 
@@ -356,8 +357,8 @@ class Browse:
         if change["off"]:
             summary = f"Tuxistant switched off {change['id']}"
             body = registry.switched_off_because(change["kind"], change["reason"])
-            if change["until_restart"]:     # held in memory alone, revocation and all
-                body += "\n" + UNTIL_RESTART
+            if not change["written"]:   # held in memory, as registry.NOT_RECORDED says
+                body += "\n" + NOT_RECORDED_YET
         else:
             summary, body = f"Tuxistant switched {change['id']} back on", LIFTED
         try:
@@ -406,6 +407,7 @@ class Browse:
         async with self.lock:
             file = self.registry.remove(skill_id)
             self.host.reload()
+            await self._held_written()
             self.updates.pop(skill_id, None)
             await self._new_view()
         self.emit("RegistryChanged")
@@ -514,11 +516,24 @@ class Browse:
 
     async def _written(self, checked: registry.Checked, allow: bool) -> dict:
         problem = self._put(checked, allow)
+        await self._held_written()
         self.updates.pop(checked.skill_id, None)
         await self._new_view()
         self.emit("RegistryChanged")
         return {"id": checked.skill_id, "version": checked.version,
                 "file": str(self.host.user / f"{checked.skill_id}.yaml"), "problem": problem}
+
+    async def _held_written(self) -> None:
+        """After Browse wrote the record while what apply() couldn't write was held
+        (registry.NOT_RECORDED): apply() again, which writes it with any lift that waited and
+        clears the problem, and what that changed is told."""
+        if "state" not in self.registry.unsaved:
+            return
+        changes = self.registry.apply()
+        if changes:
+            self.host.reload()
+        for change in changes:
+            await self._notify(change)
 
     def _put(self, checked: registry.Checked, allow: bool) -> str:
         """allow(), install() and the reload, in that order, with no await between them, so no

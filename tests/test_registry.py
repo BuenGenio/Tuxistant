@@ -57,6 +57,12 @@ actions:
     say: "The next high tide in {{town}} is at {{time}}."
 """
 TIDES_HOSTS = {"network": ["tides.example.org"]}
+# registry.NOT_RECORDED, the one sentence for every record Tux couldn't write, whatever it saved
+NOT_RECORDED = ("Tux couldn't write {file} ({why}). What the skills registry switched off is off "
+                "while Tux runs, but if Tux restarts before it can write the file, a skill "
+                "switched off since the file was last written may run again until a check gets "
+                "the registry's list of revoked skills again, and what the registry switched back "
+                "on stays off until the file is written. Tux tries again within an hour.")
 
 
 def make_key(folder: Path, name: str, kind: str = "ed25519", bits: int | None = None):
@@ -1041,7 +1047,7 @@ class InstalledTests(RegistryCase):
         changes = self.suspend({"skill": "io.github.ada.bluetooth"}, reason="Its host was lost.")
         self.assertEqual(changes, [{"file": self.file.name, "id": "io.github.ada.bluetooth",
                                     "off": True, "kind": "suspend",
-                                    "reason": "Its host was lost.", "until_restart": False}])
+                                    "reason": "Its host was lost.", "written": True}])
         self.assertEqual(self.changed, 1)
         self.assertTrue(self.file.exists())
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
@@ -1127,7 +1133,8 @@ class InstalledTests(RegistryCase):
         self.assertIn("io.github.ada.bluetooth", self.loaded())
         with self.full(ledger):
             changes = self.suspend({"skill": "io.github.ada.bluetooth"})
-            self.assertEqual([change["off"] for change in changes], [True])
+            self.assertEqual([(change["off"], change["written"]) for change in changes],
+                             [(True, False)])
             self.assertNotIn("io.github.ada.bluetooth", self.loaded())
             self.assertIn(self.file.name, registry.switched_off(self.skills))
         self.assertEqual(self.reg.problems["state"], registry.NOT_RECORDED.format(
@@ -1140,63 +1147,25 @@ class InstalledTests(RegistryCase):
         self.assertEqual(self.reg.unsaved, set())
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
 
-    def test_a_switch_off_in_memory_alone_is_said_to_last_until_a_restart(self):
-        """With state.json full as well, a restart reads neither the switch-off nor what made
-        it, so the recipe runs again: a known limit, which the words say while it holds."""
-        tides = self.version(TIDES, "1.0.0", TIDES_HOSTS)
-        self.accept(self.index(seq=2, skills=[*self.base["skills"], self.skill("tides", [tides])],
-                               revocations=[self.entry(1, {"skill": "io.github.ada.bluetooth"})]))
-        self.reg.install(self.reg.check("io.github.ada.tides", "1.0.0"))
-        ledger, state = self.skills.parent / registry.INSTALLED, self.state / registry.STATE
-        recorded = registry.NOT_RECORDED.format(file=registry._shown(ledger),
-                                                why=os.strerror(errno.ENOSPC))
-        with self.full(ledger):     # its revocation is in state.json, so a start makes it again
-            self.assertEqual([change["until_restart"] for change in self.reg.apply()], [False])
-            self.assertEqual(self.reg.problems["state"], recorded)
-            with self.full(state):
-                self.revoked(1, [self.entry(2, {"skill": "io.github.ada.tides"})])
-                changes = self.reg.refresh()
-            self.assertEqual([(change["id"], change["until_restart"]) for change in changes],
-                             [("io.github.ada.tides", True)])
-            self.assertEqual(self.reg.problems["state"], recorded + (
-                " Tux couldn't save what switched off io.github.ada.tides either, so it is off "
-                "only until Tux restarts."))
-            with self.full(state):
-                self.revoked(2, [self.entry(3, {"author": "ada"})])
-                self.reg.refresh()
-            self.assertTrue(self.reg.problems["state"].endswith(
-                " Tux couldn't save what switched off io.github.ada.tides either, so it is off "
-                "only until Tux restarts."), "the author's revocation is unsaved, but bluetooth's "
-                                            "first one is saved and still covers it")
-        self.assertEqual(self.reg.apply(), [], "written now")
+    @unittest.skipIf(os.geteuid() == 0, "root can write a folder that is 0500")
+    def test_a_lift_waiting_on_a_folder_tux_cant_write_is_told_as_it_stands(self):
+        """A review suspended a skill, which Tux wrote, made the record's folder read-only and
+        lifted it, with room on the disk: Settings said Tux couldn't save what switched it off,
+        so it was off only until a restart. Tux had saved both, and it stays off till written."""
+        ledger = self.skills.parent / registry.INSTALLED
+        self.suspend({"skill": "io.github.ada.bluetooth"})
+        self.skills.parent.chmod(0o500)
+        self.addCleanup(self.skills.parent.chmod, 0o700)
+        self.accept(self.index(seq=2, skills=self.base["skills"], lifted=[self.lift(1)]))
+        self.assertEqual(self.reg.apply(), [])
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.reg.problems["state"], NOT_RECORDED.format(
+            file=registry._shown(ledger), why=os.strerror(errno.EACCES)))
+        self.assertEqual(self.reg.unsaved, {"state"})
+        self.skills.parent.chmod(0o700)
+        self.assertEqual([change["off"] for change in self.reg.apply()], [False])
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
         self.assertNotIn("state", self.reg.problems)
-
-    def test_the_words_name_each_switch_off_a_restart_would_lose(self):
-        tides = self.version(TIDES, "1.0.0", TIDES_HOSTS)
-        self.accept(self.index(seq=2, skills=[*self.base["skills"], self.skill("tides", [tides])]))
-        self.reg.install(self.reg.check("io.github.ada.tides", "1.0.0"))
-        ledger, state = self.skills.parent / registry.INSTALLED, self.state / registry.STATE
-        with self.full(ledger), self.full(state):
-            self.revoked(1, [self.entry(1, {"author": "ada"})])
-            changes = self.reg.refresh()
-        self.assertEqual([change["until_restart"] for change in changes], [True, True])
-        self.assertTrue(self.reg.problems["state"].endswith(
-            " Tux couldn't save what switched off io.github.ada.bluetooth and "
-            "io.github.ada.tides either, so they are off only until Tux restarts."))
-
-    def test_a_state_a_restart_cant_read_holds_only_what_the_record_has(self):
-        """A restart refuses a damaged state.json, so only a switch-off written to the record
-        holds then."""
-        ledger, state = self.skills.parent / registry.INSTALLED, self.state / registry.STATE
-        with self.full(ledger):
-            self.assertEqual([change["until_restart"] for change in self.suspend(
-                {"skill": "io.github.ada.bluetooth"})], [False])
-            state.write_text("damaged")
-            with self.assertLogs("tuxistant", "WARNING"):
-                self.assertEqual(self.reg.apply(), [])
-        self.assertTrue(self.reg.problems["state"].endswith(
-            " Tux couldn't save what switched off io.github.ada.bluetooth either, so it is off "
-            "only until Tux restarts."))
 
     def test_a_lift_that_cant_be_written_waits_for_the_write(self):
         ledger = self.skills.parent / registry.INSTALLED
