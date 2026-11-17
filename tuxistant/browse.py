@@ -29,7 +29,7 @@ log = logging.getLogger("tuxistant")
 
 FIRST_CHECK_S = 300
 CHECK_EVERY_S = 24 * 3600
-RETRY_S = 3600          # after a check that couldn't reach the registry
+RETRY_S = 3600          # after a check that couldn't reach the registry or keep what it took
 WAKE_S = 600            # the wall clock is looked at this often, so a suspend delays little
 FETCH_S = 30            # for the whole file
 MAX_CHECKED = 32        # recipes kept checked for an install, at most 64 KiB each
@@ -129,7 +129,9 @@ class Browse:
         self.checked: dict[tuple[str, str], registry.Checked] = {}
         self.updates: dict[str, dict] = {}      # by id: the update Browse offers, as checked
         self.started = clock()
-        self.last: tuple[float, bool] | None = None    # the last check's end, and if it reached
+        # the last check's end, and if it reached the registry and saved all it took, as what
+        # it couldn't save may revoke a skill
+        self.last: tuple[float, bool] | None = None
         self.view, self.pages = self._view(self._problems(), None, {}), {}
 
     # What Settings reads
@@ -274,7 +276,8 @@ class Browse:
                 await self._updates()
                 await self._new_view()
                 problems = self.registry.problems.values()
-                self.last = (self.clock(), registry.NOT_REACHED not in problems)
+                self.last = (self.clock(), registry.NOT_REACHED not in problems
+                             and not self.registry.unsaved)
         except Exception:
             log.exception("the check of the skills registry failed")
             self.last = (self.clock(), False)

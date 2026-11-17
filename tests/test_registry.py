@@ -95,6 +95,8 @@ class RegistryCase(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix="tux-registry-"))
         self.addCleanup(shutil.rmtree, self.root, True)
         self.state, self.skills = self.root / "state", self.root / "data" / "skills"
+        # a switch-off held in memory is the daemon's, so it goes with the test's folders
+        self.addCleanup(registry._UNWRITTEN.pop, self.skills.parent / registry.INSTALLED, None)
         self.skills.mkdir(parents=True)
         self.signers = self.root / "registry_allowed_signers"
         self.signers.write_text(
@@ -425,7 +427,8 @@ class IndexTests(RegistryCase):
         self.accept(self.index())
         (self.state / "state.json").write_bytes(b"{not json")
         message = self.refused(self.new_registry().kept, contains="damaged")
-        self.assertIn(f"Removing state.json in {self.state} starts it again.", message)
+        self.assertIn(f"Removing state.json in {registry._shown(self.state)} starts it again.",
+                      message)
         with mock.patch.object(registry.Path, "home", return_value=self.root):
             self.refused(self.new_registry().kept, contains="Removing state.json in ~/state ")
 
@@ -1103,20 +1106,59 @@ class InstalledTests(RegistryCase):
         self.assertNotIn("off", record(), "the update its revocation doesn't cover ended it")
         self.assertIn("io.github.ada.bluetooth", self.loaded())
 
-    def test_a_switch_off_that_cant_be_written_says_so(self):
+    def full(self, target: Path):
+        """registry._write failing at target as on a full disk."""
         real = registry._write
 
-        def full(file, data, mode=0o600):
-            if file.name == registry.INSTALLED:
+        def write(file, data, mode=0o600):
+            if file == target:
                 raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
             real(file, data, mode)
+        return mock.patch.object(registry, "_write", write)
 
-        with mock.patch.object(registry, "_write", full):
-            self.assertEqual(self.suspend({"skill": "io.github.ada.bluetooth"}), [])
+    def written(self) -> dict:
+        """The record of the file as it is on disk, with nothing held in memory."""
+        return json.loads((self.skills.parent / registry.INSTALLED).read_text())[self.file.name]
+
+    def test_a_switch_off_that_cant_be_written_holds_while_tux_runs_and_says_so(self):
+        """A review filled the disk at a revocation: the recipe ran on with nothing said, and
+        the check that would write it came a day later."""
+        ledger = self.skills.parent / registry.INSTALLED
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        with self.full(ledger):
+            changes = self.suspend({"skill": "io.github.ada.bluetooth"})
+            self.assertEqual([change["off"] for change in changes], [True])
+            self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+            self.assertIn(self.file.name, registry.switched_off(self.skills))
         self.assertEqual(self.reg.problems["state"], registry.NOT_RECORDED.format(
-            file=self.skills.parent / registry.INSTALLED, why=os.strerror(errno.ENOSPC)))
-        self.assertEqual([change["off"] for change in self.reg.refresh()], [True],
-                         "the next check does it")
+            file=registry._shown(ledger), why=os.strerror(errno.ENOSPC)))
+        self.assertEqual(self.reg.unsaved, {"state"})
+        self.assertNotIn("off", self.written(), "only in memory")
+        self.assertEqual(self.reg.refresh(), [], "told once, and written now")
+        self.assertIn("off", self.written())
+        self.assertNotIn("state", self.reg.problems)
+        self.assertEqual(self.reg.unsaved, set())
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+
+    def test_a_lift_that_cant_be_written_waits_for_the_write(self):
+        ledger = self.skills.parent / registry.INSTALLED
+        self.suspend({"skill": "io.github.ada.bluetooth"})
+        self.accept(self.index(seq=2, skills=self.base["skills"], lifted=[self.lift(1)]))
+        with self.full(ledger):
+            self.assertEqual(self.reg.apply(), [])
+            self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertIn("off", self.written())
+        self.assertEqual([change["off"] for change in self.reg.apply()], [False])
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        with self.full(ledger):     # a switch-off held in memory only waits for it too
+            self.assertEqual([change["off"] for change in self.suspend(
+                {"skill": "io.github.ada.bluetooth"}, seq=2)], [True])
+            self.accept(self.index(seq=3, skills=self.base["skills"], lifted=[1, 2]))
+            self.assertEqual(self.reg.apply(), [])
+            self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual([change["off"] for change in self.reg.apply()], [False])
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        self.assertNotIn("off", self.written())
         self.assertNotIn("state", self.reg.problems)
 
     def test_a_version_the_index_no_longer_lists_isnt_installed(self):

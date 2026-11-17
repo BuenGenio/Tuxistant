@@ -292,12 +292,49 @@ class CheckTests(BrowseCase):
         with mock.patch.object(registry, "_write", full):
             view = await self.browse.check()
         self.assertEqual(view["problems"]["index"], registry.UNSAVED.format(
-            folder=self.state, why=os.strerror(errno.ENOSPC)))
+            folder=registry._shown(self.state), why=os.strerror(errno.ENOSPC)))
         self.assertIn("revocations.json", [path for path, _ in self.fetched])
         self.assertIn("revocations", view["problems"])
         self.assertEqual(view["index"]["seq"], 1)
+        self.assertEqual(self.browse._due(), self.browse.last[0] + browse.RETRY_S,
+                         "what it couldn't keep may revoke a skill, so it isn't left for a day")
         view = await self.browse.check()
         self.assertEqual((view["problems"], view["index"]["seq"]), ({}, 2))
+        self.assertEqual(self.browse._due(), self.browse.last[0] + browse.CHECK_EVERY_S)
+
+    async def test_a_switch_off_tux_cant_record_holds_and_is_tried_again_an_hour_later(self):
+        """A review filled the disk as a revocation came: the check counted as done, so the
+        recipe ran on, with nothing said, until the next check a day later."""
+        await self.installed_v1()
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
+        ledger = self.skills.parent / registry.INSTALLED
+        real = registry._write
+
+        def full(file, data, mode=0o600):
+            if file == ledger:
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+            real(file, data, mode)
+
+        with mock.patch.object(registry, "_write", full):
+            view = await self.browse.check()
+            self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+            self.host.reload()
+            self.assertNotIn("io.github.ada.bluetooth", self.loaded(), "a reload keeps it off")
+        self.assertEqual(view["problems"], {"state": registry.NOT_RECORDED.format(
+            file=registry._shown(ledger), why=os.strerror(errno.ENOSPC))})
+        self.assertEqual(self.notices, [("Tuxistant switched off io.github.ada.bluetooth",
+                                         "The skills registry has switched it off: Gone bad.")])
+        self.assertEqual(view["skills"][0]["installed"]["off"],
+                         {"kind": "suspend", "reason": "Gone bad."})
+        name = self.file("bluetooth").name
+        self.assertNotIn("off", json.loads(ledger.read_text())[name], "only in memory")
+        self.assertEqual(self.browse._due(), self.browse.last[0] + browse.RETRY_S)
+        view = await self.browse.check()
+        self.assertEqual(view["problems"], {})
+        self.assertIn("off", json.loads(ledger.read_text())[name])
+        self.assertEqual(len(self.notices), 1, "a switch-off is told once")
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.browse._due(), self.browse.last[0] + browse.CHECK_EVERY_S)
 
     @unittest.skipIf(os.geteuid() == 0, "root can write a folder that is 0500")
     async def test_a_state_folder_that_cant_be_made_is_a_problem(self):

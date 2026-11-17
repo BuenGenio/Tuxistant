@@ -135,8 +135,15 @@ YOURS = "You already have a skill file called {name}, so Tux left it alone."
 DROPPED = "The skills registry's list no longer has that version, so Tux didn't install it."
 UNSAVED = ("Tux couldn't save what it took from the skills registry in {folder} ({why}), so it "
            "kept what it had.")
-NOT_RECORDED = ("Tux couldn't write {file} ({why}), so what the skills registry switched off or "
-                "back on is still as it was here.")
+NOT_RECORDED = ("Tux couldn't write {file} ({why}), so what the skills registry switched off is "
+                "off only until Tux restarts, and what it switched back on is still off. Tux "
+                "tries again in an hour.")
+RECORD_FIELDS = ("id", "version", "key", "sha256")
+
+# Switch-offs apply() couldn't write to registry-installed.json, by that file, then by file
+# name: installed() reads them as if written while the daemon runs, and apply() writes them
+# when it can. Only the safe direction is held: a lift waits for the write.
+_UNWRITTEN: dict[Path, dict[str, dict]] = {}
 
 
 class Refused(ValueError):
@@ -663,6 +670,7 @@ class Registry:
         self.clock = clock
         self.on_change = on_change
         self.problems: dict[str, str] = {}      # "index", "revocations" or "state": why it failed
+        self.unsaved: set[str] = set()          # those of them taken but not saved
         self._kept: dict | None = None
         self._index: dict | None = None
 
@@ -671,26 +679,28 @@ class Registry:
     def refresh(self) -> list[dict]:
         """Fetch and check the index, then the revocations, and switch off what they cover.
         A file that fails keeps the one Tux had, and problems says why, as it does for a disk
-        that is full or a state folder that can't be made."""
+        that is full or a state folder that can't be made; unsaved then names it too."""
         for name, step in (("index", self._refresh_index), ("revocations", self._refresh_revoked)):
             try:
                 step()
-                self.problems.pop(name, None)
+                self._problem(name, "")
             except Refused as e:
-                self.problems[name] = str(e)
+                self._problem(name, str(e))
             except OSError as e:
-                self.problems[name] = UNSAVED.format(folder=_shown(self.state),
-                                                     why=e.strerror or e)
+                self._problem(name, UNSAVED.format(folder=_shown(self.state),
+                                                   why=e.strerror or e), unsaved=True)
         try:
-            changes = self.apply()
-            self.problems.pop("state", None)
-            return changes
+            return self.apply()
         except Refused as e:
-            self.problems["state"] = str(e)
-        except OSError as e:
-            self.problems["state"] = NOT_RECORDED.format(
-                file=_shown(self.skills.parent / INSTALLED), why=e.strerror or e)
+            self._problem("state", str(e))
         return []
+
+    def _problem(self, name: str, problem: str, unsaved: bool = False) -> None:
+        if problem:
+            self.problems[name] = problem
+        else:
+            self.problems.pop(name, None)
+        (self.unsaved.add if unsaved else self.unsaved.discard)(name)
 
     def _refresh_index(self) -> None:
         data = self._fetched("index.json", MAX_INDEX_BYTES)
@@ -950,12 +960,18 @@ class Registry:
 
     def apply(self) -> list[dict]:
         """Switch off each installed recipe a revocation in effect covers, and back on each one
-        whose revocation was lifted. Returns what changed, for a notification."""
+        whose revocation was lifted. Returns what changed, for a notification. When
+        registry-installed.json can't be written, problems says so, and each switch-off holds
+        in memory all the same until a later apply() writes it (_UNWRITTEN), while a lift waits
+        for that write and is returned then."""
         self.kept()     # a damaged state is refused here too, with nothing installed
-        records = installed(self.skills)
-        changes, dirty = [], False
+        ledger = self.skills.parent / INSTALLED
+        records = installed(self.skills)    # with what couldn't be written before
+        changes, dirty, held = [], ledger in _UNWRITTEN, {}
         for name, record in records.items():
             was = record.get("off")
+            if was:
+                held[name] = dict(record)
             # a switch-off whose copy Tux no longer holds, after a lost state or a retired
             # moderation key, outlasts it and isn't swapped for another copy: only a lift ends it
             if was and not self._ended_or_held(was):
@@ -967,14 +983,23 @@ class Registry:
                 continue
             if now:
                 record["off"] = now
+                held[name] = dict(record)
             else:
-                record.pop("off", None)
+                record.pop("off", None)     # held as it was until this is written
             dirty = True
             if os.path.lexists(self.skills / name):     # one taken out has nothing to switch
                 changes.append({"file": name, "id": record["id"], "off": bool(now),
                                 "kind": (now or was)["kind"], "reason": (now or was)["reason"]})
-        if dirty:
-            _write(self.skills.parent / INSTALLED, _dumps(records))
+        try:
+            if dirty:
+                _write(ledger, _dumps(records))
+            _UNWRITTEN.pop(ledger, None)
+            self._problem("state", "")
+        except OSError as e:
+            _UNWRITTEN[ledger] = held
+            changes = [change for change in changes if change["off"]]
+            self._problem("state", NOT_RECORDED.format(file=_shown(ledger), why=e.strerror or e),
+                          unsaved=True)
         if changes and self.on_change:
             self.on_change()
         return changes
@@ -1161,15 +1186,20 @@ def _held(value, more: set = frozenset()) -> dict | None:
 
 
 def installed(skills: Path) -> dict:
-    """What Tux installed from the registry, by file name in the skills folder."""
+    """What Tux installed from the registry, by file name in the skills folder, with each
+    switch-off apply() couldn't write while the daemon runs, on the version it was made for."""
     data = _read_json(skills.parent / INSTALLED, MAX_STATE_BYTES)
     records = {}
     for name, record in (data.items() if isinstance(data, dict) else ()):
         if (isinstance(name, str) and "/" not in name and name.endswith(".yaml")
-                and _record_ok(record, ("id", "version", "key", "sha256"))
+                and _record_ok(record, RECORD_FIELDS)
                 and (record.get("was") is None
-                     or _record_ok(record["was"], ("version", "key", "sha256")))):
+                     or _record_ok(record["was"], RECORD_FIELDS[1:]))):
             records[name] = _on_disk(skills / name, record)
+    for name, held in _UNWRITTEN.get(skills.parent / INSTALLED, {}).items():
+        record = records.get(name)
+        if record and all(record[field] == held[field] for field in RECORD_FIELDS):
+            records[name] = {**record, "off": held["off"]}
     return records
 
 
