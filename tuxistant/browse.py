@@ -146,11 +146,24 @@ class Browse:
         return page
 
     async def start(self) -> None:
-        """The view of what Tux holds, read once the daemon is up. Settings may have asked
-        before it was ready, and had nothing, so it is told to ask again."""
-        before = self.view
+        """Once the daemon is up, what the revocations Tux holds switch off or back on, fetching
+        nothing, told as after a check: one saved before a restart but never written to the
+        record would otherwise run until the next check. Then the view of what Tux holds.
+        Settings may have asked before it was ready, and had nothing, so it is told to ask
+        again."""
+        before, changes = self.view, []
         async with self.lock:
+            try:
+                changes = await asyncio.to_thread(self.registry.apply)
+            except Refused:     # a damaged state, which the view says
+                pass
+            except Exception:
+                log.exception("switching off what the skills registry revoked failed")
+            if changes:
+                self.host.reload()
             await self._new_view()
+        for change in changes:
+            await self._notify(change)
         if self.view != before:
             self.emit("RegistryChanged")
 
@@ -254,6 +267,8 @@ class Browse:
             when, reached = self.last
             return when + (CHECK_EVERY_S if reached else RETRY_S)
         soon = self.started + FIRST_CHECK_S
+        if self.registry.unsaved:   # start() couldn't write what it switched, so no day's wait
+            return soon
         try:
             accepted = (self.registry.state / registry.HELD_INDEX).stat().st_mtime
         except OSError:

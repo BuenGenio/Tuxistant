@@ -127,6 +127,17 @@ class BrowseCase(RegistryCase, unittest.IsolatedAsyncioTestCase):
         made.notify = notify
         return made
 
+    def restarted(self) -> Browse:
+        """The daemon started again: nothing it held in memory, and a new SkillHost and
+        Controller reading the files."""
+        registry._UNWRITTEN.pop(self.skills.parent / registry.INSTALLED, None)
+        self.host = SkillHost(DEFAULTS, self.builtin, self.root / "bundled", self.skills,
+                              launcher=lambda *_: None)
+        self.host.reload()
+        self.ctl = Controller(self.config, None, self.host, emit=self.emitted)
+        self.ctl.face = True
+        return self.new_browse()
+
     def emitted(self, name, *args):
         self.signals.append(name)
         if name == "Approval":
@@ -308,14 +319,7 @@ class CheckTests(BrowseCase):
         await self.installed_v1()
         self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
         ledger = self.skills.parent / registry.INSTALLED
-        real = registry._write
-
-        def full(file, data, mode=0o600):
-            if file == ledger:
-                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
-            real(file, data, mode)
-
-        with mock.patch.object(registry, "_write", full):
+        with self.full(ledger):
             view = await self.browse.check()
             self.assertNotIn("io.github.ada.bluetooth", self.loaded())
             self.host.reload()
@@ -335,6 +339,90 @@ class CheckTests(BrowseCase):
         self.assertEqual(len(self.notices), 1, "a switch-off is told once")
         self.assertNotIn("io.github.ada.bluetooth", self.loaded())
         self.assertEqual(self.browse._due(), self.browse.last[0] + browse.CHECK_EVERY_S)
+
+    async def test_a_switch_off_saved_but_never_recorded_is_made_again_at_a_restart(self):
+        """A review filled the disk as a revocation came, then restarted the daemon: the record
+        had no switch-off, so the recipe ran, shown as on, until the next check a day later."""
+        await self.installed_v1()
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
+        ledger, name = self.skills.parent / registry.INSTALLED, self.file("bluetooth").name
+        with self.full(ledger):
+            await self.browse.check()
+        told = [("Tuxistant switched off io.github.ada.bluetooth",
+                 "The skills registry has switched it off: Gone bad.")]
+        self.assertEqual(self.notices, told)
+        self.assertNotIn("off", json.loads(ledger.read_text())[name])
+        held = self.state / registry.HELD_INDEX
+        with self.full(ledger):     # still full at the restart
+            later = self.restarted()
+            self.assertIn("io.github.ada.bluetooth", self.loaded(), "the record has no off")
+            await later.start()
+            self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+            self.host.reload()
+            self.assertNotIn("io.github.ada.bluetooth", self.loaded(), "a reload keeps it off")
+        view = later.listing()
+        self.assertEqual(view["skills"][0]["installed"]["off"],
+                         {"kind": "suspend", "reason": "Gone bad."})
+        self.assertEqual(view["problems"], {"state": registry.NOT_RECORDED.format(
+            file=registry._shown(ledger), why=os.strerror(errno.ENOSPC))})
+        self.assertEqual(self.notices, told * 2, "told again, as the record never had it")
+        os.utime(held, (NOW - 3600,) * 2)      # a fresh index waits a day, but not now
+        self.assertEqual(later._due(), NOW + browse.FIRST_CHECK_S)
+        later = self.restarted()    # with room on the disk
+        await later.start()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertIn("off", json.loads(ledger.read_text())[name])
+        self.assertEqual(later.listing()["problems"], {})
+        self.assertEqual(len(self.notices), 3)
+        self.assertEqual(later._due(), NOW - 3600 + browse.CHECK_EVERY_S)
+        later = self.restarted()    # written now, so nothing more to do or say
+        await later.start()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(len(self.notices), 3)
+
+    async def test_a_lift_saved_but_never_recorded_is_made_at_a_restart(self):
+        await self.installed_v1()
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"})])
+        await self.browse.check()
+        self.publish(self.bluetooth_index(self.v1, seq=2, lifted=[1]))
+        with self.full(self.skills.parent / registry.INSTALLED):
+            await self.browse.check()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded(), "a lift waits for the write")
+        self.assertEqual(len(self.notices), 1)
+        later = self.restarted()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        await later.start()
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.notices[1:], [("Tuxistant switched io.github.ada.bluetooth back on",
+                                             browse.LIFTED)])
+        self.assertIsNone(later.listing()["skills"][0]["installed"]["off"])
+
+    async def test_revocations_tux_cant_save_switch_off_all_the_same(self):
+        """With state.json full as a revocation came, the list was checked, then dropped
+        unsaved, so the recipe ran on until a check could save it."""
+        await self.installed_v1()
+        self.revoked(1, [self.entry(1, {"skill": "io.github.ada.bluetooth"}, reason="Gone bad.")])
+        state, ledger = self.state / registry.STATE, self.skills.parent / registry.INSTALLED
+        with self.full(state):
+            view = await self.browse.check()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.notices, [("Tuxistant switched off io.github.ada.bluetooth",
+                                         "The skills registry has switched it off: Gone bad.")])
+        unsaved = registry.UNSAVED.format(folder=registry._shown(self.state),
+                                          why=os.strerror(errno.ENOSPC))
+        self.assertEqual(view["problems"], {"index": unsaved, "revocations": unsaved})
+        self.assertEqual(json.loads(state.read_text())["moderated"], {}, "only in memory")
+        self.assertEqual(self.browse._due(), self.browse.last[0] + browse.RETRY_S)
+        name = self.file("bluetooth").name
+        self.assertIn("off", json.loads(ledger.read_text())[name], "recorded as any switch-off")
+        later = self.restarted()
+        await later.start()
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded(), "the record holds it off")
+        view = await later.check()
+        self.assertEqual(view["problems"], {})
+        self.assertNotEqual(json.loads(state.read_text())["moderated"], {})
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(len(self.notices), 1, "a switch-off is told once")
 
     @unittest.skipIf(os.geteuid() == 0, "root can write a folder that is 0500")
     async def test_a_state_folder_that_cant_be_made_is_a_problem(self):

@@ -185,6 +185,16 @@ class RegistryCase(unittest.TestCase):
         self.assertIn(contains, str(caught.exception))
         return str(caught.exception)
 
+    def full(self, target: Path):
+        """registry._write failing at target as on a full disk."""
+        real = registry._write
+
+        def write(file, data, mode=0o600):
+            if file == target:
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+            real(file, data, mode)
+        return mock.patch.object(registry, "_write", write)
+
 
 class SignatureTests(RegistryCase):
     def check(self, data, sig, public=None, principal="p", namespace="ns"):
@@ -1106,16 +1116,6 @@ class InstalledTests(RegistryCase):
         self.assertNotIn("off", record(), "the update its revocation doesn't cover ended it")
         self.assertIn("io.github.ada.bluetooth", self.loaded())
 
-    def full(self, target: Path):
-        """registry._write failing at target as on a full disk."""
-        real = registry._write
-
-        def write(file, data, mode=0o600):
-            if file == target:
-                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
-            real(file, data, mode)
-        return mock.patch.object(registry, "_write", write)
-
     def written(self) -> dict:
         """The record of the file as it is on disk, with nothing held in memory."""
         return json.loads((self.skills.parent / registry.INSTALLED).read_text())[self.file.name]
@@ -1160,6 +1160,20 @@ class InstalledTests(RegistryCase):
         self.assertIn("io.github.ada.bluetooth", self.loaded())
         self.assertNotIn("off", self.written())
         self.assertNotIn("state", self.reg.problems)
+
+    def test_a_switch_off_held_in_memory_is_only_on_the_version_it_was_made_for(self):
+        """Laid over 1.1.0, installed while it is held and not covered, it would show the new
+        version as off, and the next write would tell it as switched back on."""
+        with self.full(self.skills.parent / registry.INSTALLED):
+            self.assertEqual([change["off"] for change in self.suspend(
+                {"skill": "io.github.ada.bluetooth", "versions": ["1.0.0"]})], [True])
+        self.assertNotIn("io.github.ada.bluetooth", self.loaded())
+        self.reg.install(self.reg.check("io.github.ada.bluetooth", "1.1.0"))
+        record = registry.installed(self.skills)[self.file.name]
+        self.assertEqual((record["version"], record.get("off")), ("1.1.0", None))
+        self.assertIn("io.github.ada.bluetooth", self.loaded())
+        self.assertEqual(self.reg.apply(), [], "nothing to tell")
+        self.assertNotIn("off", self.written())
 
     def test_a_version_the_index_no_longer_lists_isnt_installed(self):
         checked = self.reg.check("io.github.ada.bluetooth", "1.1.0")

@@ -133,11 +133,11 @@ CHANGED_LEFT = ("You've changed {name}, so Tux left it. Take it out of your skil
                 "if you want it gone.")
 YOURS = "You already have a skill file called {name}, so Tux left it alone."
 DROPPED = "The skills registry's list no longer has that version, so Tux didn't install it."
-UNSAVED = ("Tux couldn't save what it took from the skills registry in {folder} ({why}), so it "
-           "kept what it had.")
-NOT_RECORDED = ("Tux couldn't write {file} ({why}), so what the skills registry switched off is "
-                "off only until Tux restarts, and what it switched back on is still off. Tux "
-                "tries again in an hour.")
+UNSAVED = ("Tux couldn't save what it took from the skills registry in {folder} ({why}). Tux "
+           "tries again within an hour.")
+NOT_RECORDED = ("Tux couldn't write {file} ({why}). What the skills registry switched off is off "
+                "all the same, but what it switched back on stays off until Tux can write it. Tux "
+                "tries again within an hour.")
 RECORD_FIELDS = ("id", "version", "key", "sha256")
 
 # Switch-offs apply() couldn't write to registry-installed.json, by that file, then by file
@@ -679,7 +679,8 @@ class Registry:
     def refresh(self) -> list[dict]:
         """Fetch and check the index, then the revocations, and switch off what they cover.
         A file that fails keeps the one Tux had, and problems says why, as it does for a disk
-        that is full or a state folder that can't be made; unsaved then names it too."""
+        that is full or a state folder that can't be made; unsaved then names it too. A list of
+        revocations checked but not saved is used all the same while the daemon runs."""
         for name, step in (("index", self._refresh_index), ("revocations", self._refresh_revoked)):
             try:
                 step()
@@ -770,12 +771,19 @@ class Registry:
             raise Refused("The registry's list of revoked skills is too big, so it wasn't used.")
         signer = self._moderation_key(data, signature, index["moderation_keys"])
         found = parse_revocations(data)
-        kept = copy.deepcopy(self.kept())   # kept in memory only once it is on disk
+        kept = copy.deepcopy(self.kept())
         digest = hashlib.sha256(data).hexdigest()
         _not_older(kept.get("revocations"), found["seq"], digest, "list of revoked skills")
         kept = _with_moderation(kept, signer, found["revocations"])
         kept["revocations"] = {"seq": found["seq"], "sha256": digest, "key": signer}
-        self._save(kept, _state_bytes(kept))
+        state = _state_bytes(kept)
+        try:
+            self._save(kept, state)
+        except OSError:
+            # checked, and it only adds revocations, so it is used all the same while the daemon
+            # runs, and the next save of the state writes it with the rest
+            self._kept = kept
+            raise
         return found
 
     def _moderation_key(self, data: bytes, signature: bytes, keys: list) -> str:
