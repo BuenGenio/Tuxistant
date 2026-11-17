@@ -14,8 +14,22 @@
     "channel": "planned",
     "url": null
   },
-  "preview": null,
+  "preview": {
+    "version": "0.6.0",
+    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.6.0.tar.gz",
+    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.6.0"
+  },
   "history": [
+    {
+      "version": "0.6.0",
+      "date": "2026-11-17",
+      "channel": "preview",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.6.0",
+      "features": [
+        {"icon": "shield", "label": {"en": "Signature checks for shared skills", "es": "Habilidades compartidas firmadas", "pt": "Habilidades compartilhadas assinadas", "zh": "共享技能的签名校验", "ar": "التحقق من توقيعات المهارات المشتركة"}},
+        {"icon": "search", "label": {"en": "Browse skills, once the registry opens", "es": "Ver habilidades cuando abra el registro", "pt": "Ver habilidades quando o registro abrir", "zh": "目录开放后即可浏览技能", "ar": "تصفّح المهارات عند افتتاح السجل"}}
+      ]
+    },
     {
       "version": "0.5.0",
       "date": "2026-11-15",

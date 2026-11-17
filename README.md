@@ -22,14 +22,15 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 
 ## Install
 
-There are four releases to choose from:
+There are five releases to choose from:
 
 - **0.5.0**, the stable release, and what the website offers. It adds recipe skills you write in YAML, a page for every skill in Settings, follow-up questions, hands-free dictation and an agreement before anything goes to the cloud. All of it was reviewed and tested, but most of it hasn't been tried on a real desktop yet; [CHANGELOG.md](CHANGELOG.md) says how far each part was.
 - **0.2.0**, the last release whose additions all worked on the owner's own desktop.
 - **0.3.0**, a preview. It adds media, timers, Home Assistant, mail search, facts from Wikipedia, web search and research, and your own skills. Most of it has only run in tests so far; [CHANGELOG.md](CHANGELOG.md) says which parts.
 - **0.4.0**, a preview. It adds opening apps and Settings pages, and a click before the facts lookup sends a question that may be about your home. None of it has been tried on a real desktop yet.
+- **0.6.0**, a preview. It holds Tux's side of the skills registry, for sharing recipe skills: the signature checks, the switch-off of revoked recipes and a Browse page in Settings. The registry doesn't exist yet, so nothing is fetched and Settings doesn't show Browse: as installed it works as 0.5.0 does. None of it has been tried on a real desktop yet.
 
-On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for an earlier release, use `--branch v0.2.0`, `--branch v0.3.0` or `--branch v0.4.0` instead:
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for another release, use `--branch v0.2.0`, `--branch v0.3.0`, `--branch v0.4.0` or `--branch v0.6.0` instead:
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
@@ -37,7 +38,7 @@ git clone --branch v0.5.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
 
-Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`.
+Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`, or `tar xzf Tuxistant-0.6.0.tar.gz && cd Tuxistant-0.6.0` for the newest preview.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 

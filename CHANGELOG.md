@@ -1,6 +1,12 @@
 # Changelog
 
-## Not yet released
+## 0.6.0, a preview
+
+A preview, published as a GitHub prerelease. 0.5.0 stays the stable release and what the website offers.
+
+If you use Tuxistant, nothing changes yet, except a new line in `tuxistant doctor` that says no skills registry is set. 0.6.0 holds Tux's side of the skills registry, the reviewed place planned for sharing recipe skills: the checks that every list of skills, list of revoked skills and recipe from it was signed and is unchanged, the switch-off of a recipe the registry revokes, and a Browse page in Settings to find, install, update and remove those recipes. The registry itself doesn't exist yet, so as installed no registry address is set, nothing is fetched, Settings doesn't show Browse, and every skill loads as it did in 0.5.0. It ships now, unused, so that the part that decides what a stranger's recipe may do on your computer is reviewed, tested and in the open before any registry depends on it. It was reviewed for security, for correctness and for what a stranger sees, and fixed over five rounds, but it has only run in tests: the checks and the daemon's side offline, with throwaway keys and a loopback server, and the Browse page in a headless Settings against a stand-in daemon. None of it has been tried on a real desktop.
+
+Mail search through GNOME Online Accounts, which was planned for 0.6.0, isn't ready, so it isn't in it. The website was also redesigned since 0.5.0; that is live already.
 
 One change reaches what 0.5.0 already did:
 

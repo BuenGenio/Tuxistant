@@ -1,14 +1,14 @@
 {
   "about": "A local preview of the site once the current rounds ship: python3 website/build.py --preview website/preview/upcoming.json writes website/dist-preview/. Never deployed. Planned entries carry their planned date, and every claim stays Soon.",
   "preview": {
-    "version": "0.6.0",
+    "version": "0.7.0",
     "url": null,
     "page": null
   },
   "releases": [
     {
-      "version": "0.6.0",
-      "date": "2026-11-17",
+      "version": "0.7.0",
+      "date": "2026-11-19",
       "channel": "preview",
       "planned": true,
       "features": [
@@ -48,28 +48,11 @@
       ]
     ]
   },
-  "strings": {
-    "en": {
-      "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Tailscale, Home Assistant, Spotify, CNN, Windows and macOS are trademarks of their owners, named only to say what Tuxistant works with or will. None of them sponsors or endorses it."
-    },
-    "es": {
-      "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Tailscale, Home Assistant, Spotify, CNN, Windows y macOS son marcas de sus respectivos dueños y se nombran solo para decir con qué funciona o funcionará Tuxistant. Ninguno lo patrocina ni lo avala."
-    },
-    "pt": {
-      "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Tailscale, Home Assistant, Spotify, CNN, Windows e macOS são marcas dos seus respectivos donos, citadas apenas para dizer com o que o Tuxistant funciona ou vai funcionar. Nenhum deles o patrocina ou endossa."
-    },
-    "zh": {
-      "trademarks": "Linux、GNOME、BBC、The Kyiv Independent、Google Calendar、Tapo、Open-Meteo、LibreTranslate、Wikipedia、Tailscale、Home Assistant、Spotify、CNN、Windows 和 macOS 均为其各自所有者的商标，在此提及仅为说明 Tuxistant 现已支持或即将支持的对象。它们均未赞助或认可 Tuxistant。"
-    },
-    "ar": {
-      "trademarks": "Linux، GNOME، BBC، The Kyiv Independent، Google Calendar، Tapo، Open-Meteo، LibreTranslate، Wikipedia، Tailscale، Home Assistant، Spotify، CNN، Windows وmacOS علامات تجارية لمالكيها، وتُذكر هنا فقط لبيان ما يعمل معه Tuxistant أو سيعمل معه. لا يرعاه أي منهم ولا يزكّيه."
-    }
-  },
   "banner": {
-    "en": "Local preview of the site once 0.6.0 ships. Not deployed, and the date is a plan.",
-    "es": "Vista previa local del sitio cuando salga 0.6.0. No está publicada y la fecha es una previsión.",
-    "pt": "Prévia local do site quando sair a 0.6.0. Não está publicada e a data é planejada.",
-    "zh": "本地预览：0.6.0 发布后的网站样子。未上线，日期为计划。",
-    "ar": "معاينة محلية للموقع بعد صدور 0.6.0. غير منشورة، والتاريخ مخطط له."
+    "en": "Local preview of the site once 0.7.0 ships. Not deployed, and the date is a plan.",
+    "es": "Vista previa local del sitio cuando salga 0.7.0. No está publicada y la fecha es una previsión.",
+    "pt": "Prévia local do site quando sair a 0.7.0. Não está publicada e a data é planejada.",
+    "zh": "本地预览：0.7.0 发布后的网站样子。未上线，日期为计划。",
+    "ar": "معاينة محلية للموقع بعد صدور 0.7.0. غير منشورة، والتاريخ مخطط له."
   }
 }

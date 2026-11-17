@@ -208,7 +208,7 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
 .dl-meta { margin: 6px 0 0; color: var(--muted); font-size: 0.88rem; }
 .dl-meta a { color: var(--text); }
 .dl-preview { margin: 2px 0 0; color: var(--muted); font-size: 0.84rem; }
-.dl-preview a { color: var(--text); }
+.dl-preview a { color: var(--text); white-space: nowrap; }     /* a link wraps whole, not mid-way */
 
 /* Works with: a slim strip. Two copies of one list sit side by side and each slides by its own
    width plus the gap, so the second lands exactly where the first began. No script. */
