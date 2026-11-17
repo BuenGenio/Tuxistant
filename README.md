@@ -212,9 +212,9 @@ The plan starts from one assumption: a bad skill will eventually get past review
 | Private data can't leave without a click | Built |
 | Read-only shell commands run in a sandbox | Built, for the shell skill only |
 | Each skill confined to its declared permissions at run time | Built for code skills, which may only ask for the network, and get all of it or none. Built for recipes, which reach only the hosts they name and never this computer over the network. Built-in skills run inside the daemon |
-| Signing and hash pinning | **Planned** |
-| Publisher namespaces against lookalike names | **Planned**. Skills you add can't use an action name that starts like a built-in one |
-| Re-approving new permissions | Built for skills you add: a new permission, or a new host for a recipe, waits until the skill is taken out and put back. A card for it is planned |
+| Signing and hash pinning | Built in Tux, not yet in use as no registry exists: Tux checks the registry's signature on its list of skills and refuses an older list, and checks each recipe's size, SHA-256 and publisher's signature before installing it |
+| Publisher namespaces against lookalike names | Built in Tux for the registry, not yet in use: a shared skill's id is `io.github.<login>.<name>`, and its recipe must be signed by a key of that GitHub account. Skills you add can't use an action name that starts like a built-in one |
+| Re-approving new permissions | Built for skills you add: a new permission, or a new host for a recipe, waits until the skill is taken out and put back. For a skill from the registry, an update that asks for more waits for a card (not yet in use) |
 | Sandbox for skills with their own code | Built. Not yet tried on the real desktop |
 
 Confining each skill at run time matters most, because that's what has to hold once a bad skill gets through. Shell access stays built in, and community skills will never be able to request it. [docs/ROADMAP.md](docs/ROADMAP.md#rules-for-shared-skills) has the rules for shared skills and the order of the work.
