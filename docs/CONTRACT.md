@@ -255,7 +255,7 @@ An installed file that no longer loads counts as having none of these. An update
 
 ### D-Bus
 
-Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed` with a sentence that Settings shows as it is. None of these is in `SHELL_ONLY`, since Settings calls them. A daemon older than them answers with an unknown-method error, and Settings then leaves Browse out.
+Every value is a JSON string. Every error is `org.tuxistant.Daemon.Error.Failed` with a sentence that Settings shows as it is. None of these is in `SHELL_ONLY`, since Settings calls them. A daemon older than them answers with an unknown-method error, and Settings then shows, in place of Browse, that the Tuxistant running is older than Settings and needs a restart.
 
 | Method | Signature | Meaning |
 |---|---|---|
@@ -311,6 +311,15 @@ The errors, beside the `Refused` sentences of `registry.py`, which pass through 
 ### Settings
 
 The Browse page shows `BrowseSkills`: the categories, a search box that filters the list it already has by id, name, summary and tags, and the skills, with "Check now" for `CheckRegistry`. A skill's page shows `BrowseSkill`: the publisher, licence, tags, links (shown as text, opened in the browser only on a click), the hosts and the risk with its reason in plain words, and the versions. "Show the recipe" calls `FetchSkill` and shows each action's tool as the Skills page does, and the whole file read-only as the Skills page shows a manifest. Every string from the registry is plain text, never markup. Install, Update and Remove call their methods. While Install or Update waits, the page says "Allow it on the approval card." Problems and errors are shown as the daemon wrote them.
+
+Built in `tuxistant/settings_app.py` (`BrowsePage`, `BrowseDialog`) and tested against the fake daemon in `tests/shell_harness_settings_fake.py`. Settings' own choices within the above:
+
+- A category opens to its tags, and choosing the category or one tag narrows the list to it. The list is in two parts, "Installed from the registry" in the index's order and "Newest", by the `date` of the version offered.
+- "Allow it on the approval card." is said for an install, and for an update whose `new` isn't empty or whose skill is switched off. For an update whose `new` is `[]` the page says "Updating…", and for one whose `new` is still null "Updating. If an approval card comes up, allow it there".
+- Remove asks first in Settings, as Clear history does. That is a question in Settings, not an approval: the daemon needs none.
+- A link opens only if it is `https://`, as the format allows, so a click can't hand another scheme to another app.
+- `off` and `revoked` are said with the words of `switched_off_because()`. A test keeps Settings' copy of them the same.
+- Settings calls `BrowseSkills` again on `RegistryChanged`, on `SkillsChanged` and whenever its window becomes active, so it must stay as cheap as the rest of this section says.
 
 ### Tests
 

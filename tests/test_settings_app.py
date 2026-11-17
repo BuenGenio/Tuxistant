@@ -547,6 +547,151 @@ class Logic(unittest.TestCase):
         self.assertIn("English only", notes["tux-realtime-eou"])
         self.assertIn("GPU memory", notes["tux-realtime-eou"])
 
+    def test_browse_search_looks_at_the_id_name_summary_and_tags(self):
+        tides = {"id": "io.github.ada.tides", "name": "Tides", "tags": ["weather", "Sea"],
+                 "summary": "Says when the next high tide is"}
+        for query in ("", "  TIDES ", "io.github.ada", "high tide", "weather", "sea", "next ada"):
+            self.assertTrue(sa.browse_matches(tides, query), query)
+        for query in ("moon", "tides moon", "tide weatherman"):
+            self.assertFalse(sa.browse_matches(tides, query), query)
+        self.assertFalse(sa.browse_matches(tides, "tidesweather"), "a word is in one field")
+        self.assertTrue(sa.browse_matches({"id": "x"}, ""), "a field left out is no error")
+
+    def test_newest_skills_come_first(self):
+        skills = [{"id": "a", "date": "2026-11-01T08:00:00Z"}, {"id": "b", "date": None},
+                  {"id": "c", "date": "2026-11-12T09:00:00Z"}, {"id": "d", "date": "nonsense"},
+                  {"id": "e", "date": "2026-11-12T09:00:00Z"}]
+        self.assertEqual([s["id"] for s in sa.newest_first(skills)], ["c", "e", "a", "b", "d"],
+                         "a tie keeps the index's order, and no date goes last")
+
+    def test_categories_show_only_tags_that_have_skills(self):
+        skills = [{"tags": ["weather"]}, {"tags": ["weather", "prices"]}, {"tags": ["notes"]}]
+        categories = [{"id": "info", "name": "Information", "tags": ["weather", "prices", "x"]},
+                      {"id": "travel", "name": "Travel", "tags": ["transport"]},
+                      {"id": "home", "name": "Home", "tags": ["notes"]}]
+        self.assertEqual(sa.categories_shown(categories, skills), [
+            (categories[0], 2, [("weather", 2), ("prices", 1)]),
+            (categories[2], 1, [("notes", 1)])])
+        self.assertEqual(sa.categories_shown(None, skills), [])
+        self.assertEqual([sa.count_words(n) for n in (0, 1, 2)],
+                         ["0 skills", "1 skill", "2 skills"])
+
+    def test_switched_off_says_what_the_daemon_says(self):
+        from tuxistant import registry
+        for kind in ("suspend", "ban"):
+            for reason in ("It sent your mail somewhere", "Braces {0} and {reason} stay"):
+                self.assertEqual(sa.off_words({"kind": kind, "reason": reason}),
+                                 registry.switched_off_because(kind, reason))
+
+    def test_where_an_installed_skill_stands(self):
+        installed = {"version": "1.0.0", "file": "/s/t.yaml", "edited": False, "off": None}
+        skill = {"installed": installed, "update": None}
+        self.assertEqual(sa.browse_status({"installed": None}), "")
+        self.assertEqual(sa.browse_status(skill), "Installed, version 1.0.0")
+        more = {**skill, "update": {"version": "1.1.0", "new": ["to reach a.org", "the action t.b"],
+                                    "problem": ""}}
+        self.assertEqual(sa.browse_status(more), "Version 1.1.0 is waiting for your OK. New in "
+                                                 "this version: to reach a.org, the action t.b")
+        self.assertTrue(sa.needs_card(more))
+        nothing_new = {**skill, "update": {"version": "1.1.0", "new": [], "problem": ""}}
+        self.assertEqual(sa.update_words(nothing_new), "Version 1.1.0 is out, and it asks for "
+                                                       "nothing new")
+        self.assertIs(sa.needs_card(nothing_new), False)
+        unchecked = {**skill, "update": {"version": "1.1.0", "new": None, "problem": ""}}
+        self.assertIsNone(sa.needs_card(unchecked))
+        self.assertIn("hasn't checked yet", sa.update_words(unchecked))
+        failed = {**skill, "update": {"version": "1.1.0", "new": None,
+                                      "problem": "Tux couldn't reach the skills registry."}}
+        self.assertEqual(sa.update_words(failed),
+                         "Version 1.1.0 is out. Tux couldn't reach the skills registry.")
+        off = {"kind": "suspend", "reason": "Too much"}
+        switched_off = {"installed": {**installed, "off": off}, "update": nothing_new["update"]}
+        self.assertTrue(sa.needs_card(switched_off), "one switched off always takes the card")
+        self.assertEqual(sa.update_words(switched_off), "Version 1.1.0 is waiting for your OK. "
+                                                        "Installing it switches the skill back on")
+        self.assertEqual(sa.browse_status(switched_off), sa.off_words(off))
+        edited = {"installed": {**installed, "edited": True}, "update": more["update"]}
+        self.assertEqual(sa.browse_status(edited), sa.EDITED)
+
+    def test_what_the_page_says_while_the_daemon_works(self):
+        skill = {"installed": None, "update": None}
+        self.assertEqual(sa.waiting_words("InstallSkill", skill), sa.ON_THE_CARD)
+        self.assertEqual(sa.ON_THE_CARD, "Allow it on the approval card.", "as the contract says")
+        installed = {"version": "1.0.0", "edited": False, "off": None}
+        for new, words in ((["to reach a.org"], sa.ON_THE_CARD), ([], "Updating…"),
+                           (None, "Updating. If an approval card comes up, allow it there")):
+            update = {"installed": installed, "update": {"version": "2", "new": new}}
+            self.assertEqual(sa.waiting_words("UpdateSkill", update), words)
+        self.assertEqual(sa.waiting_words("RemoveSkill", skill), "Removing…")
+        reply = {"version": "1.1.0", "problem": ""}
+        self.assertEqual(sa.done_words("InstallSkill", "Tides", reply),
+                         "Installed Tides, version 1.1.0")
+        refused = {"version": "2", "problem": "Full."}
+        self.assertEqual(sa.done_words("UpdateSkill", "Tides", refused),
+                         "Updated Tides, version 2. It didn't load: Full.")
+        self.assertEqual(sa.done_words("RemoveSkill", "Tides", {}), "Removed Tides")
+
+    def test_a_refusal_is_shown_as_the_daemon_wrote_it(self):
+        refused = GLib.Error.new_literal(
+            Gio.DBusError.quark(), "GDBus.Error:org.tuxistant.Daemon.Error.Failed: You didn't "
+            "allow it, so nothing was installed.", Gio.DBusError.FAILED)
+        self.assertEqual(sa.failed_words(refused), "You didn't allow it, so nothing was installed.")
+        older = GLib.Error.new_literal(Gio.DBusError.quark(), "No such method",
+                                       Gio.DBusError.UNKNOWN_METHOD)
+        self.assertEqual(sa.failed_words(older), sa.BROWSE_OLDER)
+        late = GLib.Error.new_literal(Gio.io_error_quark(), "Timeout was reached",
+                                      Gio.IOErrorEnum.TIMED_OUT)
+        self.assertEqual(sa.failed_words(late), sa.NO_ANSWER, "a timeout doesn't say what was done")
+
+    def test_only_a_web_link_opens(self):
+        for url in ("https://example.org/ada/tides", "https://example.org/<b>x</b>",
+                    "https://example.org"):
+            self.assertEqual(sa.link_url(url), url)
+        for url in ("http://example.org/", "file:///etc/passwd", "https://", "https://a b.org/",
+                    "https://user@example.org/", "javascript:alert(1)", "HTTPS://example.org/",
+                    "https://example.org/" + "x" * 200, None, 7):
+            self.assertIsNone(sa.link_url(url), url)
+
+    def test_a_registry_recipe_says_what_it_reaches(self):
+        self.assertEqual(sa.permission_words(sa.registry_permissions(["a.org", "b.org"])),
+                         "Can use the network (a.org, b.org)")
+        self.assertEqual(sa.permission_list(sa.registry_permissions(None)), [])
+        self.assertEqual(sa.risk_words("medium", ["network"], sa.registry_permissions(["a.org"])),
+                         "Because it can use the network")
+
+    def test_registry_dates(self):
+        try:
+            with mock.patch.dict(os.environ, {"TZ": "UTC"}):
+                time.tzset()
+                self.assertEqual(sa.stamp_day("2026-11-20T08:41:00Z"), "20 November 2026")
+                self.assertEqual(sa.index_words({"seq": 4, "date": "2026-11-20T09:00:00Z",
+                                                 "accepted": "2025-01-02T10:02:11Z"}),
+                                 "Number 4, made 20 November 2026\nAccepted: 2 Jan 2025 10:02")
+        finally:
+            time.tzset()
+        for junk in (None, "", "soon", "9999-12-31T23:59:59-23:59", 12):
+            self.assertIsInstance(sa.stamp_day(junk), str)
+            self.assertIsInstance(sa.stamp_time(junk), str)
+        self.assertEqual(sa.stamp_day("soon"), sa.UNREADABLE_DATE)
+
+    def test_settings_fetches_nothing_itself(self):
+        """Every byte from the registry comes by way of the daemon, which checks it first."""
+        import ast
+        source = (ROOT / "tuxistant/settings_app.py").read_text()
+        imported, ours = set(), set()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.Import):
+                imported |= {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level:
+                ours |= {node.module or ""} | {alias.name for alias in node.names}
+            elif isinstance(node, ast.ImportFrom):
+                imported.add(node.module.split(".")[0])
+        self.assertEqual(imported & {"socket", "ssl", "http", "urllib", "websockets", "requests",
+                                     "asyncio", "subprocess", "aiohttp"}, set())
+        self.assertNotIn("registry", ours, "the checks and the fetching are the daemon's")
+        for name in ("SocketClient", "Soup", "WebKit", "new_for_uri", "load_contents"):
+            self.assertNotIn(name, source, name)
+
 
 class HeadlessApp(unittest.TestCase):
     """Starts the isolated session and has the Inner tests below run inside it."""
@@ -770,6 +915,85 @@ def close_skill(window):
         settle(30)
 
 
+def reset_registry():
+    """The fake daemon's registry back as it starts, and Browse showing it."""
+    forget()
+    control("SetRegistry", "", signature="s")
+    wait(lambda: calls("BrowseSkills"), "Browse to read it again")
+    settle()
+
+
+def open_browse(window):
+    window.views.set_visible_child_name("browse")
+    page = window.browse
+    wait(lambda: page.listing is not None and page.stack.get_visible_child_name() == "list",
+         "the skills from the registry")
+    return page
+
+
+def browse_rows(page):
+    return page.installed_rows + page.newest_rows
+
+
+def browse_row(page, skill_id):
+    return next(row for row in browse_rows(page) if row.skill["id"] == skill_id)
+
+
+def shown_ids(rows):
+    return [row.skill["id"] for row in rows if row.get_visible()]
+
+
+def open_registry_skill(window, skill_id):
+    """A skill's page from the registry, as a click on its row opens it."""
+    close_browse(window)
+    page = open_browse(window)
+    browse_row(page, skill_id).activate()
+    dialog = page.dialog
+    assert dialog is window.get_visible_dialog(), "a click opens the skill's page"
+    wait(lambda: dialog.details is not None or dialog.problem, "the skill's page")
+    return dialog
+
+
+def close_browse(window):
+    if window.browse.dialog:
+        window.browse.dialog.force_close()
+        settle(30)
+
+
+def fetching_calls():
+    """The calls that would have the daemon fetch from the registry or change your skills."""
+    return [call for call in calls() if call[0] in (
+        "FetchSkill", "CheckRegistry", "InstallSkill", "UpdateSkill", "RemoveSkill")]
+
+
+def card_up():
+    return control("CardUp")[0]
+
+
+def own_sockets() -> set[str]:
+    found = set()
+    for fd in os.listdir("/proc/self/fd"):
+        try:
+            target = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            continue
+        if target.startswith("socket:"):
+            found.add(target[len("socket:["):-1])
+    return found
+
+
+def network_sockets(inodes) -> set[str]:
+    """Those of inodes that are TCP or UDP sockets, in this process's network namespace."""
+    listed = set()
+    for name in ("tcp", "tcp6", "udp", "udp6", "raw", "raw6"):
+        try:
+            lines = (Path("/proc/self/net") / name).read_text().splitlines()[1:]
+        except OSError:
+            continue
+        listed |= {line.split()[9] for line in lines if len(line.split()) > 9}
+    return set(inodes) & listed
+
+
 def ready(window):
     return (window.state == "ready" and window.voices.groups and window.appearance.rows
             and window.skills.rows and window.history.rows)
@@ -801,6 +1025,7 @@ class Inner(unittest.TestCase):
 
     def setUp(self):
         close_skill(self.win)
+        close_browse(self.win)
         self.win.views.set_visible_child_name("general")
         forget()
 
@@ -2758,6 +2983,488 @@ class Inner(unittest.TestCase):
         control("Change", "ha_server", '""', signature="ss")
         wait(lambda: page.home.get_text() == "", "the outside change")
 
+    def test_27_b_a_browse_shows_categories_what_you_installed_and_the_newest(self):
+        from tuxistant import registry
+        from tests.shell_harness_settings_fake import REGISTRY_ADDRESS, SPY_REASON
+        reset_registry()
+        page = open_browse(self.win)
+        self.assertEqual(shown_ids(page.installed_rows),
+                         ["io.github.ada.notes", "io.github.ada.tides", "io.github.mal.spy"])
+        self.assertEqual(shown_ids(page.newest_rows),
+                         ["io.github.bob.prices", "io.github.mal.markup", "io.github.eve.lunar"],
+                         "newest first")
+        tides = browse_row(page, "io.github.ada.tides")
+        self.assertEqual(tides.get_title(), "Tides")
+        self.assertEqual(tides.get_subtitle(), "Says when the next high tide is at a seaside town"
+                         "\nFrom the GitHub account ada\nVersion 1.1.0 is waiting for your OK. "
+                         "New in this version: to reach tides.example.org")
+        self.assertIn(registry.switched_off_because("ban", SPY_REASON),
+                      browse_row(page, "io.github.mal.spy").get_subtitle())
+        self.assertIn(sa.EDITED, browse_row(page, "io.github.ada.notes").get_subtitle())
+
+        def badges(row):
+            return [c.get_label() for c in iter_children(row) if isinstance(c, Gtk.Label)
+                    and c.has_css_class("risk-badge")]
+
+        self.assertEqual(badges(browse_row(page, "io.github.bob.prices")), ["Medium risk"])
+        self.assertEqual(badges(browse_row(page, "io.github.eve.lunar")), ["Low risk"])
+        self.assertEqual(badges(browse_row(page, "io.github.mal.spy")), [],
+                         "nothing is offered, so there is no risk to give")
+        self.assertTrue(all(row.get_activatable() for row in browse_rows(page)))
+        self.assertEqual([(row.get_title(), row.get_subtitle()) for row in page.category_rows],
+                         [("Information", "3 skills"), ("Home & <b>notes</b>", "3 skills")],
+                         "a category with no skills in it isn't shown")
+        registry_texts = texts_of(page.registry)
+        self.assertIn(REGISTRY_ADDRESS, registry_texts)
+        self.assertIn("Number 4, made 12 November 2026", "\n".join(registry_texts))
+        self.assertIn("Tux couldn't reach the skills registry.", registry_texts)
+        self.assertEqual(fetching_calls(), [], "showing the page asks the daemon to fetch nothing")
+        shot(self.win, "browse")
+
+    def test_27_b_b_search_categories_and_tags_narrow_the_list(self):
+        reset_registry()
+        page = open_browse(self.win)
+        everything = shown_ids(browse_rows(page))
+
+        def search(text):
+            page.search.set_text(text)
+            settle(400)     # a search entry waits a moment before it says it changed
+            return shown_ids(browse_rows(page))
+
+        self.addCleanup(page.search.set_text, "")
+        self.assertEqual(search("coin"), ["io.github.bob.prices"], "by summary")
+        self.assertEqual(search("Weather"), ["io.github.ada.tides", "io.github.mal.spy",
+                                             "io.github.eve.lunar"], "by tag, and by summary")
+        self.assertEqual(search("io.github.eve"), ["io.github.eve.lunar"], "by id")
+        self.assertEqual(search("moon up"), ["io.github.eve.lunar"], "every word")
+        self.assertEqual(search("zzz"), [])
+        self.assertTrue(page.nothing.get_visible())
+        self.assertEqual(page.nothing_row.get_title(), "No skill matches")
+        self.assertFalse(page.installed.get_visible() or page.newest.get_visible())
+        self.assertEqual(sorted(search("")), sorted(everything))
+        self.assertFalse(page.nothing.get_visible())
+        information = page.category_rows[0]
+        information.set_expanded(True)
+        settle()
+        choices = information.choices
+        self.assertEqual([(row.get_title(), row.get_subtitle()) for row in choices],
+                         [("Everything in Information", "3 skills"), ("weather", "2 skills"),
+                          ("prices", "1 skill")])
+        choices[2].activate()
+        self.assertEqual(shown_ids(browse_rows(page)), ["io.github.bob.prices"])
+        self.assertTrue(page.narrowing.get_visible())
+        self.assertEqual(page.narrow_row.get_title(), "Tagged prices")
+        choices[0].activate()
+        self.assertEqual(page.narrow_row.get_title(), "In Information")
+        self.assertEqual(sorted(shown_ids(browse_rows(page))), [
+            "io.github.ada.tides", "io.github.bob.prices", "io.github.eve.lunar"])
+        self.assertEqual(search("moon"), ["io.github.eve.lunar"], "a search within it")
+        search("")
+        show_all = next(c for c in iter_children(page.narrow_row) if isinstance(c, Gtk.Button))
+        show_all.emit("clicked")
+        self.assertFalse(page.narrowing.get_visible())
+        self.assertEqual(sorted(shown_ids(browse_rows(page))), sorted(everything))
+        focus = self.win.get_focus()
+        self.assertTrue(focus is not None and (focus == page.search
+                                               or focus.is_ancestor(page.search)),
+                        "the button that went leaves the focus on the search")
+        forget()
+        with mock.patch.object(self.win, "is_active", return_value=True):
+            rows = browse_rows(page)
+            self.win.on_active()
+        wait(lambda: calls("BrowseSkills"), "Browse to read again")
+        settle()
+        self.assertEqual(browse_rows(page), rows, "an unchanged list keeps its rows")
+        self.assertTrue(information.get_expanded() and information in page.category_rows)
+
+    def test_27_b_c_a_skill_page_says_what_it_is_and_fetches_only_when_asked(self):
+        from tuxistant import registry
+        from tests.shell_harness_settings_fake import PRICES_REASON, REGISTRY_RECIPES
+        reset_registry()
+        dialog = open_registry_skill(self.win, "io.github.bob.prices")
+        self.assertEqual(dialog.get_title(), "Prices")
+        about = texts_of(dialog.about) + texts_of(dialog.facts)
+        for wanted in ("Says what a coin is worth", "The GitHub account bob",
+                       "io.github.bob.prices", "1.1.0, from 12 November 2026", "MIT", "prices"):
+            self.assertIn(wanted, about)
+        permissions = texts_of(dialog.permissions)
+        for wanted in ("Use the network", "prices.example.org", "Medium risk",
+                       "Because it can use the network"):
+            self.assertIn(wanted, permissions)
+        versions = [(row.get_title(), row.get_subtitle()) for row in iter_children(dialog.versions)
+                    if isinstance(row, Adw.ActionRow)]
+        self.assertEqual(versions, [
+            ("Version 1.1.0", "12 November 2026"),
+            ("Version 1.0.0", "3 November 2026\n"
+             + registry.switched_off_because("suspend", PRICES_REASON))], "newest first")
+        self.assertIn(sa.INSTALL_NOTE, texts_of(dialog.state))
+        self.assertTrue(dialog.install.get_visible())
+        self.assertFalse(dialog.update.get_visible() or dialog.remove.get_visible())
+        self.assertEqual(calls("FetchSkill"), [], "nothing is downloaded until you ask")
+        dialog.show_recipe.emit("activated")
+        wait(lambda: dialog.recipe is not None, "the recipe")
+        self.assertEqual(calls("FetchSkill"), [["FetchSkill", "io.github.bob.prices"]])
+        [row] = [r for r in iter_children(dialog.actions) if isinstance(r, sa.SkillActionRow)]
+        tool = dialog.recipe["actions"][0]["tool"]
+        self.assertEqual(row.get_title(), "prices_coin")
+        self.assertIn(sa.ACTION_NOTE, row.get_subtitle())
+        row.set_expanded(True)
+        settle()
+        shown = texts_of(row)
+        self.assertIn("Say what a coin is worth now", shown, "the description, word for word")
+        self.assertIn(json.dumps(tool, indent=2, ensure_ascii=False), shown)
+        self.assertIn("coin (required)", shown)
+        self.assertTrue(dialog.manifest.get_visible())
+        self.assertTrue(dialog.manifest_row.get_subtitle().startswith("Version 1.1.0, "))
+        dialog.manifest_row.activate()
+        settle()
+        text = next(w for w in iter_children(dialog) if isinstance(w, Gtk.TextView))
+        buffer = text.get_buffer()
+        self.assertEqual(buffer.get_text(*buffer.get_bounds(), False),
+                         REGISTRY_RECIPES["io.github.bob.prices"], "the whole recipe")
+        self.assertFalse(text.get_editable())
+        shot(self.win, "browse-recipe")
+        dialog.copy_manifest()
+        self.assertEqual(clipboard_text(dialog), REGISTRY_RECIPES["io.github.bob.prices"])
+        dialog.pop_subpage()
+        control("FailNext", "FetchSkill", "The recipe's signature doesn't <verify>.",
+                signature="ss")
+        dialog = open_registry_skill(self.win, "io.github.eve.lunar")
+        dialog.show_recipe.emit("activated")
+        wait(lambda: "The recipe's signature doesn't <verify>." in texts_of(dialog.actions),
+             "the daemon's refusal, as it wrote it")
+        self.assertTrue(dialog.show_recipe.get_sensitive(), "it can be asked for again")
+        self.assertIsNone(dialog.recipe)
+
+    def test_27_b_d_install_waits_for_the_card_and_says_what_the_daemon_said(self):
+        reset_registry()
+        dialog = open_registry_skill(self.win, "io.github.eve.lunar")
+        page = self.win.browse
+        dialog.install.emit("activated")
+        wait(card_up, "the card")
+        self.assertEqual(calls("InstallSkill"), [["InstallSkill", "io.github.eve.lunar"]],
+                         "Settings sends the id and nothing else: the card is the daemon's")
+        self.assertIn(sa.ON_THE_CARD, texts_of(dialog.state))
+        self.assertFalse(dialog.install.get_sensitive())
+        self.assertIn(sa.ON_THE_CARD, browse_row(page, "io.github.eve.lunar").get_subtitle())
+        dialog.install.emit("activated")
+        settle()
+        self.assertEqual(len(calls("InstallSkill")), 1, "one at a time")
+        shot(self.win, "browse-waiting")
+        control("AnswerCard", "deny", signature="s")
+        wait(lambda: "You didn't allow it, so nothing was installed." in texts_of(dialog.state),
+             "the daemon's words")
+        self.assertTrue(dialog.install.get_visible() and dialog.install.get_sensitive())
+        self.assertNotIn(sa.ON_THE_CARD, browse_row(page, "io.github.eve.lunar").get_subtitle())
+        dialog.install.emit("activated")
+        wait(card_up, "the card")
+        control("AnswerCard", "timeout", signature="s")
+        wait(lambda: "The card wasn't answered in time, so nothing was installed."
+             in texts_of(dialog.state), "the daemon's words")
+        control("SetInstallProblem", "Your skills already have 6 actions.", signature="s")
+        self.addCleanup(control, "SetInstallProblem", "", signature="s")
+        dialog.install.emit("activated")
+        wait(card_up, "the card")
+        control("AnswerCard", "allow", signature="s")
+        wait(lambda: "Installed Moon phase, version 2.0.0. It didn't load: Your skills already "
+             "have 6 actions." in texts_of(dialog.state), "what the reload said")
+        wait(lambda: not dialog.install.get_visible(), "the page to show it installed")
+        self.assertTrue(dialog.remove.get_visible())
+        self.assertIn("Installed", texts_of(dialog.state))
+        wait(lambda: "io.github.eve.lunar" in shown_ids(page.installed_rows), "the list")
+        self.assertNotIn("io.github.eve.lunar", shown_ids(page.newest_rows))
+        control("SetInstallProblem", "", signature="s")
+        close_browse(self.win)
+        self.assertIsNone(page.dialog)
+        page.act("InstallSkill", browse_row(page, "io.github.bob.prices").skill)
+        wait(card_up, "the card")
+        with mock.patch.object(self.win, "toast") as toast:
+            control("AnswerCard", "allow", signature="s")
+            wait(lambda: toast.called, "a page closed meanwhile still hears how it went")
+        toast.assert_called_once_with("Installed Prices, version 1.1.0")
+
+    def test_27_b_e_an_update_that_asks_for_more_waits_for_your_ok(self):
+        reset_registry()
+        dialog = open_registry_skill(self.win, "io.github.ada.tides")
+        state = texts_of(dialog.state)
+        self.assertIn("Version 1.1.0 is waiting for your OK. New in this version: to reach "
+                      "tides.example.org", state)
+        self.assertTrue(any(text.startswith("Version 1.0.0\n") and text.endswith(
+            "/io.github.ada.tides.yaml") for text in state))
+        self.assertTrue(dialog.update.get_visible() and dialog.remove.get_visible())
+        self.assertFalse(dialog.install.get_visible())
+        self.assertIn("Installed", [row.get_subtitle() for row in iter_children(dialog.versions)
+                                    if isinstance(row, Adw.ActionRow)][1])
+        dialog.update.emit("activated")
+        wait(card_up, "the card")
+        self.assertIn(sa.ON_THE_CARD, texts_of(dialog.state))
+        control("AnswerCard", "allow", signature="s")
+        wait(lambda: "Updated Tides, version 1.1.0" in texts_of(dialog.state), "the update")
+        wait(lambda: not dialog.update.get_visible(), "the page to show it up to date")
+        self.assertIn("Version 1.1.0\n", "\n".join(texts_of(dialog.state)))
+        close_browse(self.win)
+        listing = json.loads(json.dumps(self.win.browse.listing))
+        tides = next(s for s in listing["skills"] if s["id"] == "io.github.ada.tides")
+        tides["update"] = {"version": "1.2.0", "new": [], "problem": ""}
+        control("SetRegistry", json.dumps(listing), signature="s")
+        wait(lambda: "asks for nothing new" in browse_row(self.win.browse,
+                                                           "io.github.ada.tides").get_subtitle(),
+             "the new listing")
+        dialog = open_registry_skill(self.win, "io.github.ada.tides")
+        control("DelayNext", "UpdateSkill", 600, signature="si")
+        dialog.update.emit("activated")
+        wait(lambda: "Updating…" in texts_of(dialog.state), "no card to send you to")
+        self.assertFalse(card_up())
+        wait(lambda: "Updated Tides, version 1.2.0" in texts_of(dialog.state), "the update")
+
+    def test_27_b_f_remove_asks_first_and_an_edited_or_banned_skill_is_said_so(self):
+        from tuxistant import registry
+        from tests.shell_harness_settings_fake import SPY_REASON
+        reset_registry()
+        dialog = open_registry_skill(self.win, "io.github.ada.tides")
+        dialog.remove.emit("activated")
+        alert = self.win.get_visible_dialog()
+        self.assertIsInstance(alert, Adw.AlertDialog)
+        self.assertEqual(alert.get_heading(), "Remove Tides?")
+        self.assertEqual(alert.get_default_response(), "cancel")
+        self.assertEqual(alert.get_close_response(), "cancel")
+        self.assertEqual(alert.get_response_appearance("remove"),
+                         Adw.ResponseAppearance.DESTRUCTIVE)
+        alert.emit("response", "cancel")
+        alert.force_close()
+        settle()
+        self.assertEqual(calls("RemoveSkill"), [])
+        dialog.remove.emit("activated")
+        alert = self.win.get_visible_dialog()
+        alert.emit("response", "remove")
+        alert.force_close()
+        wait(lambda: "Removed Tides" in texts_of(dialog.state), "the removal")
+        self.assertEqual(calls("RemoveSkill"), [["RemoveSkill", "io.github.ada.tides"]])
+        wait(lambda: dialog.install.get_visible(), "it can be installed again")
+        wait(lambda: "io.github.ada.tides" in shown_ids(self.win.browse.newest_rows), "the list")
+
+        notes = open_registry_skill(self.win, "io.github.ada.notes")
+        self.assertIn(sa.EDITED, texts_of(notes.state))
+        self.assertFalse(notes.buttons.get_visible(), "Tux leaves a file you changed alone")
+        spy = open_registry_skill(self.win, "io.github.mal.spy")
+        off = registry.switched_off_because("ban", SPY_REASON)
+        self.assertIn(off, texts_of(spy.state))
+        self.assertIn("None to install: the skills registry has switched off every version",
+                      texts_of(spy.facts))
+        self.assertTrue(spy.remove.get_visible())
+        self.assertFalse(spy.install.get_visible() or spy.update.get_visible())
+        self.assertFalse(spy.permissions.get_visible() or spy.actions.get_visible(),
+                         "nothing is offered to show")
+        self.assertIn(off, [row.get_subtitle() for row in iter_children(spy.versions)
+                            if isinstance(row, Adw.ActionRow)][0].split("\n"))
+        shot(self.win, "browse-banned")
+        spy.remove.emit("activated")
+        alert = self.win.get_visible_dialog()
+        alert.emit("response", "remove")
+        alert.force_close()
+        wait(lambda: "io.github.mal.spy" not in shown_ids(browse_rows(self.win.browse)),
+             "a banned skill taken out to leave the list")
+
+    def test_27_b_g_with_no_registry_set_up_it_says_so_and_fetches_nothing(self):
+        page = self.win.browse
+        self.addCleanup(reset_registry)
+        self.win.views.set_visible_child_name("browse")
+        forget()
+        empty = {"address": "", "index": None, "problems": {}, "categories": [], "skills": []}
+        control("SetRegistry", json.dumps(empty), signature="s")
+        wait(lambda: page.stack.get_visible_child_name() == "none", "the page to say so")
+        self.assertEqual(page.none_page.get_title(), sa.NO_REGISTRY)
+        self.assertIn(sa.NO_REGISTRY_NOTE, texts_of(page.none_page))
+        self.assertFalse(page.bar.get_visible(), "nothing to search")
+        self.assertFalse(page.check.get_mapped(), "and nothing to check")
+        shot(self.win, "browse-none")
+        unusable = {**empty, "problems": {"address": "The skills registry address in config.json "
+                                                     "isn't one Tux can use, so Tux fetches "
+                                                     "nothing."}}
+        control("SetRegistry", json.dumps(unusable), signature="s")
+        wait(lambda: unusable["problems"]["address"] in texts_of(page.none_page),
+             "the daemon's sentence, as it wrote it")
+        self.assertTrue(calls("BrowseSkills"))
+        self.assertEqual(fetching_calls(), [])
+
+    def test_27_b_h_a_daemon_older_than_browse_gets_a_sentence(self):
+        page = self.win.browse
+        self.addCleanup(reset_registry)
+        self.win.views.set_visible_child_name("browse")
+        control("FailNextAs", "BrowseSkills", "org.freedesktop.DBus.Error.UnknownMethod",
+                "No such method", signature="sss")
+        with mock.patch.object(self.win, "toast") as toast:
+            page.load()
+            wait(lambda: page.stack.get_visible_child_name() == "older", "the sentence")
+        toast.assert_not_called()
+        self.assertEqual(self.win.state, "ready", "the rest of Settings carries on")
+        self.assertIn(sa.BROWSE_OLDER, texts_of(page))
+        control("FailNext", "BrowseSkills", "The disk is <full> & more", signature="ss")
+        page.load()
+        wait(lambda: page.stack.get_visible_child_name() == "failed", "the failure")
+        self.assertIn("The disk is <full> & more", texts_of(page.failed_page), "as written")
+        retry = next(c for c in iter_children(page.failed_page) if isinstance(c, Gtk.Button))
+        retry.emit("clicked")
+        wait(lambda: page.stack.get_visible_child_name() == "list", "Try again to work")
+
+    def test_27_b_i_what_the_registry_says_is_never_markup_and_links_wait_for_a_click(self):
+        from tests.shell_harness_settings_fake import MARKUP_NAME, MARKUP_SUMMARY
+        reset_registry()
+        page = open_browse(self.win)
+        self.assertEqual(browse_row(page, "io.github.mal.markup").get_title(), MARKUP_NAME)
+        with mock.patch.object(sa.Gtk.UriLauncher, "new") as launcher:
+            dialog = open_registry_skill(self.win, "io.github.mal.markup")
+            self.assertEqual(dialog.get_title(), MARKUP_NAME)
+            links = [row for row in iter_children(dialog.links) if isinstance(row, Adw.ActionRow)]
+            self.assertEqual([(row.get_title(), row.get_subtitle()) for row in links], [
+                ("<i>Source</i> & more", "https://example.org/<b>x</b>"),
+                ("Not a web page", "file:///etc/passwd")], "shown as text")
+            launcher.assert_not_called()
+            self.assertFalse(links[1].get_activatable(), "only a web link opens")
+            links[1].emit("activated")
+            launcher.assert_not_called()
+            links[0].emit("activated")
+        launcher.assert_called_once_with("https://example.org/<b>x</b>")
+        launcher.return_value.launch.assert_called_once()
+        texts = [label.get_text() for label in labels_of(dialog)] + texts_of(page.list)
+        for wanted in (MARKUP_NAME, MARKUP_SUMMARY, "Home & <b>notes</b>"):
+            self.assertIn(wanted, texts, "shown as written")
+        marked = [label.get_text() for label in labels_of(dialog) + labels_of(page.list)
+                  if label.get_use_markup() and ("<" in label.get_label()
+                                                 or "&" in label.get_label())]
+        self.assertEqual(marked, [], "no label holding the registry's text reads it as markup")
+
+    def test_27_b_j_check_now_asks_the_daemon(self):
+        reset_registry()
+        page = open_browse(self.win)
+        control("DelayNext", "CheckRegistry", 500, signature="si")
+        page.check.emit("clicked")
+        self.assertEqual(page.check.get_label(), "Checking…")
+        self.assertTrue(page.check.get_sensitive(), "it keeps the keyboard focus")
+        page.check.emit("clicked")
+        wait(lambda: page.check.get_label() == "Check now", "the check to end", 10)
+        self.assertEqual(calls("CheckRegistry"), [["CheckRegistry"]], "one at a time")
+        wait(lambda: "Tux couldn't reach the skills registry." not in texts_of(page.registry),
+             "what the check found")
+
+    def test_27_b_k_settings_opens_no_socket_of_its_own(self):
+        """The daemon fetches. Settings holds its bus and display connections, and no other, at
+        any moment of a whole round of Browse."""
+        reset_registry()
+        before = own_sockets()
+        seen = set()
+
+        def sample():
+            seen.update(own_sockets() - before)
+            return GLib.SOURCE_CONTINUE
+
+        source = GLib.timeout_add(5, sample)
+        self.addCleanup(GLib.source_remove, source)
+        page = open_browse(self.win)
+        page.check.emit("clicked")
+        wait(lambda: not page.checking, "the check", 10)
+        dialog = open_registry_skill(self.win, "io.github.eve.lunar")
+        dialog.show_recipe.emit("activated")
+        wait(lambda: dialog.recipe is not None, "the recipe")
+        dialog.install.emit("activated")
+        wait(card_up, "the card")
+        control("AnswerCard", "allow", signature="s")
+        wait(lambda: dialog.remove.get_visible(), "the install")
+        dialog.remove.emit("activated")
+        alert = self.win.get_visible_dialog()
+        alert.emit("response", "remove")
+        alert.force_close()
+        wait(lambda: dialog.install.get_visible(), "the removal")
+        with mock.patch.object(sa.Gtk.UriLauncher, "new"):
+            dialog = open_registry_skill(self.win, "io.github.ada.tides")
+            next(row for row in iter_children(dialog.links)
+                 if isinstance(row, Adw.ActionRow)).emit("activated")
+        settle()
+        sample()
+        self.assertEqual(seen, set(), "no socket was opened")
+        self.assertEqual(network_sockets(own_sockets()), set())
+
+    def test_27_b_l_browse_works_from_the_keyboard(self):
+        reset_registry()
+        page = open_browse(self.win)
+        gtk = ctypes.CDLL("libgtk-4.so.1")
+        check = gtk.gtk_test_accessible_check_property
+        check.restype = ctypes.c_char_p
+        capsule = ctypes.pythonapi.PyCapsule_GetPointer
+        capsule.restype = ctypes.c_void_p
+        capsule.argtypes = [ctypes.py_object, ctypes.c_char_p]
+        self.assertIsNone(check(ctypes.c_void_p(capsule(page.search.__gpointer__, None)),
+                                ctypes.c_int(int(Gtk.AccessibleProperty.LABEL)),
+                                ctypes.c_char_p(b"Search skills")), "the search has a name")
+        buttons = [c for c in iter_children(page.list) if isinstance(c, Gtk.Button)]
+        self.assertEqual(sorted(button.get_label() for button in buttons),
+                         ["Check now", "Show all"])
+        for row in browse_rows(page) + page.category_rows:
+            self.assertTrue(row.get_title() and row.get_focusable(), row.get_title())
+        dialog = open_registry_skill(self.win, "io.github.bob.prices")
+        for row in (dialog.install, dialog.update, dialog.remove, dialog.show_recipe):
+            self.assertTrue(row.get_title() and row.get_focusable(), row.get_title())
+            self.assertTrue(row.has_css_class("button"), "a button row keeps its own look")
+        self.assertTrue(dialog.install.has_css_class("suggested-action"))
+        self.assertTrue(dialog.remove.has_css_class("destructive-action"))
+        close_browse(self.win)
+        keyboard = Keyboard()
+        self.addCleanup(keyboard.close)
+        keyboard.press(Gdk.KEY_Shift_L)     # a new virtual keyboard loses its first key
+        row = browse_row(page, "io.github.bob.prices")
+        row.grab_focus()
+        settle()
+        keyboard.press(Gdk.KEY_Return)
+        wait(lambda: isinstance(self.win.get_visible_dialog(), sa.BrowseDialog), "its page")
+        dialog = page.dialog
+        wait(lambda: dialog.details is not None, "the skill's page")
+        settle(200)
+        dialog.install.grab_focus()
+        settle()
+        keyboard.press(Gdk.KEY_Return)
+        wait(card_up, "Enter on Install to put up the card")
+        settle()
+        self.assertEqual(holder(self.win, dialog.shown_rows["state"]).get_title(), sa.ON_THE_CARD,
+                         "the focus goes to what the page says, not nowhere")
+        control("AnswerCard", "deny", signature="s")
+        wait(lambda: dialog.install.get_sensitive(), "the answer")
+        settle()
+        self.assertEqual(holder(self.win, dialog.shown_rows["state"]).get_title(),
+                         "You didn't allow it, so nothing was installed.")
+        dialog.show_recipe.grab_focus()
+        settle()
+        keyboard.press(Gdk.KEY_Return)
+        wait(lambda: dialog.recipe is not None, "Enter on Show the recipe")
+        settle()
+        self.assertIsNotNone(holder(self.win, [row for row in iter_children(dialog.actions)
+                                               if isinstance(row, sa.SkillActionRow)]),
+                             "the focus goes to the first action, not nowhere")
+        keyboard.press(Gdk.KEY_Escape)
+        wait(lambda: self.win.get_visible_dialog() is None, "Escape to close the page")
+        settle()
+        focus = holder(self.win, browse_rows(page))
+        self.assertIsNotNone(focus, "the focus goes back to the list")
+        self.assertEqual(focus.skill["id"], "io.github.bob.prices")
+
+    def test_27_b_m_browse_fits_a_narrow_window(self):
+        reset_registry()
+        window = open_window(self.app, 360, 720)
+        wait(lambda: ready(window) and window.split.get_collapsed(), "a collapsed window")
+        window.split.set_show_content(True)
+        open_browse(window)
+        settle(300)
+        self.assertEqual(window.get_width(), 360, "long text must not widen the window")
+        shot(window, "browse-narrow")
+        for skill_id in ("io.github.mal.markup", "io.github.ada.tides"):
+            dialog = open_registry_skill(window, skill_id)
+            settle(300)
+            self.assertEqual(window.get_width(), 360)
+            self.assertLessEqual(dialog.get_width(), 360)
+            self.assertLessEqual(dialog.get_height(), 720)
+            shot(window, f"browse-narrow-{skill_id.rsplit('.', 1)[-1]}")
+        close_browse(window)
+        dispose(window)
+
     def test_27_clearing_history_asks_first(self):
         page = self.win.history
         self.win.views.set_visible_child_name("history")
@@ -2844,7 +3551,7 @@ class Inner(unittest.TestCase):
         for key, value in (("server", '"ai-box.local:8080"'), ("voice", '"af_nicole"'),
                            ("listen_timeout_s", "8"), ("theme", '"orb"')):
             control("Change", key, value, signature="ss")
-        pages = ("general", "voice", "appearance", "skills", "history")
+        pages = ("general", "voice", "appearance", "skills", "browse", "history")
         styles = Adw.StyleManager.get_default()
         control("Change", "api_key", '"x"', signature="ss")
         for scheme, tag, width, height in ((Adw.ColorScheme.FORCE_LIGHT, "light", 860, 1500),
