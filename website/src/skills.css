@@ -8,6 +8,11 @@
 .portal-head { padding-block: 14px 8px; }
 .portal h1 { font-size: clamp(1.8rem, 6vw, 2.6rem); }
 .portal h1.fit { overflow: hidden; text-overflow: ellipsis; }
+/* A skill's name too long to fit even at 14 px is cut above, so it is said again in full here.
+   With script, which the js class says from the first paint, it shows only under a heading
+   site.js had to cut; without, under every one. */
+.full-name { margin: 2px 0 0; font-weight: 650; }
+.js .fit:not(.is-cut) + .full-name { display: none; }
 .lede { margin: 4px 0 0; max-width: 760px; color: var(--muted); }
 .muted { color: var(--muted); }
 /* Says the skills are made up, as the local preview's banner says its releases are planned. */

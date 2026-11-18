@@ -9,7 +9,8 @@
 //        arrival), "beforematch" (optional: true for a browser that knows hidden=until-found, as
 //        Chromium does), "steps": [null, a selector to click, {"focus": selector}, or {"type":
 //        [selector, text]}, which sets a field's value as typing does, ...], "probes": [selector,
-//        ...]}]}
+//        ...], "measure" (optional: {"room", "em"}, a page that measures, where every box is room
+//        px wide and a text is its letters times em times its font size)}]}
 // A tree is ["tag", {attributes}, [children]], and a child is a tree or a string of text.
 // REPORT: one entry per case: for each step, after its click, each probe's matches as
 //         {text, attrs, parts}, "#scrolled", what app.js last scrolled into view, "#active", what
@@ -81,7 +82,7 @@ class Element {
     else this.removeAttribute('hidden');
   }
   get offsetHeight() { return 0; }
-  get clientWidth() { return 0; }
+  get clientWidth() { return this.ownerDocument?.measure?.room ?? 0; }
   getBoundingClientRect() { return { left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }; }
   getContext() { return null; }     // no WebGL here
 
@@ -187,7 +188,12 @@ function documentFrom(tree) {
   doc.activeElement = doc.body;
   doc.getElementById = id => doc.descendants().find(element => element.id === id) ?? null;
   doc.createElement = tag => new Element(doc, tag);
-  doc.createRange = () => ({ selectNodeContents() {}, getBoundingClientRect: () => ({ width: 0 }) });
+  doc.createRange = () => {
+    let contents = null;
+    const width = () => (doc.measure && contents
+      ? contents.textContent.length * doc.measure.em * parseFloat(contents.style.fontSize || '16px') : 0);
+    return { selectNodeContents(node) { contents = node; }, getBoundingClientRect: () => ({ width: width() }) };
+  };
   Object.defineProperty(doc, 'dir', { get: () => doc.documentElement.getAttribute('dir') || '' });
   return doc;
 }
@@ -211,8 +217,10 @@ function describe(element) {
   };
 }
 
-function run(scripts, tree, { userAgent, platform, hash = '', search = '', beforematch = false, steps, probes }) {
+function run(scripts, tree, { userAgent, platform, hash = '', search = '', beforematch = false, steps, probes,
+                               measure = null }) {
   const document = documentFrom(tree);
+  document.measure = measure;
   if (beforematch) document.body.onbeforematch = null;    // what 'onbeforematch' in body looks for
   const location = { hash, search, pathname: '/skills/', href: `http://127.0.0.1/skills/${search}${hash}` };
   const context = {
@@ -229,7 +237,7 @@ function run(scripts, tree, { userAgent, platform, hash = '', search = '', befor
     setTimeout,
     clearTimeout,
     requestAnimationFrame: () => 0,
-    getComputedStyle: () => ({ fontSize: '16px', backgroundColor: 'rgb(0, 0, 0)' }),
+    getComputedStyle: element => ({ fontSize: element?.style?.fontSize || '16px', backgroundColor: 'rgb(0, 0, 0)' }),
     devicePixelRatio: 1,
     IntersectionObserver: class { observe() {} },
     ResizeObserver: class { observe() {} },

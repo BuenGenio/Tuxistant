@@ -495,16 +495,8 @@ class Browse:
         granted = self.host.granted(checked.skill_id)
         allowed = (granted or {}).get("permissions", {}).get("network") if (
             granted and not granted.get("removed")) else None
-        manifest = checked.manifest
-        new = [f"to reach {host}" for host in manifest["permissions"].get("network", [])
-               if allowed is not True and host not in (allowed or ())]
         had = self.registry.load_installed(name, record) or {"actions": {}, "desktop": []}
-        new += [f"the action {action}" for action in manifest["actions"]
-                if action not in had["actions"]]
-        new += [f"the desktop action {entry}" for entry in manifest["desktop"]
-                if entry not in had["desktop"]]
-        opened = _opens(had)
-        return new + [f"to open {target}" for target in _opens(manifest) if target not in opened]
+        return asks_for(checked.manifest, had, allowed)
 
     async def _approve(self, ask: Ask) -> None:
         """The shell's card, with no turn behind it. Refused unless Allow was clicked."""
@@ -585,6 +577,22 @@ def card(checked: registry.Checked, new: list | None = None, off: bool = False) 
     if len(detail) > MAX_DETAIL_CHARS:
         raise Refused(TOO_LONG)
     return Ask(INSTALL_TITLE if new is None else UPDATE_TITLE, detail, dict)
+
+
+def asks_for(manifest: dict, had: dict, allowed) -> list[str]:
+    """What a loaded recipe asks for that had, the one it would replace, doesn't, in the words
+    of the update card's "New in this version": hosts that allowed doesn't hold (True holds any,
+    None none), then actions, desktop actions and things to open that had lacks. An update that
+    asks for none of them is installed without a card. The website's skills portal says the same
+    of each version, from this."""
+    new = [f"to reach {host}" for host in manifest["permissions"].get("network", [])
+           if allowed is not True and host not in (allowed or ())]
+    new += [f"the action {action}" for action in manifest["actions"]
+            if action not in had["actions"]]
+    new += [f"the desktop action {entry}" for entry in manifest["desktop"]
+            if entry not in had["desktop"]]
+    opened = _opens(had)
+    return new + [f"to open {target}" for target in _opens(manifest) if target not in opened]
 
 
 def _risk(permissions: dict) -> str:

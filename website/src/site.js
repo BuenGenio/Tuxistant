@@ -98,8 +98,8 @@
   tintBrowserBar();
 
   // Headings never wrap: shrink to fit the parent's content box instead. A skill's name on the
-  // portal can be 100 characters, so a heading marked .fit stops shrinking at 14 px, and the
-  // stylesheet cuts the rest with an ellipsis.
+  // portal can be 100 characters, so a heading marked .fit stops shrinking at 14 px, the
+  // stylesheet cuts the rest with an ellipsis, and is-cut shows the name in full under it.
   function fitHeadings() {
     for (const heading of document.querySelectorAll('h1, h2')) {
       heading.style.fontSize = '';
@@ -109,11 +109,13 @@
       const range = document.createRange();
       range.selectNodeContents(heading);
       const width = range.getBoundingClientRect().width;
+      const fit = heading.classList.contains('fit');
       if (width > room && room > 0) {
         const size = parseFloat(getComputedStyle(heading).fontSize);
         const fitted = Math.floor(size * room / width * 10) / 10;
-        heading.style.fontSize = `${heading.classList.contains('fit') ? Math.max(14, fitted) : fitted}px`;
+        heading.style.fontSize = `${fit ? Math.max(14, fitted) : fitted}px`;
       }
+      if (fit) heading.classList.toggle('is-cut', range.getBoundingClientRect().width > room + 0.5);
     }
   }
   fitHeadings();

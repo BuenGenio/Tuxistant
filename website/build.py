@@ -479,10 +479,14 @@ def cta_releases(strings, releases):
     return f'<a class="btn btn-cta btn-cta-alt" href="{esc(page)}">{esc(strings["ctaReleases"])}</a>'
 
 
+# The Skills link on the portal: its own page there, and the part of the site a skill's page is in.
+CURRENT = {"skills": ' aria-current="page"', "skill": ' aria-current="true"'}
+
+
 def site_header(root, strings, home, language_menu="", current="", skills_link=False):
     """The same bar on every page. The Skills link is only in a build with the portal, which is
     in English and has no language menu."""
-    skills = ' aria-current="page"' if current == "skills" else ""
+    skills = CURRENT.get(current, "")
     link = (f'<a class="nav-link" href="{root}skills/"{skills}>{SKILLS_ICON}<span class="nav-text">'
             f'{esc(strings["skills"])}</span></a>' if skills_link else "")
     modes = "".join(f'<option value="{m}">{esc(strings["modes"][m])}</option>' for m in MODES)
@@ -520,6 +524,7 @@ def portal_site(strings, policy, releases):
     def shell(title, description, depth, body, sample):
         root = "../" * depth
         robots = '\n<meta name="robots" content="noindex">' if sample else ""
+        current = "skills" if depth == 1 else "skill"     # skills/, or a skill's page below it
         return f"""<!doctype html>
 <html lang="en" dir="ltr">
 <head>
@@ -527,7 +532,7 @@ def portal_site(strings, policy, releases):
 <link rel="stylesheet" href="{root}skills.css">{robots}
 </head>
 <body>
-{site_header(root, strings, root, current="skills", skills_link=True)}
+{site_header(root, strings, root, current=current, skills_link=True)}
 <main>
 {body}
 </main>
@@ -671,13 +676,17 @@ def main(argv=()):
     policy = (f"default-src 'none'; script-src 'self' {csp_hash(MODE_SCRIPT)} {csp_hash(detect)}; "
               "style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'")
 
+    # The portal's code and the registry it shows are taken before anything is written, so a
+    # portal build that fails leaves no half-built site behind.
+    portal = load_portal(options.portal) if options.portal else None
     shutil.rmtree(dist, ignore_errors=True)
     dist.mkdir()
     for code, strings in languages.items():
         target = dist / path_for(code).strip("/") / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
+        # The portal is in English only, so only the English page links to it for now.
         target.write_text(page(code, strings, languages, releases, detect, policy,
-                               skills_link=bool(options.portal)))
+                               skills_link=bool(portal) and code == "en"))
     shutil.copy(SRC / "style.css", dist)
     for script in ("site.js", "app.js"):
         shutil.copy(SRC / script, dist)
@@ -689,8 +698,8 @@ def main(argv=()):
     if options.preview:     # deploy.sh refuses a folder holding this file
         (dist / "LOCAL-PREVIEW").write_text("A local preview of planned releases. Never deploy it.\n")
         local.append("a local preview")
-    if options.portal:
-        shown = build_portal(dist, options.portal, languages["en"], policy, releases)
+    if portal:
+        shown = build_portal(dist, portal, languages["en"], policy, releases)
         local.append(f"the skills portal with {shown} skill pages")
     if local:
         (dist / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
@@ -698,19 +707,30 @@ def main(argv=()):
           + (f" ({' and '.join(local)}, never to be deployed)" if local else ""))
 
 
-def build_portal(dist, folder, strings, policy, releases):
-    """skills/ with its script and stylesheet, from a registry folder, with the file deploy.sh
-    refuses. Only for looking at until the registry repo exists: the owner decides when it goes
-    live."""
-    portal = _portal()
+def load_portal(folder):
+    """portal.py and the registry folder it reads, taken as Tux would take it: (module, what it
+    shows). Stops the build with a sentence if either can't be had."""
+    try:
+        portal = _portal()
+    except ImportError as e:
+        raise SystemExit("The skills portal needs what Tux's daemon imports, PyYAML, websockets "
+                         f"and dbus-fast, as install.sh lists them: {e}.") from None
+    try:
+        return portal, portal.load(Path(folder))
+    except portal.Refused as e:
+        raise SystemExit(f"The skills portal wasn't built from {folder}: {e}.") from None
+
+
+def build_portal(dist, portal, strings, policy, releases):
+    """skills/ with its script and stylesheet, from what load_portal() took, with the file
+    deploy.sh refuses. Only for looking at until the registry repo exists: the owner decides when
+    it goes live."""
+    module, shown = portal
     (dist / "LOCAL-PORTAL").write_text("The skills portal, built locally. Never deploy it until "
                                        "the registry exists.\n")
     for name in ("skills.js", "skills.css"):
         shutil.copy(SRC / name, dist)
-    try:
-        return portal.build(dist, Path(folder), portal_site(strings, policy, releases))
-    except portal.Refused as e:
-        raise SystemExit(f"The skills portal wasn't built from {folder}: {e}.") from None
+    return module.write(dist, shown, portal_site(strings, policy, releases))
 
 
 if __name__ == "__main__":

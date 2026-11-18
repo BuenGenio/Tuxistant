@@ -76,7 +76,7 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .bar { display: flex; align-items: center; gap: 12px; height: 100%; }
 .brand { font-weight: 700; text-decoration: none; margin-inline-end: auto; }
 .nav-link { flex: none; color: var(--muted); font-size: 0.92rem; font-weight: 600; text-decoration: none; }
-.nav-link:hover, .nav-link[aria-current="page"] { color: var(--text); }
+.nav-link:hover, .nav-link[aria-current] { color: var(--text); }
 .lang-pick { display: contents; }
 .bar-icon { display: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .lang {
@@ -375,7 +375,7 @@ main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); paddi
     background: var(--panel);
     color: var(--text);
   }
-  .nav-link[aria-current="page"], .nav-link:hover, .lang-pick:hover { border-color: var(--accent); }
+  .nav-link[aria-current], .nav-link:hover, .lang-pick:hover { border-color: var(--accent); }
   .lang-pick:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .lang-pick .lang { position: absolute; inset: 0; width: 100%; max-width: none; height: 100%; opacity: 0; cursor: pointer; }
   .bar-icon { display: block; }

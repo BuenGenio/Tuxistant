@@ -7,10 +7,11 @@ index it.
 
 It holds what the registry publishes, in the formats of docs/REGISTRY-FORMAT.md: index.json and
 revocations.json with their signatures, and recipes/<sha256>.yaml with each one's .sig. All
-publishers are made up (example-*), and every host is under example.com, example.net or
-example.org. The portal checks it with Tux's own code, as Tux would check the real registry, except
-that the index is signed with the sample's own registry key, in registry_allowed_signers, which Tux
-never ships.
+publishers are made up (example-*), and every host is under example.com, example.net,
+example.org or .example. Their github.com links, publishers and reports are made up too, so the
+portal shows them as words, not links. The portal checks it with Tux's own code, as Tux would check
+the real registry, except that the index is signed with the sample's own registry key, in
+registry_allowed_signers, which Tux never ships, and which the portal takes only for this folder.
 
 Every signature here was made with throwaway keys, the registry's and the moderation key's
 included, whose private halves were deleted as soon as it was signed. No real key ever signs it.
@@ -19,6 +20,6 @@ After changing index.json, revocations.json or a recipe, sign it all again with 
     python3 website/sample_registry.py
 
 To build the portal from a real registry, give --portal a folder with the same layout, without
-this file:
+this file. Any other folder is checked against the registry key Tux ships, SAMPLE file or not:
 
     python3 website/build.py --portal /path/to/published
