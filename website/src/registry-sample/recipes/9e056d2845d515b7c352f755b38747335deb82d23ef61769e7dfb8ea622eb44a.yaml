@@ -1,0 +1,16 @@
+# Prices come from a sample service; a real recipe names its own.
+id: io.github.example-dee.fuel
+name: Fuel prices
+description: Says today's average fuel price
+version: "2026.11"
+permissions:
+  network: [fuel.example.org]
+actions:
+  fuel.price:
+    description: Say today's average price of petrol or diesel
+    params:
+      kind: { type: choice, of: [petrol, diesel], default: petrol, description: "Petrol or diesel" }
+    get: https://fuel.example.org/v1/average?kind={kind}
+    pick:
+      price: [price]
+    say: "Today's average {kind} price is {price}."

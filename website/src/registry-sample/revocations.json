@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-12T09:00:30Z",
+  "format": 1,
+  "revocations": [
+    {
+      "actor": "example-mod",
+      "date": "2026-11-09T16:05:00Z",
+      "id": 1,
+      "kind": "suspend",
+      "reason": "Its host, api.tides.example, has been taken over by someone else.",
+      "report": "https://github.com/example/tuxistant-skills/issues/7",
+      "scope": {
+        "skill": "io.github.example-ada.tides",
+        "versions": [
+          "1.0.0"
+        ]
+      }
+    },
+    {
+      "actor": "example-mod",
+      "date": "2026-11-09T10:30:00Z",
+      "id": 2,
+      "kind": "suspend",
+      "reason": "It sends the town you name to a host its summary doesn't mention.",
+      "report": "https://github.com/example/tuxistant-skills/issues/9",
+      "scope": {
+        "skill": "io.github.example-eve.weather-now"
+      }
+    },
+    {
+      "actor": "example-mod",
+      "date": "2026-11-12T09:00:00Z",
+      "id": 4,
+      "kind": "suspend",
+      "reason": "Looking into a report that its first version turns on a lamp it wasn't asked to.",
+      "report": "https://github.com/example/tuxistant-skills/issues/12",
+      "scope": {
+        "skill": "io.github.example-cy.desk-lamp",
+        "versions": [
+          "1.0"
+        ]
+      }
+    }
+  ],
+  "seq": 4
+}

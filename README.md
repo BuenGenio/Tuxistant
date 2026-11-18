@@ -22,14 +22,15 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 
 ## Install
 
-There are four releases to choose from:
+There are five releases to choose from:
 
 - **0.5.0**, the stable release, and what the website offers. It adds recipe skills you write in YAML, a page for every skill in Settings, follow-up questions, hands-free dictation and an agreement before anything goes to the cloud. All of it was reviewed and tested, but most of it hasn't been tried on a real desktop yet; [CHANGELOG.md](CHANGELOG.md) says how far each part was.
 - **0.2.0**, the last release whose additions all worked on the owner's own desktop.
 - **0.3.0**, a preview. It adds media, timers, Home Assistant, mail search, facts from Wikipedia, web search and research, and your own skills. Most of it has only run in tests so far; [CHANGELOG.md](CHANGELOG.md) says which parts.
 - **0.4.0**, a preview. It adds opening apps and Settings pages, and a click before the facts lookup sends a question that may be about your home. None of it has been tried on a real desktop yet.
+- **0.6.0**, a preview. It holds Tux's side of the skills registry, for sharing recipe skills: the signature checks, the switch-off of revoked recipes and a Browse page in Settings. The registry doesn't exist yet, so nothing is fetched and Settings doesn't show Browse: as installed it works as 0.5.0 does. None of it has been tried on a real desktop yet.
 
-On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for an earlier release, use `--branch v0.2.0`, `--branch v0.3.0` or `--branch v0.4.0` instead:
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for another release, use `--branch v0.2.0`, `--branch v0.3.0`, `--branch v0.4.0` or `--branch v0.6.0` instead:
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
@@ -37,7 +38,7 @@ git clone --branch v0.5.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
 
-Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`.
+Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`, or `tar xzf Tuxistant-0.6.0.tar.gz && cd Tuxistant-0.6.0` for the newest preview.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
@@ -124,7 +125,7 @@ Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has
 
 **Cloud.** Complex requests stay on your own server unless you turn on Cloud on the Multi-step tasks page in Settings, which is off by default and needs your own Anthropic API key. Turning it on shows what leaves the computer, to which provider and model, and when, with a link to Anthropic's privacy policy, and it stays off until you tick "I understand and agree" and press Turn On. Your agreement is kept with its date, the page says when you gave it, and Withdraw turns Cloud off and forgets it. A different model, or a release that changes what is sent, asks again. Switching Cloud off keeps the agreement, so without one the switch alone sends nothing, but with one kept, the switch alone turns Cloud on again, from Settings or from any program on the session bus; only Withdraw forgets it. With it on, Claude sees your request, the actions Tux can take, and what each step gives back, such as file names, command output and calendar events. What is inside a file, Home Assistant's answers and your list of reminders go only if you click to allow each result. It needs the Anthropic SDK: run `./install.sh --cloud-sdk`, which needs `pip` (`python3-pip` on Ubuntu).
 
-**Settings** has pages for General (server, API key, pipeline, listening, shortcuts, instructions), Voice, Appearance, Skills and History. Each skill under Skills opens to show where it comes from, what it may do and why that is its risk, what the model is given for each action, word for word, its whole manifest with a Copy button, and its settings: the home town for weather, the news source, the calendar, mail, the timer chime, the phone, the translation and search servers, the Tapo account, Home Assistant and Cloud are each on their skill's page. See "Reading a skill in Settings" in [docs/SKILLS.md](docs/SKILLS.md#reading-a-skill-in-settings).
+**Settings** has pages for General (server, API key, pipeline, listening, shortcuts, instructions), Voice, Appearance, Skills and History. A Browse page for the skills registry is built, but the registry doesn't exist yet, so no address is set, nothing is fetched and Settings doesn't show the page. It appears beside Skills once a registry address is set and the daemon restarted ([docs/SKILLS.md](docs/SKILLS.md#browsing-the-skills-registry-in-settings)). Each skill under Skills opens to show where it comes from, what it may do and why that is its risk, what the model is given for each action, word for word, its whole manifest with a Copy button, and its settings: the home town for weather, the news source, the calendar, mail, the timer chime, the phone, the translation and search servers, the Tapo account, Home Assistant and Cloud are each on their skill's page. See "Reading a skill in Settings" in [docs/SKILLS.md](docs/SKILLS.md#reading-a-skill-in-settings).
 
 | General | Skills |
 |---|---|
@@ -212,9 +213,9 @@ The plan starts from one assumption: a bad skill will eventually get past review
 | Private data can't leave without a click | Built, apart from mail search through Online Accounts, which sends the question's words to each connected mail account's own server with no click |
 | Read-only shell commands run in a sandbox | Built, for the shell skill only |
 | Each skill confined to its declared permissions at run time | Built for code skills, which may only ask for the network, and get all of it or none. Built for recipes, which reach only the hosts they name and never this computer over the network. Built-in skills run inside the daemon |
-| Signing and hash pinning | **Planned** |
-| Publisher namespaces against lookalike names | **Planned**. Skills you add can't use an action name that starts like a built-in one |
-| Re-approving new permissions | Built for skills you add: a new permission, or a new host for a recipe, waits until the skill is taken out and put back. A card for it is planned |
+| Signing and hash pinning | Built in Tux, not yet in use as no registry exists: Tux checks the registry's signature on its list of skills and refuses an older list, and checks each recipe's size, SHA-256 and publisher's signature before installing it |
+| Publisher namespaces against lookalike names | Built in Tux for the registry, not yet in use: a shared skill's id is `io.github.<login>.<name>`, and its recipe must be signed by a key of that GitHub account. Skills you add can't use an action name that starts like a built-in one |
+| Re-approving new permissions | Built for skills you add: a new permission, or a new host for a recipe, waits until the skill is taken out and put back. For a skill from the registry, an update that asks for more waits for a card (not yet in use) |
 | Sandbox for skills with their own code | Built. Not yet tried on the real desktop |
 
 Confining each skill at run time matters most, because that's what has to hold once a bad skill gets through. Shell access stays built in, and community skills will never be able to request it. [docs/ROADMAP.md](docs/ROADMAP.md#rules-for-shared-skills) has the rules for shared skills and the order of the work.

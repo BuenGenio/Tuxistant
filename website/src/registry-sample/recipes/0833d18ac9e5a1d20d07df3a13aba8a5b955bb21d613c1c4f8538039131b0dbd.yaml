@@ -1,0 +1,14 @@
+id: io.github.example-cy.boiler
+name: Boiler boost
+description: Turns the heating on for a while
+version: "1.0.0"
+permissions:
+  network: [boiler.example.net]
+actions:
+  boiler.boost:
+    description: Turn the heating on for some minutes, when someone says they are cold
+    params:
+      minutes: { type: number, min: 10, max: 120, default: 30, description: "How long, in minutes" }
+    post: https://boiler.example.net/api/boost
+    json: { minutes: "{minutes}" }
+    say: "The heating is on for {minutes} minutes."

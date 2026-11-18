@@ -3,17 +3,18 @@
   "title": "Tuxistant: talk to your computer",
   "description": "A voice assistant for your desktop that runs on your own hardware.",
   "tagline": "Talk to your computer. It runs on your hardware, not someone else's.",
-  "donate": "Donate", "language": "Language", "now": "Now", "soon": "Soon",
+  "donate": "Donate", "skills": "Skills", "language": "Language", "now": "Now", "soon": "Soon",
   "appearance": "Appearance", "modes": { "auto": "Auto", "light": "Light", "dark": "Dark" },
   "caps": [
     ["now", "Spoken answers in about a second"], ["now", "Hold a key and talk"], ["now", "27 voices to choose from"], ["now", "Swap the look with themes"], ["now", "Runs on your own network"],
     ["soon", "Finds your files"], ["soon", "Sends files to your phone"], ["now", "Translates as you speak"], ["soon", "Runs commands, with your OK"], ["soon", "Share skills in a reviewed registry"]
   ],
   "themes": { "tux": "Listening Tux", "orb": "Orb", "waves": "Waves", "scanner": "Scanner" },
-  "showTheme": "Show theme",
+  "showTheme": "Show theme", "pauseMotion": "Pause the animation", "playMotion": "Play the animation",
   "dlFor": "Download for {os}", "dlSoon": "Coming to {os}", "dlPending": "{os} preview coming soon", "dlAll": "All versions",
   "dlMeta": "Version {version}, {channel}", "dlPlanned": "Not available yet",
   "examplesTitle": "What it does for you", "youSay": "You say", "approve": "You approve it first",
+  "ctaExamples": "Want it on your own desktop?", "ctaPreview": "Try them on your own desktop.", "ctaVersions": "Looking for an older version or the source code?", "ctaSoon": "Coming to {os}.", "ctaSoonAlso": "Have a {os} desktop too?", "ctaReleases": "See every release on GitHub",
   "examples": {
     "linux": [
       ["now", "How much disk space do I have left?", "Checks your disk and tells you out loud."],
@@ -34,10 +35,10 @@
       ["soon", "Clear my temp files.", "Shows what it found, then frees the space.", true]
     ]
   },
-  "versionsTitle": "Versions", "colSystem": "System", "colVersion": "Version", "colStatus": "Status", "colNeeds": "Needs",
+  "versionsTitle": "Versions and releases", "colSystem": "System", "colVersion": "Version", "colStatus": "Status", "colNeeds": "Needs",
   "preview": "Preview", "stable": "Stable", "planned": "Planned", "linuxNeeds": "GNOME 50 and your own LocalAI server", "tbd": "To be announced",
   "previewTry": "Try the {version} preview for Linux", "previewSep": ", ", "previewUntried": "not yet tried on a real desktop", "releaseNotes": "Release notes",
-  "previewTitle": "New in 0.5.0", "previewLead": "Built, but not yet proven on a real desktop. Each becomes Now once it has worked on one.",
+  "previewTitle": "New since 0.2.0", "previewLead": "Built, but not yet proven on a real desktop. Each becomes Now once it has worked on one.",
   "previewCaps": [
     ["soon", "Plays, pauses and skips music"], ["soon", "Timers and reminders"], ["soon", "Controls your Home Assistant"], ["soon", "Searches and researches the web"],
     ["soon", "Answers facts from Wikipedia"], ["soon", "Answers from your mail"], ["soon", "Your own skills, in a sandbox"], ["soon", "Opens apps and Settings pages"],
@@ -47,5 +48,5 @@
   "donateTitle": "Help build the next version", "donateText": "Your support pays for macOS and Windows versions.",
   "credit": "Tux was drawn by Larry Ewing with The GIMP. The Home Assistant logo is by Home Assistant, shown here in one colour, under CC BY-NC-SA 4.0.",
   "worksWith": "Works with",
-  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Home Assistant, Spotify, CNN, Windows and macOS are trademarks of their owners, named only to say what Tuxistant works with or will. None of them sponsors or endorses it."
+  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Tailscale, Home Assistant, Spotify, CNN, Windows and macOS are trademarks of their owners, named only to say what Tuxistant works with or will. None of them sponsors or endorses it."
 }

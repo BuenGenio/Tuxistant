@@ -1,0 +1,4 @@
+# SAMPLE. Not the registry's key: a throwaway key made by website/sample_registry.py to sign the
+# sample registry, which only the website's local portal build shows. Its private half was deleted
+# once the sample was signed, and Tux never ships it.
+tuxistant-registry namespaces="tuxistant-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICFlKUbnUT77SPRTBcI7gZdoATDYMG2dN6H06oB5hwI9

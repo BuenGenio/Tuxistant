@@ -90,6 +90,19 @@ A skill you add is a stranger's text, so its name, description, actions, files a
 
 A setting two skills use is on both their pages. Each page is built when it opens and only one is open at a time, so two rows can never disagree about it.
 
+## Browsing the skills registry in Settings
+
+Browse, beside Skills in Settings, is where recipes from the [skills registry](REGISTRY.md) are found, installed, updated and removed. The registry doesn't exist yet, and no address is set, so today nothing is fetched and Settings doesn't show Browse at all. The page appears beside Skills once the daemon has a registry address it can use: when a Tuxistant release names the registry, or after `registry_url` is set by hand in `config.json` and the daemon restarted. An address it can't use counts as none, and `tuxistant doctor` says why. Settings' half is tested against a stand-in for the daemon, in a headless Settings, and the daemon's half, which fetches and checks, offline with throwaway keys and a loopback server ("Recipes from the skills registry" below). None of it has been tried on a real desktop. "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md) is the interface.
+
+Settings fetches nothing itself, not even a link. Everything on the page comes from the daemon, which checks every file against the registry's signatures before Settings sees any of it.
+
+- **The list.** A search box that matches the id, name, summary and tags, and the categories, each opening to its tags, either of which narrows the list. Then what you installed from the registry, and the newest skills. Each says who published it, its risk, and, for one you installed, where it stands: an update that asks for more, with what it asks for that the installed version didn't, a file you changed, or a skill the registry switched off, with the moderators' reason. Under them, the registry's address, the list it sent with when Tux last took it, any problem as the daemon put it, and "Check now".
+- **A skill's page.** What its publisher says it does and who that is, where it stands on this computer, Install, Update or Remove, its permissions and hosts in words with its risk and the reason, its id, version, licence and tags, its links, and its versions with any that were switched off and why. A link is shown as text and opens in the browser only when you click it, and only if it is `https://`.
+- **Show the recipe.** Only on a click, as the registry's host can tell that someone asked for that recipe: the daemon downloads and checks it, and the page shows each action as the model would be given it, the same rows as a skill's page under Skills, and the whole `recipe.yaml`, read-only, with Copy.
+- **Install, and an update that asks for more,** go to the shell's approval card, which the daemon writes from the recipe it checked; nothing in Settings can click Allow. Meanwhile the page says "Checking it. Then allow it on the approval card when it comes up." and how it went is said in the daemon's words, such as "You didn't allow it, so nothing was installed." An update that asks for nothing new needs no card. Remove asks first, in Settings.
+
+What the registry sends is a stranger's text, so names, summaries, tags, links and reasons are plain text, never markup, as on the Skills page. A Tuxistant that hasn't been restarted since Settings was updated doesn't have Browse, so Settings leaves the page out until it is restarted, and while Tuxistant isn't answering. Everything works from the keyboard: when a button goes away or waits, the focus moves to what the page now says.
+
 ## Manifest format
 
 A built-in skill is one YAML file. This is the shape of a skill that needs the network:
@@ -422,6 +435,16 @@ An answer is only read when the action picks something from it. The same request
 
 **Risk and what it was allowed.** Risk comes from the permissions as for any skill: medium with hosts, low without. A recipe never marks the conversation as having read something private. What it was first allowed is kept by its id and its hosts. A new version that names a host it didn't have is refused, and the last version that worked carries on, until you take the file out of the folder, wait a moment, and put it back. That holds for an example you copied in too, so change its hosts in a copy outside the folder first. A broken edit keeps the last version that worked too, and Settings lists the problem under "Skills with problems".
 
+**Recipes from the skills registry.** Once the registry exists, Browse in Settings installs a recipe from it into the same folder, as `io.github.<publisher>.<skill>.yaml`. The daemon's side is built, in `tuxistant/browse.py`, but does nothing as installed: `registry_url` in `config.json` is empty, and while it is, nothing is fetched. With an address set by hand:
+
+- **Checked before it is written.** Every recipe is checked by `tuxistant/registry.py` against the index the registry key signed: its size and SHA-256, its publisher's signature and this loader. See [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md).
+- **A card for an install, and for an update that asks for more.** The shell's approval card names the skill's id and GitHub account, its version, its hosts, its risk and why, its actions, the apps and Settings pages it opens and its desktop actions, all from the checked file and never from the publisher's summary or descriptions. Allow sets what the skill is allowed to exactly what that version asks for, then writes the file, so it loads at once. That is the one way past "take the file out and put it back", and it is open only to a click on the card: no model, planner or skill can install or update.
+- **Updates once a day.** Each is downloaded at the daily check, so the registry's host can tell which skills you have. One that asks for no host the skill isn't allowed and no action, app, Settings page or desktop action its installed version lacks installs by itself. One that asks for more waits for Update and its card. A file you changed is never updated or removed, and a hand edit that asks for more is refused as above.
+- **Switched off when revoked.** A recipe the registry revokes is switched off at the daily check, with a notification giving the reason, and comes back on if the revocation is lifted. Only files Tux installed are touched.
+- **Remove** takes out the file Tux installed and its record, with no card. A skill switched off by a revocation Tux can no longer follow, after a lost state folder or a retired moderation key, keeps its record, so putting it back waits until the registry lifts it.
+
+`tuxistant doctor` has a line for the registry: none set, an address it can't use, or the list it holds.
+
 ## Planned
 
 None of this exists yet.
@@ -431,5 +454,5 @@ None of this exists yet.
 - **Recipe switch in Settings.** Turning a recipe off, and "don't ask again" for one, instead of a card every time for a device at home.
 - **Network by host.** A code skill that names hosts gets the whole network today. Holding it to those hosts needs a proxy in front of the sandbox.
 - **Process and CPU limits.** A cgroup for each skill, with a limit on its tasks and its CPU time.
-- **Approving on a card.** A skill that asks for more than it had should show a card, rather than need taking out and putting back.
-- **Sharing.** Code skills stay local to the machine. They are not for sharing. Recipes are the ones meant for sharing, as what one does can be read from its file and checked by the same loader, but there is no registry yet.
+- **Approving on a card.** A skill you added that asks for more than it had should show a card, rather than need taking out and putting back. Only an update from the skills registry has one so far.
+- **Sharing.** Code skills stay local to the machine. They are not for sharing. Recipes are the ones meant for sharing, as what one does can be read from its file and checked by the same loader. The registry they will be shared through doesn't exist yet: see "Recipes from the skills registry" above.

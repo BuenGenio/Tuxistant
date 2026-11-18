@@ -1,6 +1,6 @@
 # The skills registry
 
-Where people share recipe skills, and how Tux finds, installs, updates and removes them. This is the plan agreed with the owner on 2026-11-13. Nothing here is built yet.
+Where people share recipe skills, and how Tux finds, installs, updates and removes them. This is the plan agreed with the owner on 2026-11-13. Tux's checks and Browse in Settings, the daemon's side and Settings' page, are built and tested offline. The portal is built too, from a signed sample, and kept out of the live site until the registry repo exists. The registry repo and moderation aren't in this tree yet. "Building it, in order" below says where each step stands. The exact file formats are in [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md).
 
 The plan starts from the same assumption as the rest of Tuxistant: a bad skill will eventually get past review. Review, signing and moderation make that rarer and shorter. What protects you when it happens is what Tux itself enforces: risk computed from permissions, a card for every risky action, recipes that can only reach the hosts they name, and no shell.
 
@@ -25,6 +25,7 @@ The plan starts from the same assumption as the rest of Tuxistant: a bad skill w
    - the recipe loads with no problem;
    - its id is `io.github.<the PR author>.*`;
    - the signature verifies against a key GitHub lists for the PR author;
+   - an update is signed with a key the author already had on `main`, and a key added once they have a skill published is vouched for by one of their earlier keys, or else the owner confirms it is them;
    - the licence is MIT or CC0, and the tags exist;
    - the author isn't suspended or banned.
 
@@ -53,6 +54,17 @@ The site and its host are never trusted. If GitHub Pages served something else, 
 | Registry key | The owner, offline | The index, at each merge | Serious: a new key ships with the next Tuxistant release. Mitigated because Tux still checks each recipe's publisher signature and pinned hash |
 | Moderation key | CI, as a secret | Revocation entries only | Someone can switch skills off, but never add or change one. Switching off is the safe direction, so this key can live where moderation needs to be fast |
 
+## Logos
+
+Not built yet: Browse shows no logos, and Tux fetches and decodes none. This is the plan for them. A skill can have a logo, still or animated: PNG and APNG, WebP, AVIF or GIF, square, up to 512 pixels and 512 KiB, signed by the publisher like the recipe. [REGISTRY-FORMAT.md](REGISTRY-FORMAT.md#logos) has the exact rules.
+
+- **No SVG.** An SVG can carry scripts and links to other servers. The raster formats are only pixels.
+- **Decoded in a sandbox.** Image decoders are a common way in, so Settings and Browse decode logos with glycin, GNOME's image library. It runs each decoder in a sandbox of its own, not in Settings. The daemon never decodes a logo, and the model never sees one.
+- **Checked before it is shown.** Tux shows a logo only when its hash matches the index and the publisher's signature verifies, as for a recipe.
+- **Calm by default.** A logo animates only while its skill's page is open and only if animations are on in GNOME's settings. Lists and everyone with animations off see the still first frame. CI refuses a logo that flashes more than three times a second.
+- **Built-in skills get logos too.** They are drawn for Tuxistant as one set, so the Skills page looks the same with or without shared skills.
+- **Moderation covers logos.** The report form has "the logo is misleading or offensive", and suspending a skill hides its logo too.
+
 ## Tags and categories
 
 A tag is one word or short phrase: `weather`, `smart-home`, `prices`, `transport`, `notes`. A category is a named collection of tags, chosen by the registry, not by publishers: "Home" holds `smart-home`, `lights` and `heating`, and "Information" holds `weather`, `prices` and `transport`. Publishers pick tags from the list in `tags.yaml`. A new tag is proposed in the same pull request and approved with it. The portal and the Browse page show categories first, then tags inside them.
@@ -68,7 +80,7 @@ A Browse page, close to GNOME's Extension Manager:
 - **Remove.** It removes the file.
 - **Revoked skills.** They are switched off at once, with a notification that names the reason from the revocation list.
 
-Nothing about you is sent to the registry. Fetching the index is the only request, and it is the same for everyone.
+Nothing about you is sent to the registry: no identifier, cookie or account. The daily check's requests for the index and the revocations are the same for everyone. Downloading a recipe isn't: an install, an update and "Show the recipe" each fetch that skill's recipe, and so does the daily check for a skill you installed that has a new version, so the registry's host can tell which skills someone at your address has. Whether the daily check should hide that is still open ("Not decided" under "Skills registry: Browse" in [CONTRACT.md](CONTRACT.md)).
 
 ## Moderation
 
@@ -118,10 +130,10 @@ Use Suspend while looking into a report, since it costs a user only a skill that
 
 ## Building it, in order
 
-1. **The registry repo**, with the layout above, CI running Tux's loader as a check, signature checks against GitHub's published keys, the index build, and `tags.yaml` and categories. Three example recipes from the owner.
-2. **Signing in Tux:** checking the index and recipe signatures with `ssh-keygen -Y verify`, the pinned hashes, the sequence number and the revocation list. All of it is tested offline.
-3. **The portal:** browse, search, categories and skill pages, built into the existing GitHub Pages site.
-4. **Browse in Settings:** search, skill pages, install, update, remove, Report.
+1. **The registry repo**, waiting for the owner to name and create it, with the layout above, CI running Tux's loader as a check, signature checks against GitHub's published keys, the index build, and `tags.yaml` and categories. Three example recipes from the owner.
+2. **Signing in Tux:** checking the index and recipe signatures with `ssh-keygen -Y verify`, the pinned hashes, the sequence number and the revocation list. All of it is tested offline. Built, in `tuxistant/registry.py`.
+3. **The portal:** browse, search, categories and skill pages, built into the existing GitHub Pages site. Built, in `website/portal.py`, which takes the registry's files with Tux's own checks in `tuxistant/registry.py`, signatures included. Until the registry repo exists it is built only locally, from a sample signed with throwaway keys (`website/build.py --portal`, see [website/README.md](../website/README.md)), and goes live when the owner says so. It shows no logos yet, as Browse shows none.
+4. **Browse in Settings:** search, skill pages, install, update, remove, Report. The daemon's side is built, in `tuxistant/browse.py`: the `registry_url` setting, empty as installed, the fetch, the daily check with its notifications, and the D-Bus methods, which install and update through the shell's card. Settings' page is built too, in `tuxistant/settings_app.py`, and tested in a headless Settings against a stand-in daemon. Settings shows it only while the daemon has a registry address it can use, so it is hidden as installed. Report waits for the repo's issue form, and logos aren't shown yet.
 5. **Moderation:** the report form, the moderation screen, and the workflows behind each action.
 6. **A private trial:** a handful of people publish and install through it before any announcement.
 

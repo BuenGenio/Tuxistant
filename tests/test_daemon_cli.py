@@ -151,6 +151,12 @@ class Doctor(unittest.TestCase):
             cli.main(["--version"])
         self.assertRegex(out.getvalue(), r"^tuxistant \d+\.\d+\.\d+(\.dev\d+)?\n$")
 
+    def test_the_skills_registry_has_a_line_and_needs_none(self):
+        config = self.config(9)
+        self.assertTrue(self.results(config)["skills registry"])
+        config.values["registry_url"] = "http://not-https.example/"
+        self.assertFalse(self.results(config)["skills registry"])
+
     def test_missing_pipewire_tools(self):
         with mock.patch.dict(os.environ, {"PATH": str(self.folder)}):
             self.assertFalse(self.results(self.config(9))["PipeWire tools present"])

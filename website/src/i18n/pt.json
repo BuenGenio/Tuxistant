@@ -3,17 +3,18 @@
   "title": "Tuxistant: fale com o seu computador",
   "description": "Um assistente de voz para o seu computador que funciona no seu próprio hardware.",
   "tagline": "Fale com o seu computador. Funciona no seu hardware, não no de outros.",
-  "donate": "Doar", "language": "Idioma", "now": "Já", "soon": "Em breve",
+  "donate": "Doar", "skills": "Habilidades", "language": "Idioma", "now": "Já", "soon": "Em breve",
   "appearance": "Aparência", "modes": { "auto": "Automático", "light": "Claro", "dark": "Escuro" },
   "caps": [
     ["now", "Respostas faladas em um segundo"], ["now", "Segure uma tecla e fale"], ["now", "27 vozes para escolher"], ["now", "Mude o visual com temas"], ["now", "Funciona na sua própria rede"],
     ["soon", "Encontra seus arquivos"], ["soon", "Envia arquivos para o celular"], ["now", "Traduz enquanto você fala"], ["soon", "Executa comandos com sua permissão"], ["soon", "Habilidades revisadas para todos"]
   ],
   "themes": { "tux": "Tux ouvindo", "orb": "Orbe", "waves": "Ondas", "scanner": "Scanner" },
-  "showTheme": "Mostrar tema",
+  "showTheme": "Mostrar tema", "pauseMotion": "Pausar a animação", "playMotion": "Retomar a animação",
   "dlFor": "Baixar para {os}", "dlSoon": "Em breve no {os}", "dlPending": "Prévia para {os} em breve", "dlAll": "Todas as versões",
   "dlMeta": "Versão {version}, {channel}", "dlPlanned": "Ainda não disponível",
   "examplesTitle": "O que ele faz por você", "youSay": "Você diz", "approve": "Você aprova primeiro",
+  "ctaExamples": "Quer isso no seu próprio computador?", "ctaPreview": "Experimente-as no seu próprio computador.", "ctaVersions": "Procurando uma versão anterior ou o código-fonte?", "ctaSoon": "Em breve no {os}.", "ctaSoonAlso": "Também usa um computador com {os}?", "ctaReleases": "Todas as versões no GitHub",
   "examples": {
     "linux": [
       ["now", "Quanto espaço ainda tenho no disco?", "Verifica o disco e diz em voz alta."],
@@ -34,18 +35,18 @@
       ["soon", "Limpe meus arquivos temporários.", "Mostra o que encontrou e libera o espaço.", true]
     ]
   },
-  "versionsTitle": "Versões", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
+  "versionsTitle": "Versões e histórico", "colSystem": "Sistema", "colVersion": "Versão", "colStatus": "Status", "colNeeds": "Requisitos",
   "preview": "Prévia", "stable": "Estável", "planned": "Planejada", "linuxNeeds": "GNOME 50 e seu próprio servidor LocalAI", "tbd": "A anunciar",
   "previewTry": "Experimente a prévia {version} para Linux", "previewSep": ", ", "previewUntried": "ainda não testada num computador real", "releaseNotes": "Notas da versão",
-  "previewTitle": "Novidades da 0.5.0", "previewLead": "Já estão prontas, mas ainda não foram comprovadas num computador real. Cada uma passa para Já quando tiver funcionado em um.",
+  "previewTitle": "Novidades desde a 0.2.0", "previewLead": "Já estão prontas, mas ainda não foram comprovadas num computador real. Cada uma passa para Já quando tiver funcionado em um.",
   "previewCaps": [
     ["soon", "Toca, pausa e pula músicas"], ["soon", "Timers e lembretes"], ["soon", "Controla seu Home Assistant"], ["soon", "Pesquisa e investiga na web"],
     ["soon", "Responde fatos com a Wikipédia"], ["soon", "Responde com seus e-mails"], ["soon", "Suas próprias habilidades, isoladas"], ["soon", "Abre apps e páginas de Configurações"],
-    ["soon", "Habilidades receita: um arquivo YAML, sem código"], ["soon", "Receitas podem alternar Luz noturna e Não Perturbe"], ["soon", "Cada habilidade com sua página nas Configurações"], ["soon", "Endereço do Tailscale só se você ativar"], ["soon", "Ditado sem as mãos: toque duas vezes em Fn"], ["soon", "Responda ao Tux segurando Fn de novo"], ["soon", "Nuvem só se você aceitar"]
+    ["soon", "Habilidades de receita: um arquivo YAML, sem código"], ["soon", "Receitas podem alternar Luz noturna e Não Perturbe"], ["soon", "Cada habilidade com sua página nas Configurações"], ["soon", "Endereço do Tailscale só se você ativar"], ["soon", "Ditado sem as mãos: toque duas vezes em Fn"], ["soon", "Responda ao Tux segurando Fn de novo"], ["soon", "Nuvem só se você aceitar"]
   ],
   "releasesTitle": "Histórico de versões",
   "donateTitle": "Ajude a criar a próxima versão", "donateText": "Seu apoio financia as versões para macOS e Windows.",
   "credit": "O Tux foi desenhado por Larry Ewing com o The GIMP. O logotipo do Home Assistant é do Home Assistant, aqui em uma só cor, sob a licença CC BY-NC-SA 4.0.",
   "worksWith": "Funciona com",
-  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Home Assistant, Spotify, CNN, Windows e macOS são marcas dos seus respectivos donos, citadas apenas para dizer com o que o Tuxistant funciona ou vai funcionar. Nenhum deles o patrocina ou endossa."
+  "trademarks": "Linux, GNOME, BBC, The Kyiv Independent, Google Calendar, Tapo, Open-Meteo, LibreTranslate, Wikipedia, Tailscale, Home Assistant, Spotify, CNN, Windows e macOS são marcas dos seus respectivos donos, citadas apenas para dizer com o que o Tuxistant funciona ou vai funcionar. Nenhum deles o patrocina ou endossa."
 }

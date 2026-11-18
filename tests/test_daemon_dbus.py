@@ -4,8 +4,10 @@ The test class below re-runs this file under dbus-run-session. The service tests
 and check that the bus really is not the user's before touching anything.
 """
 import asyncio
+import hashlib
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -31,6 +33,10 @@ from tuxistant.config import CLOUD_CONSENT_VERSION, NOT_THE_CONSENT, Config, clo
 from tuxistant.gate import Ask  # noqa: E402
 from tuxistant.history import History  # noqa: E402
 from tuxistant.service import Daemon, serve  # noqa: E402
+from tuxistant.browse import NO_REGISTRY, Browse  # noqa: E402
+from tuxistant.registry import INDEX_NS, NOT_LISTED, RECIPE_NS, REVOCATIONS_NS  # noqa: E402
+from tuxistant.skillhost import SkillHost  # noqa: E402
+from tuxistant.skills import BUILTIN  # noqa: E402
 
 PRIVATE = "TUXISTANT_TEST_PRIVATE_BUS"
 REAL_BUS = "TUXISTANT_TEST_REAL_BUS"
@@ -47,6 +53,9 @@ METHODS = {
     "ListPhones": ("", "s"), "ListCalendars": ("", "s"),
     "Hello": ("i", ""), "CanAsk": ("", "b"), "Answer": ("sb", ""),
     "SelectionText": ("ss", ""),
+    "BrowseSkills": ("", "s"), "BrowseSkill": ("s", "s"), "FetchSkill": ("s", "s"),
+    "InstallSkill": ("s", "s"), "UpdateSkill": ("s", "s"), "RemoveSkill": ("s", "s"),
+    "CheckRegistry": ("", "s"),
 }
 SIGNALS = {
     "StateChanged": "s", "Presence": "b", "Level": "d", "Transcript": "sb", "Reply": "s",
@@ -54,6 +63,7 @@ SIGNALS = {
     "SkillsChanged": "",
     "Approval": "ssssi", "ApprovalClosed": "s", "SelectionWanted": "s",
     "DictationStarted": "s", "DictationMode": "ss", "TypeText": "ssb", "FollowUp": "ssi",
+    "RegistryChanged": "",
 }
 
 
@@ -69,11 +79,32 @@ class RunsOnPrivateBus(unittest.TestCase):
                 ["dbus-run-session", "--", sys.executable, "-m", "unittest",
                  "tests.test_daemon_dbus.Service", "tests.test_daemon_dbus.Process",
                  "tests.test_daemon_dbus.Lock", "tests.test_daemon_dbus.OnlyTheShellClicks",
-                 "tests.test_daemon_dbus.OnlyTheShellTypes", "tests.test_daemon_dbus.Timers"],
+                 "tests.test_daemon_dbus.OnlyTheShellTypes", "tests.test_daemon_dbus.Timers",
+                 "tests.test_daemon_dbus.OnlyTheShellInstalls"],
                 cwd=ROOT, env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr[-4000:])
         self.assertIn("OK", done.stderr)
         self.assertNotIn("skipped", done.stderr.splitlines()[-1])
+
+
+class SettingsStandIn(unittest.TestCase):
+    """Settings is tested against a stand-in daemon, so a signature that differs there from the
+    daemon's would pass Settings' tests and fail on the real bus."""
+
+    def test_it_serves_the_daemons_signatures(self):
+        from tests.shell_harness_settings_fake import Daemon as StandIn
+        with tempfile.TemporaryDirectory() as folder:
+            stand_in = StandIn(Path(folder))
+            stand_in.history.db.close()
+        interface = stand_in.introspect()
+        methods = {m.name: (m.in_signature, m.out_signature) for m in interface.methods}
+        signals = {s.name: s.signature for s in interface.signals}
+        self.assertEqual({name: METHODS.get(name) for name in methods}, methods)
+        self.assertEqual({name: SIGNALS.get(name) for name in signals}, signals)
+        browse = {"BrowseSkills", "BrowseSkill", "FetchSkill", "InstallSkill", "UpdateSkill",
+                  "RemoveSkill", "CheckRegistry"}
+        self.assertLessEqual(browse, set(methods))
+        self.assertIn("RegistryChanged", signals)
 
 
 class BlockedMic:
@@ -761,17 +792,226 @@ class OnlyTheShellClicks(OnPrivateBus):
         self.assertFalse(self.daemon.controller.face)
 
 
+@unittest.skipUnless(os.environ.get(PRIVATE), "needs dbus-run-session")
+@unittest.skipUnless(shutil.which("ssh-keygen"), "ssh-keygen isn't installed")
+class OnlyTheShellInstalls(OnPrivateBus):
+    """Any program on the bus can ask Browse to install a skill, and so put up a card, as a
+    model can. Only a click from the shell installs it."""
+
+    async def asyncSetUp(self):
+        from tests.test_registry import BLUETOOTH, NOW, dumped, fingerprint, make_key, sign
+        keys = self.folder / "keys"
+        keys.mkdir()
+        ada, registry_key = make_key(keys, "ada"), make_key(keys, "registry")
+        self.registry_key = registry_key    # moderation's too, here
+        data = BLUETOOTH.format(version="1.0.0").encode()
+        digest = hashlib.sha256(data).hexdigest()
+        version = {"version": "1.0.0", "date": "2026-11-14T10:00:00Z", "sha256": digest,
+                   "size": len(data), "key": fingerprint(ada[1]),
+                   "sig": sign(ada[0], RECIPE_NS, data).decode(), "permissions": {},
+                   "risk": "low"}
+        index = dumped({
+            "format": 1, "seq": 1, "date": "2026-11-20T09:00:00Z", "commit": "a" * 40,
+            "moderation_keys": [registry_key[1]],
+            "categories": [{"id": "desktop", "name": "Desktop", "tags": ["settings"]}],
+            "authors": {"ada": {"status": "active", "keys": [
+                {"key": ada[1], "fingerprint": fingerprint(ada[1]), "added": "2026-11-14",
+                 "removed": None}]}},
+            "skills": [{"id": "io.github.ada.bluetooth", "author": "ada", "name": "Bluetooth",
+                        "summary": "Opens Bluetooth", "tags": ["settings"], "licence": "MIT",
+                        "links": [], "versions": [version]}],
+            "revocations": [], "lifted": []})
+        self.served = {"index.json": index, f"recipes/{digest}.yaml": data,
+                       "index.json.sig": sign(registry_key[0], INDEX_NS, index)}
+        signers = self.folder / "signers"
+        signers.write_text(f'tuxistant-registry namespaces="{INDEX_NS}" {registry_key[1]}\n')
+        builtin, self.skills = self.folder / "builtin", self.folder / "data" / "skills"
+        builtin.mkdir()
+        self.skills.mkdir(parents=True)
+        shutil.copy(BUILTIN / "time.yaml", builtin / "time.yaml")
+        config = Config(self.folder / "config.json")
+        config.values["registry_url"] = "https://registry.example/skills/"
+        host = SkillHost(config, builtin, self.folder / "bundled", self.skills,
+                         launcher=lambda *_: None)
+        host.reload()
+        history = History(self.folder / "history.db")
+        self.addCleanup(history.db.close)
+        self.daemon = Daemon(config, history, host)
+        self.daemon.browse = Browse(config, host, self.daemon.controller, emit=self.daemon.send,
+                                    state=self.folder / "state", signers=signers,
+                                    fetch=self.fetch, clock=lambda: NOW)
+        self.bus = await MessageBus().connect()
+        self.assertTrue(await serve(self.bus, self.daemon))
+        self.addCleanup(self.bus.disconnect)
+        self.client = await MessageBus().connect()
+        self.addCleanup(self.client.disconnect)
+        self.cards = []
+        self.daemon.controller.emit = self.spy
+        await self.daemon.browse.check()
+
+    def fetch(self, path, _limit):
+        if path not in self.served:
+            raise OSError("not found")
+        return self.served[path]
+
+    def spy(self, name, *args):
+        if name == "Approval":
+            self.cards.append(args[0])
+        self.daemon.send(name, *args)
+
+    async def call(self, member, signature="", body=(), bus=None):
+        return await (bus or self.client).call(Message(
+            destination=BUS_NAME, path=BUS_PATH, interface=BUS_NAME, member=member,
+            signature=signature, body=list(body)))
+
+    async def the_shell(self):
+        shell = await MessageBus().connect()
+        self.addCleanup(shell.disconnect)
+        await shell.request_name(service.SHELL_NAME)
+        while self.daemon.shell_owner != shell.unique_name:
+            await asyncio.sleep(0.01)
+        self.daemon.controller.face = True
+        return shell
+
+    async def card_for(self, task):
+        async with asyncio.timeout(10):
+            while not self.cards and not task.done():
+                await asyncio.sleep(0.01)
+        self.assertFalse(task.done(), "no card came up")
+        return self.cards[-1]
+
+    async def test_only_the_shells_click_installs(self):
+        shell = await self.the_shell()
+        changed = []
+        await self.client.call(Message(
+            destination="org.freedesktop.DBus", path="/org/freedesktop/DBus",
+            interface="org.freedesktop.DBus", member="AddMatch", signature="s",
+            body=[f"type='signal',interface='{BUS_NAME}',member='RegistryChanged'"]))
+        self.client.add_message_handler(
+            lambda message: changed.append(message.member)
+            if message.member == "RegistryChanged" else None)
+        task = asyncio.create_task(self.call("InstallSkill", "s", ["io.github.ada.bluetooth"]))
+        card = await self.card_for(task)
+        refused = await self.call("Answer", "sb", [card, True])
+        self.assertEqual(refused.error_name, service.DENIED)
+        await asyncio.sleep(0.05)
+        self.assertFalse(task.done(), "a stranger answered the card")
+        self.assertFalse((self.skills / "io.github.ada.bluetooth.yaml").exists())
+        await self.call("Answer", "sb", [card, True], bus=shell)
+        reply = await task
+        self.assertEqual(reply.message_type, MessageType.METHOD_RETURN, reply.body)
+        self.assertEqual(json.loads(reply.body[0])["version"], "1.0.0")
+        self.assertTrue((self.skills / "io.github.ada.bluetooth.yaml").exists())
+        async with asyncio.timeout(5):
+            while not changed:
+                await asyncio.sleep(0.01)
+        listing = json.loads((await self.call("BrowseSkills")).body[0])
+        self.assertEqual(listing["skills"][0]["installed"]["version"], "1.0.0")
+
+    async def test_a_deny_and_an_unknown_skill_come_back_as_sentences(self):
+        shell = await self.the_shell()
+        task = asyncio.create_task(self.call("InstallSkill", "s", ["io.github.ada.bluetooth"]))
+        await self.call("Answer", "sb", [await self.card_for(task), False], bus=shell)
+        reply = await task
+        self.assertEqual((reply.error_name, reply.body),
+                         (service.FAILED, ["You didn't allow it, so nothing was installed."]))
+        reply = await self.call("BrowseSkill", "s", ["io.github.ada.other"])
+        self.assertEqual((reply.error_name, reply.body), (service.FAILED, [NOT_LISTED]))
+
+    async def test_a_switch_off_at_the_daily_check_is_a_notification_on_the_desktop(self):
+        from tests.test_registry import dumped, sign
+        browse = self.daemon.browse
+        browse.registry.install(browse.registry.check("io.github.ada.bluetooth", "1.0.0"))
+        revocations = dumped({"format": 1, "seq": 1, "date": "2026-11-20T10:00:00Z",
+                              "revocations": [{
+                                  "id": 1, "kind": "suspend",
+                                  "scope": {"skill": "io.github.ada.bluetooth"},
+                                  "reason": "Its host & owner changed.",
+                                  "date": "2026-11-19T16:05:00Z", "actor": "mod",
+                                  "report": None}]})
+        self.served["revocations.json"] = revocations
+        self.served["revocations.json.sig"] = sign(self.registry_key[0], REVOCATIONS_NS,
+                                                   revocations)
+        desktop = FakeDesktop()
+        bus = await MessageBus().connect()
+        self.addCleanup(bus.disconnect)
+        bus.export("/org/freedesktop/Notifications", desktop)
+        await bus.request_name("org.freedesktop.Notifications")
+
+        async def once():
+            await browse.check()
+        browse.run = once       # the daily check, once and now
+        await service._check_registry(browse, self.bus)
+        self.assertEqual(desktop.notices, [(
+            "Tuxistant switched off io.github.ada.bluetooth",
+            "The skills registry has switched it off: Its host &amp; owner changed.")])
+
+    async def test_with_no_registry_set_a_start_still_switches_off_what_tux_saved(self):
+        """No check without an address, but what the revocations saved before cover is switched
+        off at the start, and told on this bus, as the record may not say so."""
+        from tests.test_registry import NOW, dumped, sign
+        browse = self.daemon.browse
+        browse.registry.install(browse.registry.check("io.github.ada.bluetooth", "1.0.0"))
+        revocations = dumped({"format": 1, "seq": 1, "date": "2026-11-20T10:00:00Z",
+                              "revocations": [{
+                                  "id": 1, "kind": "suspend",
+                                  "scope": {"skill": "io.github.ada.bluetooth"},
+                                  "reason": "Gone bad.", "date": "2026-11-19T16:05:00Z",
+                                  "actor": "mod", "report": None}]})
+        browse.registry.accept_revocations(     # saved, and never applied to the record
+            revocations, sign(self.registry_key[0], REVOCATIONS_NS, revocations))
+        host = browse.host
+        host.reload()
+
+        def loaded():
+            return {skill["id"] for skill in host.current().listing()}
+        self.assertIn("io.github.ada.bluetooth", loaded())
+        desktop = FakeDesktop()
+        bus = await MessageBus().connect()
+        self.addCleanup(bus.disconnect)
+        bus.export("/org/freedesktop/Notifications", desktop)
+        await bus.request_name("org.freedesktop.Notifications")
+        unset = Browse({"registry_url": ""}, host, self.daemon.controller,
+                       emit=self.daemon.send, state=self.folder / "state",
+                       signers=self.folder / "signers", clock=lambda: NOW)
+        await asyncio.wait_for(service._check_registry(unset, self.bus), 10)
+        self.assertEqual(desktop.notices, [("Tuxistant switched off io.github.ada.bluetooth",
+                                            "The skills registry has switched it off: Gone bad.")])
+        self.assertNotIn("io.github.ada.bluetooth", loaded())
+        self.assertEqual(unset.listing()["address"], "")
+
+    async def test_a_failure_in_browse_is_a_sentence_and_the_daemon_carries_on(self):
+        async def fails(*_args):
+            raise RuntimeError("something unforeseen")
+        self.daemon.browse.fetch = fails
+        with self.assertLogs("tuxistant", "ERROR"):
+            reply = await self.call("FetchSkill", "s", ["io.github.ada.bluetooth"])
+        self.assertEqual((reply.error_name, reply.body), (service.FAILED, [service.BROWSE_FAILED]))
+        self.daemon.browse.run = fails
+        with self.assertLogs("tuxistant", "ERROR"):
+            await service._check_registry(self.daemon.browse, self.bus)
+        self.daemon.browse = None       # as for a fixed set of skills, which has no folder
+        await service._check_registry(None, self.bus)
+        for member in ("BrowseSkills", "CheckRegistry"):
+            reply = await self.call(member)
+            self.assertEqual(json.loads(reply.body[0]), service.NOTHING_HELD, member)
+        for member in ("BrowseSkill", "InstallSkill"):
+            reply = await self.call(member, "s", ["io.github.ada.bluetooth"])
+            self.assertEqual((reply.error_name, reply.body), (service.FAILED, [NO_REGISTRY]))
+
+
 class FakeDesktop(ServiceInterface):
     """What takes a notification, in place of GNOME Shell."""
 
     def __init__(self):
         super().__init__("org.freedesktop.Notifications")
-        self.shown = []
+        self.shown, self.notices = [], []
 
     @method()
     def Notify(self, app: "s", replaces: "u", icon: "s", summary: "s", body: "s",
                actions: "as", hints: "a{sv}", expires: "i") -> "u":
         self.shown.append(summary)
+        self.notices.append((summary, body))
         return 1
 
 

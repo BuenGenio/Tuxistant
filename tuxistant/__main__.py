@@ -183,6 +183,12 @@ def skill_problems(config, host=None) -> dict[str, str]:
     return (host or offline_skills(config)).problems
 
 
+def registry_line(config) -> tuple[bool, str]:
+    """The skills registry, as the daemon would find it here, read with nothing fetched."""
+    from . import browse, registry
+    return browse.doctor(config, registry.STATE_DIR, user_skills())
+
+
 def checks(config) -> list[tuple[bool, str, str]]:
     """(passed, what, detail) for each thing Tuxistant depends on."""
     missing = missing_packages()
@@ -208,6 +214,7 @@ def checks(config) -> list[tuple[bool, str, str]]:
     host = offline_skills(config)
     sandbox, sandbox_detail = sandbox_ready(config, host)
     problems = skill_problems(config, host)
+    shared, shared_detail = registry_line(config)
     return [
         (True, "Python modules present", ""),
         (reachable, "server reachable", server),
@@ -228,6 +235,7 @@ def checks(config) -> list[tuple[bool, str, str]]:
         (typing, "dictation ready", typing_detail),
         (sandbox, "skill sandbox ready", sandbox_detail),
         (not problems, SKILLS_LOAD, f"{len(problems)} with a problem" if problems else ""),
+        (shared, "skills registry", shared_detail),
     ]
 
 

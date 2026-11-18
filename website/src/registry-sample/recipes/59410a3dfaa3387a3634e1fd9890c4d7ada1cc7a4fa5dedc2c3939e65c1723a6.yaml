@@ -1,0 +1,15 @@
+id: io.github.example-cy.desk-lamp
+name: Desk lamp
+description: Sets the desk lamp to a scene
+version: "1.1"
+permissions:
+  network: [lamp.example.net]
+actions:
+  lamp.scene:
+    description: Set the desk lamp to reading, warm, bright or off. Not for the ceiling lights
+    params:
+      scene: { type: choice, of: [reading, warm, bright, "off"], description: "The scene" }
+    required: [scene]
+    post: https://lamp.example.net/scene
+    json: { scene: "{scene}" }
+    say: "The desk lamp is set to {scene}."

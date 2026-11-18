@@ -1,0 +1,4 @@
+# PLACEHOLDER. Not the registry's key: its private half was thrown away when it was made, so
+# nothing verifies with it and Tux accepts no index until a release ships the real key here.
+# Format and rules: docs/REGISTRY-FORMAT.md, "Signatures and keys". At most two key lines.
+tuxistant-registry namespaces="tuxistant-index" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGun7P1DeS4kEZ6LhHL0I9KsQACTvRi3doZnmpOMmFPZ
