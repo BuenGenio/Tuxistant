@@ -714,11 +714,18 @@ def load_portal(folder):
         portal = _portal()
     except ImportError as e:
         raise SystemExit("The skills portal needs what Tux's daemon imports, PyYAML, websockets "
-                         f"and dbus-fast, as install.sh lists them: {e}.") from None
+                         f"and dbus-fast, as install.sh lists them: {ended(e)}") from None
     try:
         return portal, portal.load(Path(folder))
     except portal.Refused as e:
-        raise SystemExit(f"The skills portal wasn't built from {folder}: {e}.") from None
+        raise SystemExit(f"The skills portal wasn't built from {folder}: {ended(e)}") from None
+
+
+def ended(reason) -> str:
+    """A reason with one period at its end: Tux's own reasons are sentences that end with one
+    already, and the portal's and Python's aren't."""
+    reason = str(reason)
+    return reason if reason.endswith(".") else f"{reason}."
 
 
 def build_portal(dist, portal, strings, policy, releases):

@@ -351,12 +351,12 @@ def _lines(text: str) -> list:
 def diff_html(old, new) -> str:
     """The diff, in lines split at \\n alone: str.splitlines() also splits at characters YAML
     doesn't break at, and drops those it does, with their marks. Each line is shown by code()
-    with its \\n, so a \\r before it reads as the \\r\\n it is."""
-    lines = difflib.unified_diff(_lines(old["text"]), _lines(new["text"]), lineterm="", n=2)
+    with its \\n, so a \\r before it reads as the \\r\\n it is. The two file headers unified_diff
+    yields first are dropped by where they are, never by how they start: a line added that starts
+    with ++ starts with +++ in the diff."""
+    lines = list(difflib.unified_diff(_lines(old["text"]), _lines(new["text"]), lineterm="", n=2))
     out = []
-    for line in lines:
-        if line.startswith(("---", "+++")):
-            continue
+    for line in lines[2:]:
         kind = {"+": "add", "-": "del", "@": "hunk"}.get(line[:1], "same")
         out.append(f'<span class="{kind}">{code(line + chr(10))[:-1]}</span>')
     return '<pre class="code diff">' + "\n".join(out) + "</pre>" if out else ""
@@ -560,7 +560,9 @@ def skill_html(skill, sample, site) -> str:
     history = "".join(version_html(skill["versions"], i, sample)
                       for i in reversed(range(len(skill["versions"]))))
     # A name too long for the heading even at its smallest is cut there, so it is said again in
-    # full under it. site.js hides that line again for a name it didn't have to cut.
+    # full under it. site.js hides that line again for a name it didn't have to cut. The HTML
+    # parser drops a line break right after <pre>, so the whole recipe has one there to drop, and
+    # a recipe that starts with a blank line keeps it.
     return f"""<article class="portal" aria-labelledby="skill-title">
   <div class="portal-head wrap">
     <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Skills</a></nav>
@@ -585,7 +587,8 @@ def skill_html(skill, sample, site) -> str:
   {install_html(skill, current, sample, site)}
   {site.acc_open("file", "The whole recipe")}
     <p class="file-meta">{esc(skill["file_name"])}, version {esc(current["version"])}, {current["size"]} bytes. SHA-256 {esc(current["sha256"])}.</p>
-    <pre class="code">{code(current["text"])}</pre>
+    <pre class="code">
+{code(current["text"])}</pre>
   {site.acc_end()}
   {site.acc_open("versions", "Versions")}
     <ol class="history" reversed>{history}</ol>

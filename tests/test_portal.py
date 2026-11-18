@@ -443,7 +443,7 @@ class BuiltPortal(BuiltSite):
     def test_the_whole_recipe_is_on_its_page(self):
         version = self.index["skills"][0]["versions"][-1]
         recipe = (SAMPLE / "recipes" / f"{version['sha256']}.yaml").read_text()
-        self.assertIn(f'<pre class="code">{recipe.replace(chr(34), "&quot;")}</pre>',
+        self.assertIn(f'<pre class="code">\n{recipe.replace(chr(34), "&quot;")}</pre>',
                       self.page(TIDES))
 
     def test_versions_show_what_changed_in_plain_words_and_as_a_diff(self):
@@ -913,6 +913,32 @@ class HostileRegistry(unittest.TestCase):
         self.assertIn(f'<span class="del">-y{MARK(11)}z</span>', diff, "one line, as YAML reads it")
         self.assertIn(f'<span class="add">+y{MARK(11)}w</span>', diff)
 
+    def test_the_diff_shows_lines_that_start_as_its_headers_do(self):
+        """A line added that starts with ++ reads +++ in the diff, and one removed that starts
+        with -- reads ---, as the two headers difflib puts first do. YAML takes either at the
+        start of a line in a flow mapping, so here each is a key of the body Tux sends."""
+        page = self.two_tides(
+            "  tides.next:\n    description: Say the tide\n    post: https://tides.example.org/"
+            "send\n    json: { n: \"1\",\n--old: \"x\" }\n    say: \"Sent.\"\n",
+            "  tides.next:\n    description: Say the tide\n    post: https://tides.example.org/"
+            "send\n    json: { n: \"1\",\n++all: \"yes\" }\n    say: \"Sent.\"\n")
+        self.assertIn("<li>tides.next sends a different body.</li>", page)
+        self.assertIn('<span class="del">---old: &quot;x&quot; }</span>', page)
+        self.assertIn('<span class="add">+++all: &quot;yes&quot; }</span>', page)
+        self.assertEqual(portal.diff_html({"text": "a\n--b\n"}, {"text": "a\n++c\n"}),
+                         '<pre class="code diff"><span class="hunk">@@ -1,2 +1,2 @@</span>\n'
+                         '<span class="same"> a</span>\n<span class="del">---b</span>\n'
+                         '<span class="add">+++c</span></pre>', "and neither header")
+
+    def test_a_recipe_that_starts_with_a_blank_line_keeps_it_on_the_page(self):
+        """The HTML parser drops a line break right after <pre>, so the page puts one there for
+        it to drop, and the whole recipe starts where the file does."""
+        registry = Registry(self)
+        recipe = "\n" + registry.recipe(TIDES)
+        registry.replace_recipe(TIDES, recipe)
+        page = (registry.build() / TIDES / "index.html").read_text()
+        self.assertIn(f'<pre class="code">\n{html_escape(recipe)}</pre>', page)
+
     def test_a_copied_sample_is_checked_against_the_key_tux_ships(self):
         """Its SAMPLE file still makes its pages say so, but never picks the key it is checked
         with: only the sample in this repo is checked against its own."""
@@ -958,6 +984,17 @@ class FailedBuild(unittest.TestCase):
     def test_from_a_registry_tux_would_refuse(self):
         registry = Registry(self)       # a copy of the sample, checked against the key Tux ships
         with self.assertRaisesRegex(SystemExit, "wasn't built from .*: .*isn't signed by the key"):
+            build.main(["--portal", str(registry.folder)])
+        self.assertFalse(self.dist.exists())
+
+    def test_the_reason_ends_with_one_period(self):
+        """Tux's own reasons are sentences that end with one already, and the portal's aren't."""
+        registry = Registry(self)
+        with self.assertRaisesRegex(SystemExit, r"isn't signed by the key it has to be, so it "
+                                                r"wasn't used\.$"):
+            build.main(["--portal", str(registry.folder)])
+        (registry.folder / "index.json").unlink()
+        with self.assertRaisesRegex(SystemExit, r": index\.json is missing\.$"):
             build.main(["--portal", str(registry.folder)])
         self.assertFalse(self.dist.exists())
 
