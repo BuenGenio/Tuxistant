@@ -962,14 +962,17 @@ def _select(imap, box: str) -> bool:
 def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float,
           last: float | None = None) -> list[tuple]:
     """Rows as mail._rows makes them, from one mailbox. The server is asked nothing past until,
-    but what it gave by then is read and hidden up to last, as that asks nothing of it: on a
-    slow server, fetching on took all the search's time, and every mail of the mailbox was then
-    thrown away, those read whole too."""
+    but what it gave by then is read and hidden up to last, as that asks nothing of it. Each mail
+    is hidden as it was first read before the server is asked anything more, one cut short as a
+    mail that can't be fetched on or asked about is, and that one is hidden again from what
+    fetching on and the search for sign-in talk brought, if they come back by last: on a slow
+    server, fetching on took all the search's time, or a round of it started in time answered
+    past last, and every mail of the mailbox was then thrown away, those read whole too."""
     last = until if last is None else last
     if time.monotonic() > until or not _select(imap, box):
         return []
     picked = _picked(_hits(imap, stems, until))
-    if not picked:
+    if not picked or time.monotonic() > until:
         return []
     asked = (f"(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS ({FIELDS})]<0.{HEADER_BYTES}> "
              f"BODY.PEEK[TEXT]<0.{TEXT_BYTES}>)")
@@ -983,15 +986,26 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float,
         message = found and _read(found)
         if message:
             read.append((uid, every, found, *message))
-    read = _read_on(imap, read, until)
-    talking = _talking(imap, [uid for uid, *_, body, cut in read if _short(body, cut)], until)
-    rows = []
+    short = [item for item in read if _short(*item[-2:])]
+    rows = _kept(stems, folder, read, {uid for uid, *_ in short}, last)
+    if short:
+        short = _read_on(imap, short, until)
+        talking = _talking(imap, [uid for uid, *_, body, cut in short if _short(body, cut)],
+                           until)
+        rows |= _kept(stems, folder, short, talking, last)
+    return [row for row in rows.values() if row]
+
+
+def _kept(stems: list[mail.Term], folder: int, read: list[tuple], talking: set[int],
+          last: float) -> dict[int, tuple | None]:
+    """{uid: its row, or None where hiding left nothing to find} of the mails read, in order,
+    those in talking hidden as mails that talk of signing in, as far as there is time."""
+    rows = {}
     for uid, every, found, message, body, cut in read:
         if time.monotonic() > last:
             break
         kept = _hidden(stems, message, found, body, every, cut, uid in talking)
-        if kept:
-            rows.append(((folder, uid), _stamp(found.get(b"INTERNALDATE")), folder, *kept))
+        rows[uid] = kept and ((folder, uid), _stamp(found.get(b"INTERNALDATE")), folder, *kept)
     return rows
 
 

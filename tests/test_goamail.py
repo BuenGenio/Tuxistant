@@ -84,6 +84,48 @@ def text_of(raw: bytes) -> bytes:
 FETCHED_BYTES = goamail.TEXT_BYTES + goamail.MORE_BYTES     # a mail's text once fetched on
 
 
+class Clock:
+    """time as goamail sees it, in place of the module: it moves only when a test moves it."""
+
+    def __init__(self, now: float):
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+class Mailbox:
+    """A mailbox of a few mails, in this process, as goamail._rows asks one, whose answers come
+    at the time answered(what was asked) gives, or at once for None. Its search for the
+    question's words finds every mail, and its search for sign-in talk none of them."""
+    literal, taken = None, 0
+
+    def __init__(self, mails: dict[int, bytes], clock: Clock, answered):
+        self.mails, self.clock, self.answered, self.asked = mails, clock, answered, []
+
+    def select(self, _box, readonly=True):
+        return "OK", [str(len(self.mails)).encode()]
+
+    def uid(self, command, *args):
+        self.literal = None
+        self.asked.append(" ".join((command, *args)))
+        at = self.answered(args[-1])
+        self.clock.now = self.clock.now if at is None else at
+        if command == "SEARCH":
+            return "OK", [b"" if "UID" in args else " ".join(map(str, self.mails)).encode()]
+        out = []
+        for uid in map(int, args[0].split(",")):
+            header, _, text = self.mails[uid].partition(b"\r\n\r\n")
+            head = f'{uid} (UID {uid} INTERNALDATE "13-Nov-2026 10:00:00 +0000"'.encode()
+            for section, start, size in re.findall(
+                    r"BODY\.PEEK\[(HEADER\.FIELDS \([^)]*\)|TEXT)\]<(\d+)\.(\d+)>", args[-1]):
+                data = (text if section == "TEXT" else header + b"\r\n")[int(start):][:int(size)]
+                out.append((head + f" BODY[{section}]<{start}> {{{len(data)}}}".encode(), data))
+                head = b""
+            out.append(b")")
+        return "OK", out
+
+
 def gmail(inbox=(), sent=(), junk=(), archived=()) -> list[Box]:
     """Gmail's folders. Each mail is (raw, days ago the server took it in). Everything but Spam
     and Trash is in All Mail too, as on Gmail."""
@@ -1477,6 +1519,51 @@ class CutShort(Goa):
         self.assertEqual(goamail._talking(Refusing(), [3, 5], time.monotonic() + 9), {3, 5})
         self.assertEqual(goamail._talking(Refusing(), [3, 5], time.monotonic() - 1), {3, 5})
         self.assertEqual(goamail._talking(Refusing(), [], time.monotonic() + 9), set())
+
+    def test_a_round_that_answers_past_the_hiding_time_keeps_what_was_read(self):
+        """A round of fetching on asked just before the search's time ran out, which a slow
+        server answered past halfway through the lookups' time, left no time to hide anything,
+        and every mail of the mailbox was thrown away, the one read whole too. Each is now hidden
+        as it was first read before the server is asked more, the cut one as a mail that can't
+        be fetched on or asked about is, and that one again from what came, if it came in time."""
+        terms = "The Acme terms go on here and on.\n" * 900
+        whole = message("Acme receipt", ACME, "Thank you for your Acme payment.")
+        cut = message("Acme order", ACME, "Your Acme order 5928374 is on its way.\n" + terms)
+        for answered, shown in ((12, False), (11, True)):     # until is 10, and last 11.5
+            clock = Clock(9.9)
+            box = Mailbox({1: whole, 2: cut}, clock, lambda asked: (
+                answered if f"TEXT]<{goamail.TEXT_BYTES}." in asked else None))
+            with mock.patch.object(goamail, "time", clock):
+                rows = goamail._rows(box, "INBOX", 0, mail.terms("Acme"), 10, 11.5)
+            bodies = {key[1]: body for key, *_, body in rows}
+            self.assertEqual(sorted(bodies), [1, 2], answered)
+            self.assertIn("Thank you for your Acme payment.", bodies[1])
+            self.assertEqual("5928374" in bodies[2], shown, answered)
+            self.assertEqual("[hidden]" in bodies[2], not shown, answered)
+            self.assertEqual(len(bodies[2]) > goamail.TEXT_BYTES, shown, answered)
+            self.assertEqual(len([asked for asked in box.asked
+                                  if f"TEXT]<{goamail.TEXT_BYTES}." in asked]), 1, answered)
+
+    def test_no_search_for_sign_in_talk_is_asked_past_the_search_time(self):
+        """Each word for it that isn't ASCII is a search of its own, and a slow server could
+        hold each up to the cut, so each looks at the time first, and any it can't ask in time
+        leaves the mails taken to talk of signing in."""
+        clock = Clock(0)
+        box = Mailbox({}, clock, lambda asked: clock.now + 1)
+        with mock.patch.object(goamail, "time", clock):
+            self.assertEqual(goamail._talking(box, [3, 5], 1.5), {3, 5})
+        self.assertEqual(len(box.asked), 2)     # all of the ASCII ones, then one more
+        self.assertEqual(clock.now, 2)
+
+    def test_mails_are_not_fetched_past_the_search_time(self):
+        """A search for the question's words that answered past the search's time still had
+        the mails it found fetched."""
+        clock = Clock(9.9)
+        box = Mailbox({1: message("Acme receipt", ACME, "Thank you.")}, clock, lambda asked: 10.5)
+        with mock.patch.object(goamail, "time", clock):
+            self.assertEqual(goamail._rows(box, "INBOX", 0, mail.terms("Acme"), 10, 11.5), [])
+        self.assertTrue(box.asked)
+        self.assertFalse([asked for asked in box.asked if asked.startswith("FETCH")])
 
     def test_what_the_server_is_asked_for_is_sign_in_talk(self):
         for term in goamail.TALK_TERMS:
