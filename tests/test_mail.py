@@ -125,7 +125,21 @@ SPLIT_ACROSS = (("Your Acme verification code", "Enter this on the page: 482913"
                 ("Your Acme sign-in code", "Hello. Enter K Q 7 X 9 B on the page."),
                 # Two groups of three, one of them letters only.
                 ("Sign in to Acme", "Hello.\n\nKQW 9XB\n\nThanks"),
-                ("Acme KQW 9XB", "This is your Acme code."))
+                ("Acme KQW 9XB", "This is your Acme code."),
+                # Portuguese senha counts for the other part only where it names a password:
+                # with nothing but punctuation after it, or before temporária, provisória or de
+                # acesso, and not a queue's ticket, "Sua senha de atendimento".
+                ("Sua senha temporária Acme", "Olá! Aqui está: 482913"),
+                ("Senha de acesso Acme", "Olá, aqui está ela: 482913."),
+                ("Senha provisória Acme", "Olá, Sam. Segue: 482913, até logo."),
+                ("Acme: sua nova senha", "Olá, Sam. É 482913, até logo."),
+                ("Sua senha:", "Olá, use 482913 na Acme."))
+# A code in two groups on two lines by talk of signing in that a line end splits, which only
+# joining the lines makes talk, with an order number on a line of its own that stays.
+SPLIT_TALK_CODES = ("Order 5928374 has shipped.\nUse 482\n913 to log\nin now.",
+                    "Hi Sam,\nuse 482\n913 to sign\nin to Acme.\nOrder 5928374 has shipped.",
+                    "Please log\nin with 482\n913 now.\nOrder 5928374 has shipped.",
+                    "Order 5928374 has shipped.\n\nUse 482\n913 to sign\nin now.")
 # Codes joined by a dash that isn't a hyphen-minus: a non-breaking hyphen, which templates write
 # as &#8209; to keep a code on one line, a hyphen, a minus sign and an en dash, the other minus
 # signs, and the dots that stand where a dash would, which are spaces.
@@ -1246,13 +1260,26 @@ class Secrets(Base):
                       "author": "Acme <account@acme.example>"}
                      for n, (subject, body) in enumerate(SPLIT_ACROSS)))
         self.says = ["NOTHING"] * len(SPLIT_ACROSS)
-        with mock.patch.object(mail, "TRIED", len(SPLIT_ACROSS)):
+        with mock.patch.object(mail, "TRIED", len(SPLIT_ACROSS)), \
+                mock.patch.object(mail, "MAX_CHECKED", max(mail.MAX_CHECKED, len(SPLIT_ACROSS))):
             await self.ask("Did Acme email me?")
         self.assertEqual(len(self.model), len(SPLIT_ACROSS))
         for call in range(len(SPLIT_ACROSS)):
             self.assertIn(mail.HIDDEN, self.read(call))
             for code in codes:
                 self.assertNotRegex(self.read(call), code)
+
+    def test_near_talk_only_joining_the_lines_makes_only_what_the_joining_makes_is_hidden(self):
+        """Talk of signing in that a line end splits, as in "log\\nin", is no talk, as for 0.5.0,
+        so an order number by it is read out. But the model reads the lines joined, where it is
+        talk, and so near it what the joining makes is hidden, such as a code in two groups on
+        two lines."""
+        for body in SPLIT_TALK_CODES:
+            kept = mail._kept(mail.terms("Acme"), "", "Acme", body, False)
+            shown = mail._shown(kept[2], mail.BODY_CHARS)
+            self.assertIn(mail.HIDDEN, shown, body)
+            self.assertNotRegex(shown, r"\b482\b|\b913\b", body)
+            self.assertIn("Order 5928374", shown, body)
 
     def test_sign_in_talk_counts_for_its_own_part_only(self):
         """As 0.5.0 had it. Talk of signing in in one part of a mail, as a footer has, hid every

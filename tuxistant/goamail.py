@@ -170,10 +170,17 @@ HIGH_RUN = re.compile(rb"[\x80-\xff]+")
 GUESSES = (("cp1256", re.compile("[\u0620-\u064a\u066e-\u06d3\u06fa-\u06ff]")),
            ("gb18030", re.compile("[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")))
 LATIN = re.compile("[A-Za-z\u00c0-\u024f]")
+# A Latin accent or a Latin-1 sign glued to an Arabic letter, as GBK read in Windows-1256 is full
+# of. Arabic quotes a word in « », which Windows-1256 writes as Latin-1 does, so only a « after a
+# letter or a » before one, the wrong way round, counts: counted either way, "أدخل «رمز التحقق»"
+# was read as Windows-1252, and the code after it was shown.
 GLUED_TO_ARABIC = re.compile("[\u0620-\u064a\u066e-\u06d3\u06fa-\u06ff]"
-                             "[\u00a1-\u00bf\u00c0-\u024f\u00d7\u00f7]|"
-                             "[\u00a1-\u00bf\u00c0-\u024f\u00d7\u00f7]"
+                             "[\u00a1-\u00ba\u00bc-\u024f\u00d7\u00f7]|"
+                             "[\u00a1-\u00aa\u00ac-\u024f\u00d7\u00f7]"
                              "[\u0620-\u064a\u066e-\u06d3\u06fa-\u06ff]")
+# What a cut through an escape leaves at the end of quoted-printable once decoded: its "=" and
+# one hex digit, which decoding leaves as they are (an "=" alone it drops, as a soft line break).
+QP_CUT = re.compile(rb"=[0-9A-Fa-f]\Z")
 # An encoded word (RFC 2047), and the space between two of them, which is not part of the text.
 ENCODED_WORD = re.compile(r"=\?([^?\s]+)\?([QqBb])\?([^?\s]*)\?=")
 BETWEEN_WORDS = re.compile(r"(?<=\?=)\s+(?==\?[^?\s]+\?[QqBb]\?)")
@@ -711,16 +718,21 @@ def _subject(message) -> str:
     return _flat(_words(_header(message, "Subject") or ""))
 
 
-def _decoded(part) -> str:
+def _decoded(part, cut: bool = False) -> str:
     """A part's text, from as much of it as was fetched: base64 cut short still decodes. Its last
     group is padded, not dropped, as one that ends a part with no padding would lose the last word
     of it, and "482 913 is your Acme code." was read as "... Acme cod". A single letter left over
-    holds no whole byte."""
+    holds no whole byte. Quoted-printable cut short (cut) loses an escape the cut went through,
+    as its "=" and the digit after it are no escape: "=E7=B", read as "\\xe7=B", was no UTF-8 but
+    before its end, and was read as Windows-1252 (see _guessed)."""
     try:
-        if str(part.get("Content-Transfer-Encoding", "")).strip().lower() == "base64":
+        encoding = str(part.get("Content-Transfer-Encoding", "")).strip().lower()
+        if encoding == "base64":
             data = _base64(str(part.get_payload()))
         else:
             data = part.get_payload(decode=True) or b""
+            if cut and encoding == "quoted-printable":
+                data = QP_CUT.sub(b"", data)
         label = part.get_content_charset()
         if label is None and part.get_content_type() == "text/html":
             meta = META_CHARSET.search(data, 0, META_BYTES)
@@ -742,7 +754,8 @@ def _guessed(data: bytes) -> str:
     GB18030, an accent and the letter after it are one Chinese character between two Latin
     letters, "c骴igo", which no Chinese text has: so where more than one in ten are that, it is
     not Chinese. Windows-1256 reads any bytes, and GBK read in it is mostly Arabic letters too,
-    with a Latin accent or a sign glued to them, "ؤرéض¤", which Arabic never writes."""
+    with a Latin accent or a sign glued to them, "ؤرéض¤", which Arabic never writes but for its
+    own quotes (see GLUED_TO_ARABIC)."""
     if _decodes(data, "utf-8") is not None:
         return "utf-8"
     runs = [len(run) for run in HIGH_RUN.findall(data)]
@@ -837,11 +850,11 @@ def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
         if _attached(part):
             continue
         kind = part.get_content_type()
+        cut = fetched_cut and part is leaves[-1]
         if kind == "text/plain" and plain is None:
-            plain = (LINE_ENDS.sub("\n", _decoded(part).replace(mail.JOIN, " ")),
-                     fetched_cut and part is leaves[-1])
+            plain = (LINE_ENDS.sub("\n", _decoded(part, cut).replace(mail.JOIN, " ")), cut)
         elif kind == "text/html" and marked is None:
-            marked = (_decoded(part), fetched_cut and part is leaves[-1])
+            marked = (_decoded(part, cut), cut)
     text, cut = plain if plain and plain[0].strip() else (
         (_unhtml(_closed(*marked)), marked[1]) if marked else ("", False))
     first = INDEXED.match(text)
@@ -880,12 +893,15 @@ def _read_on(imap, read: list[tuple], until: float) -> list[tuple]:
     that searches the markup found "signin" in a link; and the 40 KB of a shop's HTML fetched in
     one go held a third of those 20,000 characters. A mailbox's mails take no more than half of
     what a search may take, which leaves the rest for Sent. A mail that can't be fetched on in
-    that, in time or at all, or read again, stays as it was."""
+    that, in time or at all, or read again, stays as it was, and is never fetched on again: each
+    round fetches from where the last one stopped, so a mail left out of one, fetched at the next,
+    skipped the 24 KB between and was read as whole."""
     at, given_up = TEXT_BYTES, set()
     while at < READ_ON_BYTES and time.monotonic() <= until:
         room = (MAX_TAKEN // 2 - imap.taken) // (MORE_BYTES + 256)
-        short = [uid for uid, *_, body, cut in read
-                 if uid not in given_up and _short(body, cut)][:max(0, room)]
+        listed = [uid for uid, *_, body, cut in read if uid not in given_up and _short(body, cut)]
+        short = listed[:max(0, room)]
+        given_up.update(listed[len(short):])
         if not short:
             break
         typ, data = _ask(imap, "FETCH", ",".join(map(str, short)),
@@ -908,7 +924,7 @@ def _talking(imap, uids: list[int], until: float) -> set[int]:
     """Of these mails, cut short before 0.5.0's 20,000 characters even where they were fetched on
     to, the ones that talk of signing in anywhere in their text, past the cut too: one search for
     all of them, as the server reads each whole, and one more for each word that isn't ASCII,
-    which goes as a UTF-8 literal. Any it can't be asked about are taken to."""
+    which goes as a UTF-8 literal. Any it can't be asked about, in time or at all, are taken to."""
     if not uids:
         return set()
     if time.monotonic() > until:
@@ -918,6 +934,8 @@ def _talking(imap, uids: list[int], until: float) -> set[int]:
                     "OR " * (len(plain) - 1) + " ".join(f'BODY "{term}"' for term in plain))]
     for term in TALK_TERMS:
         if not term.isascii() and replies[-1][0] == "OK":
+            if time.monotonic() > until:
+                return set(uids)
             imap.literal = term.encode()
             replies.append(_ask(imap, "SEARCH", "CHARSET", "UTF-8", "UID", listed, "BODY"))
     if any(typ != "OK" for typ, _data in replies):
@@ -941,8 +959,13 @@ def _select(imap, box: str) -> bool:
         return False
 
 
-def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> list[tuple]:
-    """Rows as mail._rows makes them, from one mailbox."""
+def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float,
+          last: float | None = None) -> list[tuple]:
+    """Rows as mail._rows makes them, from one mailbox. The server is asked nothing past until,
+    but what it gave by then is read and hidden up to last, as that asks nothing of it: on a
+    slow server, fetching on took all the search's time, and every mail of the mailbox was then
+    thrown away, those read whole too."""
+    last = until if last is None else last
     if time.monotonic() > until or not _select(imap, box):
         return []
     picked = _picked(_hits(imap, stems, until))
@@ -954,7 +977,7 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
     fetched = _fetched(data) if typ == "OK" else {}
     read = []
     for uid, every in picked:
-        if time.monotonic() > until:    # a mail can be slow to read, and this runs no further
+        if time.monotonic() > last:     # a mail can be slow to read, and this runs no further
             break
         found = fetched.get(uid)
         message = found and _read(found)
@@ -964,7 +987,7 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
     talking = _talking(imap, [uid for uid, *_, body, cut in read if _short(body, cut)], until)
     rows = []
     for uid, every, found, message, body, cut in read:
-        if time.monotonic() > until:
+        if time.monotonic() > last:
             break
         kept = _hidden(stems, message, found, body, every, cut, uid in talking)
         if kept:
@@ -1062,7 +1085,7 @@ def _search(account: Account, token: str, stems: list[mail.Term], until: tuple) 
     try:
         boxes, sent = _boxes(imap)
         for folder, box in enumerate([*boxes, *([sent] if sent and sent not in boxes else [])]):
-            rows += _rows(imap, box, folder, stems, until[0])
+            rows += _rows(imap, box, folder, stems, until[0], (until[0] + until[1]) / 2)
         scored = mail._ranked(rows, stems, {len(boxes)} if sent and sent not in boxes else set())
         owners = {item[3].owner for item in mail.checked(scored) if not item[3].by_user}
         known = _known(imap, boxes, sent, owners, account.address,

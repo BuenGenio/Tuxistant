@@ -1555,10 +1555,15 @@ class Inner(unittest.TestCase):
     def test_21_a_the_mail_skills_page_shows_what_its_permissions_dont_say(self):
         """Mail search without Thunderbird sends the question's words to each account's server,
         which no permission of its own says, so the page shows it beside them."""
-        shown = texts_of(open_skill(self.win, "org.tuxistant.mail").permissions)
+        dialog = open_skill(self.win, "org.tuxistant.mail")
+        shown = texts_of(dialog.permissions)
         self.assertIn("Read your mail", shown)
         self.assertIn(sa.ALSO_DOES["org.tuxistant.mail"][0], shown)
         self.assertIn(sa.ALSO_DOES["org.tuxistant.mail"][1], shown)
+        # And its settings say where the mail comes from, and that each server gets the words.
+        note = dialog.settings.group.get_description()
+        self.assertIn("Online Accounts", note)
+        self.assertIn("question's words", note)
 
     def test_21_a_a_built_in_skill_shows_what_the_model_is_given(self):
         from tuxistant.skills import Skills
