@@ -9,8 +9,10 @@ so the security policy is a meta tag in each page.
 --preview UPCOMING.json builds a local preview of planned releases into dist-preview/ instead, with a
 banner on every page. It is only for looking at: git ignores dist-preview/ and deploy.sh refuses it.
 
-The skills portal under skills/ is built by portal.py from REGISTRY_DIR, a folder laid out as the
-registry publishes it. Until the registry exists that is src/registry-sample, and its pages say so.
+--portal [FOLDER] builds the site with the skills portal under skills/ into dist-portal/ instead,
+from FOLDER laid out as the registry publishes it, or from src/registry-sample, whose pages say they
+are a sample. It stays local until the registry repo exists: the plain build reads no registry and
+writes no portal page, git ignores dist-portal/, and deploy.sh refuses it.
 """
 import argparse
 import base64
@@ -28,9 +30,10 @@ HERE = Path(__file__).resolve().parent
 SRC = HERE / "src"
 DIST = HERE / "dist"
 DIST_PREVIEW = HERE / "dist-preview"     # --preview: local only, git ignores it, deploy.sh refuses it
+DIST_PORTAL = HERE / "dist-portal"       # --portal: local only, git ignores it, deploy.sh refuses it
+SAMPLE_REGISTRY = SRC / "registry-sample"
 THEMES = HERE.parent / "themes"
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
-REGISTRY = Path(os.environ.get("REGISTRY_DIR") or SRC / "registry-sample")
 DONATE = "https://buymeacoffee.com/buengenio"
 THEME_ORDER = ["tux", "orb", "waves", "scanner"]
 OS_ORDER = [("linux", "Linux"), ("macos", "macOS"), ("windows", "Windows")]
@@ -470,21 +473,21 @@ def cta_releases(strings, releases):
     return f'<a class="btn btn-cta btn-cta-alt" href="{esc(page)}">{esc(strings["ctaReleases"])}</a>'
 
 
-def site_header(root, strings, home, language_menu="", current="", skills_link=True):
-    """The same bar on every page. The portal is in English and has no language menu. The front
-    pages leave the Skills link out while the portal shows the sample, as it isn't open yet."""
+def site_header(root, strings, home, language_menu="", current="", skills_link=False):
+    """The same bar on every page. The Skills link is only in a build with the portal, which is
+    in English and has no language menu."""
     skills = ' aria-current="page"' if current == "skills" else ""
     link = (f'<a class="nav-link" href="{root}skills/"{skills}>{SKILLS_ICON}<span class="nav-text">'
             f'{esc(strings["skills"])}</span></a>' if skills_link else "")
     modes = "".join(f'<option value="{m}">{esc(strings["modes"][m])}</option>' for m in MODES)
-    return f"""<header class="site-header" id="site-header">
+    bar = [f'<a class="brand" href="{home}">Tuxistant</a>', link, language_menu,
+           f'<span class="mode">{MODE_ICONS}<select id="mode" aria-label="{esc(strings["appearance"])}" '
+           f'title="{esc(strings["appearance"])}">{modes}</select></span>',
+           f'<a class="btn btn-coffee" href="{DONATE}" rel="noopener">{esc(strings["donate"])}</a>']
+    return """<header class="site-header" id="site-header">
   <div class="nav-glass" aria-hidden="true"></div>
   <div class="wrap bar">
-    <a class="brand" href="{home}">Tuxistant</a>
-    {link}
-    {language_menu}
-    <span class="mode">{MODE_ICONS}<select id="mode" aria-label="{esc(strings['appearance'])}" title="{esc(strings['appearance'])}">{modes}</select></span>
-    <a class="btn btn-coffee" href="{DONATE}" rel="noopener">{esc(strings['donate'])}</a>
+    """ + "\n    ".join(item for item in bar if item) + """
   </div>
 </header>"""
 
@@ -516,7 +519,7 @@ def portal_shell(strings, policy):
 {head_html(policy, f"{title} · Tuxistant skills", description, root)}{robots}
 </head>
 <body>
-{site_header(root, strings, root, current="skills")}
+{site_header(root, strings, root, current="skills", skills_link=True)}
 <main>
 {body}
 </main>
@@ -529,7 +532,7 @@ def portal_shell(strings, policy):
     return shell
 
 
-def page(code, strings, languages, releases, detect, policy, skills_link=True):
+def page(code, strings, languages, releases, detect, policy, skills_link=False):
     caps_a, caps_b = caps_html(strings)
     tabs, panels = panels_html(strings)
     options = "".join(
@@ -548,9 +551,10 @@ def page(code, strings, languages, releases, detect, policy, skills_link=True):
     data["releases"] = {os_id: releases[os_id] for os_id, _ in OS_ORDER}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"
-    language_menu = (f'<span class="lang-pick">{LANGUAGE_ICON}<select class="lang" id="lang" '
-                     f'data-root="{root}" aria-label="{esc(strings["language"])}">{options}</select>'
-                     '</span>')
+    language_menu = (f'<select class="lang" id="lang" data-root="{root}" '
+                     f'aria-label="{esc(strings["language"])}">{options}</select>')
+    if skills_link:     # beside the Skills link, it too becomes an icon on a phone
+        language_menu = f'<span class="lang-pick">{LANGUAGE_ICON}{language_menu}</span>'
     return f"""<!doctype html>
 <html lang="{code}" dir="{strings['dir']}">
 <head>
@@ -640,6 +644,9 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description="Builds the site into dist/.")
     parser.add_argument("--preview", metavar="UPCOMING.json",
                         help="build a local preview of planned releases into dist-preview/ instead")
+    parser.add_argument("--portal", metavar="FOLDER", nargs="?", type=Path, const=SAMPLE_REGISTRY,
+                        help="build the site with the skills portal into dist-portal/ instead, "
+                             "from FOLDER as the registry publishes it, or from the sample")
     return parser.parse_args(argv)
 
 
@@ -647,39 +654,52 @@ def main(argv=()):
     options = parse_args(argv)
     languages = load_languages()
     releases = json.loads((SRC / "releases.json").read_text())
-    dist = DIST
+    dist = DIST_PORTAL if options.portal else DIST_PREVIEW if options.preview else DIST
     if options.preview:
         apply_upcoming(options.preview, languages, releases)
-        dist = DIST_PREVIEW
     check_releases(releases, languages)
     detect = detect_script(list(languages))
     policy = (f"default-src 'none'; script-src 'self' {csp_hash(MODE_SCRIPT)} {csp_hash(detect)}; "
               "style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'")
 
-    portal = _portal()
-    skills_link = not portal.is_sample(REGISTRY)
     shutil.rmtree(dist, ignore_errors=True)
     dist.mkdir()
     for code, strings in languages.items():
         target = dist / path_for(code).strip("/") / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(page(code, strings, languages, releases, detect, policy, skills_link))
+        target.write_text(page(code, strings, languages, releases, detect, policy,
+                               skills_link=bool(options.portal)))
     shutil.copy(SRC / "style.css", dist)
-    for script in ("site.js", "app.js", "skills.js"):
+    for script in ("site.js", "app.js"):
         shutil.copy(SRC / script, dist)
-    try:
-        shown = portal.build(dist, REGISTRY, portal_shell(languages["en"], policy))
-    except portal.Refused as e:
-        raise SystemExit(f"The skills portal wasn't built from {REGISTRY}: {e}.") from None
     shutil.copy(SRC / "favicon.svg", dist)
     (dist / "themes.js").write_text(themes_js())
     (dist / ".nojekyll").touch()    # served as they are, with no Jekyll build first
     (dist / "robots.txt").write_text("User-agent: *\nAllow: /\n")
+    local = []
     if options.preview:     # deploy.sh refuses a folder holding this file
         (dist / "LOCAL-PREVIEW").write_text("A local preview of planned releases. Never deploy it.\n")
+        local.append("a local preview")
+    if options.portal:
+        shown = build_portal(dist, options.portal, languages["en"], policy)
+        local.append(f"the skills portal with {shown} skill pages")
+    if local:
         (dist / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
-    print(f"built {len(languages)} languages and {shown} skill pages into {dist}"
-          + (" (a local preview, never to be deployed)" if options.preview else ""))
+    print(f"built {len(languages)} languages into {dist}"
+          + (f" ({' and '.join(local)}, never to be deployed)" if local else ""))
+
+
+def build_portal(dist, folder, strings, policy):
+    """skills/ and its script, from a registry folder, with the file deploy.sh refuses. Only for
+    looking at until the registry repo exists: the owner decides when it goes live."""
+    portal = _portal()
+    (dist / "LOCAL-PORTAL").write_text("The skills portal, built locally. Never deploy it until "
+                                       "the registry exists.\n")
+    shutil.copy(SRC / "skills.js", dist)
+    try:
+        return portal.build(dist, Path(folder), portal_shell(strings, policy))
+    except portal.Refused as e:
+        raise SystemExit(f"The skills portal wasn't built from {folder}: {e}.") from None
 
 
 if __name__ == "__main__":

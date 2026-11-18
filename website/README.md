@@ -23,16 +23,21 @@ This shows the site as it will look once the releases in `preview/upcoming.json`
 
 ## The skills portal
 
-`skills/` is the registry's portal (step 3 of [docs/REGISTRY.md](../docs/REGISTRY.md)): browse by category and tag, search, and a page per skill with its risk and why, what each action does and whether it asks first, the description the model sees, install steps, the whole `recipe.yaml`, its versions with what changed, and a Report link. `portal.py` builds it from `REGISTRY_DIR`, a folder laid out as the registry publishes it (`index.json`, `revocations.json`, `recipes/<sha256>.yaml`; see [docs/REGISTRY-FORMAT.md](../docs/REGISTRY-FORMAT.md)):
+`skills/` is the registry's portal (step 3 of [docs/REGISTRY.md](../docs/REGISTRY.md)): browse by category and tag, search, and a page per skill with its risk and why, what each action does and whether it asks first, the description the model sees, install steps, the whole `recipe.yaml`, its versions with what changed, and a Report link. `portal.py` builds it from a folder laid out as the registry publishes it (`index.json`, `revocations.json`, `recipes/<sha256>.yaml`; see [docs/REGISTRY-FORMAT.md](../docs/REGISTRY-FORMAT.md)).
+
+**It stays out of the live site until the registry repo exists**, which is the owner's call. The plain build, the one `deploy.sh` runs, reads no registry and writes no portal page: `dist/` has no `skills/` and the front pages have no Skills link. Only `--portal` builds it, into `dist-portal/`, which git ignores, with a `LOCAL-PORTAL` file. `deploy.sh` refuses a `dist/` holding that file or `skills/`, as it refuses the preview's. To see it:
 
 ```sh
-REGISTRY_DIR=/path/to/published python3 build.py
+python3 website/build.py --portal                  # from the sample, into website/dist-portal/
+cd website/dist-portal && python3 -m http.server 8002 --bind 127.0.0.1
 ```
 
-Until the registry exists it uses `src/registry-sample/`, made-up skills whose `SAMPLE` file makes every portal page say so and ask not to be indexed. While it does, the front pages have no Skills link, and the portal offers no downloads, install commands, Install button or Report button, so a deploy publishes nothing that looks open.
+Then open http://127.0.0.1:8002/skills/, or the front page, whose header links to it in this build. `--portal /path/to/published` builds it from a real registry's files instead. Once the registry repo exists and the owner says so, going live means building the portal in the plain build and taking that refusal out of `deploy.sh`.
+
+Until then it uses `src/registry-sample/`, made-up skills whose `SAMPLE` file makes every portal page say so and ask not to be indexed. The portal offers them no downloads, install commands, Install button or Report button, as there is nothing to install or report.
 
 - **Everything in the registry is a stranger's text.** The index is checked against the format and the build stops if anything doesn't fit, or if a recipe isn't the size and hash the index gives. Strings are escaped in `portal.py`; hidden characters in a recipe show as their code; `skills.js` only hides and shows cards the build wrote.
-- **Recipes go through Tux's own loader**, so the build needs what the daemon imports (PyYAML and websockets). A skill whose current file the loader refuses has no card in Browse, and its page offers nothing to install and makes no claim about its hosts or risk. `skills/recipes/` holds no such file, nor a revoked one, so once the registry pulls a version the next deploy stops serving it. Hosts in the index are held to the loader's form either way.
+- **Recipes go through Tux's own loader**, so the portal build needs what the daemon imports (PyYAML, websockets and dbus-fast, as `install.sh` lists them); the plain build needs none of them. A skill whose current file the loader refuses has no card in Browse, and its page offers nothing to install and makes no claim about its hosts or risk. `skills/recipes/` holds no such file, nor a revoked one, so once the registry pulls a version the next build stops serving it. Hosts in the index are held to the loader's form either way.
 - **Any word may break.** A stranger's 140 letters with no space would otherwise run off a phone's screen, so `.portal` sets `overflow-wrap: anywhere`; headings still never wrap and shrink instead.
 - **Revoked skills are hidden**, by the index's revocations and any newer ones in `revocations.json`, until the index lifts them. A suspended version of a skill that is still shown is listed with its reason.
 - The portal is in English only. The registry repo's name and its report form's field ids are guesses until they exist: `REGISTRY_REPO` and `report_url` in `portal.py`.

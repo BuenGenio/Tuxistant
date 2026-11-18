@@ -74,21 +74,21 @@ class Registry:
 
 
 class BuiltSite(unittest.TestCase):
-    """The whole site, built from a registry folder as build.py does it."""
-    registry = SAMPLE
+    """The whole site, built with the portal from a registry folder, as build.py --portal does."""
 
     @classmethod
     def setUpClass(cls):
         folder = tempfile.TemporaryDirectory()
         cls.addClassCleanup(folder.cleanup)
-        cls.dist = Path(folder.name) / "dist"
-        saved = build.DIST, build.REGISTRY
-        build.DIST, build.REGISTRY = cls.dist, cls.registry_in(Path(folder.name))
+        cls.plain = Path(folder.name) / "dist"
+        cls.dist = Path(folder.name) / "dist-portal"
+        saved = build.DIST, build.DIST_PORTAL
+        build.DIST, build.DIST_PORTAL = cls.plain, cls.dist
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                build.main()
+                build.main(["--portal", str(cls.registry_in(Path(folder.name)))])
         finally:
-            build.DIST, build.REGISTRY = saved
+            build.DIST, build.DIST_PORTAL = saved
         cls.skills = cls.dist / "skills"
         cls.pages = sorted(cls.skills.glob("**/index.html"))
         cls.index = json.loads((SAMPLE / "index.json").read_text())
@@ -106,6 +106,13 @@ class BuiltPortal(BuiltSite):
 
     def front_pages(self):
         return [p for p in self.dist.glob("**/index.html") if "skills" not in p.parts]
+
+    def test_it_is_written_beside_the_real_site_and_marked_for_deploy_to_refuse(self):
+        self.assertFalse(self.plain.exists())
+        self.assertTrue((self.dist / "LOCAL-PORTAL").is_file())
+        self.assertTrue((self.dist / "skills.js").is_file())
+        self.assertEqual((self.dist / "robots.txt").read_text(), "User-agent: *\nDisallow: /\n")
+        self.assertIn("dist-portal/", (ROOT / "website/.gitignore").read_text().split())
 
     def test_a_page_per_skill_that_isnt_revoked(self):
         shown = {p.parent.name for p in self.pages if p.parent != self.skills}
@@ -146,12 +153,14 @@ class BuiltPortal(BuiltSite):
             self.assertIn('<div class="nav-glass" aria-hidden="true"></div>', html, page)
             self.assertIn('aria-current="page"', html, page)
 
-    def test_front_pages_dont_link_to_the_sample(self):
+    def test_front_pages_link_to_the_portal_in_this_build_only(self):
         self.assertEqual(len(self.front_pages()), 5)
         for page in self.front_pages():
             html = page.read_text()
             self.assertIn('<header class="site-header" id="site-header">', html, page)
-            self.assertNotIn("skills/", html, page)
+            root = "" if page.parent == self.dist else "../"
+            self.assertIn(f'<a class="nav-link" href="{root}skills/">', html, page)
+            self.assertIn('<span class="lang-pick">', html, page)
 
     def test_sample_pages_offer_nothing_to_install_or_report(self):
         self.assertNotIn("Report this skill", self.page(TIDES))
@@ -259,11 +268,6 @@ class OpenRegistry(BuiltSite):
         shutil.copytree(SAMPLE, folder / "registry")
         (folder / "registry" / "SAMPLE").unlink()
         return folder / "registry"
-
-    def test_front_pages_link_to_the_portal(self):
-        self.assertIn('href="skills/"', (self.dist / "index.html").read_text())
-        for code in ("es", "pt", "zh", "ar"):
-            self.assertIn('href="../skills/"', (self.dist / code / "index.html").read_text())
 
     def test_no_page_says_it_is_a_sample(self):
         for page in self.pages:

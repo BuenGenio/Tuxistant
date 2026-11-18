@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -763,6 +764,31 @@ class BuiltSite(unittest.TestCase):
             for entry in upcoming["releases"]:
                 self.assertNotIn(f">{entry['version']}<", html, page)
 
+    def test_the_real_site_holds_no_skills_portal(self):
+        """The owner's call (2026-11-14): the portal stays out of deploys until the registry repo
+        exists, so the plain build writes no page of it, nor its script, nor the sample."""
+        self.assertFalse((self.dist / "skills").exists())
+        self.assertFalse((self.dist / "skills.js").exists())
+        self.assertFalse((self.dist / "LOCAL-PORTAL").exists())
+        sample = ROOT / "website/src/registry-sample"
+        self.assertFalse({file.name for file in sample.rglob("*")}
+                         & {file.name for file in self.dist.rglob("*")})
+        for page in self.pages:
+            html = page.read_text()
+            for portal in ("skills/", "nav-link", "lang-pick", "example-ada"):
+                self.assertNotIn(portal, html, page)
+
+    def test_the_plain_build_reads_no_registry(self):
+        build = load_build()
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        build.DIST = Path(folder.name) / "dist"
+        refuse = AssertionError("the plain build loaded portal.py")
+        with mock.patch.object(build, "_portal", side_effect=refuse), \
+                contextlib.redirect_stdout(io.StringIO()):
+            build.main()
+        self.assertEqual(front_pages(build.DIST), sorted(build.DIST.glob("**/index.html")))
+
 
 class LocalPreview(unittest.TestCase):
     """The preview of planned releases: built beside the real site, and never deployed."""
@@ -839,13 +865,71 @@ class LocalPreview(unittest.TestCase):
 
     def test_deploy_builds_the_real_site_and_refuses_a_preview(self):
         deploy = (ROOT / "website/deploy.sh").read_text()
-        self.assertNotIn("--preview", deploy)
-        self.assertNotIn("dist-preview", deploy)
+        for local in ("--preview", "dist-preview", "--portal", "dist-portal"):
+            self.assertNotIn(local, deploy)
         self.assertRegex(deploy, r"python3 build\.py\n")
         self.assertRegex(deploy, r"if \[ -e dist/LOCAL-PREVIEW \]; then .*exit 1")
         self.assertLess(deploy.index("LOCAL-PREVIEW"), deploy.index("git push"))
         self.assertNotIn("Co-Authored-By", deploy, "the published commit is the owner's alone")
         self.assertIn("dist-preview/", (ROOT / "website/.gitignore").read_text().split())
+
+
+# deploy.sh's stand-ins: a build.py that writes dist/ with what the test asks, and a git that only
+# writes down what it was asked. Nothing is built, committed or pushed for real.
+STAND_IN_BUILD = """import os, sys
+from pathlib import Path
+with open(os.environ["CALLS"], "a") as calls:
+    calls.write(" ".join(["build.py", *sys.argv[1:]]) + "\\n")
+dist = Path("dist")
+dist.mkdir()
+(dist / "index.html").write_text("<!doctype html>")
+for name in os.environ["LEAVES"].split():
+    (dist / name).parent.mkdir(parents=True, exist_ok=True)
+    (dist / name).write_text("")
+"""
+STAND_IN_GIT = """#!/bin/sh
+echo "git $*" >> "$CALLS"
+case "$1" in remote) echo https://example.org/site.git ;; rev-parse) echo abc1234 ;; esac
+"""
+
+
+class Deploy(unittest.TestCase):
+    """deploy.sh itself, run from a copy beside stand-ins for build.py and git, in a folder that
+    is no git repo, so it can't reach a real one even if the stand-in were missed."""
+
+    def deploy(self, *leaves):
+        folder = Path(tempfile.mkdtemp(prefix="tux-deploy-"))
+        self.addCleanup(shutil.rmtree, folder, True)
+        site, tools = folder / "website", folder / "bin"
+        site.mkdir()
+        tools.mkdir()
+        shutil.copy(ROOT / "website/deploy.sh", site)
+        (site / "build.py").write_text(STAND_IN_BUILD)
+        (tools / "git").write_text(STAND_IN_GIT)
+        (tools / "git").chmod(0o755)
+        calls = folder / "calls"
+        calls.touch()
+        env = {"PATH": f"{tools}:/usr/bin:/bin", "HOME": str(folder), "CALLS": str(calls),
+               "LEAVES": " ".join(leaves), "GIT_CEILING_DIRECTORIES": str(folder.parent)}
+        done = subprocess.run(["/bin/sh", str(site / "deploy.sh")], capture_output=True, text=True,
+                              timeout=60, env=env)
+        return done, calls.read_text().splitlines()
+
+    def test_the_real_site_is_built_with_no_options_and_pushed(self):
+        done, calls = self.deploy()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("build.py", calls)
+        self.assertIn("git push -q -f https://example.org/site.git gh-pages", calls)
+
+    def test_a_dist_holding_the_portal_or_a_preview_is_never_pushed(self):
+        for left, why in (("LOCAL-PORTAL", "skills portal"), ("skills/index.html", "skills portal"),
+                          ("LOCAL-PREVIEW", "local preview")):
+            with self.subTest(left):
+                done, calls = self.deploy(left)
+                self.assertEqual(done.returncode, 1)
+                self.assertIn(why, done.stderr)
+                pushed = [call for call in calls if call.startswith(("git init", "git push"))]
+                self.assertEqual(pushed, [])
 
 
 class HeroAndHeader(unittest.TestCase):
