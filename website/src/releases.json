@@ -15,11 +15,21 @@
     "url": null
   },
   "preview": {
-    "version": "0.6.0",
-    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.6.0.tar.gz",
-    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.6.0"
+    "version": "0.7.0",
+    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.7.0.tar.gz",
+    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.7.0"
   },
   "history": [
+    {
+      "version": "0.7.0",
+      "date": "2026-11-21",
+      "channel": "preview",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.7.0",
+      "features": [
+        {"icon": "mail", "label": {"en": "Mail search without Thunderbird", "es": "Búsqueda en el correo sin Thunderbird", "pt": "Busca nos e-mails sem o Thunderbird", "zh": "无需 Thunderbird 的邮件搜索", "ar": "البحث في البريد دون Thunderbird"}},
+        {"icon": "server", "label": {"en": "What runs on your server", "es": "Qué se ejecuta en tu servidor", "pt": "O que roda no seu servidor", "zh": "你的服务器上运行着什么", "ar": "ما يعمل على خادمك"}}
+      ]
+    },
     {
       "version": "0.6.0",
       "date": "2026-11-17",

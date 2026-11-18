@@ -256,6 +256,8 @@ FEATURE_ICONS = {
     "calendar": '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
     "news": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8.5h10M7 12.5h4M7 16h4M14 12.5h3V16h-3z"/>',
     "steps": '<path d="M3 20h5v-5h5v-5h5V5h3"/>',
+    "server": ('<rect x="3.5" y="4" width="17" height="7" rx="1.5"/><rect x="3.5" y="13" width="17" height="7" rx="1.5"/>'
+               '<path d="M7.5 7.5h.01M7.5 16.5h.01"/>'),
 }
 # The icons with lines of writing, left-aligned on a page or a list, and the steps, which climb
 # the way a line is read: right to left they run the other way, so the Arabic page mirrors them.

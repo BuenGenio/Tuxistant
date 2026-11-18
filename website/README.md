@@ -19,7 +19,7 @@ python3 website/build.py --preview website/preview/upcoming.json    # writes web
 cd website/dist-preview && python3 -m http.server 8001 --bind 127.0.0.1
 ```
 
-This shows the site as it will look once the releases in `preview/upcoming.json` ship: they go on top of the releases list, marked Planned with their dates, the preview link names the newest, and their claims join the preview section's (`previewCaps`), all still Soon. Every page has a banner saying it is a local preview. It is never deployed: git ignores `dist-preview/`, and `deploy.sh` builds without `--preview` and refuses a `dist/` holding the preview's `LOCAL-PREVIEW` file. When a planned release ships, move its entry into `src/releases.json` and its claims into the language files, and take them out of `upcoming.json`.
+This shows the site as it will look once the releases in `preview/upcoming.json` ship: they go on top of the releases list, marked Planned with their dates, the preview link names the newest, and their claims join the preview section's (`previewCaps`), all still Soon. Every page has a banner saying it is a local preview. It is never deployed: git ignores `dist-preview/`, and `deploy.sh` builds without `--preview` and refuses a `dist/` holding the preview's `LOCAL-PREVIEW` file. When a planned release ships, move its entry into `src/releases.json`, and take it and its claims out of `upcoming.json`. The claims go into the language files' `previewCaps` only once the main download holds that release, as they are listed under that download; until then they are dropped.
 
 ## The skills portal
 

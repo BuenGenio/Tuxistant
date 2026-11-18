@@ -16,21 +16,22 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 - PipeWire with `pw-record` and `pw-cat`
 - `glib-compile-schemas`
 - A LocalAI server with a realtime pipeline (`tux-realtime` by default), a voice model (`tux-voice`) and a speech-to-text model (`whisper-large-turbo-q5_0`), which dictation and, from 0.3.0, every Fn hold use. [server/](server/README.md) has a script that sets one up on a computer with an 8 GB NVIDIA GPU
-- For the skills, all optional: `bwrap` (bubblewrap) for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, Thunderbird, or a Google or Microsoft account in GNOME Online Accounts, for mail search, `wpctl`, which comes with WirePlumber, for the volume, a Home Assistant of your own for the smart home, and a LibreTranslate server for translation, with Piper voices on LocalAI to hear it spoken ([server/](server/README.md) sets up the translation server and the voices)
+- For the skills, all optional: `bwrap` (bubblewrap) for shell commands that need no click, `localsearch` or `plocate` for finding files, GSConnect for phones, `python3-cryptography` for Tapo lights, Evolution Data Server with its Python bindings (`gir1.2-ecal-2.0` on Ubuntu) for the calendar, Thunderbird, or, from the 0.7.0 preview, a Google or Microsoft account in GNOME Online Accounts, for mail search, `wpctl`, which comes with WirePlumber, for the volume, a Home Assistant of your own for the smart home, and a LibreTranslate server for translation, with Piper voices on LocalAI to hear it spoken ([server/](server/README.md) sets up the translation server and the voices)
 - For Tapo lights and your own skills, from 0.3.0: the skill sandbox, which needs `bwrap` and `prlimit` on an x86_64 or aarch64 computer, and Linux 6.12 or newer with Landlock on for lights and any skill that uses the network. 0.2.0 ran the lights without it, so without these they stop working after the update
 - For web search, research and the web fallback for facts, from 0.3.0: a SearXNG server of your own, which server/ doesn't set up. Tuxistant looks for it on port 8888 of the voice server unless Settings names another, and it needs JSON output turned on (`formats: [html, json]` under `search:` in its settings.yml)
 
 ## Install
 
-There are five releases to choose from:
+There are six releases to choose from:
 
 - **0.5.0**, the stable release, and what the website offers. It adds recipe skills you write in YAML, a page for every skill in Settings, follow-up questions, hands-free dictation and an agreement before anything goes to the cloud. All of it was reviewed and tested, but most of it hasn't been tried on a real desktop yet; [CHANGELOG.md](CHANGELOG.md) says how far each part was.
 - **0.2.0**, the last release whose additions all worked on the owner's own desktop.
 - **0.3.0**, a preview. It adds media, timers, Home Assistant, mail search, facts from Wikipedia, web search and research, and your own skills. Most of it has only run in tests so far; [CHANGELOG.md](CHANGELOG.md) says which parts.
 - **0.4.0**, a preview. It adds opening apps and Settings pages, and a click before the facts lookup sends a question that may be about your home. None of it has been tried on a real desktop yet.
 - **0.6.0**, a preview. It holds Tux's side of the skills registry, for sharing recipe skills: the signature checks, the switch-off of revoked recipes and a Browse page in Settings. The registry doesn't exist yet, so nothing is fetched and Settings doesn't show Browse: as installed it works as 0.5.0 does. None of it has been tried on a real desktop yet.
+- **0.7.0**, a preview. It adds mail search without Thunderbird, in a Google or Microsoft account in GNOME Online Accounts, behind the same "Search my mail" switch, which starts off, and asks your own server what docker and systemd list there. Neither has been tried on a real desktop, a real account or a real server yet, and whether Microsoft's mail server takes the token Online Accounts hands out isn't known.
 
-On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for another release, use `--branch v0.2.0`, `--branch v0.3.0`, `--branch v0.4.0` or `--branch v0.6.0` instead:
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for another release, use `--branch v0.2.0`, `--branch v0.3.0`, `--branch v0.4.0`, `--branch v0.6.0` or `--branch v0.7.0` instead:
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
@@ -38,7 +39,7 @@ git clone --branch v0.5.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
 
-Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`, or `tar xzf Tuxistant-0.6.0.tar.gz && cd Tuxistant-0.6.0` for the newest preview.
+Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`, or `tar xzf Tuxistant-0.7.0.tar.gz && cd Tuxistant-0.7.0` for the newest preview.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
@@ -95,7 +96,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 ## What you can ask
 
-Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has them all. Of those, only mail search has been used on a real desktop so far.
+Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has them all. Of those, only mail search has been used on a real desktop so far. Parts of a row marked 0.7.0 preview are only in that preview, and haven't been tried on a real desktop yet.
 
 | Ask | What happens |
 |---|---|
@@ -104,7 +105,7 @@ Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has
 | "Send it to my phone", "Where's my phone?" | Sends a file through GSConnect, rings the phone, or reads its battery. Sending asks first |
 | "Move everything in Downloads older than a year to the Trash" | Shows how many files and how much space, and waits for your click. Nothing is deleted outright |
 | "What's on my calendar tomorrow?", "Add dentist on Friday at 3pm" | Reads your calendars, and adds an event once you click to allow it. It uses the calendars GNOME Calendar shows: add the account once in GNOME Settings under Online Accounts. So far reading has been tried on Google and adding on a local calendar. CalDAV and Microsoft, which also needs the `evolution-ews` package, have not been tried yet |
-| "When did I book the flights?", "What did my landlord say about the rent?" | Finds the answer in the mail Thunderbird keeps on this computer and says who it was from and when. Off until you turn on "Search my mail" in Settings. 0.3.0 preview. Without Thunderbird, a Google or Microsoft account in Online Accounts is searched on its own server: not yet released, and not yet tried on a real account. |
+| "When did I book the flights?", "What did my landlord say about the rent?" | Finds the answer in the mail Thunderbird keeps on this computer and says who it was from and when. Off until you turn on "Search my mail" in Settings. 0.3.0 preview. Without Thunderbird, a Google or Microsoft account in Online Accounts is searched on its own server: 0.7.0 preview, not yet tried on a real desktop or a real account. |
 | "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account on the Lights page, under Skills in Settings. From 0.3.0 this needs the skill sandbox: bubblewrap and Linux 6.12 or newer (see Requirements) |
 | "Turn off the kitchen light", "Is the front door locked?", "Set the heating to 21" | Controls and reads your Home Assistant by the names you gave things there: lights, plugs, fans, heating, blinds, locks and scenes. Unlocking, opening, activating a scene and running a script wait for a click. Add the address and a long-lived access token on the Home Assistant page, under Skills in Settings. Until both are there, Tux doesn't offer it. 0.3.0 preview, not yet tried on a real desktop. |
 | "Pause the music", "Skip this song", "Turn it up", "What's playing?" | Pauses, resumes and skips whatever is playing in a player that speaks MPRIS, such as Spotify, VLC or a browser, tells you the song and who it is by, and sets the volume, never above 100 percent. 0.3.0 preview, not yet tried on a real desktop. |
@@ -113,7 +114,7 @@ Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "How many chemical elements are there?", "What's 15 percent of 80?" | Looks it up instead of guessing: Wikipedia first, then web search, and it says so if neither clearly answers. Sums are worked out on this computer. 0.3.0 preview, not yet tried on a real desktop. |
 | "Search the web for flights to Lisbon", "Research electric bikes" | Reads out the top results, or reads a few pages and tells you what they say, naming its sources. Needs SearXNG. 0.3.0 preview, not yet tried on a real desktop. |
-| "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system. "What's running on my server?" asks the server in Settings over ssh, with your own key, and says what docker and systemd list there, in their own words: not yet released, and not yet tried against a real server |
+| "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system. "What's running on my server?" asks the server in Settings over ssh, with your own key, and says what docker and systemd list there, in their own words: 0.7.0 preview, not yet tried against a real server |
 | "What does my todo file say?", "Install VLC" | Runs a command. Read-only commands run in a sandbox with no click, and anything else shows the exact command first |
 | "Find my CV and send it to my phone" | Several steps in a row, with the same approval cards |
 

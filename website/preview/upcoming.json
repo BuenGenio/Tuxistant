@@ -1,58 +1,18 @@
 {
-  "about": "A local preview of the site once the current rounds ship: python3 website/build.py --preview website/preview/upcoming.json writes website/dist-preview/. Never deployed. Planned entries carry their planned date, and every claim stays Soon.",
-  "preview": {
-    "version": "0.7.0",
-    "url": null,
-    "page": null
-  },
-  "releases": [
-    {
-      "version": "0.7.0",
-      "date": "2026-11-19",
-      "channel": "preview",
-      "planned": true,
-      "features": [
-        {"icon": "mail", "label": {"en": "Mail search without Thunderbird", "es": "Búsqueda en el correo sin Thunderbird", "pt": "Busca nos e-mails sem o Thunderbird", "zh": "无需 Thunderbird 的邮件搜索", "ar": "البحث في البريد دون Thunderbird"}}
-      ]
-    }
-  ],
+  "about": "A local preview of the site once the current rounds ship: python3 website/build.py --preview website/preview/upcoming.json writes website/dist-preview/. Never deployed. Planned entries carry their planned date, and every claim stays Soon. What 0.8.0 holds isn't settled yet, so no entry, preview link or claim is planned for it: add them here once it is.",
+  "releases": [],
   "claims": {
-    "en": [
-      [
-        "soon",
-        "Searches your mail without Thunderbird"
-      ]
-    ],
-    "es": [
-      [
-        "soon",
-        "Busca en tu correo sin Thunderbird"
-      ]
-    ],
-    "pt": [
-      [
-        "soon",
-        "Busca nos seus e-mails sem o Thunderbird"
-      ]
-    ],
-    "zh": [
-      [
-        "soon",
-        "无需 Thunderbird 即可搜索你的邮件"
-      ]
-    ],
-    "ar": [
-      [
-        "soon",
-        "يبحث في بريدك دون Thunderbird"
-      ]
-    ]
+    "en": [],
+    "es": [],
+    "pt": [],
+    "zh": [],
+    "ar": []
   },
   "banner": {
-    "en": "Local preview of the site once 0.7.0 ships. Not deployed, and the date is a plan.",
-    "es": "Vista previa local del sitio cuando salga 0.7.0. No está publicada y la fecha es una previsión.",
-    "pt": "Prévia local do site quando sair a 0.7.0. Não está publicada e a data é planejada.",
-    "zh": "本地预览：0.7.0 发布后的网站样子。未上线，日期为计划。",
-    "ar": "معاينة محلية للموقع بعد صدور 0.7.0. غير منشورة، والتاريخ مخطط له."
+    "en": "Local preview of the site once 0.8.0 ships. Not deployed, and what 0.8.0 holds isn't settled yet.",
+    "es": "Vista previa local del sitio cuando salga 0.8.0. No está publicada, y lo que traerá 0.8.0 aún no está decidido.",
+    "pt": "Prévia local do site quando sair a 0.8.0. Não está publicada, e o que a 0.8.0 trará ainda não está decidido.",
+    "zh": "本地预览：0.8.0 发布后的网站样子。未上线，0.8.0 的内容尚未确定。",
+    "ar": "معاينة محلية للموقع بعد صدور 0.8.0. غير منشورة، ولم يُحسم بعد ما سيتضمنه 0.8.0."
   }
 }
