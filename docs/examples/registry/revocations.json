@@ -1,0 +1,21 @@
+{
+  "date": "2026-11-19T16:05:30Z",
+  "format": 1,
+  "revocations": [
+    {
+      "actor": "example-mod",
+      "date": "2026-11-19T16:05:00Z",
+      "id": 1,
+      "kind": "suspend",
+      "reason": "Its host, api.tides.example, has been taken over by someone else.",
+      "report": "https://github.com/example/tuxistant-skills/issues/7",
+      "scope": {
+        "skill": "io.github.example-ada.tides",
+        "versions": [
+          "1.0.0"
+        ]
+      }
+    }
+  ],
+  "seq": 2
+}

@@ -1,0 +1,145 @@
+/* The skills portal, on top of style.css: its colours, type, buttons, folding sections and calls to
+   action are the front page's. Only a build with the portal copies this file. */
+:root { --high: light-dark(#b3261e, #ff8f85); }
+
+/* Every word in it may be a stranger's 140 letters with no space, so any word may break. Headings
+   keep white-space: nowrap and shrink instead. */
+.portal { overflow-wrap: anywhere; }
+.portal-head { padding-block: 14px 8px; }
+.portal h1 { font-size: clamp(1.8rem, 6vw, 2.6rem); }
+.portal h1.fit { overflow: hidden; text-overflow: ellipsis; }
+/* A skill's name too long to fit even at 14 px is cut above, so it is said again in full here.
+   With script, which the js class says from the first paint, it shows only under a heading
+   site.js had to cut; without, under every one. */
+.full-name { margin: 2px 0 0; font-weight: 650; }
+.js .fit:not(.is-cut) + .full-name { display: none; }
+.lede { margin: 4px 0 0; max-width: 760px; color: var(--muted); }
+.muted { color: var(--muted); }
+/* Says the skills are made up, as the local preview's banner says its releases are planned. */
+.sample {
+  margin: 10px 0 0;
+  padding: 6px 12px;
+  border: 1px dashed var(--soon);
+  border-radius: 10px;
+  color: var(--soon);
+  font-size: 0.88rem;
+}
+
+/* Browse: search, the categories with their tags, and a card per skill. */
+.finder { margin-block-start: 6px; }
+.finder[hidden] { display: none; }
+.finder input {
+  width: 100%;
+  height: 40px;
+  padding-inline: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+.cats { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; margin-block-start: 10px; }
+.cat, .chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* A category is a tab, as the examples' systems are; its tags are the release list's chips. */
+.cat-name {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 2px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 650;
+  text-decoration: none;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 1px 9px;
+  border: 1px solid var(--line);
+  border-radius: 0.95em;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.84rem;
+  text-decoration: none;
+}
+.chip:hover, .cat-name:hover { border-color: var(--accent); color: var(--text); }
+.chip[aria-current="true"], .cat-name[aria-current="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+.count { margin-block: 14px 8px; font-size: clamp(1.05rem, 3.6vw, 1.25rem); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.card { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.card[hidden] { display: none; }
+.card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.card h3 { margin: 0; font-size: 1.05rem; }
+.card h3 a { text-decoration: none; }
+.card h3 a:hover { text-decoration: underline; }
+.card p { margin: 0; color: var(--muted); font-size: 0.92rem; }
+.meta-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--muted); font-size: 0.82rem; }
+.none { margin: 8px 0 0; color: var(--muted); }
+.portal-cta { margin-block: 16px 0; }     /* the Browse page's last element: the footer's padding follows */
+.risk { flex: none; padding: 0 8px; border: 1px solid currentColor; border-radius: 999px; font-size: 0.74rem; font-weight: 700; white-space: nowrap; }
+.risk-low { color: var(--now); }
+.risk-medium { color: var(--soon); }
+.risk-high { color: var(--high); }
+
+/* A skill's page: what it is, then its sections, folded as the front page's are. */
+.crumbs { font-size: 0.88rem; color: var(--muted); }
+.crumbs a { text-decoration: none; }
+.crumbs a::before { content: "‹ "; }
+.why { margin: 10px 0 0; }
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr)); gap: 8px 16px; margin: 12px 0 0; }
+.facts dt { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+.facts dd { margin: 0; }
+.links { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-block-start: 12px; }
+.portal-head + .acc { margin-block-start: 4px; }
+.portal .acc-head { border-block-start: 1px solid var(--line); }
+/* A section with no call to action ends on its content, as far above the next one's line. */
+.portal .acc-inner > :last-child:not(.acc-cta) { margin-block-end: 16px; }
+.portal .acc-inner > p { margin: 0 0 6px; }
+.action { margin-block-start: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.action h3 { margin: 0; font: 650 0.95rem/1.3 ui-monospace, "DejaVu Sans Mono", monospace; }
+.action > p { margin: 8px 0 0; }
+.model { margin-block-start: 8px; padding: 8px 10px; border-inline-start: 3px solid var(--accent); border-radius: 6px; background: var(--bg); }
+.model p { margin: 0; }
+.label { color: var(--muted); font-size: 0.75rem; font-weight: 700; }
+.model-text { font-weight: 600; }
+.params { margin: 4px 0 0; padding-inline-start: 18px; font-size: 0.92rem; }
+.steps { display: grid; gap: 8px; margin: 0; padding-inline-start: 22px; }
+.steps > li, .history > li { min-width: 0; }
+.code {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  font: 0.84rem/1.5 ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", monospace;
+  tab-size: 4;
+  /* Wrapped, never scrolled: a line padded far to the right must not hide what follows it. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.steps .code { margin-block-end: 6px; }
+.diff .add { color: var(--now); }
+.diff .del { color: var(--high); }
+.diff .hunk { color: var(--muted); }
+.hidden-char { padding-inline: 2px; border: 1px solid currentColor; border-radius: 3px; color: var(--high); font-size: 0.85em; }
+.file-meta { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.version .file-meta { margin-block-start: 6px; }
+.history { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.version { padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.version-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.version details { margin-block-start: 6px; }
+.version > p { margin: 6px 0 0; }
+.version summary { cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+.changes { margin: 6px 0 0; padding-inline-start: 18px; font-size: 0.9rem; }
+.revoked { margin: 6px 0 0; color: var(--high); }
+.revoked a { color: inherit; }
+
+@media (max-width: 560px) {
+  .cats { gap: 8px 12px; }
+  .buttons .btn { flex: 1 1 auto; }
+}

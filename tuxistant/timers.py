@@ -779,15 +779,20 @@ async def notify(bus, item: Item, now: float | None = None) -> None:
     it: GNOME Shell is already there, and a test's private bus must never launch a real
     notification service.
     """
-    from dbus_fast import Message, MessageFlag, Variant     # the daemon's, and only this needs it
     text = notice(item, epoch() if now is None else now)
-    hints = {"urgency": Variant("y", text["urgency"]), "suppress-sound": Variant("b", True)}
+    await send_notice(bus, text["summary"], text["body"], text["icon"], text["urgency"])
+
+
+async def send_notice(bus, summary: str, body: str, icon: str = ICON, urgency: int = 1) -> None:
+    """One desktop notification, started nowhere. GNOME reads markup in the body, so a body
+    with text from elsewhere has its & < > escaped by the caller."""
+    from dbus_fast import Message, MessageFlag, Variant     # the daemon's, and only this needs it
+    hints = {"urgency": Variant("y", urgency), "suppress-sound": Variant("b", True)}
     await asyncio.wait_for(bus.call(Message(
         destination="org.freedesktop.Notifications", path="/org/freedesktop/Notifications",
         interface="org.freedesktop.Notifications", member="Notify", signature="susssasa{sv}i",
         flags=MessageFlag.NO_AUTOSTART,
-        body=["Tuxistant", 0, text["icon"], text["summary"], text["body"], [], hints, -1])),
-        NOTIFY_WAIT_S)
+        body=["Tuxistant", 0, icon, summary, body, [], hints, -1])), NOTIFY_WAIT_S)
 
 
 @functools.cache

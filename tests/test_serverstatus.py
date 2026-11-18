@@ -96,7 +96,7 @@ PINNED_INNER = ('export LC_ALL=C; T=; timeout 8 true >/dev/null 2>&1 && T="timeo
 # Everything else, such as sys.executable, /bin/sh or bwrap, starts as usual.
 REACHED = no_ssh.REACHED
 BOUND_POPEN = subprocess.Popen      # bound before any patch could replace it
-# What SKILLS.md, the changelog, TESTING.md and check 31 each say, word for word.
+# What SKILLS.md, the changelog, TESTING.md and check 32 each say, word for word.
 SUPPORTED = ("Full listings are for a Linux server reached over ssh where systemd runs the "
              "services, and runs docker as the system's `docker.service`: the Docker CLI talking "
              "to dockerd, from docker-ce or docker.io, socket-activated or not. Any other setup, "
@@ -1677,20 +1677,20 @@ class RemoteCommandWithoutBwrap(Case):
         self.assertEqual(result.testsRun, len(tests))
 
 
-# The key check in check 31, word for word: it runs here, so a change must be seen first.
+# The key check in check 32, word for word: it runs here, so a change must be seen first.
 PINNED_KEY_CHECK = ('import shlex, subprocess, sys; from tuxistant import serverstatus as s; '
                     'argv = s.command(sys.argv[1])[:-1] + ["true"]; print(shlex.join(argv)); '
                     'sys.exit(subprocess.call(argv, stdin=subprocess.DEVNULL))')
 
 
 class RealServerCheck(Case):
-    """Check 31 in docs/ROADMAP.md, run with a stand-in for ssh first and alone on PATH, and in
+    """Check 32 in docs/ROADMAP.md, run with a stand-in for ssh first and alone on PATH, and in
     the sandbox where bwrap works: an ssh given by its path would get past the stand-in, and it
     reads the developer's ~/.ssh/config whatever HOME says."""
 
     def check(self) -> str:
         roadmap = (ROOT / "docs" / "ROADMAP.md").read_text()
-        return next(line for line in roadmap.splitlines() if line.startswith("31. Your server"))
+        return next(line for line in roadmap.splitlines() if line.startswith("32. Your server"))
 
     def test_its_key_check_runs_tux_s_own_command(self):
         """So no ControlMaster connection the first step left open stands in for the key."""
@@ -1817,9 +1817,9 @@ class RealServerCheck(Case):
             self.assertTrue(re.fullmatch(system._pattern(name), "local-ai"), name)
 
 
-def _check_31() -> str:
+def _check_32() -> str:
     roadmap = (ROOT / "docs" / "ROADMAP.md").read_text()
-    return next(line for line in roadmap.splitlines() if line.startswith("31. Your server"))
+    return next(line for line in roadmap.splitlines() if line.startswith("32. Your server"))
 
 
 def _flat(path: str) -> str:
@@ -1828,7 +1828,7 @@ def _flat(path: str) -> str:
 
 def _changelog_entry() -> str:
     """What the changelog says of this round: up to the last release."""
-    return _flat("CHANGELOG.md").partition("## 0.5.0")[0]
+    return _flat("CHANGELOG.md").partition("## 0.6.0")[0]
 
 
 def _skills_section() -> str:
@@ -1843,7 +1843,7 @@ def _quoted(text: str) -> list[str]:
 
 
 class Docs(Case):
-    """What docs/SKILLS.md, the changelog, TESTING.md, check 31 and the manifest say it does,
+    """What docs/SKILLS.md, the changelog, TESTING.md, check 32 and the manifest say it does,
     each sentence they quote pinned to what Tux says."""
 
     def test_the_supported_setup_and_the_relay_are_named(self):
@@ -1861,25 +1861,25 @@ class Docs(Case):
         for path, text in (("docs/SKILLS.md", _flat("docs/SKILLS.md")),
                            ("CHANGELOG.md", _changelog_entry()),
                            ("docs/TESTING.md", _flat("docs/TESTING.md")),
-                           ("check 31", " ".join(_check_31().split()))):
+                           ("check 32", " ".join(_check_32().split()))):
             with self.subTest(path):
                 self.assertIn(f"{SUPPORTED} {SCOPE}", text)
                 self.assertIn(LOGIN, text)
-                if path != "check 31":
+                if path != "check 32":
                     self.assertIn(RELAYS, text)
                 for wrong in ("Full answers", "the system docker has", "system services running",
                               "The system's docker.service isn't running"):
                     self.assertNotIn(wrong, text)
         self.assertIn("Tux says what docker and systemd list there, and what runs on this "
                       "computer, in their own words, and doesn't judge whether an app works.",
-                      _check_31())
+                      _check_32())
 
     def test_no_doc_quotes_a_verdict(self):
         """Every sentence the docs quote of what Tux says, as against what you ask, is read for
         a yes or no: a question ends with a question mark."""
         for path, text in (("docs/SKILLS.md", _skills_section()),
                            ("CHANGELOG.md", _changelog_entry()),
-                           ("check 31", _check_31())):
+                           ("check 32", _check_32())):
             for quote in _quoted(text):
                 if not quote.endswith("?"):
                     with self.subTest(path=path, quote=quote[:60]):
@@ -2023,9 +2023,9 @@ class Docs(Case):
         # Up to 4 is how many are said, of the services and of the processes, not of separators.
         self.assertIn(f"between its letters. Tux says up to {system.SAID_HERE} of each, services "
                       "and processes, and how many more,", _changelog_entry())
-        # The local step of check 31: localai is the local-ai process, with or without its dash.
+        # The local step of check 32: localai is the local-ai process, with or without its dash.
         self.assertIn("as the check here takes \"localai\" for `local-ai` with or without the "
-                      "dash", _check_31())
+                      "dash", _check_32())
 
     def test_the_command_and_what_it_reads_are_described_as_they_are(self):
         skills = _skills_section()

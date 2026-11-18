@@ -18,6 +18,7 @@ sentences tuxistant/recipes.py knows how to make. Recipes and code skills you ad
 budget of actions, as every tool the small model is offered costs it some of its other answers.
 """
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -34,6 +35,7 @@ from pathlib import Path
 
 import yaml
 
+from . import registry
 from .config import DATA_DIR
 from .gate import printable, shown
 from .inotify import ignored
@@ -80,6 +82,8 @@ BROKEN_GRANTS = ("Tux couldn't read what your skills were allowed, in {file}, so
 UNSAVED_GRANTS = ("Tux couldn't save what your skills were allowed to {file} ({why}), so a "
                   "skill of yours it hasn't allowed this before can't have it until it can. "
                   "Skills it allowed before carry on, and it tries again at the next reload.")
+NOT_ALLOWED = ("Tux couldn't save what that skill is allowed to {file} ({why}), so nothing was "
+               "installed.")
 NOT_A_SKILL = ("It is no longer a recipe or a skill folder, so nothing of it is in use, but it "
                "keeps its place and its names until you take it out.")
 SKILL_ID = re.compile(r"[a-z0-9][a-z0-9_-]*(\.[a-z0-9][a-z0-9_-]*)+")
@@ -937,6 +941,7 @@ class SkillHost:
         self.retired: list[_Running] = []           # retired with no loop to stop them on
         self.watcher = None
         self.grants = _Grants(self.user.parent / GRANTS)
+        self.switched_off: dict[str, tuple[str, str]] = {}  # recipes the registry revoked
         self.code_root = self.user.parent / CODE_DIR
         self.using: Counter = Counter()             # checked copies by the processes using them
         self._current = Skills(config=config, manifests=[])
@@ -971,6 +976,43 @@ class SkillHost:
             entry.retired = True
         await asyncio.gather(*(self._stop_one(entry) for entry in everything),
                              *self.stopping, return_exceptions=True)
+
+    # Browse's approval card, the one other way what a skill is allowed changes
+
+    def granted(self, skill_id: str) -> dict | None:
+        """A copy of the record of what a skill of yours is allowed, from the grants file as it
+        is now, or None: no record, or a file that can't be read."""
+        self.grants.refresh()
+        record = self.grants.records.get(skill_id)
+        return None if self.grants.broken or record is None else copy.deepcopy(record)
+
+    def allow(self, manifest: dict, file: Path) -> str:
+        """After Allow on Browse's card and before the file is written: the record of the
+        checked manifest's id becomes what it asks for, and is saved, so the reload after the
+        write loads it. Nothing else changes. "" or why it couldn't be saved."""
+        return self._set_grant(manifest["id"], {
+            "permissions": copy.deepcopy(manifest["permissions"]), "config": [],
+            "folder": file.name})
+
+    def put_back(self, skill_id: str, record: dict | None) -> str:
+        """The record as granted() gave it before allow(), after the file couldn't be written."""
+        return self._set_grant(skill_id, record)
+
+    def _set_grant(self, skill_id: str, record: dict | None) -> str:
+        grants = self.grants
+        grants.refresh()
+        records = grants.records    # reads the file, which may find it broken
+        if grants.broken:
+            return grants.broken
+        if not grants.writable:
+            return NOT_ALLOWED.format(file=grants.file, why="nothing is saved here")
+        if record is None:
+            records.pop(skill_id, None)
+        else:
+            records[skill_id] = record
+        grants._dirty = True
+        why = grants.save()
+        return NOT_ALLOWED.format(file=grants.file, why=why) if why else ""
 
     def _changed(self) -> None:
         problems = self.reload()
@@ -1060,6 +1102,7 @@ class SkillHost:
     def _scan(self, problems: dict) -> list[_Found]:
         self.failed: dict[str, str] = {}    # why each that didn't load failed, this reload
         found = []
+        self.switched_off = registry.switched_off(self.user)
         for file in self._listing(self.builtin, "*.yaml", problems):
             found += self._attempt(str(file), problems, lambda f=file: self._builtin(f))
         for root, bundled in ((self.bundled, True), (self.user, False)):
@@ -1088,10 +1131,17 @@ class SkillHost:
     def _attempt(self, key: str, problems: dict, load) -> list[_Found]:
         try:
             item = load()
+        except registry.SwitchedOff as e:     # never the version kept in use, either
+            self.failed[key] = problems[key] = str(e)
+            return []
         except Exception as e:
             problem = str(e) if isinstance(e, ValueError) else f"It could not be loaded: {e}"
             self.failed[key] = problems[key] = problem
             last = self.last_offered.get(key)
+            off = last and self._off(key, last.manifest["id"])
+            if off:     # a file that broke as it was switched off isn't kept running either
+                self.failed[key] = problems[key] = off
+                return []
             if last and Path(key).exists():     # what is in use stays, if it is still allowed
                 problems[key] = f"{problem} {KEPT}"
                 return [last]
@@ -1131,11 +1181,21 @@ class SkillHost:
     def _recipe(self, file: Path) -> _Found:
         from . import recipes
         manifest, text = _as_loaded(file, lambda: recipes.load(file))
+        off = self._off(str(file), manifest["id"])
+        if off:
+            self.seen_ids[str(file)] = (manifest["id"], _text_digest(text))
+            raise registry.SwitchedOff(off)
         problem = self.grants.problem(manifest, file)
         if problem:     # it read, so its id is known, though it doesn't load
             self.seen_ids[str(file)] = (manifest["id"], _text_digest(text))
             raise ValueError(problem)
         return _Found(str(file), manifest, kind="recipe", text=text)
+
+    def _off(self, key: str, skill_id: str) -> str:
+        """Why the registry switched off the file of yours at key, if it did and the file still
+        has the id Tux installed there: a recipe you saved over it under another id is yours."""
+        off = self.switched_off.get(Path(key).name) if Path(key).parent == self.user else None
+        return off[1] if off and off[0] == skill_id else ""
 
     def _grant(self, chosen: list[_Found], found: list[_Found], listed: bool) -> str:
         """Notes what is allowed, and clears the state of those new, back with more or pruned,

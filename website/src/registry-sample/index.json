@@ -1,0 +1,392 @@
+{
+  "authors": {
+    "example-ada": {
+      "keys": [
+        {
+          "added": "2026-11-04",
+          "fingerprint": "SHA256:YjxilYZDBMiVzBgju68l/V6YG2YiXAdvG+T2tSd80Cg",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKOnEEmvrfTReMsH+T0BQ6pj2u4lMNY5dbnTiC6/uZlQ",
+          "removed": null
+        }
+      ],
+      "status": "active"
+    },
+    "example-bo": {
+      "keys": [
+        {
+          "added": "2026-11-05",
+          "fingerprint": "SHA256:HRcmEa88XtowVLMTZq/wNOZjx1xqALNAk7kPjBo5hXE",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID5/XADkZeiHK2HTbObuhI5hKfg7CmY8pm95n15mY/n0",
+          "removed": null
+        },
+        {
+          "added": "2026-11-08",
+          "fingerprint": "SHA256:7vIC90u7huxJZKZbnV0w/Oxac3T2EA+Kl8OmBVFtyB0",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKeAjw0qHasvDjZRGSS5YKPlc+Hu2SMhCI6TDv2toa7k",
+          "removed": null
+        }
+      ],
+      "status": "active"
+    },
+    "example-cy": {
+      "keys": [
+        {
+          "added": "2026-11-06",
+          "fingerprint": "SHA256:K/t9ZS2cw/brETcPt2CVtaB8bK6OsQqNSSmnqg1DIzw",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO30Mc2Q0aruacZZNB3bB7KLFFrs/zYnzgfHYW1fj8CF",
+          "removed": null
+        }
+      ],
+      "status": "active"
+    },
+    "example-dee": {
+      "keys": [
+        {
+          "added": "2026-11-07",
+          "fingerprint": "SHA256:l4VKANszy/hKvaun4FNi61eMFfj4ez8Hx+LEl341Ye4",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICj9iQVmO64K2k1kGCIwyPMS1sBPvwQm9kUTqWgFEVVh",
+          "removed": null
+        }
+      ],
+      "status": "active"
+    },
+    "example-eve": {
+      "keys": [
+        {
+          "added": "2026-11-08",
+          "fingerprint": "SHA256:Rm6OUbIs/JSv9E/tFxFYR8zXZ7YNvUcflzxVc65U32E",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJfmUlMr1dHp3jQXBjgn6aJONKis1AU3LVn4LfiRqUyw",
+          "removed": null
+        }
+      ],
+      "status": "active"
+    }
+  },
+  "categories": [
+    {
+      "id": "home",
+      "name": "Home",
+      "tags": [
+        "smart-home",
+        "lights",
+        "heating"
+      ]
+    },
+    {
+      "id": "information",
+      "name": "Information",
+      "tags": [
+        "weather",
+        "prices",
+        "transport"
+      ]
+    },
+    {
+      "id": "desktop",
+      "name": "Desktop",
+      "tags": [
+        "settings",
+        "apps"
+      ]
+    }
+  ],
+  "commit": "9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d",
+  "date": "2026-11-11T16:00:00Z",
+  "format": 1,
+  "lifted": [
+    3
+  ],
+  "moderation_keys": [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGYlHffcUaJ4wVe3EhCINlAxw0i16CcE/l/wFwV+yoxm"
+  ],
+  "revocations": [
+    {
+      "actor": "example-mod",
+      "date": "2026-11-09T16:05:00Z",
+      "id": 1,
+      "kind": "suspend",
+      "reason": "Its host, api.tides.example, has been taken over by someone else.",
+      "report": "https://github.com/example/tuxistant-skills/issues/7",
+      "scope": {
+        "skill": "io.github.example-ada.tides",
+        "versions": [
+          "1.0.0"
+        ]
+      }
+    },
+    {
+      "actor": "example-mod",
+      "date": "2026-11-09T10:30:00Z",
+      "id": 2,
+      "kind": "suspend",
+      "reason": "It sends the town you name to a host its summary doesn't mention.",
+      "report": "https://github.com/example/tuxistant-skills/issues/9",
+      "scope": {
+        "skill": "io.github.example-eve.weather-now"
+      }
+    }
+  ],
+  "seq": 6,
+  "skills": [
+    {
+      "author": "example-ada",
+      "id": "io.github.example-ada.tides",
+      "licence": "MIT",
+      "links": [
+        {
+          "title": "Source",
+          "url": "https://github.com/example-ada/tides"
+        }
+      ],
+      "name": "Tides",
+      "summary": "Says when the next high tide is at a seaside town",
+      "tags": [
+        "weather",
+        "transport"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-04T10:12:00Z",
+          "key": "SHA256:YjxilYZDBMiVzBgju68l/V6YG2YiXAdvG+T2tSd80Cg",
+          "logo": null,
+          "permissions": {
+            "network": [
+              "api.tides.example"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "570d956fb6109bd32c73d826bbb65b988a8991a15f2b712620440bbf0f8f5497",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgo6cQSa+t9NF4ywf5PQFDqmPa7i\nUw1jl1udOILr+5mVAAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECbEwSSIDPjRVIbpy8uOZmMt/0vLEXInUEWUENOI5sEA8uuCZ\nqeIa7R8vqkeK23ElxJD0ya0oPdJUXq3iJebiEN\n-----END SSH SIGNATURE-----\n",
+          "size": 495,
+          "version": "1.0.0"
+        },
+        {
+          "date": "2026-11-10T08:41:00Z",
+          "key": "SHA256:YjxilYZDBMiVzBgju68l/V6YG2YiXAdvG+T2tSd80Cg",
+          "logo": null,
+          "permissions": {
+            "network": [
+              "tides.example.org"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "b76ea8d1d7f493e432cc673e2bfbe70c3198bdf74b0e83f4319e031e20dc449e",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgo6cQSa+t9NF4ywf5PQFDqmPa7i\nUw1jl1udOILr+5mVAAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECGYjAZ6RMCDHLP3pvEDtkX46hpLCKVfF6GW+SSNI3CvZt8IA\nNiESYpHsVnSfMFtqDPT1fUI0k6k8aqM+UccvAP\n-----END SSH SIGNATURE-----\n",
+          "size": 495,
+          "version": "1.1.0"
+        }
+      ]
+    },
+    {
+      "author": "example-bo",
+      "id": "io.github.example-bo.bluetooth",
+      "licence": "CC0-1.0",
+      "links": [],
+      "name": "Bluetooth page",
+      "summary": "Opens the Bluetooth page of Settings",
+      "tags": [
+        "settings"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-05T17:30:00Z",
+          "key": "SHA256:HRcmEa88XtowVLMTZq/wNOZjx1xqALNAk7kPjBo5hXE",
+          "logo": null,
+          "permissions": {},
+          "risk": "low",
+          "sha256": "20d48e3a09c6005c94b9f16cace6de8a1c85e345e68324aad6f0c116443bab99",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgPn9cAORl6IcrYdNs5u6EjmEp+D\nsKZjymb3mfXmZj+fQAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECYNgkcblxggJhkUwKkztUHED/TFikXvQteLSBFYMtpt9zii2\ni5j/RZFkjX22szCxunjccgYnCtI6ETVGRLPeUO\n-----END SSH SIGNATURE-----\n",
+          "size": 278,
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "author": "example-bo",
+      "id": "io.github.example-bo.evening",
+      "licence": "CC0-1.0",
+      "links": [],
+      "name": "Evening",
+      "summary": "Night Light, quiet time and locking the screen for the evening",
+      "tags": [
+        "settings"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-10T20:15:00Z",
+          "key": "SHA256:7vIC90u7huxJZKZbnV0w/Oxac3T2EA+Kl8OmBVFtyB0",
+          "logo": null,
+          "permissions": {},
+          "risk": "low",
+          "sha256": "2cfef8806445c639e874f0971c69a3b2b99bd17af0cdaf2d68e23c8c26046c4d",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgp4CPDSodqy8ONlEZJLlgo+Vz4e\n7ZIyEIjpMO/a2hruQAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEDwwZEW7Uv9DwRly4uuVexiHNAnUel0f8j/hjEya2SYaf63go\n8ZjqGm8gEG4YhaI9Rd+9IclpjDZdL/4mCLIQYA\n-----END SSH SIGNATURE-----\n",
+          "size": 964,
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "author": "example-bo",
+      "id": "io.github.example-bo.sound",
+      "licence": "CC0-1.0",
+      "links": [],
+      "name": "Sound page",
+      "summary": "Opens the Sound page of Settings",
+      "tags": [
+        "settings"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-08T19:45:00Z",
+          "key": "SHA256:7vIC90u7huxJZKZbnV0w/Oxac3T2EA+Kl8OmBVFtyB0",
+          "logo": null,
+          "permissions": {},
+          "risk": "low",
+          "sha256": "a65c1a1b0e1669ff8b1b7ba440aafed6279eadc5898ba6c68406c5265d78d323",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgp4CPDSodqy8ONlEZJLlgo+Vz4e\n7ZIyEIjpMO/a2hruQAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEALquR2guLh33HB3ldoSvlQRdOCpFMPweJatpt1H13Lt5DbjC\njaay+OSusbfq0/LgeqxrlmyKM2593FDFBrcLsE\n-----END SSH SIGNATURE-----\n",
+          "size": 256,
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "author": "example-cy",
+      "id": "io.github.example-cy.boiler",
+      "licence": "MIT",
+      "links": [
+        {
+          "title": "Source",
+          "url": "https://github.com/example-cy/boiler"
+        }
+      ],
+      "name": "Boiler boost",
+      "summary": "Turns the heating on for a while, from your own boiler controller",
+      "tags": [
+        "heating",
+        "smart-home"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-06T11:02:00Z",
+          "key": "SHA256:K/t9ZS2cw/brETcPt2CVtaB8bK6OsQqNSSmnqg1DIzw",
+          "logo": null,
+          "permissions": {
+            "network": [
+              "boiler.example.net"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "0833d18ac9e5a1d20d07df3a13aba8a5b955bb21d613c1c4f8538039131b0dbd",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7fQxzZDRqu5pxlk0HdsHsosUWu\nz/NifOB8dhbV+PwIUAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEDwdTV78+4YfbcQ1Dz1iiA2mrH6fLclgNMe+KVOzVPsihcm7q\n1WN5u8b9r4ArD9e2RhqPwQ7QM+4VRTsRh/u2YO\n-----END SSH SIGNATURE-----\n",
+          "size": 518,
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "author": "example-cy",
+      "id": "io.github.example-cy.desk-lamp",
+      "licence": "CC0-1.0",
+      "links": [],
+      "name": "Desk lamp",
+      "summary": "Sets a desk lamp to reading, warm, bright or off",
+      "tags": [
+        "lights"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-06T11:40:00Z",
+          "key": "SHA256:K/t9ZS2cw/brETcPt2CVtaB8bK6OsQqNSSmnqg1DIzw",
+          "logo": null,
+          "permissions": {
+            "network": [
+              "lamp.example.net"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "9eea3aa905fb22baeca1c7ebf6e8445c312c623dd069c1de0a791df64b08a3dc",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7fQxzZDRqu5pxlk0HdsHsosUWu\nz/NifOB8dhbV+PwIUAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEAcDGYs48juK4AIwfUkI8GV8Za9BRkn6c8SnKLkYOHwvEtZsQ\nzGGtCHrk9xuumKLnW07X9WNBcV+UJi2gZogUEE\n-----END SSH SIGNATURE-----\n",
+          "size": 468,
+          "version": "1.0"
+        },
+        {
+          "date": "2026-11-11T15:12:00Z",
+          "key": "SHA256:K/t9ZS2cw/brETcPt2CVtaB8bK6OsQqNSSmnqg1DIzw",
+          "logo": null,
+          "permissions": {
+            "network": [
+              "lamp.example.net"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "59410a3dfaa3387a3634e1fd9890c4d7ada1cc7a4fa5dedc2c3939e65c1723a6",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7fQxzZDRqu5pxlk0HdsHsosUWu\nz/NifOB8dhbV+PwIUAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEABRVKLyjEO1sk8UfFkYDfRAJ5rN4Ko9N5u1LL4TiV4wSfNAF\nTw+kSgXsc+WxniY4Ss4dt90aPRxbFy1E+dlZsE\n-----END SSH SIGNATURE-----\n",
+          "size": 512,
+          "version": "1.1"
+        }
+      ]
+    },
+    {
+      "author": "example-dee",
+      "id": "io.github.example-dee.fuel",
+      "licence": "MIT",
+      "links": [
+        {
+          "title": "Prices it reads",
+          "url": "https://fuel.example.org/about"
+        }
+      ],
+      "name": "Fuel prices",
+      "summary": "Says today's average price of petrol or diesel",
+      "tags": [
+        "prices",
+        "transport"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-07T08:20:00Z",
+          "key": "SHA256:l4VKANszy/hKvaun4FNi61eMFfj4ez8Hx+LEl341Ye4",
+          "logo": null,
+          "permissions": {
+            "network": [
+              "fuel.example.org"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "9e056d2845d515b7c352f755b38747335deb82d23ef61769e7dfb8ea622eb44a",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgKP2JBWY7rgraTWQYIjDI8xLWwE\n+/BCb2RROpaAURVWEAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECrfcvHjcivGT51Ts3Tpn0E3XpTQW3uG8l1Pg9CqxEBprrMWH\nZ+rMKmwFVmg8X6HcgoYClbfZz/H0nYptVRgLQH\n-----END SSH SIGNATURE-----\n",
+          "size": 561,
+          "version": "2026.11"
+        }
+      ]
+    },
+    {
+      "author": "example-eve",
+      "id": "io.github.example-eve.weather-now",
+      "licence": "MIT",
+      "links": [],
+      "name": "Weather now",
+      "summary": "Says the weather now in a town",
+      "tags": [
+        "weather"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-08T21:00:00Z",
+          "key": "SHA256:Rm6OUbIs/JSv9E/tFxFYR8zXZ7YNvUcflzxVc65U32E",
+          "logo": null,
+          "permissions": {
+            "network": [
+              "weather.example.com"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "bd9e9808b7e31076a5a9089fcd23ec5ed6021314c4955ce3136779455e673967",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgl+ZSUyvV0eneNBcGOCfpok40qK\nzUBTctWfgt+JGpTLAAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEDpEajm8qRta+jq0VUrgr1KeiKeQO0RgwQ1gkiQuFF08AEjXR\ncj+DSyaijXbM18u2++JWqEYLs/uT4DwlGlRrYB\n-----END SSH SIGNATURE-----\n",
+          "size": 448,
+          "version": "0.1"
+        }
+      ]
+    }
+  ]
+}

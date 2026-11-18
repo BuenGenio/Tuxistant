@@ -6,14 +6,16 @@ cd "$(dirname "$0")"
 remote=$(git remote get-url origin)
 revision=$(git rev-parse --short HEAD)
 SITE_URL=${SITE_URL:-https://buengenio.github.io/Tuxistant} python3 build.py
-# Only the real site goes out, never the local preview of planned releases.
+# Only the real site goes out, never the local preview of planned releases, and never the skills
+# portal, which stays local until the registry repo exists.
 if [ -e dist/LOCAL-PREVIEW ]; then echo "dist/ holds a local preview: not publishing it" >&2; exit 1; fi
+if [ -e dist/LOCAL-PORTAL ] || [ -e dist/skills ]; then
+  echo "dist/ holds the skills portal, which waits for the registry: not publishing it" >&2; exit 1
+fi
 cd dist
 git init -q -b gh-pages
 git add -A
-git commit -q -m "Publish the site from $revision
-
-Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>"
+git commit -q -m "Publish the site from $revision"
 git push -q -f "$remote" gh-pages
 rm -rf .git
 echo "published $revision"

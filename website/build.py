@@ -8,22 +8,31 @@ so the security policy is a meta tag in each page.
 
 --preview UPCOMING.json builds a local preview of planned releases into dist-preview/ instead, with a
 banner on every page. It is only for looking at: git ignores dist-preview/ and deploy.sh refuses it.
+
+--portal [FOLDER] builds the site with the skills portal under skills/ into dist-portal/ instead,
+from FOLDER laid out as the registry publishes it, or from src/registry-sample, whose pages say they
+are a sample. It stays local until the registry repo exists: the plain build reads no registry and
+writes no portal page, git ignores dist-portal/, and deploy.sh refuses it.
 """
 import argparse
 import base64
 import hashlib
 import html
+import importlib.util
 import json
 import os
 import re
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "src"
 DIST = HERE / "dist"
 DIST_PREVIEW = HERE / "dist-preview"     # --preview: local only, git ignores it, deploy.sh refuses it
+DIST_PORTAL = HERE / "dist-portal"       # --portal: local only, git ignores it, deploy.sh refuses it
+SAMPLE_REGISTRY = SRC / "registry-sample"
 THEMES = HERE.parent / "themes"
 SITE_URL = os.environ.get("SITE_URL", "").rstrip("/")
 DONATE = "https://buymeacoffee.com/buengenio"
@@ -71,8 +80,18 @@ MODE_ICONS = (
     '<svg class="i-dark" viewBox="0 0 24 24" aria-hidden="true">'
     '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>'
 )
+# On a phone the Skills link and the language menu become icon buttons, like the appearance switch.
+SKILLS_ICON = ('<svg class="bar-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6.5" '
+               'height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/>'
+               '<rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" '
+               'width="6.5" height="6.5" rx="1.5"/></svg>')
+LANGUAGE_ICON = ('<svg class="bar-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" '
+                 'r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.7 5.6 3.7 9s-1.2 6.4-3.7 9c-2.5-2.6-3.7-5.6-'
+                 '3.7-9s1.2-6.4 3.7-9z"/></svg>')
 # Runs before first paint on every page, so a stored choice never flashes the system's colours.
-MODE_SCRIPT = ("try{var m=localStorage.getItem('mode');"
+# The js class tells the stylesheet a script will draw the hero, so the still drawing that stands
+# in without one never flashes first.
+MODE_SCRIPT = ("document.documentElement.classList.add('js');try{var m=localStorage.getItem('mode');"
                "if(m==='light'||m==='dark')document.documentElement.dataset.mode=m}catch(e){}")
 
 esc = html.escape
@@ -204,8 +223,71 @@ def planned_html(strings, entry):
             f'<time dir="ltr" datetime="{entry["date"]}">{entry["date"]}</time>')
 
 
+# The release chips' icons, drawn for this site like MODE_ICONS: 24 units square, a 2-unit round
+# stroke and no fill, so each one takes the chip's colour. A feature in releases.json names one.
+FEATURE_ICONS = {
+    "mail": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3.5 7 8.5 6 8.5-6"/>',
+    "search": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/>',
+    "home": '<path d="M4 10.5 12 4l8 6.5V20H4z"/><path d="M10 20v-5h4v5"/>',
+    "timer": '<circle cx="12" cy="13.5" r="7.5"/><path d="M12 13.5V10M9.5 2.5h5M12 2.5V6"/>',
+    "media": ('<path d="M9 17.5V5.5l11-2v12"/><circle cx="6.5" cy="17.5" r="2.5"/>'
+              '<circle cx="17.5" cy="15.5" r="2.5"/>'),
+    "book": ('<path d="M12 6.5C10 5 7 4.5 3 5v13.5c4-.5 7 0 9 1.5 2-1.5 5-2 9-1.5V5c-4-.5-7 0-9 1.5z"/>'
+             '<path d="M12 6.5V20"/>'),
+    "code": '<path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 5l-3 14"/>',
+    "recipe": ('<path d="M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z"/>'
+               '<path d="M14 3v5h5M8.5 13h7M8.5 17h4"/>'),
+    "followup": ('<path d="M4 3.5h10a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1H8.5L5 15.5v-3H4a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1z"/>'
+                 '<path d="M18 8h2a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-1v3l-3.5-3H11a1 1 0 0 1-1-1v-.5"/>'),
+    "dictation": '<path d="M4 7h9M4 12h6M4 17h8M18 5v14M15.5 5h5M15.5 19h5"/>',
+    "voice": ('<rect x="9" y="3" width="6" height="11" rx="3"/>'
+              '<path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"/>'),
+    "approve": '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m8.5 12 2.5 2.5 5-5"/>',
+    "settings": ('<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/>'
+                 '<circle cx="9" cy="17" r="2"/>'),
+    "theme": ('<path d="M12 3a9 9 0 0 0 0 18c1.4 0 2-1 1.5-2.2-.6-1.4.3-2.8 1.8-2.8H18a3 3 0 0 0 3-3'
+              'c0-5.5-4-10-9-10z"/><path d="M7.5 11.5h.01M10 7.5h.01M15 7.5h.01"/>'),
+    "apps": ('<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/>'
+             '<rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/>'
+             '<rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>'),
+    "shield": '<path d="M12 3 5 6v5.5c0 4.5 3 8 7 9.5 4-1.5 7-5 7-9.5V6z"/><path d="M9.5 12.5h5"/>',
+    "consent": ('<path d="M7 18.5a4.5 4.5 0 0 1-.6-9 6 6 0 0 1 11.4 1.6 3.8 3.8 0 0 1-.3 7.4z"/>'
+                '<path d="m9.5 13.5 2 2 3.5-3.5"/>'),
+    "calendar": '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+    "news": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8.5h10M7 12.5h4M7 16h4M14 12.5h3V16h-3z"/>',
+    "steps": '<path d="M3 20h5v-5h5v-5h5V5h3"/>',
+}
+# The icons with lines of writing, left-aligned on a page or a list, and the steps, which climb
+# the way a line is read: right to left they run the other way, so the Arabic page mirrors them.
+FEATURE_MIRRORED = {"dictation", "news", "recipe", "steps"}
+# Characters: a chip, not a sentence. About 40 Latin characters fit one line at 360 px.
+FEATURE_LABEL_LENGTH = (2, 40)
+
+
+def feature_sprite_html(releases):
+    """Every icon the release chips use, drawn once in a sprite the chips point at. Its size is set
+    here as well as in the stylesheet, so without the stylesheet it takes no room."""
+    used = dict.fromkeys(feature["icon"] for entry in releases["history"] for feature in entry["features"])
+    symbols = "".join(f'<symbol id="feat-{icon}" viewBox="0 0 24 24">{FEATURE_ICONS[icon]}</symbol>'
+                      for icon in used)
+    return f'<svg class="feat-sprite" width="0" height="0" aria-hidden="true" focusable="false">{symbols}</svg>'
+
+
+def features_html(code, entry):
+    """What a release added, one chip each, in the order releases.json gives: most impact first.
+    role="list" because WebKit drops a list's role when it has no bullets."""
+    chips = []
+    for feature in entry["features"]:
+        icon = feature["icon"]
+        mirrored = " is-mirrored" if icon in FEATURE_MIRRORED else ""
+        chips.append(f'<li class="feat"><svg class="feat-icon{mirrored}" width="15" height="15" '
+                     f'aria-hidden="true" focusable="false"><use href="#feat-{icon}"/></svg>'
+                     f'<span>{esc(feature["label"][code])}</span></li>')
+    return f'<ul class="rel-added" role="list">{"".join(chips)}</ul>'
+
+
 def releases_html(code, strings, releases):
-    """Newest first: version, date, stable or preview, and one line of what it added."""
+    """Newest first: version, date, stable or preview, and a chip for each thing it added."""
     rows = []
     for entry in releases["history"]:
         version, date = esc(entry["version"]), entry["date"]
@@ -217,7 +299,7 @@ def releases_html(code, strings, releases):
         rows.append(f'<li class="release{" is-planned" if entry.get("planned") else ""}">'
                     f'<span class="rel-version">{version_html}</span><span class="rel-when">{when}</span>'
                     f'<span class="chan chan-{entry["channel"]}">{esc(strings[entry["channel"]])}</span>'
-                    f'<span class="rel-added">{esc(entry["added"][code])}</span></li>')
+                    f'{features_html(code, entry)}</li>')
     return "".join(rows)
 
 
@@ -256,9 +338,7 @@ def check_releases(releases, languages):
             raise SystemExit(f"{where} must be stable or preview")
         if bool(entry.get("planned")) == bool(entry.get("page")):
             raise SystemExit(f"{where} links its release page, or is planned and links nothing")
-        missing = set(languages) - set(entry["added"])
-        if missing:
-            raise SystemExit(f"{where} says what it added in every language, not {sorted(missing)}")
+        check_features(where, entry, languages)
     linux, preview = releases["linux"]["version"], releases["preview"]
     if linux not in versions or release_in(releases, linux).get("planned"):
         raise SystemExit("releases.json: the main download must be a released version in history")
@@ -271,6 +351,32 @@ def check_releases(releases, languages):
     if bool(preview["url"]) != bool(preview["page"]) or (
             bool(preview["url"]) == bool(release_in(releases, preview["version"]).get("planned"))):
         raise SystemExit("releases.json: a released preview has a download and a page, a planned one neither")
+
+
+def check_features(where, entry, languages):
+    """A release's chips: at least one, each with a known icon and a label in every language that
+    starts with a capital where the script has capitals, and is short enough for a chip."""
+    features = entry.get("features")
+    if not isinstance(features, list) or not features:
+        raise SystemExit(f"{where} lists what it added as features, most impact first")
+    shortest, longest = FEATURE_LABEL_LENGTH
+    for feature in features:
+        if not isinstance(feature, dict):
+            raise SystemExit(f"{where}: each feature is an icon and a label, not {feature!r}")
+        label = feature.get("label") if isinstance(feature.get("label"), dict) else {}
+        name = f"{where}: {label.get('en', feature)!r}"
+        if not isinstance(feature.get("icon"), str) or feature["icon"] not in FEATURE_ICONS:
+            raise SystemExit(f"{name} needs an icon from FEATURE_ICONS, not {feature.get('icon')!r}")
+        if set(feature) != {"icon", "label"}:
+            raise SystemExit(f"{name} has only an icon and a label, not {sorted(set(feature) - {'icon', 'label'})}")
+        if set(label) != set(languages):
+            raise SystemExit(f"{name} needs a label in every language and no other: missing "
+                             f"{sorted(set(languages) - set(label))}, unknown {sorted(set(label) - set(languages))}")
+        for code, text in label.items():
+            if not isinstance(text, str) or text != text.strip() or not shortest <= len(text) <= longest:
+                raise SystemExit(f"{name} in {code} needs {shortest} to {longest} characters, not {text!r}")
+            if text[0].lower() != text[0].upper() and not text[0].isupper():
+                raise SystemExit(f"{name} in {code} must start with a capital letter, not {text!r}")
 
 
 def apply_upcoming(path, languages, releases):
@@ -295,13 +401,157 @@ def apply_upcoming(path, languages, releases):
         strings["localPreview"] = upcoming["banner"][code]
 
 
-def page(code, strings, languages, releases, detect, policy):
+# Accordion sections. Every section after the ticker arrives open with a plain heading, which is how
+# it stays without script: no button that does nothing. app.js turns the heading's text into the
+# toggle, a button inside the h2 so the outline keeps the heading, closes all but the first section
+# and opens the one a link points into. The h2 sits alone in its own box so fitHeadings() in app.js
+# measures the room left beside the chevron.
+ACC_CHEVRON = ('<svg class="acc-chev" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'
+               '<path d="M6 9l6 6 6-6"/></svg>')
+
+
+def acc_open(name, title):
+    return (f'<section class="section acc wrap" id="{name}" aria-labelledby="{name}-title">'
+            f'<div class="acc-head"><div class="acc-fit"><h2 id="{name}-title">{esc(title)}</h2></div>'
+            f'{ACC_CHEVRON}</div><div class="acc-panel" id="{name}-panel"><div class="acc-inner">')
+
+
+def acc_close(prompt, *actions):
+    """The section's call to action, its last element: a line asking, and what to do about it."""
+    return (f'<div class="acc-cta"><p>{esc(prompt)}</p><div class="acc-actions">{"".join(actions)}</div></div>'
+            + acc_end())
+
+
+def acc_end():
+    """A section with no call to action of its own, as a skill's on the portal may be."""
+    return '</div></div></section>'
+
+
+def sentences_html(text):
+    """A sentence to a span, as app.js does for a call to action, so a narrow screen breaks between
+    sentences before it breaks inside one. A full-width stop, as Chinese ends a sentence with, has
+    no space after it."""
+    parts = re.split(r"((?<=[.!?])\s+|(?<=[\u3002\uff01\uff1f]))", text)
+    return "".join(esc(part) if index % 2 else f"<span>{esc(part)}</span>"
+                   for index, part in enumerate(parts) if part or index % 2)
+
+
+def hero_download(strings, releases):
+    """The hero's button as it stands without script: the Linux file, named as such, as app.js
+    shows a phone. app.js then points it at the visitor's own system and says which."""
+    linux = releases["linux"]
+    if linux["url"]:
+        label = fill(strings["dlFor"], os="Linux")
+        return f'<a class="btn btn-main" id="download" href="{esc(linux["url"])}">{esc(label)}</a>'
+    label = fill(strings["dlPending"] if linux["version"] else strings["dlSoon"], os="Linux")
+    return f'<a class="btn btn-main" id="download" aria-disabled="true">{esc(label)}</a>'
+
+
+def hero_meta(strings, releases):
+    """The line under the hero's button: which version it downloads, as app.js words it."""
+    linux = releases["linux"]
+    if not linux["version"]:
+        return strings["dlPlanned"]
+    return fill(strings["dlMeta"], version=linux["version"], channel=strings[linux["channel"]])
+
+
+def cta_download(strings, releases):
+    """The newest stable download, as the hero's button offers it: the Linux file, and it says so,
+    since that is what it fetches without script too. app.js points it at the visitor's own system
+    when that has a release, and names that system instead. With no Linux download yet it offers
+    every release on GitHub, rather than a button that downloads nothing."""
+    url = releases["linux"]["url"]
+    if not url:
+        return cta_releases(strings, releases)
+    label = fill(strings["dlFor"], os="Linux")
+    return f'<a class="btn btn-cta" href="{esc(url)}" data-cta="download">{esc(label)}</a>'
+
+
+def cta_notes(strings, releases):
+    """A quieter link beside the download: the release notes of the version it downloads."""
+    page = release_in(releases, releases["linux"]["version"])["page"]
+    return f'<a class="acc-more" href="{esc(page)}">{esc(strings["releaseNotes"])}</a>'
+
+
+def cta_releases(strings, releases):
+    """Every release on GitHub: the folder above the newest stable release's own page."""
+    page = release_in(releases, releases["linux"]["version"])["page"].rsplit("/tag/", 1)[0]
+    return f'<a class="btn btn-cta btn-cta-alt" href="{esc(page)}">{esc(strings["ctaReleases"])}</a>'
+
+
+# The Skills link on the portal: its own page there, and the part of the site a skill's page is in.
+CURRENT = {"skills": ' aria-current="page"', "skill": ' aria-current="true"'}
+
+
+def site_header(root, strings, home, language_menu="", current="", skills_link=False):
+    """The same bar on every page. The Skills link is only in a build with the portal, which is
+    in English and has no language menu."""
+    skills = CURRENT.get(current, "")
+    link = (f'<a class="nav-link" href="{root}skills/"{skills}>{SKILLS_ICON}<span class="nav-text">'
+            f'{esc(strings["skills"])}</span></a>' if skills_link else "")
+    modes = "".join(f'<option value="{m}">{esc(strings["modes"][m])}</option>' for m in MODES)
+    bar = [f'<a class="brand" href="{home}">Tuxistant</a>', link, language_menu,
+           f'<span class="mode">{MODE_ICONS}<select id="mode" aria-label="{esc(strings["appearance"])}" '
+           f'title="{esc(strings["appearance"])}">{modes}</select></span>',
+           f'<a class="btn btn-coffee" href="{DONATE}" rel="noopener">{esc(strings["donate"])}</a>']
+    return """<header class="site-header" id="site-header">
+  <div class="nav-glass" aria-hidden="true"></div>
+  <div class="wrap bar">
+    """ + "\n    ".join(item for item in bar if item) + """
+  </div>
+</header>"""
+
+
+def head_html(policy, title, description, root, detect=""):
+    detect_tag = f"<script>{detect}</script>" if detect else ""
+    return f"""<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{policy}">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<script>{MODE_SCRIPT}</script>{detect_tag}
+<title>{esc(title)}</title>
+<meta name="description" content="{esc(description)}">
+<meta property="og:title" content="{esc(title)}">
+<meta property="og:description" content="{esc(description)}">
+<meta name="theme-color" content="#07080d">
+<link rel="icon" href="{root}favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="{root}style.css">"""
+
+
+def portal_site(strings, policy, releases):
+    """What the portal takes from the site: the page around a portal body, depth folders below the
+    site's root, the folding sections, and the download its calls to action offer."""
+    def shell(title, description, depth, body, sample):
+        root = "../" * depth
+        robots = '\n<meta name="robots" content="noindex">' if sample else ""
+        current = "skills" if depth == 1 else "skill"     # skills/, or a skill's page below it
+        return f"""<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+{head_html(policy, f"{title} · Tuxistant skills", description, root)}
+<link rel="stylesheet" href="{root}skills.css">{robots}
+</head>
+<body>
+{site_header(root, strings, root, current=current, skills_link=True)}
+<main>
+{body}
+</main>
+<footer class="foot wrap">Each skill is its publisher's work, under the licence it names. Review and signatures make a bad one rarer, and Tux's own checks and cards are what protect you if one gets through.</footer>
+<script src="{root}site.js"></script>
+<script src="{root}skills.js"></script>
+</body>
+</html>
+"""
+    return SimpleNamespace(shell=shell, acc_open=acc_open, acc_close=acc_close, acc_end=acc_end,
+                           download=cta_download(strings, releases))
+
+
+def page(code, strings, languages, releases, detect, policy, skills_link=False):
     caps_a, caps_b = caps_html(strings)
     tabs, panels = panels_html(strings)
     options = "".join(
         f'<option value="{c}"{" selected" if c == code else ""}>{esc(s["name"])}</option>'
         for c, s in languages.items())
-    modes = "".join(f'<option value="{m}">{esc(strings["modes"][m])}</option>' for m in MODES)
     alternates = ""
     if SITE_URL:
         alternates = "".join(f'<link rel="alternate" hreflang="{c}" href="{SITE_URL}{path_for(c)}">'
@@ -309,77 +559,61 @@ def page(code, strings, languages, releases, detect, policy):
         alternates += (f'<link rel="alternate" hreflang="x-default" href="{SITE_URL}/">'
                        f'<link rel="canonical" href="{SITE_URL}{path_for(code)}">')
     data = {k: strings[k] for k in ("dlFor", "dlSoon", "dlPending", "dlMeta", "dlPlanned",
-                                    "preview", "stable", "planned", "themes", "showTheme")}
+                                    "preview", "stable", "planned", "themes", "showTheme",
+                                    "pauseMotion", "playMotion",
+                                    "ctaExamples", "ctaSoon", "ctaSoonAlso")}
     data["releases"] = {os_id: releases[os_id] for os_id, _ in OS_ORDER}
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     root = "" if code == "en" else "../"
-    head_script = f"<script>{MODE_SCRIPT}</script>"
-    if code == "en":
-        head_script += f"<script>{detect}</script>"
+    language_menu = (f'<select class="lang" id="lang" data-root="{root}" '
+                     f'aria-label="{esc(strings["language"])}">{options}</select>')
+    if skills_link:     # beside the Skills link, it too becomes an icon on a phone
+        language_menu = f'<span class="lang-pick">{LANGUAGE_ICON}{language_menu}</span>'
     return f"""<!doctype html>
 <html lang="{code}" dir="{strings['dir']}">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="{policy}">
-<meta name="referrer" content="strict-origin-when-cross-origin">
-{head_script}
-<title>{esc(strings['title'])}</title>
-<meta name="description" content="{esc(strings['description'])}">
-<meta property="og:title" content="{esc(strings['title'])}">
-<meta property="og:description" content="{esc(strings['description'])}">
-<meta name="theme-color" content="#07080d">
-<link rel="icon" href="{root}favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="{root}style.css">
+{head_html(policy, strings['title'], strings['description'], root, detect if code == "en" else "")}
 {alternates}
 </head>
 <body>
-<header class="site-header" id="site-header">
-  <div class="nav-glass" aria-hidden="true"></div>
-  <div class="wrap bar">
-    <a class="brand" href="./">Tuxistant</a>
-    <select class="lang" id="lang" data-root="{root}" aria-label="{esc(strings['language'])}">{options}</select>
-    <span class="mode">{MODE_ICONS}<select id="mode" aria-label="{esc(strings['appearance'])}" title="{esc(strings['appearance'])}">{modes}</select></span>
-    <a class="btn btn-coffee" href="{DONATE}" rel="noopener">{esc(strings['donate'])}</a>
-  </div>
-</header>
+{site_header(root, strings, "./", language_menu, skills_link=skills_link)}
 <main>{local_preview_html(strings)}
-  <section class="hero wrap">
-    <h1>Tuxistant</h1>
-    <p class="tagline">{esc(strings['tagline'])}</p>
-    <div class="stage">
-      <canvas id="tux" aria-hidden="true"></canvas>
-      <div class="fallback" aria-hidden="true"></div>
+  <section class="hero" id="hero" data-theme="{THEME_ORDER[0]}">
+    <canvas id="tux" aria-hidden="true"></canvas>
+    <div class="fallback" aria-hidden="true"></div>
+    <div class="hero-in wrap">
+      <div class="hero-copy">
+        <h1>Tuxistant</h1>
+        <p class="tagline">{sentences_html(strings['tagline'])}</p>
+        <div class="download">
+          {hero_download(strings, releases)}
+          <p class="dl-meta"><span id="dl-meta-text">{esc(hero_meta(strings, releases))}</span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
+          {preview_html(strings, releases)}
+        </div>
+        <div class="pick"><span id="theme-name">{esc(strings['themes'][THEME_ORDER[0]])}</span><span class="dots" id="dots"></span></div>
+      </div>
       <ul class="caps caps-a">{caps_a}</ul>
       <ul class="caps caps-b">{caps_b}</ul>
     </div>
-    <div class="pick"><span id="theme-name" aria-live="polite"></span><span class="dots" id="dots"></span></div>
-    <div class="download">
-      <a class="btn btn-main" id="download" aria-disabled="true"></a>
-      <p class="dl-meta"><span id="dl-meta-text"></span> · <a href="#versions">{esc(strings['dlAll'])}</a></p>
-      {preview_html(strings, releases)}
-    </div>
   </section>
   <div class="wrap"><div class="ticker">{ticker_html(strings)}</div></div>
-  <section class="section wrap" aria-labelledby="examples-title">
-    <h2 id="examples-title">{esc(strings['examplesTitle'])}</h2>
+  {acc_open('examples', strings['examplesTitle'])}
     <div class="tabs" role="tablist" aria-labelledby="examples-title">{tabs}</div>
     {panels}
-  </section>
-  <section class="section wrap" id="preview" aria-labelledby="preview-title">
-    <h2 id="preview-title">{esc(strings['previewTitle'])}</h2>
+  {acc_close(strings['ctaExamples'], cta_download(strings, releases))}
+  {acc_open('preview', strings['previewTitle'])}
     <p class="lead">{esc(strings['previewLead'])}</p>
     <ul class="caps caps-row">{preview_caps_html(strings)}</ul>
-  </section>
-  <section class="section wrap" id="versions" aria-labelledby="versions-title">
-    <h2 id="versions-title">{esc(strings['versionsTitle'])}</h2>
+  {acc_close(strings['ctaPreview'], cta_download(strings, releases), cta_notes(strings, releases))}
+  {acc_open('versions', strings['versionsTitle'])}
     <table class="versions">
       <thead><tr><th scope="col">{esc(strings['colSystem'])}</th><th scope="col">{esc(strings['colVersion'])}</th><th scope="col">{esc(strings['colStatus'])}</th><th scope="col" class="needs">{esc(strings['colNeeds'])}</th></tr></thead>
       <tbody>{versions_html(strings, releases)}</tbody>
     </table>
     <h3 class="sub" id="releases-title">{esc(strings['releasesTitle'])}</h3>
+    {feature_sprite_html(releases)}
     <ol class="releases" aria-labelledby="releases-title">{releases_html(code, strings, releases)}</ol>
-  </section>
+  {acc_close(strings['ctaVersions'], cta_releases(strings, releases))}
   <section class="wrap">
     <div class="support">
       <div><h2>{esc(strings['donateTitle'])}</h2><p>{esc(strings['donateText'])}</p></div>
@@ -389,11 +623,20 @@ def page(code, strings, languages, releases, detect, policy):
 </main>
 <footer class="foot wrap">{esc(strings['credit'])} {esc(strings['trademarks'])}</footer>
 <script type="application/json" id="strings">{data_json}</script>
+<script src="{root}site.js"></script>
 <script src="{root}themes.js"></script>
 <script src="{root}app.js"></script>
 </body>
 </html>
 """
+
+
+def _portal():
+    """portal.py beside this file, loaded by path so the build runs from any folder."""
+    spec = importlib.util.spec_from_file_location("site_portal", HERE / "portal.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def themes_js():
@@ -415,6 +658,9 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description="Builds the site into dist/.")
     parser.add_argument("--preview", metavar="UPCOMING.json",
                         help="build a local preview of planned releases into dist-preview/ instead")
+    parser.add_argument("--portal", metavar="FOLDER", nargs="?", type=Path, const=SAMPLE_REGISTRY,
+                        help="build the site with the skills portal into dist-portal/ instead, "
+                             "from FOLDER as the registry publishes it, or from the sample")
     return parser.parse_args(argv)
 
 
@@ -422,32 +668,76 @@ def main(argv=()):
     options = parse_args(argv)
     languages = load_languages()
     releases = json.loads((SRC / "releases.json").read_text())
-    dist = DIST
+    dist = DIST_PORTAL if options.portal else DIST_PREVIEW if options.preview else DIST
     if options.preview:
         apply_upcoming(options.preview, languages, releases)
-        dist = DIST_PREVIEW
     check_releases(releases, languages)
     detect = detect_script(list(languages))
     policy = (f"default-src 'none'; script-src 'self' {csp_hash(MODE_SCRIPT)} {csp_hash(detect)}; "
               "style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'")
 
+    # The portal's code and the registry it shows are taken before anything is written, so a
+    # portal build that fails leaves no half-built site behind.
+    portal = load_portal(options.portal) if options.portal else None
     shutil.rmtree(dist, ignore_errors=True)
     dist.mkdir()
     for code, strings in languages.items():
         target = dist / path_for(code).strip("/") / "index.html"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(page(code, strings, languages, releases, detect, policy))
+        # The portal is in English only, so only the English page links to it for now.
+        target.write_text(page(code, strings, languages, releases, detect, policy,
+                               skills_link=bool(portal) and code == "en"))
     shutil.copy(SRC / "style.css", dist)
-    shutil.copy(SRC / "app.js", dist)
+    for script in ("site.js", "app.js"):
+        shutil.copy(SRC / script, dist)
     shutil.copy(SRC / "favicon.svg", dist)
     (dist / "themes.js").write_text(themes_js())
     (dist / ".nojekyll").touch()    # served as they are, with no Jekyll build first
     (dist / "robots.txt").write_text("User-agent: *\nAllow: /\n")
+    local = []
     if options.preview:     # deploy.sh refuses a folder holding this file
         (dist / "LOCAL-PREVIEW").write_text("A local preview of planned releases. Never deploy it.\n")
+        local.append("a local preview")
+    if portal:
+        shown = build_portal(dist, portal, languages["en"], policy, releases)
+        local.append(f"the skills portal with {shown} skill pages")
+    if local:
         (dist / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
     print(f"built {len(languages)} languages into {dist}"
-          + (" (a local preview, never to be deployed)" if options.preview else ""))
+          + (f" ({' and '.join(local)}, never to be deployed)" if local else ""))
+
+
+def load_portal(folder):
+    """portal.py and the registry folder it reads, taken as Tux would take it: (module, what it
+    shows). Stops the build with a sentence if either can't be had."""
+    try:
+        portal = _portal()
+    except ImportError as e:
+        raise SystemExit("The skills portal needs what Tux's daemon imports, PyYAML, websockets "
+                         f"and dbus-fast, as install.sh lists them: {ended(e)}") from None
+    try:
+        return portal, portal.load(Path(folder))
+    except portal.Refused as e:
+        raise SystemExit(f"The skills portal wasn't built from {folder}: {ended(e)}") from None
+
+
+def ended(reason) -> str:
+    """A reason with one period at its end: Tux's own reasons are sentences that end with one
+    already, and the portal's and Python's aren't."""
+    reason = str(reason)
+    return reason if reason.endswith(".") else f"{reason}."
+
+
+def build_portal(dist, portal, strings, policy, releases):
+    """skills/ with its script and stylesheet, from what load_portal() took, with the file
+    deploy.sh refuses. Only for looking at until the registry repo exists: the owner decides when
+    it goes live."""
+    module, shown = portal
+    (dist / "LOCAL-PORTAL").write_text("The skills portal, built locally. Never deploy it until "
+                                       "the registry exists.\n")
+    for name in ("skills.js", "skills.css"):
+        shutil.copy(SRC / name, dist)
+    return module.write(dist, shown, portal_site(strings, policy, releases))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,150 @@
+{
+  "authors": {
+    "example-ada": {
+      "keys": [
+        {
+          "added": "2026-11-14",
+          "fingerprint": "SHA256:s82QHFB7Fj/KYRg/hFcxULFv7YdAMtYnJ5jvFVnetWY",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII+YPY+EjRujOtCtSryIuMkrxpewSo80g/E4L9SAcPf1",
+          "removed": null
+        }
+      ],
+      "status": "active"
+    },
+    "example-bo": {
+      "keys": [
+        {
+          "added": "2026-11-15",
+          "fingerprint": "SHA256:vjQBqXKHMz92+gq+RC3g3+y+RkAxGAi5kL5+oNWC5ZM",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN7Xa91DaBeBbI5QHwuLTCplGaEm4gprsqCmrv/M066m",
+          "removed": null
+        }
+      ],
+      "status": "active"
+    }
+  },
+  "categories": [
+    {
+      "id": "home",
+      "name": "Home",
+      "tags": [
+        "smart-home",
+        "lights",
+        "heating"
+      ]
+    },
+    {
+      "id": "information",
+      "name": "Information",
+      "tags": [
+        "weather",
+        "prices",
+        "transport"
+      ]
+    },
+    {
+      "id": "desktop",
+      "name": "Desktop",
+      "tags": [
+        "settings",
+        "apps"
+      ]
+    }
+  ],
+  "commit": "3f1c2a9e8b7d6c5f4e3d2c1b0a9f8e7d6c5b4a39",
+  "date": "2026-11-20T09:00:00Z",
+  "format": 1,
+  "lifted": [],
+  "moderation_keys": [
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJol8M3JliP8HgE4ny4d+l4zrC+8fiIB/opY+2hX6XeB"
+  ],
+  "revocations": [
+    {
+      "actor": "example-mod",
+      "date": "2026-11-19T16:05:00Z",
+      "id": 1,
+      "kind": "suspend",
+      "reason": "Its host, api.tides.example, has been taken over by someone else.",
+      "report": "https://github.com/example/tuxistant-skills/issues/7",
+      "scope": {
+        "skill": "io.github.example-ada.tides",
+        "versions": [
+          "1.0.0"
+        ]
+      }
+    }
+  ],
+  "seq": 4,
+  "skills": [
+    {
+      "author": "example-ada",
+      "id": "io.github.example-ada.tides",
+      "licence": "MIT",
+      "links": [
+        {
+          "title": "Source",
+          "url": "https://github.com/example-ada/tides"
+        }
+      ],
+      "name": "Tides",
+      "summary": "Says when the next high tide is at a seaside town",
+      "tags": [
+        "weather",
+        "transport"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-14T10:12:00Z",
+          "key": "SHA256:s82QHFB7Fj/KYRg/hFcxULFv7YdAMtYnJ5jvFVnetWY",
+          "permissions": {
+            "network": [
+              "api.tides.example"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "570d956fb6109bd32c73d826bbb65b988a8991a15f2b712620440bbf0f8f5497",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgj5g9j4SNG6M60K1KvIi4ySvGl7\nBKjzSD8Tgv1IBw9/UAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEBwGb8uyYHufJdE2X7mTt0SHUTNy/GEg9ubtKn2nyex+0kysD\nngZzd3iSo/XZ1IGCoX8LKwnmGKS2XwV3kEbNcI\n-----END SSH SIGNATURE-----\n",
+          "size": 495,
+          "version": "1.0.0"
+        },
+        {
+          "date": "2026-11-20T08:41:00Z",
+          "key": "SHA256:s82QHFB7Fj/KYRg/hFcxULFv7YdAMtYnJ5jvFVnetWY",
+          "permissions": {
+            "network": [
+              "tides.example.org"
+            ]
+          },
+          "risk": "medium",
+          "sha256": "b76ea8d1d7f493e432cc673e2bfbe70c3198bdf74b0e83f4319e031e20dc449e",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgj5g9j4SNG6M60K1KvIi4ySvGl7\nBKjzSD8Tgv1IBw9/UAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEClYmxVIAKaSyQkZgueIH9EQqrBJ4PBjyhj9WuVKbhkoauI2F\nOfdvcSYoRoGxb/hzom8Bh3JNtHRMFBBdJLmDYI\n-----END SSH SIGNATURE-----\n",
+          "size": 495,
+          "version": "1.1.0"
+        }
+      ]
+    },
+    {
+      "author": "example-bo",
+      "id": "io.github.example-bo.bluetooth",
+      "licence": "CC0-1.0",
+      "links": [],
+      "name": "Bluetooth page",
+      "summary": "Opens the Bluetooth page of Settings",
+      "tags": [
+        "settings"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-15T17:30:00Z",
+          "key": "SHA256:vjQBqXKHMz92+gq+RC3g3+y+RkAxGAi5kL5+oNWC5ZM",
+          "permissions": {},
+          "risk": "low",
+          "sha256": "20d48e3a09c6005c94b9f16cace6de8a1c85e345e68324aad6f0c116443bab99",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg3tdr3UNoF4FsjlAfC4tMKmUZoS\nbiCmuyoKau/8zTrqYAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEChMJpPyddWpC28ihzrGHShFauher6qDVcs5gwQoMek4oq3kP\nxeaZbRCbaPv2FDk8FaaLGAdwYM7+NHWLF6ggIJ\n-----END SSH SIGNATURE-----\n",
+          "size": 278,
+          "version": "1.0.0"
+        }
+      ]
+    }
+  ]
+}

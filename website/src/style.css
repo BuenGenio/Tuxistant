@@ -11,7 +11,7 @@
   --brand-1: #6fd3ff;
   --brand-2: #d96bff;
   --header-h: 56px;
-  --stage-h: min(340px, 44svh);
+  --hero-h: min(300px, calc(64svh - var(--header-h)));
 }
 /* Auto sets no attribute: color-scheme above already follows the system, live. */
 :root[data-mode="light"] { color-scheme: light; }
@@ -75,6 +75,10 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 
 .bar { display: flex; align-items: center; gap: 12px; height: 100%; }
 .brand { font-weight: 700; text-decoration: none; margin-inline-end: auto; }
+.nav-link { flex: none; color: var(--muted); font-size: 0.92rem; font-weight: 600; text-decoration: none; }
+.nav-link:hover, .nav-link[aria-current] { color: var(--text); }
+.lang-pick { display: contents; }
+.bar-icon { display: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .lang {
   min-width: 0;
   max-width: 130px;
@@ -131,39 +135,28 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-/* Hero */
-.hero { text-align: center; padding-block-start: 14px; }
-.tagline { margin: 6px auto 0; max-width: 620px; color: var(--muted); }
-
-.stage {
-  position: relative;
+/* Hero: the theme shaders fill it edge to edge, behind the title and on up under the header's
+   glass. The copy sits in the middle with the claims either side, or below them on a phone. */
+.hero { position: relative; isolation: isolate; padding-block: 16px 14px; }
+main > .hero:first-child { margin-block-start: calc(-1 * var(--header-h)); padding-block-start: calc(var(--header-h) + 16px); }
+.hero-in {
   display: grid;
-  grid-template-columns: 1fr minmax(220px, var(--stage-h)) 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 440px) minmax(0, 1fr);
   align-items: center;
-  gap: 12px;
-  min-height: var(--stage-h);
-  margin-block-start: 6px;
+  align-content: end;     /* the spare height goes above the name, where a figure peeks out, not under the picker */
+  gap: 12px 20px;
+  min-height: var(--hero-h);
 }
-#tux {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-start: 50%;
-  width: 100vw;
-  height: 100%;
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-[dir="rtl"] #tux { transform: translateX(50%); }
+.hero-copy { position: relative; grid-column: 2; grid-row: 1; text-align: center; }
+.tagline { margin: 6px auto 0; max-width: 620px; color: var(--muted); text-wrap: balance; }
+/* A sentence to a span, as in the calls to action: a narrow screen breaks between them first, and a
+   sentence too long for a line still breaks evenly, not with one word left on its own. */
+.tagline span { display: inline-block; text-wrap: balance; }
 
-.fallback {
-  grid-column: 2;
-  justify-self: center;
-  width: 60%;
-  aspect-ratio: 1;
-  border-radius: 50%;
-  background: radial-gradient(circle at 40% 35%, var(--brand-1), var(--brand-2) 55%, #15182a 75%);
-}
+#tux, .fallback { position: absolute; inset: 0; z-index: -2; width: 100%; height: 100%; pointer-events: none; }
 .has-gl .fallback { display: none; }
+/* Until the script knows whether the shaders run, nothing: the still drawing would flash first. */
+.js:not(.no-gl) .fallback { visibility: hidden; }
 
 .caps { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 7px; margin: 0; padding: 0; list-style: none; }
 .caps-a { grid-column: 1; grid-row: 1; align-items: flex-end; }
@@ -184,13 +177,26 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .tag-now { color: var(--now); }
 .tag-soon { color: var(--soon); }
 
-.pick { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 28px; color: var(--muted); font-size: 0.9rem; }
+.pick { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 28px; margin-block-start: 4px; color: var(--muted); font-size: 0.9rem; }
+:root:not(.js) .pick { display: none; }     /* the dots and the pause button come with the script */
 .dots { display: inline-flex; }
-.dot { width: 24px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; }
-.dot::before { content: ""; display: block; width: 9px; height: 9px; margin: auto; border-radius: 50%; background: var(--line); }
-.dot[aria-pressed="true"]::before { background: var(--text); }
+.dot, .still { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: none; color: var(--muted); cursor: pointer; }
+/* The theme shown is a longer, darker mark, so the state doesn't rest on colour alone. */
+.dot::before { content: ""; width: 9px; height: 9px; border-radius: 999px; background: currentColor; box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg) 75%, transparent); }
+.dot[aria-pressed="true"]::before { width: 18px; background: var(--text); }
+.dot:hover, .still:hover { color: var(--text); }
+/* Pause, two bars; once pressed, play. A little apart from the dots: it is a control, not a fifth theme. */
+.still { margin-inline-start: 6px; }
+.still::before { content: ""; width: 9px; height: 10px; border-inline: 3px solid currentColor; }
+.still[aria-pressed="true"]::before { border: 0; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+/* On a touch screen each is a thumb's width, the marks the same size: a near miss doesn't pick the
+   theme beside it, and the row grows only a little. */
+@media (pointer: coarse) {
+  .dot, .still { width: 34px; height: 34px; }
+  .still { margin-inline-start: 2px; }
+}
 
-.download { margin-block-start: 6px; }
+.download { margin-block-start: 12px; }
 .btn-main {
   min-height: 50px;
   min-width: 260px;
@@ -206,7 +212,7 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .dl-meta { margin: 6px 0 0; color: var(--muted); font-size: 0.88rem; }
 .dl-meta a { color: var(--text); }
 .dl-preview { margin: 2px 0 0; color: var(--muted); font-size: 0.84rem; }
-.dl-preview a { color: var(--text); }
+.dl-preview a { color: var(--text); white-space: nowrap; }     /* a link wraps whole, not mid-way */
 
 /* Works with: a slim strip. Two copies of one list sit side by side and each slides by its own
    width plus the gap, so the second lands exactly where the first began. No script. */
@@ -219,7 +225,8 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   border-block: 1px solid var(--line);
 }
 .ticker:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
-.marks { position: absolute; width: 0; height: 0; }
+/* The two hidden sprites: the ticker's marks and the release chips' icons. */
+.marks, .feat-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 .ticker-label { flex: none; margin: 0; color: var(--muted); font-size: 0.82rem; font-weight: 600; white-space: nowrap; }
 .ticker-view {
   --gap: 30px;
@@ -280,7 +287,8 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 .lead { margin: 4px 0 10px; color: var(--muted); font-size: 0.94rem; }
 .caps-row { flex-direction: row; flex-wrap: wrap; gap: 7px; }
 
-/* Releases, newest first: one line each on a wide screen, two on a phone. */
+/* Releases, newest first: the version, date and channel, then a chip for each thing it added, which
+   wrap onto as many lines as they need. On a phone the chips start on a line of their own. */
 .sub { margin: 16px 0 4px; font-size: 1.05rem; font-weight: 700; }
 /* Each row is a subgrid of the list, so the columns line up and are only as wide as their contents. */
 .releases { display: grid; grid-template-columns: auto auto auto minmax(0, 1fr); margin: 0; padding: 0; list-style: none; font-size: 0.94rem; }
@@ -295,12 +303,42 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 }
 .rel-version { font-weight: 700; }
 .rel-when { color: var(--muted); font-variant-numeric: tabular-nums; }
-.rel-added { color: var(--muted); }
 .chan { justify-self: start; padding: 0 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 0.74rem; font-weight: 700; white-space: nowrap; }
 .chan-stable { color: var(--now); }
 .chan-preview { color: var(--soon); }
 .chan-planned { color: var(--accent); border-style: dashed; border-color: var(--accent); }
 .is-planned .rel-version { color: var(--muted); }
+/* Release chips: what each release added, one chip per feature, most impact first. A label that
+   wraps still stays a rounded box, though the build keeps each one short enough for a phone. */
+.rel-added { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.feat {
+  display: inline-flex;
+  align-items: baseline;    /* the label's baseline is the chip's, so the row lines up with the version */
+  gap: 5px;
+  max-width: 100%;
+  padding-block: 2px;
+  padding-inline: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 0.95em;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.3;
+}
+.feat span { min-width: 0; overflow-wrap: break-word; }
+.feat-icon {
+  flex: none;
+  align-self: center;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+[dir="rtl"] .feat-icon.is-mirrored { transform: scaleX(-1); }
+.is-planned .feat { border-style: dashed; background: none; }
 
 /* Only in a local preview build. */
 .local-preview { margin: 8px 0 0; padding: 5px 12px; border: 1px dashed var(--accent); border-radius: 10px; color: var(--accent); font-size: 0.84rem; text-align: center; }
@@ -322,17 +360,34 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
 
 .foot { padding-block: 18px; color: var(--muted); font-size: 0.8rem; }
 
+/* The header's Skills link, only in a build with the skills portal. On a phone it and the language
+   menu beside it become icon buttons, like the appearance switch. */
+@media (max-width: 480px) {
+  .nav-link, .lang-pick {
+    position: relative;
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    color: var(--text);
+  }
+  .nav-link[aria-current], .nav-link:hover, .lang-pick:hover { border-color: var(--accent); }
+  .lang-pick:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .lang-pick .lang { position: absolute; inset: 0; width: 100%; max-width: none; height: 100%; opacity: 0; cursor: pointer; }
+  .bar-icon { display: block; }
+  .nav-text { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
+
 @media (max-width: 400px) {
   .bar { gap: 8px; }
   .bar .btn-coffee { padding-inline: 10px; }
 }
 
 @media (max-width: 860px) {
-  :root { --stage-h: min(230px, 30svh); }
-  .stage { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding-block-start: var(--stage-h); min-height: 0; }
-  #tux { height: var(--stage-h); inset-block: 0 auto; }
-  .fallback { position: absolute; inset-block-start: 8px; inset-inline: 0; width: calc(var(--stage-h) - 16px); margin-inline: auto; }
-  .caps-a, .caps-b { grid-column: auto; grid-row: auto; align-items: stretch; gap: 6px; }
   .cap { padding: 4px 9px; font-size: 0.8rem; border-radius: 11px; }
   .examples { grid-template-columns: minmax(0, 1fr); }
   .versions .needs { display: none; }
@@ -340,6 +395,7 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   .caps-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .caps-row .cap span { overflow-wrap: anywhere; }     /* a long word, such as Configurações, at 320 px */
   .rel-added { grid-column: 1 / -1; }
+  .feat { font-size: 0.8rem; }
   .support { flex-direction: column; align-items: stretch; }
 }
 
@@ -351,3 +407,228 @@ h2 { font-size: clamp(1.25rem, 4.6vw, 1.7rem); font-weight: 700; }
   .ticker-list { flex: 0 1 auto; flex-wrap: wrap; justify-content: center; gap: 8px 26px; min-width: 0; animation: none; }
   .ticker-list[aria-hidden="true"] { display: none; }
 }
+
+/* ==== Hero background: the themes behind the title ==== */
+/* The shader runs on under the translucent header and fades out into the page at the bottom. */
+#tux, .fallback {
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 72px), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 72px), transparent);
+}
+/* Under the header it fades in, as it fades out at the foot: a figure's top is a soft tint in the
+   glass, not a smudge cut off at the header's line. */
+main > .hero:first-child #tux, main > .hero:first-child .fallback {
+  -webkit-mask-image: linear-gradient(transparent, #000 var(--header-h), #000 calc(100% - 72px), transparent);
+  mask-image: linear-gradient(transparent, #000 var(--header-h), #000 calc(100% - 72px), transparent);
+}
+/* A calm area behind the words, soft at its edges so the theme shows all round, and a halo on
+   each line, so they read on every theme in either mode. */
+.hero-copy::before {
+  content: "";
+  position: absolute;
+  inset: 6px -56px -30px;     /* not above the name, where a figure's eyes peek out */
+  z-index: -1;
+  background: radial-gradient(closest-side, color-mix(in srgb, var(--bg) 66%, transparent) 45%,
+    color-mix(in srgb, var(--bg) 40%, transparent) 78%, transparent);
+  pointer-events: none;
+}
+@media (prefers-reduced-transparency: reduce) {
+  .hero-copy::before { background: radial-gradient(closest-side, color-mix(in srgb, var(--bg) 88%, transparent) 60%, transparent); }
+}
+.hero-copy { --halo: 0 0 1px var(--bg), 0 0 3px var(--bg), 0 0 6px var(--bg), 0 0 12px var(--bg); }
+.hero h1, .tagline { text-shadow: var(--halo); }
+/* The scanner is the one theme that puts black right behind the name: there the name is light,
+   with a dark halo, in either mode. With the shader it turns as the bar fades in and out (the
+   script sets .ink-light); the still drawing goes by the theme. */
+.hero h1 { transition: color .25s, text-shadow .25s; }
+.has-gl .hero.ink-light h1,
+:root:not(.has-gl) .hero[data-theme="scanner"] h1 { color: #f1f2f7; text-shadow: 0 0 1px #07080d, 0 0 3px #07080d, 0 0 6px #07080d, 0 0 12px #07080d; }
+.hero .tagline { color: var(--text); }
+/* The small lines under the button get a calm pill of their own: on a bright or busy part of a
+   theme a halo isn't enough for text this size. Nearly solid, with no blur: the canvas behind them
+   redraws every frame, and a blur would be redone with it, for little a reader would see. */
+.hero .dl-meta, .hero .dl-preview, .hero .pick {
+  width: fit-content;
+  margin-inline: auto;
+  padding: 1px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+}
+.hero .dl-meta { margin-block-start: 8px; }
+.hero .dl-preview { margin-block-start: 4px; }
+.hero .pick { margin-block-start: 6px; padding-inline-end: 4px; }
+/* The claims, where a band runs behind them on a wide screen: nearly solid, so the small Now and
+   Soon keep 4.5:1 over a ribbon, which still shows through faintly. */
+.hero .cap { background: color-mix(in srgb, var(--panel) 94%, transparent); }
+@media (prefers-reduced-transparency: reduce) {
+  .hero .dl-meta, .hero .dl-preview, .hero .pick { background: var(--bg); }
+  .hero .cap { background: var(--panel); }
+}
+
+/* Without WebGL: a still drawing of each theme in CSS, where the script places its shader. Without
+   script nothing places it, so it is centred, peeking over the name and ending above the claims. */
+.fallback::before {
+  content: "";
+  position: absolute;
+  left: var(--actor-left, calc(50% - min(150px, 34vw)));
+  top: var(--actor-top, calc(var(--header-h) - 12px));
+  width: var(--actor-width, min(300px, 68vw));
+  height: var(--actor-height, min(300px, 68vw));
+}
+.hero[data-theme="tux"] .fallback::before {
+  background:
+    radial-gradient(2.3% 3.2% at 45.6% 29.5%, #111 90%, #0000),
+    radial-gradient(2.3% 3.2% at 54.4% 29.5%, #111 90%, #0000),
+    radial-gradient(5.4% 7.6% at 44.6% 28%, #fff 92%, #0000),
+    radial-gradient(5.4% 7.6% at 55.4% 28%, #fff 92%, #0000),
+    radial-gradient(10% 4.6% at 50% 38.5%, #f6a51f 92%, #0000),
+    radial-gradient(13% 6% at 37% 91%, #f39a1b 92%, #0000),
+    radial-gradient(13% 6% at 63% 91%, #f39a1b 92%, #0000),
+    radial-gradient(21% 28% at 50% 64%, #f4f1e8 95%, #0000),
+    radial-gradient(18.5% 17.5% at 50% 30%, #15171f 96%, #0000),
+    radial-gradient(29% 37% at 50% 62%, #15171f 96%, #0000),
+    radial-gradient(19.5% 18.5% at 50% 30%, #3a4055 96%, #0000),
+    radial-gradient(30% 38% at 50% 62%, #3a4055 96%, #0000);
+}
+.hero[data-theme="orb"] .fallback::before {
+  background:
+    radial-gradient(26% 18% at 40% 30%, #ffffff2e, #0000),
+    radial-gradient(42% 20% at 50% 50%, #0000 78%, #6fd3ffcc 86%, #d96bffcc 93%, #0000),
+    radial-gradient(closest-side, #0c0e1c 72%, #3b2a66 75%, #0000 77%),
+    radial-gradient(closest-side, #6fd3ff38, #d96bff1c 85%, #0000);
+}
+.hero[data-theme="scanner"] .fallback::before {
+  border-radius: 6.7% / 28.6%;
+  background:
+    linear-gradient(90deg, #000d, #0000 34% 66%, #000d) center / 80% 29% no-repeat,
+    repeating-linear-gradient(90deg, #ff2a12 0 3.6%, #1a0302 3.6% 5.88%) center / 80% 29% no-repeat,
+    linear-gradient(#060506, #060506) center / 88% 49% no-repeat,
+    linear-gradient(#1d1d22, #08080a);
+  box-shadow: 0 0 60px 4px #ff2a1226;
+}
+.hero[data-theme="waves"] .fallback::before {
+  --wave: light-dark(#1a4fb099, #cfe6ffcc);
+  --wave-dim: light-dark(#1a4fb055, #8fb8ef77);
+  background:
+    radial-gradient(120% 70% at 22% 128%, #0000 98.7%, var(--wave) 99.3%, #0000),
+    radial-gradient(130% 78% at 74% 138%, #0000 98.7%, var(--wave) 99.3%, #0000),
+    radial-gradient(150% 66% at 50% 126%, #0000 98.8%, var(--wave) 99.4%, #0000),
+    radial-gradient(110% 84% at 40% 146%, #0000 98.6%, var(--wave-dim) 99.3%, #0000),
+    radial-gradient(140% 90% at 62% 154%, #0000 98.6%, var(--wave-dim) 99.3%, #0000),
+    radial-gradient(130% 60% at 50% 112%, light-dark(#1a4fb014, #6f9fe62e), #0000 70%);
+}
+
+/* Narrower than the claims either side can sit: they go under the words, two to a row. */
+@media (max-width: 1100px) {
+  :root { --hero-h: 0px; }
+  .hero-in { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 6px; max-width: 800px; }
+  .hero-copy { grid-column: 1 / -1; grid-row: auto; padding-block: 28px 18px; }
+  .caps-a, .caps-b { grid-column: auto; grid-row: auto; align-items: stretch; gap: 6px; }
+  .hero-copy::before { inset: 14px -16px -10px; }
+  .fallback::before { top: var(--actor-top, 0px); }     /* the name sits higher here: his eyes still peek over it */
+}
+/* ==== end of hero background ==== */
+
+/* ==== Accordion sections and their calls to action: start ==================================== */
+/* Each section after the ticker folds under its heading and ends with a call to action. Without
+   script every section stays open and shows no chevron, since nothing could fold it. The fold
+   animates the panel's one grid row between 0fr and 1fr; reduced motion and print skip it. */
+.acc { padding-block: 0; }
+.wrap:has(> .ticker) + .acc { margin-block-start: 6px; }
+.acc + .acc .acc-head { border-block-start: 1px solid var(--line); }
+.acc-head { position: relative; display: flex; align-items: center; gap: 12px; min-height: 54px; padding-block: 8px; }
+.acc-fit { flex: 1 1 0; min-width: 0; }     /* the h2's own box, so fitHeadings measures the room beside the chevron */
+.acc-toggle {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: start;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.acc-toggle::after { content: ""; position: absolute; inset: 0 -8px; border-radius: 12px; }    /* the whole row folds, chevron included */
+.acc-toggle:focus-visible { outline: none; }
+.acc-toggle:focus-visible::after { outline: 2px solid var(--accent); outline-offset: 2px; }
+.acc-chev {
+  flex: none;
+  display: none;
+  width: 34px;
+  height: 34px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 280ms cubic-bezier(.2, .7, .2, 1);
+}
+.has-acc .acc-chev { display: block; }
+.acc:not(.is-closed) .acc-chev { transform: rotate(180deg); }
+/* Only where a pointer hovers: a touch screen keeps :hover after a tap, which would look stuck. */
+@media (hover: hover) {
+  .acc-head:hover .acc-chev { border-color: var(--accent); stroke: var(--accent); }
+}
+
+.acc-panel { display: grid; grid-template-rows: 1fr; transition: grid-template-rows 280ms cubic-bezier(.2, .7, .2, 1); }
+.acc-panel[hidden]:not([hidden="until-found"]) { display: none; }
+.acc.is-closed .acc-panel { grid-template-rows: 0fr; }
+/* Clips while folding. It reaches 6px past the text, so focus rings at the edges still show. */
+.acc-inner { min-height: 0; overflow: hidden; margin-inline: -6px; padding-inline: 6px; }
+.acc-instant .acc-panel, .acc-instant .acc-chev { transition: none; }
+
+.acc-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-block: 14px 16px;      /* margins, not padding: padding would stay showing when folded */
+  padding-block: 12px;
+  padding-inline: 16px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+/* The last section is followed by the Donate card, whose own margin is the gap, open or closed. */
+.acc:has(+ .wrap > .support) .acc-cta { margin-block-end: 0; }
+.acc-cta p { margin: 0; font-weight: 650; text-wrap: balance; }     /* no word left alone on a line */
+.acc-cta p span { display: inline-block; }     /* two sentences break between them, not inside one */
+.acc-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.btn-cta {
+  min-height: 44px;
+  padding-inline: 18px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(100deg, var(--brand-1), var(--brand-2));
+  color: #08090f;
+  font-size: 0.98rem;
+  font-weight: 750;
+}
+.btn-cta:hover { box-shadow: 0 0 0 2px var(--text); }
+.btn-cta-alt { background: var(--text); color: var(--bg); }
+.btn-cta-alt:hover { box-shadow: 0 0 0 2px var(--accent); }
+/* As tall as the button beside it, so it is as easy to tap. */
+.acc-more { display: inline-flex; align-items: center; min-height: 44px; padding-inline: 6px; font-size: 0.9rem; font-weight: 600; }
+
+@media (max-width: 560px) {
+  .acc-cta { flex-direction: column; align-items: stretch; padding-inline: 12px; text-align: center; }
+  .acc-actions { justify-content: center; }
+  .acc-actions .btn-cta { flex: 1 1 auto; }
+}
+@media (max-width: 340px) {
+  .btn-cta { padding-inline: 12px; font-size: 0.92rem; }     /* the longest labels stay on one line */
+}
+@media (prefers-reduced-motion: reduce) {
+  .acc-panel, .acc-chev { transition: none; }
+}
+@media print {
+  .acc .acc-panel, .acc .acc-panel[hidden] { display: block; content-visibility: visible; }
+  .acc .acc-chev, .acc .acc-cta { display: none; }
+}
+/* ==== Accordion sections and their calls to action: end ====================================== */

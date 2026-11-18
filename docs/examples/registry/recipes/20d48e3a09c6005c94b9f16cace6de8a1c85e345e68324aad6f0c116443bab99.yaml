@@ -1,0 +1,9 @@
+id: io.github.example-bo.bluetooth
+name: Bluetooth page
+description: Opens the Bluetooth page of Settings
+version: "1.0.0"
+permissions: {}
+actions:
+  bluetooth.open:
+    description: Open the Bluetooth settings, to pair headphones or a speaker
+    open: { settings: Bluetooth }

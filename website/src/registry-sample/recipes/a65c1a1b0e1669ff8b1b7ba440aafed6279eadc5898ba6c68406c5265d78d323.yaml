@@ -1,0 +1,9 @@
+id: io.github.example-bo.sound
+name: Sound page
+description: Opens the Sound page of Settings
+version: "1.0.0"
+permissions: {}
+actions:
+  sound.open:
+    description: Open the Sound settings, to pick a speaker or a microphone
+    open: { settings: Sound }
