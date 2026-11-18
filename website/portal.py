@@ -1,18 +1,20 @@
 """The skills portal: browse, search and a page per shared skill, built from what the registry
-publishes (docs/REGISTRY-FORMAT.md): index.json, revocations.json and recipes/<sha256>.yaml.
+publishes (docs/REGISTRY-FORMAT.md): index.json and revocations.json with their signatures, and
+recipes/<sha256>.yaml.
 
-Everything in it is a stranger's text. The index is checked against the format and refused whole
-if anything doesn't fit, each recipe must have the size and hash the index gives, and every string
-is escaped into the page here. No script builds markup from it. Recipes go through Tux's own
-loader, so what a page says an action does is what Tux would do with that file.
+Everything in it is a stranger's text, so the portal takes only what Tux would, by Tux's own code:
+tuxistant/registry.py checks both files' signatures and every field, finds the revocations in
+effect, and checks each version that isn't revoked as Tux does before installing it. A version
+Tux's loader refuses keeps its page, which says so; anything else that fails stops the build. Every
+string is escaped into the page here, and no script builds markup from it. Logos aren't shown, as
+Tux shows none yet.
 """
 import difflib
 import hashlib
 import html
-import json
-import re
 import sys
 import tempfile
+import time
 import unicodedata
 import urllib.parse
 from pathlib import Path
@@ -22,303 +24,118 @@ import yaml
 REPO = Path(__file__).resolve().parent.parent
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
-from tuxistant import apps, recipes  # noqa: E402
-from tuxistant.skillhost import HOST  # noqa: E402
-from tuxistant.skills import risk_of  # noqa: E402
+from tuxistant import apps, desktop, recipes, registry  # noqa: E402
 
 # The registry repo's name waits for the owner (REGISTRY.md, "Not decided yet"). This is the
 # suggested one, and the report form's field ids are this page's guess until the form exists.
 REGISTRY_REPO = "BuenGenio/tuxistant-skills"
 REPORT_TEMPLATE = "report.yml"
-MAX_INDEX = 4 << 20
-MAX_REVOCATIONS = 1 << 20
-MAX_RECIPE = 65536
-MAX_HOSTS = recipes.MAX_HOSTS
-HIDDEN = ("Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp")
-KEY_TYPES = ("ssh-ed25519", "sk-ssh-ed25519@openssh.com", "ecdsa-sha2-nistp256",
-             "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521", "sk-ecdsa-sha2-nistp256@openssh.com",
-             "ssh-rsa")
-LOGIN = r"[a-z0-9]+(?:-[a-z0-9]+)*"
-SKILL_NAME = r"[a-z0-9][a-z0-9-]{0,39}"
-SKILL_ID = re.compile(rf"io\.github\.({LOGIN})\.({SKILL_NAME})")
-TAG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
-TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
-DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
-VERSION = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]{0,39}")
-SHA256 = re.compile(r"[0-9a-f]{64}")
-COMMIT = re.compile(r"[0-9a-f]{40}")
-FINGERPRINT = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
-KEY = re.compile(rf"(?:{'|'.join(map(re.escape, KEY_TYPES))}) [A-Za-z0-9+/]+={{0,3}}")
-REPORT = re.compile(r"https://github\.com/[A-Za-z0-9-]+/[A-Za-z0-9._-]+/issues/[0-9]+")
-LICENCES = ("MIT", "CC0-1.0")
-INDEX_FIELDS = {"format", "seq", "date", "commit", "moderation_keys", "categories", "authors",
-                "skills", "revocations", "lifted"}
-SKILL_FIELDS = {"id", "author", "name", "summary", "tags", "licence", "links", "versions"}
-VERSION_FIELDS = {"version", "date", "sha256", "size", "key", "sig", "permissions", "risk"}
-REVOCATION_FIELDS = {"id", "kind", "scope", "reason", "date", "actor", "report"}
-LIFT_FIELDS = {"id", "reason", "date", "actor", "report"}
+SAMPLE_SIGNERS = "registry_allowed_signers"     # the sample's own throwaway registry key
+HIDDEN = registry.HIDDEN
 KIND_WORDS = {"suspend": "Suspended", "ban": "Banned"}
 RISK_WHY = {
-    "low": "It reaches no network: it can only open something on your computer or say a sentence.",
+    "low": "It reaches no network: it can only open something on your computer, change a "
+           "desktop setting or say a sentence.",
     "medium": "It sends requests over the network, to {hosts} and nowhere else.",
+}
+DESKTOP_DOES = {
+    "notify": "Shows a notification with a line written in the recipe, under a title that "
+              "names it.",
+    "do_not_disturb": "Turns Do Not Disturb {turn}.",
+    "night_light": "Turns Night Light {turn}.",
+    "dark_style": "Turns dark style {turn}.",
+    "lock_screen": "Locks the screen.",
 }
 
 esc = html.escape
 
 
 class Refused(ValueError):
-    """The registry's files don't fit the format, so no page is built from them."""
+    """The registry's files aren't what Tux would take, so no page is built from them."""
 
 
-# Checking the index
+# Reading the registry, as Tux does
 
-def _need(ok, what):
-    if not ok:
-        raise Refused(what)
-
-
-def _fields(value, fields, where):
-    _need(isinstance(value, dict) and set(value) == fields, f"{where} doesn't have exactly the "
-          f"fields {', '.join(sorted(fields))}")
+def is_sample(folder: Path) -> bool:
+    """The made-up registry this site uses until the real one exists."""
+    return (folder / "SAMPLE").is_file()
 
 
-def _match(pattern, value, where, longest=None):
-    _need(isinstance(value, str) and pattern.fullmatch(value)
-          and (longest is None or len(value) <= longest), f"{where} isn't in the right form")
-    return value
+def signers_for(folder: Path) -> Path:
+    """The registry key the index must be signed with: the one Tux ships, or for the sample its
+    own throwaway key, which Tux never ships."""
+    return folder / SAMPLE_SIGNERS if is_sample(folder) else registry.SHIPPED_SIGNERS
 
 
-def _text(value, longest, where):
-    """text(n) from the format: one line, nothing hidden, no < or >, no space at either end."""
-    _need(isinstance(value, str) and 0 < len(value) <= longest and value == value.strip()
-          and not any(unicodedata.category(c) in HIDDEN or c in "<>" for c in value),
-          f"{where} isn't one line of up to {longest} plain characters")
-    return value
+def _bytes(folder: Path, path: str, largest: int) -> bytes:
+    file = folder / path
+    if file.is_symlink() or not file.is_file():
+        raise Refused(f"{path} is missing")
+    with open(file, "rb") as handle:
+        data = handle.read(largest + 1)
+    if len(data) > largest:
+        raise Refused(f"{path} is bigger than Tux takes")
+    return data
 
 
-def _int(value, where, low=1, high=None):
-    _need(type(value) is int and value >= low and (high is None or value <= high),
-          f"{where} isn't a whole number in range")
-    return value
+def _reader(folder: Path):
+    """The fetch Tux's Registry is handed: files from the folder, never the network."""
+    def fetch(path: str, largest: int) -> bytes:
+        return _bytes(folder, path, largest)
+    return fetch
 
 
-def _login(value, where):
-    return _match(re.compile(LOGIN), value, where, 39)
+def load(folder: Path, signers: Path | None = None, clock=time.time) -> dict:
+    """The registry as the portal shows it: categories, and every skill with at least one version
+    that isn't revoked, newest update first. A skill whose current version Tux's loader refuses
+    keeps its page, for whoever follows a link or a report to it, but has no card in Browse."""
+    with tempfile.TemporaryDirectory(prefix="tux-portal-") as scratch:
+        scratch = Path(scratch)
+        tux = registry.Registry(scratch / "state", scratch / "skills", fetch=_reader(folder),
+                                signers=signers or signers_for(folder), clock=clock)
+        try:
+            index = tux.accept_index(
+                _bytes(folder, "index.json", registry.MAX_INDEX_BYTES),
+                _bytes(folder, "index.json.sig", registry.MAX_SIG_BYTES))
+            tux.accept_revocations(
+                _bytes(folder, "revocations.json", registry.MAX_REVOCATIONS_BYTES),
+                _bytes(folder, "revocations.json.sig", registry.MAX_SIG_BYTES))
+            shown = [skill for skill in (_skill(tux, folder, index, skill, scratch)
+                                         for skill in index["skills"]) if skill]
+        except registry.Refused as e:
+            raise Refused(str(e)) from None
+    shown.sort(key=lambda skill: (skill["current"]["date"], skill["id"]), reverse=True)
+    return {"categories": index["categories"], "skills": shown, "sample": is_sample(folder)}
 
 
-def _link(link, where):
-    _fields(link, {"title", "url"}, where)
-    _text(link["title"], 30, f"{where} title")
-    url = link["url"]
-    _need(isinstance(url, str) and url.startswith("https://") and len(url) <= 200
-          and not any(c.isspace() or unicodedata.category(c) in HIDDEN for c in url)
-          and "@" not in urllib.parse.urlsplit(url).netloc
-          and not any(c in url for c in "<>\"'`\\"), f"{where} isn't a plain https address")
+def _skill(tux, folder: Path, index: dict, skill: dict, scratch: Path) -> dict | None:
+    """A skill with each version as Tux sees it, or None when every version is revoked: hidden,
+    as in Browse."""
+    keys = {key["fingerprint"]: key["key"] for key in index["authors"][skill["author"]]["keys"]}
+    versions = [{**version, "revoked": tux.covering(skill["id"], version["version"],
+                                                    version["key"])}
+                for version in skill["versions"]]
+    if all(version["revoked"] for version in versions):
+        return None
+    for version in versions:
+        version.update(_recipe(folder, skill, version, scratch))
+        version["public_key"] = keys[version["key"]]
+        # Only what Tux would install: the check Browse runs, signature and all.
+        version["installable"] = bool(version["loaded"] and not version["revoked"])
+        if version["installable"]:
+            tux.check(skill["id"], version["version"])
+    current = next(version for version in reversed(versions) if not version["revoked"])
+    return {**skill, "versions": versions, "current": current,
+            "file_name": skill["id"].rsplit(".", 1)[1] + ".yaml"}
 
 
-def _categories(categories):
-    _need(isinstance(categories, list) and 1 <= len(categories) <= 30, "categories isn't a list")
-    seen_ids, seen_tags = set(), set()
-    for category in categories:
-        _fields(category, {"id", "name", "tags"}, "a category")
-        _match(TAG, category["id"], "a category id", 24)
-        _text(category["name"], 30, "a category name")
-        tags = category["tags"]
-        _need(isinstance(tags, list) and 1 <= len(tags) <= 30, "a category's tags isn't a list")
-        for tag in tags:
-            _need(isinstance(tag, str) and 2 <= len(tag) <= 24 and TAG.fullmatch(tag),
-                  "a tag isn't in the right form")
-            _need(tag not in seen_tags, f"the tag {tag} is in two categories")
-            seen_tags.add(tag)
-        _need(category["id"] not in seen_ids, "two categories share an id")
-        seen_ids.add(category["id"])
-    return seen_tags
-
-
-def _authors(authors):
-    _need(isinstance(authors, dict), "authors isn't an object")
-    keys = {}
-    for login, author in authors.items():
-        _login(login, "an author's login")
-        _fields(author, {"status", "keys"}, f"author {login}")
-        _need(author["status"] in ("active", "suspended", "banned"), f"{login} has no status")
-        _need(isinstance(author["keys"], list) and author["keys"], f"{login} has no keys")
-        for key in author["keys"]:
-            _fields(key, {"key", "fingerprint", "added", "removed"}, f"a key of {login}")
-            _match(KEY, key["key"], f"a key of {login}", 2000)
-            _match(FINGERPRINT, key["fingerprint"], f"a fingerprint of {login}")
-            _match(DAY, key["added"], f"a key date of {login}")
-            _need(key["removed"] is None or DAY.fullmatch(str(key["removed"])),
-                  f"a key date of {login} isn't a day")
-            keys[(login, key["fingerprint"])] = key["key"]
-    return keys
-
-
-def _version(version, where):
-    _fields(version, VERSION_FIELDS, where)
-    _match(VERSION, version["version"], f"{where} version")
-    _match(TIMESTAMP, version["date"], f"{where} date")
-    _match(SHA256, version["sha256"], f"{where} sha256")
-    _int(version["size"], f"{where} size", 1, MAX_RECIPE)
-    _match(FINGERPRINT, version["key"], f"{where} key")
-    _need(isinstance(version["sig"], str) and len(version["sig"]) <= 4096
-          and version["sig"].startswith("-----BEGIN SSH SIGNATURE-----\n")
-          and version["sig"].endswith("-----END SSH SIGNATURE-----\n"), f"{where} sig isn't one")
-    _permissions(version["permissions"], where)
-    _need(version["risk"] == risk_of(version["permissions"]),
-          f"{where} risk isn't what Tux works out")
-
-
-def _permissions(permissions, where):
-    """A recipe's: nothing, or 1 to 4 different host names. A host is shown on the page even when
-    Tux's loader refuses the file, so it is held to the loader's form here: a right-to-left
-    override or a line break in one would make the page say something else."""
-    _need(isinstance(permissions, dict) and set(permissions) <= {"network"},
-          f"{where} permissions aren't a recipe's")
-    if not permissions:
-        return
-    hosts = permissions["network"]
-    _need(isinstance(hosts, list) and 1 <= len(hosts) <= MAX_HOSTS
-          and all(isinstance(h, str) and len(h) <= 253 and HOST.fullmatch(h) for h in hosts)
-          and len(set(hosts)) == len(hosts),
-          f"{where} names hosts that aren't 1 to {MAX_HOSTS} different host names")
-
-
-def _skill(skill, tags, keys):
-    _fields(skill, SKILL_FIELDS, "a skill")
-    match = SKILL_ID.fullmatch(skill["id"]) if isinstance(skill["id"], str) else None
-    _need(match and len(skill["id"]) <= 100, "a skill id isn't io.github.<login>.<name>")
-    where = skill["id"]
-    _need(skill["author"] == match[1], f"{where} has an author that isn't in its id")
-    _text(skill["name"], 100, f"{where} name")
-    _text(skill["summary"], 140, f"{where} summary")
-    _need(isinstance(skill["tags"], list) and 1 <= len(skill["tags"]) <= 4
-          and len(set(skill["tags"])) == len(skill["tags"])
-          and all(isinstance(t, str) and t in tags for t in skill["tags"]),
-          f"{where} has tags that aren't in the list")
-    _need(skill["licence"] in LICENCES, f"{where} isn't MIT or CC0-1.0")
-    _need(isinstance(skill["links"], list) and len(skill["links"]) <= 3, f"{where} links")
-    for link in skill["links"]:
-        _link(link, f"a link of {where}")
-    _need(isinstance(skill["versions"], list) and skill["versions"], f"{where} has no versions")
-    seen = set()
-    for version in skill["versions"]:
-        _version(version, where)
-        _need(version["version"] not in seen, f"{where} lists a version twice")
-        _need((skill["author"], version["key"]) in keys,
-              f"{where} {version['version']} is signed with a key its author doesn't have")
-        seen.add(version["version"])
-
-
-def _scope(scope, kind, where):
-    _need(isinstance(scope, dict), f"{where} scope isn't an object")
-    if set(scope) == {"skill"} or set(scope) == {"skill", "versions"}:
-        _need(kind == "suspend", f"{where} bans a skill, and a ban is for an author or a key")
-        _need(isinstance(scope["skill"], str) and SKILL_ID.fullmatch(scope["skill"]),
-              f"{where} names a skill that isn't one")
-        if "versions" in scope:
-            versions = scope["versions"]
-            _need(isinstance(versions, list) and 1 <= len(versions) <= 50
-                  and all(isinstance(v, str) and VERSION.fullmatch(v) for v in versions),
-                  f"{where} versions")
-    elif set(scope) == {"author"}:
-        _login(scope["author"], f"{where} author")
-    elif set(scope) == {"key"}:
-        _match(FINGERPRINT, scope["key"], f"{where} key")
-    else:
-        raise Refused(f"{where} scope isn't one of the three forms")
-
-
-def _entry(entry, fields):
-    where = "a revocation" if fields is REVOCATION_FIELDS else "a lift"
-    _fields(entry, fields, where)
-    _int(entry["id"], f"{where} id")
-    _text(entry["reason"], 300, f"{where} reason")
-    _match(TIMESTAMP, entry["date"], f"{where} date")
-    _login(entry["actor"], f"{where} actor")
-    _need(entry["report"] is None or (isinstance(entry["report"], str) and len(entry["report"])
-                                      <= 200 and REPORT.fullmatch(entry["report"])),
-          f"{where} report isn't an issue address")
-    if fields is REVOCATION_FIELDS:
-        _need(entry["kind"] in KIND_WORDS, f"{where} kind")
-        _scope(entry["scope"], entry["kind"], where)
-    return entry
-
-
-def check_index(index):
-    _fields(index, INDEX_FIELDS, "index.json")
-    _need(index["format"] == 1, "index.json is a newer format than this site knows")
-    _int(index["seq"], "seq")
-    _match(TIMESTAMP, index["date"], "the index date")
-    _match(COMMIT, index["commit"], "the index commit")
-    _need(isinstance(index["moderation_keys"], list) and 1 <= len(index["moderation_keys"]) <= 3
-          and all(isinstance(k, str) and k.startswith("ssh-ed25519 ") and KEY.fullmatch(k)
-                  for k in index["moderation_keys"]), "moderation_keys")
-    tags = _categories(index["categories"])
-    keys = _authors(index["authors"])
-    _need(isinstance(index["skills"], list), "skills isn't a list")
-    for skill in index["skills"]:
-        _skill(skill, tags, keys)
-        _need(skill["author"] in index["authors"], f"{skill['id']} has no author entry")
-    ids = [skill["id"] for skill in index["skills"]]
-    _need(len(set(ids)) == len(ids), "two skills share an id")
-    for name, fields in (("revocations", REVOCATION_FIELDS), ("lifted", LIFT_FIELDS)):
-        _need(isinstance(index[name], list), f"{name} isn't a list")
-        for entry in index[name]:
-            _entry(entry, fields)
-    return keys
-
-
-def _read_json(file: Path, largest: int):
-    _need(file.is_file() and not file.is_symlink(), f"{file.name} is missing")
-    data = file.read_bytes()
-    _need(len(data) <= largest, f"{file.name} is too big")
-    try:
-        return json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise Refused(f"{file.name} isn't JSON") from None
-
-
-def _revocations(folder: Path, index) -> dict:
-    """In effect, by id: the index's entries, then any newer ones from revocations.json. As in
-    Tux, the first copy of an id stands, and only the index can lift one."""
-    entries = {}
-    extra = []
-    if (folder / "revocations.json").exists():
-        published = _read_json(folder / "revocations.json", MAX_REVOCATIONS)
-        _fields(published, {"format", "seq", "date", "revocations"}, "revocations.json")
-        _need(published["format"] == 1, "revocations.json is a newer format")
-        _need(isinstance(published["revocations"], list), "revocations.json revocations")
-        extra = [_entry(entry, REVOCATION_FIELDS) for entry in published["revocations"]]
-    for entry in index["revocations"] + extra:
-        entries.setdefault(entry["id"], entry)
-    lifted = {entry["id"] for entry in index["lifted"]}
-    return {key: entry for key, entry in entries.items() if key not in lifted}
-
-
-def covering(skill, version, revocations):
-    """The revocation in effect for this version, if any."""
-    for entry in revocations.values():
-        scope = entry["scope"]
-        if scope.get("skill") == skill["id"]:
-            if version["version"] in scope.get("versions", [version["version"]]):
-                return entry
-        elif scope.get("author") == skill["author"] or scope.get("key") == version["key"]:
-            return entry
-    return None
-
-
-# Reading the recipes
-
-def _recipe(folder: Path, skill, version, scratch: Path):
+def _recipe(folder: Path, skill: dict, version: dict, scratch: Path) -> dict:
     """The version's file, checked against the index, and what Tux's loader makes of it."""
-    file = folder / "recipes" / f"{version['sha256']}.yaml"
     where = f"{skill['id']} {version['version']}"
-    _need(file.is_file() and not file.is_symlink(), f"the file for {where} is missing")
-    data = file.read_bytes()
-    _need(len(data) == version["size"] and hashlib.sha256(data).hexdigest() == version["sha256"],
-          f"the file for {where} isn't the one the index names")
-    copy = scratch / f"{skill['id'].rsplit('.', 1)[1]}.yaml"
+    data = _bytes(folder, f"recipes/{version['sha256']}.yaml", registry.MAX_RECIPE_BYTES)
+    if len(data) != version["size"] or hashlib.sha256(data).hexdigest() != version["sha256"]:
+        raise Refused(f"the file for {where} isn't the one the index names")
+    copy = scratch / f"{skill['id']}.yaml"
     copy.write_bytes(data)
     text = data.decode("utf-8", errors="replace")
     info = {"text": text, "bytes": data, "loaded": None, "problem": "", "raw": None}
@@ -327,42 +144,12 @@ def _recipe(folder: Path, skill, version, scratch: Path):
     except ValueError as e:
         info["problem"] = str(e)
         return info
-    _need(loaded["id"] == skill["id"] and loaded["version"] == version["version"]
-          and loaded["permissions"] == version["permissions"],
-          f"{where} isn't what Tux's loader reads from its file")
+    if (loaded["id"] != skill["id"] or loaded["version"] != version["version"]
+            or loaded["permissions"] != version["permissions"]):
+        raise Refused(f"{where} isn't what Tux's loader reads from its file")
     info["loaded"] = loaded
     info["raw"] = yaml.safe_load(text)      # the loader has already refused aliases and the rest
     return info
-
-
-def is_sample(folder: Path) -> bool:
-    """The made-up registry this site uses until the real one exists."""
-    return (folder / "SAMPLE").is_file()
-
-
-def load(folder: Path) -> dict:
-    """The registry as the portal shows it: categories, and every skill with at least one version
-    that isn't revoked, newest update first. A skill whose current version Tux's loader refuses
-    keeps its page, for whoever follows a link or a report to it, but has no card in Browse."""
-    index = _read_json(folder / "index.json", MAX_INDEX)
-    keys = check_index(index)
-    revocations = _revocations(folder, index)
-    shown = []
-    with tempfile.TemporaryDirectory() as scratch:
-        for skill in index["skills"]:
-            versions = [{**version, "revoked": covering(skill, version, revocations)}
-                        for version in skill["versions"]]
-            if all(version["revoked"] for version in versions):
-                continue        # suspended or banned: hidden, as in Browse
-            for version in versions:
-                version.update(_recipe(folder, skill, version, Path(scratch)))
-                version["public_key"] = keys[(skill["author"], version["key"])]
-            current = next(v for v in reversed(versions) if not v["revoked"])
-            shown.append({**skill, "versions": versions, "current": current,
-                          "file_name": skill["id"].rsplit(".", 1)[1] + ".yaml"})
-    shown.sort(key=lambda skill: (skill["current"]["date"], skill["id"]), reverse=True)
-    return {"categories": index["categories"], "skills": shown,
-            "sample": is_sample(folder)}
 
 
 # Words
@@ -409,12 +196,34 @@ def settings_title(stem: str) -> str:
     return stem
 
 
+def desktop_words(plan) -> tuple:
+    """A desktop action, and whether Tux asks first, by the entry's own card rule in
+    tuxistant/desktop.py, for each value the model can give it."""
+    entry = desktop.DESKTOP.get(plan.entry)
+    turn = dict(plan.settings).get("turn")
+    turns = (True, False) if isinstance(turn, str) else (turn,)     # a choice, or fixed
+    word = "on or off, as the model chooses" if len(turns) == 2 else "on" if turn else "off"
+    does = DESKTOP_DOES.get(plan.entry, f"Does Tux's desktop action {plan.entry}.")
+    cards = [entry.card({"turn": value}, plan.skill) is not None for value in turns] if entry \
+        else []
+    if cards and all(cards):
+        card = "Tux shows you a card first, every time."
+    elif cards == [True, False]:
+        card = "Tux shows you a card first when it turns it on."
+    else:
+        card = "No card."
+    return does.format(turn=word), card
+
+
 def effect_words(plan, raw) -> tuple:
     """What the action does, and whether Tux asks first, as SKILLS.md "What needs a card" says."""
     if plan.effect == "open" and plan.page:
         return f"Opens the {settings_title(plan.page)} page of Settings.", "No card."
     if plan.effect == "open":
-        return f"Opens the app {plan.app}.", "No card for an app in the app grid."
+        return (f"Opens the app {plan.app}.", "No card for an app installed as a package. One "
+                "added in your home folder shows a card with the command it runs.")
+    if plan.effect == "desktop":
+        return desktop_words(plan)
     if plan.effect == "say":
         return "Says a sentence written in the recipe.", "No card."
     method = plan.effect.upper()
@@ -522,21 +331,21 @@ def card_html(skill, categories) -> str:
             f'<div class="chips">{tag_chips(skill["tags"], "")}</div></li>')
 
 
-def browse_html(registry) -> str:
-    categories = registry["categories"]
+def browse_html(shown) -> str:
+    categories = shown["categories"]
     cats = "".join(
         f'<div class="cat"><a class="cat-name" href="?category={esc(c["id"])}" '
         f'data-filter="category:{esc(c["id"])}">{esc(c["name"])}</a>'
         + "".join(f'<a class="chip" href="?tag={esc(t)}" data-filter="tag:{esc(t)}">{esc(t)}</a>'
                   for t in c["tags"]) + "</div>"
         for c in categories)
-    listed = [skill for skill in registry["skills"] if skill["current"]["loaded"]]
+    listed = [skill for skill in shown["skills"] if skill["current"]["installable"]]
     cards = "".join(card_html(skill, categories) for skill in listed)
     count = len(listed)
     return f"""<section class="portal wrap" aria-labelledby="skills-title">
   <h1 id="skills-title">Skills</h1>
-  <p class="lede">{LEDE[registry["sample"]]}</p>
-  {SAMPLE_NOTE if registry["sample"] else ""}
+  <p class="lede">{LEDE[shown["sample"]]}</p>
+  {SAMPLE_NOTE if shown["sample"] else ""}
   <div class="finder" id="finder" hidden><label class="visually-hidden" for="skill-search">Search skills</label><input id="skill-search" type="search" placeholder="Search skills" autocomplete="off" spellcheck="false"></div>
   <nav class="cats" aria-label="Categories and tags"><a class="cat-name" href="./" data-filter="" aria-current="true">All</a>{cats}</nav>
   <h2 class="count" id="skill-count" aria-live="polite">{count} skill{"" if count == 1 else "s"}</h2>
@@ -569,7 +378,7 @@ def by_hand_html(skill, current) -> str:
     principal = f"io.github.{skill['author']}"
     commands = (f"echo '{current['sha256']}  {name}' | sha256sum -c\n"
                 f"echo '{principal} {current['public_key']}' > {signers}\n"
-                f"ssh-keygen -Y verify -f {signers} -I {principal} -n tuxistant-recipe "
+                f"ssh-keygen -Y verify -f {signers} -I {principal} -n {registry.RECIPE_NS} "
                 f"-s {name}.sig < {name}\n"
                 f"mv {name} ~/.local/share/tuxistant/skills/")
     file = f'../recipes/{esc(current["sha256"])}.yaml'
@@ -582,7 +391,7 @@ def by_hand_html(skill, current) -> str:
 def install_html(skill, current, sample) -> str:
     """Install steps. The sample's files are made up, so its pages offer neither them nor the
     commands, and nothing is offered for a file Tux's loader refuses."""
-    if not current["loaded"]:
+    if not current["installable"]:
         return ""
     by_hand = ('<li><span class="tag tag-soon">Soon</span> By hand: the recipe, its signature and '
                'the commands that check them.</li>' if sample else by_hand_html(skill, current))
@@ -643,7 +452,7 @@ def skill_html(skill, sample) -> str:
            if loaded else f'<span class="revoked">{esc(REFUSED + current["problem"])}</span>')
     # The sample has nothing to install or report, so its pages have neither button.
     buttons = [] if sample else (
-        (['<a class="btn" href="#install">Install</a>'] if loaded else [])
+        (['<a class="btn" href="#install">Install</a>'] if current["installable"] else [])
         + [f'<a class="btn" href="{esc(report_url(skill, current))}" '
            'rel="nofollow noopener">Report this skill</a>'])
     links = "".join(f'<a href="{esc(link["url"])}" rel="nofollow noopener ugc">'
@@ -682,27 +491,28 @@ def skill_html(skill, sample) -> str:
 </article>"""
 
 
-def build(dist: Path, folder: Path, shell) -> int:
-    """Writes skills/, skills/<id>/ and skills/recipes/. shell(title, description, depth, body,
-    sample) wraps a body in the site's page. Returns how many skill pages it wrote."""
-    registry = load(folder)
+def build(dist: Path, folder: Path, shell, signers: Path | None = None) -> int:
+    """Writes skills/, skills/<id>/ and, for a real registry, skills/recipes/. shell(title,
+    description, depth, body, sample) wraps a body in the site's page. The index must be signed
+    by the registry key in signers, which is the one Tux ships unless told otherwise, or the
+    sample's own. Returns how many skill pages it wrote."""
+    shown = load(folder, signers)
     out = dist / "skills"
     out.mkdir(parents=True)
-    sample = registry["sample"]
+    sample = shown["sample"]
     (out / "index.html").write_text(shell(
-        "Skills", LEDE[sample].split(". ")[0] + ".", 1, browse_html(registry), sample))
-    for skill in registry["skills"]:
+        "Skills", LEDE[sample].split(". ")[0] + ".", 1, browse_html(shown), sample))
+    for skill in shown["skills"]:
         page = out / skill["id"] / "index.html"
         page.parent.mkdir()
         page.write_text(shell(skill["name"], skill["summary"], 2, skill_html(skill, sample),
                               sample))
-        # Only versions Tux would install: not a revoked one, nor one its loader refuses.
-        served = [] if sample else [v for v in skill["versions"]
-                                    if not v["revoked"] and v["loaded"]]
+        # Only versions Tux would install, and never the sample's.
+        served = [] if sample else [v for v in skill["versions"] if v["installable"]]
         for version in served:
             target = out / "recipes" / f"{version['sha256']}.yaml"
             target.parent.mkdir(exist_ok=True)
             target.write_bytes(version["bytes"])
             # The signature the index carries, which is the one Tux checks.
             target.with_name(target.name + ".sig").write_text(version["sig"])
-    return len(registry["skills"])
+    return len(shown["skills"])

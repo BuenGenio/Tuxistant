@@ -1,5 +1,8 @@
 """The skills portal. Everything in the registry is a stranger's text, so the tests feed it hostile
-and broken indexes and check what reaches the page; the sample registry shows the rest."""
+and broken indexes and check what reaches the page; the sample registry shows the rest. The portal
+takes only what Tux would, signatures included, so a copy a test changes is signed again with keys
+made for this run and thrown away. Skipped without ssh-keygen, as the portal can't be built
+without it."""
 import base64
 import contextlib
 import copy
@@ -9,14 +12,23 @@ import io
 import json
 import re
 import shutil
+import sys
 import tempfile
 import unittest
 import urllib.parse
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from tuxistant import registry as tux_registry  # noqa: E402
+
 SAMPLE = ROOT / "website/src/registry-sample"
 TIDES = "io.github.example-ada.tides"
+LAMP = "io.github.example-cy.desk-lamp"
+FUEL = "io.github.example-dee.fuel"
+WEATHER = "io.github.example-eve.weather-now"
+KEYS = None     # this run's throwaway keys, by name, for signing a changed copy
 
 
 def _module(name, path):
@@ -28,10 +40,21 @@ def _module(name, path):
 
 build = _module("site_build", ROOT / "website/build.py")
 portal = build._portal()
+sample_registry = _module("site_sample_registry", ROOT / "website/sample_registry.py")
+
+
+def setUpModule():
+    global KEYS
+    if not tux_registry.keygen():
+        raise unittest.SkipTest("ssh-keygen isn't installed")
+    folder = tempfile.TemporaryDirectory(prefix="tux-portal-keys-")
+    unittest.addModuleCleanup(folder.cleanup)
+    KEYS = sample_registry.Keys(Path(folder.name))
 
 
 class Registry:
-    """A copy of the sample registry that a test can change."""
+    """A copy of the sample registry that a test can change, signed with this run's keys, so the
+    index a test changes already names them."""
 
     def __init__(self, test):
         folder = tempfile.TemporaryDirectory()
@@ -39,6 +62,7 @@ class Registry:
         self.root = Path(folder.name)
         self.folder = self.root / "registry"
         shutil.copytree(SAMPLE, self.folder)
+        sample_registry.resign(self.folder, KEYS)
         self.index = json.loads((self.folder / "index.json").read_text())
         self.revocations = json.loads((self.folder / "revocations.json").read_text())
 
@@ -62,14 +86,25 @@ class Registry:
         (self.folder / "SAMPLE").unlink()
         return self
 
-    def build(self):
-        (self.folder / "index.json").write_text(json.dumps(self.index))
-        (self.folder / "revocations.json").write_text(json.dumps(self.revocations))
+    def build(self, signed="all", own_key=True):
+        """The portal's pages from the copy as the test left it: signed again, or only its index
+        signed again, or neither, and checked against the copy's own registry key, as Tux checks
+        an index against the key it ships, or else against the key Tux really ships."""
+        # Written as the sample is, so a file the test left alone keeps its signature.
+        (self.folder / "index.json").write_bytes(sample_registry.dumped(self.index))
+        (self.folder / "revocations.json").write_bytes(sample_registry.dumped(self.revocations))
+        if signed == "all":
+            sample_registry.resign(self.folder, KEYS)
+        elif signed == "index":
+            data = (self.folder / "index.json").read_bytes()
+            (self.folder / "index.json.sig").write_bytes(
+                KEYS.sign("registry", tux_registry.INDEX_NS, data))
         dist = self.root / "dist"
         shutil.rmtree(dist, ignore_errors=True)
         dist.mkdir()
         shell = build.portal_shell(build.load_languages()["en"], "default-src 'none'")
-        portal.build(dist, self.folder, shell)
+        signers = self.folder / "registry_allowed_signers" if own_key else None
+        portal.build(dist, self.folder, shell, signers=signers)
         return dist / "skills"
 
 
@@ -84,9 +119,10 @@ class BuiltSite(unittest.TestCase):
         cls.dist = Path(folder.name) / "dist-portal"
         saved = build.DIST, build.DIST_PORTAL
         build.DIST, build.DIST_PORTAL = cls.plain, cls.dist
+        registry = cls.registry_in(Path(folder.name))
         try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                build.main(["--portal", str(cls.registry_in(Path(folder.name)))])
+            with contextlib.redirect_stdout(io.StringIO()), cls.shipped(registry):
+                build.main(["--portal", str(registry)])
         finally:
             build.DIST, build.DIST_PORTAL = saved
         cls.skills = cls.dist / "skills"
@@ -96,6 +132,11 @@ class BuiltSite(unittest.TestCase):
     @classmethod
     def registry_in(cls, folder):
         return SAMPLE
+
+    @classmethod
+    def shipped(cls, registry):
+        """The registry key Tux ships, as the build checks a real registry's index against it."""
+        return contextlib.nullcontext()
 
     def page(self, skill_id=None):
         return (self.skills / (skill_id or "") / "index.html").read_text()
@@ -114,10 +155,43 @@ class BuiltPortal(BuiltSite):
         self.assertEqual((self.dist / "robots.txt").read_text(), "User-agent: *\nDisallow: /\n")
         self.assertIn("dist-portal/", (ROOT / "website/.gitignore").read_text().split())
 
+    def test_the_sample_is_what_tux_takes(self):
+        """Tux's own Registry, as Browse runs it: the signed index and revocations are taken, and
+        every version no revocation covers passes the check Tux makes before installing it."""
+        with tempfile.TemporaryDirectory() as folder:
+            tux = tux_registry.Registry(Path(folder) / "state", Path(folder) / "skills",
+                                        fetch=lambda path, _largest: (SAMPLE / path).read_bytes(),
+                                        signers=SAMPLE / "registry_allowed_signers")
+            self.assertEqual(tux.refresh(), [])
+            self.assertEqual(tux.problems, {})
+            self.assertEqual([entry["id"] for entry in tux.in_effect()], [1, 2, 4])
+            self.assertEqual(tux.index()["lifted"], [3])
+            checked = set()
+            for skill in tux.index()["skills"]:
+                for version in skill["versions"]:
+                    if not tux.covering(skill["id"], version["version"], version["key"]):
+                        tux.check(skill["id"], version["version"])
+                        checked.add((skill["id"], version["version"]))
+            self.assertEqual(len(checked), 7)
+            self.assertNotIn((TIDES, "1.0.0"), checked)
+            self.assertNotIn((LAMP, "1.0"), checked, "suspended by revocations.json alone")
+
+    def test_no_real_key_signs_the_sample(self):
+        signers = (SAMPLE / "registry_allowed_signers").read_text()
+        self.assertTrue(signers.startswith("# SAMPLE. Not the registry's key: a throwaway key"))
+        key = signers.splitlines()[-1].split(" ", 2)[2]
+        shipped = (ROOT / "tuxistant/registry_allowed_signers").read_text()
+        example = (ROOT / "docs/examples/registry/registry_allowed_signers").read_text()
+        for elsewhere in (shipped, example):
+            self.assertNotIn(key, elsewhere)
+            for moderation in self.index["moderation_keys"]:
+                self.assertNotIn(moderation, elsewhere)
+        self.assertIn("throwaway keys", (SAMPLE / "SAMPLE").read_text())
+
     def test_a_page_per_skill_that_isnt_revoked(self):
         shown = {p.parent.name for p in self.pages if p.parent != self.skills}
-        self.assertEqual(shown, {s["id"] for s in self.index["skills"]}
-                         - {"io.github.example-eve.weather-now"})
+        self.assertEqual(shown, {s["id"] for s in self.index["skills"]} - {WEATHER})
+        self.assertIn(FUEL, shown, "its author's suspension was lifted")
         browse = self.page()
         for skill_id in shown:
             self.assertIn(f'href="{skill_id}/"', browse)
@@ -257,17 +331,38 @@ class BuiltPortal(BuiltSite):
         tides = self.page(TIDES)
         self.assertIn("<strong>Suspended:</strong> Its host, api.tides.example, has been taken "
                       "over by someone else.", tides)
-        self.assertIn("<dd>1.1.0, 2026-11-20</dd>", tides, "the newest version still allowed")
+        self.assertIn("<dd>1.1.0, 2026-11-10</dd>", tides, "the newest version still allowed")
+        lamp = self.page(LAMP)
+        self.assertIn("<strong>Suspended:</strong> Looking into a report that its first version",
+                      lamp, "a suspension only revocations.json has")
+        self.assertIn("<dd>1.1, 2026-11-11</dd>", lamp)
+
+    def test_desktop_actions_say_what_they_do_and_when_tux_asks(self):
+        evening = self.page("io.github.example-bo.evening")
+        for words in ("Turns Night Light on or off, as the model chooses. Tux shows you a card "
+                      "first when it turns it on.",
+                      "Turns Do Not Disturb on. Tux shows you a card first, every time.",
+                      "Locks the screen. Tux shows you a card first, every time.",
+                      "Shows a notification with a line written in the recipe, under a title "
+                      "that names it. No card."):
+            self.assertIn(words, evening)
+        self.assertIn('<span class="risk risk-low">Low risk</span>', evening)
 
 
 class OpenRegistry(BuiltSite):
-    """Built from the registry as it will be, with no SAMPLE file."""
+    """Built from the registry as it will be, with no SAMPLE file, and as if Tux shipped the key
+    that signed it."""
 
     @classmethod
     def registry_in(cls, folder):
         shutil.copytree(SAMPLE, folder / "registry")
         (folder / "registry" / "SAMPLE").unlink()
         return folder / "registry"
+
+    @classmethod
+    def shipped(cls, registry):
+        return mock.patch.object(tux_registry, "SHIPPED_SIGNERS",
+                                 registry / "registry_allowed_signers")
 
     def test_no_page_says_it_is_a_sample(self):
         for page in self.pages:
@@ -321,7 +416,8 @@ class HostileRegistry(unittest.TestCase):
         registry = Registry(self)
         tides = registry.skill(TIDES)
         tides["name"] = 'Tides & "Co" \'x\''
-        tides["links"] = [{"title": 'A "quoted" & link', "url": "https://example.org/?a=1&b=2"}]
+        tides["links"] = [{"title": 'A "quoted" & link', "url": "https://example.org/?a=1&b=2"},
+                          {"title": "Quoted", "url": 'https://example.org/"x'}]
         registry.replace_recipe(TIDES, registry.recipe(TIDES).replace(
             'name: Tides', 'name: Tides & "Co" \'x\'') +
             "# </pre><script>alert(1)</script><img src=x onerror=alert(2)>\n")
@@ -331,6 +427,7 @@ class HostileRegistry(unittest.TestCase):
         self.assertIn("&lt;/pre&gt;&lt;script&gt;alert(1)&lt;/script&gt;", page)
         self.assertIn("Tides &amp; &quot;Co&quot; &#x27;x&#x27;", page)
         self.assertIn('href="https://example.org/?a=1&amp;b=2"', page)
+        self.assertIn('href="https://example.org/&quot;x"', page, "Tux takes it, so it is escaped")
         self.assertIn("A &quot;quoted&quot; &amp; link", page)
         self.assertNotIn('"Co"', page)
 
@@ -370,7 +467,6 @@ class HostileRegistry(unittest.TestCase):
             "a name on two lines": tides("name", "Tides\nmore"),
             "a summary with a hidden character": tides("summary", "Tides ‮"),
             "a javascript link": tides("links", [{"title": "x", "url": "javascript:alert(1)"}]),
-            "a link with a quote": tides("links", [{"title": "x", "url": 'https://a.example/"x'}]),
             "a tag nobody approved": tides("tags", ["weather", "hacking"]),
             "a licence that isn't allowed": tides("licence", "GPL-3.0"),
             "a field the format doesn't have": tides("rating", 5),
@@ -385,6 +481,18 @@ class HostileRegistry(unittest.TestCase):
             .__setitem__("kind", "ban"),
             "a report that isn't an issue": lambda index: index["revocations"][0]
             .__setitem__("report", "https://evil.example/"),
+            "a lifted id still in effect": lambda index: index["revocations"].append(
+                {**index["revocations"][0], "id": 3}),
+            "a lift written out in full, as the format once had it": lambda index: index
+            .__setitem__("lifted", [{"id": 3, "reason": "Fine.", "date": "2026-11-10T08:15:00Z",
+                                     "actor": "example-owner", "report": None}]),
+            "revocations out of order": lambda index: index["revocations"].reverse(),
+            "a status its revocations don't give": lambda index: index["authors"]["example-dee"]
+            .__setitem__("status", "suspended"),
+            "a logo out of the format": lambda index: index["skills"][0]["versions"][0]
+            .__setitem__("logo", {"type": "svg"}),
+            "a date more than a day ahead": lambda index: index.__setitem__(
+                "date", "2099-01-01T00:00:00Z"),
         }
         for name, change in cases.items():
             with self.subTest(name):
@@ -412,12 +520,13 @@ class HostileRegistry(unittest.TestCase):
                 registry.replace_recipe(bluetooth, registry.recipe(bluetooth) + "risk: low\n")
                 version = registry.skill(bluetooth)["versions"][-1]
                 version.update(permissions={"network": hosts}, risk="medium")
-                with self.assertRaisesRegex(portal.Refused, "aren't 1 to 4 different host names"):
+                with self.assertRaisesRegex(portal.Refused,
+                                            "permissions isn't in the registry's format"):
                     registry.build()
         registry = Registry(self)
         registry.replace_recipe(bluetooth, registry.recipe(bluetooth) + "risk: low\n")
         registry.skill(bluetooth)["versions"][-1].update(
-            permissions={"network": ["Tides.example.org", "a-b.example.org"]}, risk="medium")
+            permissions={"network": ["tides.example.org", "a-b.example.org"]}, risk="medium")
         page = (registry.build() / bluetooth / "index.html").read_text()   # host names: built
         self.assertNotIn("a-b.example.org", page, "only a file Tux loads backs up its hosts")
 
@@ -430,7 +539,7 @@ class HostileRegistry(unittest.TestCase):
         self.assertNotIn(f'href="{bluetooth}/"', browse)
         self.assertNotIn("Bluetooth page", browse)
         self.assertIn(f'href="{TIDES}/"', browse)
-        self.assertIn(">5 skills</h2>", browse)
+        self.assertIn(">6 skills</h2>", browse)
         page = (skills / bluetooth / "index.html").read_text()
         self.assertIn("Tux&#x27;s loader refuses this version, so it can&#x27;t be installed: ",
                       page)
@@ -444,32 +553,79 @@ class HostileRegistry(unittest.TestCase):
         tides = registry.skill(TIDES)["versions"][-1]["sha256"]
         self.assertTrue((skills / "recipes" / f"{tides}.yaml").exists())
 
+    @staticmethod
+    def revocation(id, scope, kind="suspend"):
+        return {"id": id, "kind": kind, "scope": scope, "reason": "Being looked at.",
+                "date": "2026-11-12T10:00:00Z", "actor": "example-mod", "report": None}
+
     def test_revocations_hide_skills_until_the_index_lifts_them(self):
         registry = Registry(self)
-        registry.index["lifted"] = []
         bo_first_key = registry.index["authors"]["example-bo"]["keys"][0]["fingerprint"]
-        registry.index["revocations"].append(
-            {"id": 4, "kind": "ban", "scope": {"key": bo_first_key}, "reason": "A leaked key.",
-             "date": "2026-11-21T10:00:00Z", "actor": "example-mod", "report": None})
-        # Only in revocations.json, as a suspension made since the index was signed.
-        registry.revocations["revocations"].append(
-            {"id": 5, "kind": "suspend", "scope": {"skill": "io.github.example-cy.desk-lamp"},
-             "reason": "Being looked at.", "date": "2026-11-21T11:00:00Z",
-             "actor": "example-mod", "report": None})
+        registry.index["revocations"].append(self.revocation(5, {"key": bo_first_key}, "ban"))
+        # Only in revocations.json, as suspensions made since the index was signed: one of the
+        # desk lamp, and the one of example-dee the index has lifted.
+        dee = self.revocation(3, {"author": "example-dee"})
+        registry.revocations["revocations"] = sorted(
+            registry.revocations["revocations"] + [dee, self.revocation(6, {"skill": LAMP})],
+            key=lambda entry: entry["id"])
         skills = registry.build()
         shown = {p.parent.name for p in skills.glob("*/index.html")}
-        self.assertEqual(shown, {TIDES, "io.github.example-bo.sound", "io.github.example-cy.boiler"})
+        self.assertEqual(shown, {TIDES, FUEL, "io.github.example-bo.evening",
+                                 "io.github.example-bo.sound", "io.github.example-cy.boiler"})
         browse = (skills / "index.html").read_text()
-        for hidden in ("Fuel prices", "Bluetooth page", "Desk lamp", "Weather now"):
+        for hidden in ("Bluetooth page", "Desk lamp", "Weather now"):
             self.assertNotIn(hidden, browse)
-
-    def test_revocations_json_cant_change_or_lift_what_the_index_says(self):
-        registry = Registry(self)
-        changed = copy.deepcopy(registry.index["revocations"][1])
-        changed["scope"] = {"skill": "io.github.example-eve.weather-now", "versions": ["9"]}
-        registry.revocations["revocations"] = [changed]
+        registry.index["lifted"] = []       # until the index lifts it, dee's is in effect
         shown = {p.parent.name for p in registry.build().glob("*/index.html")}
-        self.assertNotIn("io.github.example-eve.weather-now", shown)
+        self.assertNotIn(FUEL, shown)
+
+    def test_revocations_json_cant_narrow_or_lift_what_the_index_says(self):
+        """Every copy of an id is in effect, as in Tux: a narrower copy changes nothing and a
+        wider one covers more."""
+        registry = Registry(self)
+        narrower = copy.deepcopy(registry.index["revocations"][1])
+        narrower["scope"] = {"skill": WEATHER, "versions": ["9"]}
+        wider = copy.deepcopy(registry.index["revocations"][0])
+        wider["scope"] = {"skill": TIDES}
+        registry.revocations["revocations"] = [wider, narrower]
+        shown = {p.parent.name for p in registry.build().glob("*/index.html")}
+        self.assertNotIn(WEATHER, shown)
+        self.assertNotIn(TIDES, shown)
+
+    def test_a_change_nobody_signed_refuses_the_build(self):
+        registry = Registry(self)
+        registry.skill(TIDES)["summary"] = "Says when the next low tide is"
+        with self.assertRaisesRegex(portal.Refused, "isn't signed by the key it has to be"):
+            registry.build(signed=None)
+        registry = Registry(self)
+        registry.revocations["revocations"] = []
+        with self.assertRaisesRegex(portal.Refused, "isn't signed by the key it has to be"):
+            registry.build(signed="index")
+
+    def test_a_recipe_its_publisher_didnt_sign_refuses_the_build(self):
+        registry = Registry(self)
+        sig = KEYS.sign("example-ada-0", tux_registry.RECIPE_NS, b"other bytes")
+        registry.skill(TIDES)["versions"][-1]["sig"] = sig.decode()
+        with self.assertRaisesRegex(portal.Refused, "isn't signed by the key it has to be"):
+            registry.build(signed="index")
+
+    def test_a_real_registry_is_checked_against_the_key_tux_ships(self):
+        """Which is a placeholder until a release ships the real one, so nothing verifies."""
+        registry = Registry(self).open()
+        with self.assertRaisesRegex(portal.Refused, "isn't signed by the key it has to be"):
+            registry.build(own_key=False)
+
+    def test_a_logo_in_the_index_is_taken_and_not_shown(self):
+        registry = Registry(self)
+        version = registry.skill(TIDES)["versions"][-1]
+        version["logo"] = {"type": "png", "sha256": "a" * 64, "size": 4096, "width": 128,
+                           "height": 128, "frames": 1, "duration_ms": 0, "key": version["key"],
+                           "sig": version["sig"], "still_sha256": "b" * 64}
+        skills = registry.build()
+        for page in skills.glob("**/index.html"):
+            html = page.read_text()
+            self.assertNotIn("<img", html, page)
+            self.assertNotIn("a" * 64, html, page)
 
 
 if __name__ == "__main__":

@@ -86,6 +86,8 @@ At most 4 KiB.
 
 ## Logos
 
+Not shown yet: Tux shows no logos, and nor does the website's portal, which takes an index with logo entries, as Tux does, and leaves them out of its pages. See "A logo" under "How Tux checks".
+
 A skill may have one logo, `logo.png`, `logo.webp`, `logo.avif` or `logo.gif`, signed like the recipe:
 
 ```text
@@ -236,7 +238,7 @@ They also keep the files small enough. Written as above, 1000 revocations with e
 | `versions[].sig` | string | The whole of `recipe.yaml.sig` at that commit, with its line breaks and final newline |
 | `versions[].permissions` | object | `{}` or `{"network": [<1 to 4 hosts>]}`, exactly as the loader returns it. The hosts are what Browse lists |
 | `versions[].risk` | string | `risk_of()` of those permissions: `low` without hosts, `medium` with them |
-| `versions[].logo` | object or null | null without a logo. Tux reads a version that leaves the field out, as the signed example does, as having none. Otherwise `type` (`png`, `webp`, `avif`, `gif`), `sha256`, `size`, `width`, `height`, `frames` (1 for a still), `duration_ms` (0 for a still), `key` and `sig` as for the recipe (namespace `tuxistant-logo`), and `still_sha256` for `logo-still.png`. A new logo makes a new version, and the change summary says so |
+| `versions[].logo` | object or null | null without a logo. Tux reads a version that leaves the field out, as the signed example does, as having none. Neither Tux nor the portal shows a logo yet. Otherwise `type` (`png`, `webp`, `avif`, `gif`), `sha256`, `size`, `width`, `height`, `frames` (1 for a still), `duration_ms` (0 for a still), `key` and `sig` as for the recipe (namespace `tuxistant-logo`), and `still_sha256` for `logo-still.png`. A new logo makes a new version, and the change summary says so |
 
 A skill whose folder is deleted keeps its entry, so installed copies can still be checked against it.
 

@@ -3,9 +3,9 @@
     "example-ada": {
       "keys": [
         {
-          "added": "2026-11-14",
-          "fingerprint": "SHA256:s82QHFB7Fj/KYRg/hFcxULFv7YdAMtYnJ5jvFVnetWY",
-          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII+YPY+EjRujOtCtSryIuMkrxpewSo80g/E4L9SAcPf1",
+          "added": "2026-11-04",
+          "fingerprint": "SHA256:YjxilYZDBMiVzBgju68l/V6YG2YiXAdvG+T2tSd80Cg",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKOnEEmvrfTReMsH+T0BQ6pj2u4lMNY5dbnTiC6/uZlQ",
           "removed": null
         }
       ],
@@ -14,15 +14,15 @@
     "example-bo": {
       "keys": [
         {
-          "added": "2026-11-15",
-          "fingerprint": "SHA256:vjQBqXKHMz92+gq+RC3g3+y+RkAxGAi5kL5+oNWC5ZM",
-          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN7Xa91DaBeBbI5QHwuLTCplGaEm4gprsqCmrv/M066m",
+          "added": "2026-11-05",
+          "fingerprint": "SHA256:HRcmEa88XtowVLMTZq/wNOZjx1xqALNAk7kPjBo5hXE",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID5/XADkZeiHK2HTbObuhI5hKfg7CmY8pm95n15mY/n0",
           "removed": null
         },
         {
-          "added": "2026-11-18",
-          "fingerprint": "SHA256:zjOMj/S7YNeTmEXuZaPs3aq0ztl2sFPn3oHeEaQ6Kqg",
-          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN4CjHrEHPi1TYJNSVt5vC1OMR4iH/coFqv9eYJk4txY",
+          "added": "2026-11-08",
+          "fingerprint": "SHA256:7vIC90u7huxJZKZbnV0w/Oxac3T2EA+Kl8OmBVFtyB0",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKeAjw0qHasvDjZRGSS5YKPlc+Hu2SMhCI6TDv2toa7k",
           "removed": null
         }
       ],
@@ -31,9 +31,9 @@
     "example-cy": {
       "keys": [
         {
-          "added": "2026-11-16",
-          "fingerprint": "SHA256:Fy5xOLxTT2gi0vhw1J5qllZNXVNy1ToY320MtSxvrXI",
-          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGdV9i9cSJCdOobU3nFGI5accO8smqWmKAkwyCwGgkEO",
+          "added": "2026-11-06",
+          "fingerprint": "SHA256:K/t9ZS2cw/brETcPt2CVtaB8bK6OsQqNSSmnqg1DIzw",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO30Mc2Q0aruacZZNB3bB7KLFFrs/zYnzgfHYW1fj8CF",
           "removed": null
         }
       ],
@@ -42,9 +42,9 @@
     "example-dee": {
       "keys": [
         {
-          "added": "2026-11-17",
-          "fingerprint": "SHA256:pKOIeOvUqxi2DXG8gt4dIYKx0IRL/mV5IXZRz4/pRhE",
-          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJSMKpCYR+Go7q+9G9LIxLkqCCPTZot99uDeeUF3I4zX",
+          "added": "2026-11-07",
+          "fingerprint": "SHA256:l4VKANszy/hKvaun4FNi61eMFfj4ez8Hx+LEl341Ye4",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICj9iQVmO64K2k1kGCIwyPMS1sBPvwQm9kUTqWgFEVVh",
           "removed": null
         }
       ],
@@ -53,9 +53,9 @@
     "example-eve": {
       "keys": [
         {
-          "added": "2026-11-18",
-          "fingerprint": "SHA256:hc5pVqqcFHoNyg0QEuLlDY498U+3pwxIOnmBttve4As",
-          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDIWT606vMC3FrmBdLmjPEd9q1O6S0E1eYn1V4YrHWSk",
+          "added": "2026-11-08",
+          "fingerprint": "SHA256:Rm6OUbIs/JSv9E/tFxFYR8zXZ7YNvUcflzxVc65U32E",
+          "key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJfmUlMr1dHp3jQXBjgn6aJONKis1AU3LVn4LfiRqUyw",
           "removed": null
         }
       ],
@@ -91,24 +91,18 @@
     }
   ],
   "commit": "9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d",
-  "date": "2026-11-21T16:00:00Z",
+  "date": "2026-11-11T16:00:00Z",
   "format": 1,
   "lifted": [
-    {
-      "actor": "example-owner",
-      "date": "2026-11-20T08:15:00Z",
-      "id": 3,
-      "reason": "The price service is the one its page names.",
-      "report": "https://github.com/example/tuxistant-skills/issues/11"
-    }
+    3
   ],
   "moderation_keys": [
-    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJol8M3JliP8HgE4ny4d+l4zrC+8fiIB/opY+2hX6XeB"
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGYlHffcUaJ4wVe3EhCINlAxw0i16CcE/l/wFwV+yoxm"
   ],
   "revocations": [
     {
       "actor": "example-mod",
-      "date": "2026-11-19T16:05:00Z",
+      "date": "2026-11-09T16:05:00Z",
       "id": 1,
       "kind": "suspend",
       "reason": "Its host, api.tides.example, has been taken over by someone else.",
@@ -122,24 +116,13 @@
     },
     {
       "actor": "example-mod",
-      "date": "2026-11-19T10:30:00Z",
+      "date": "2026-11-09T10:30:00Z",
       "id": 2,
       "kind": "suspend",
       "reason": "It sends the town you name to a host its summary doesn't mention.",
       "report": "https://github.com/example/tuxistant-skills/issues/9",
       "scope": {
         "skill": "io.github.example-eve.weather-now"
-      }
-    },
-    {
-      "actor": "example-mod",
-      "date": "2026-11-19T12:00:00Z",
-      "id": 3,
-      "kind": "suspend",
-      "reason": "Looking into a report about where its prices come from.",
-      "report": "https://github.com/example/tuxistant-skills/issues/11",
-      "scope": {
-        "author": "example-dee"
       }
     }
   ],
@@ -163,8 +146,9 @@
       ],
       "versions": [
         {
-          "date": "2026-11-14T10:12:00Z",
-          "key": "SHA256:s82QHFB7Fj/KYRg/hFcxULFv7YdAMtYnJ5jvFVnetWY",
+          "date": "2026-11-04T10:12:00Z",
+          "key": "SHA256:YjxilYZDBMiVzBgju68l/V6YG2YiXAdvG+T2tSd80Cg",
+          "logo": null,
           "permissions": {
             "network": [
               "api.tides.example"
@@ -172,13 +156,14 @@
           },
           "risk": "medium",
           "sha256": "570d956fb6109bd32c73d826bbb65b988a8991a15f2b712620440bbf0f8f5497",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgj5g9j4SNG6M60K1KvIi4ySvGl7\nBKjzSD8Tgv1IBw9/UAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEBwGb8uyYHufJdE2X7mTt0SHUTNy/GEg9ubtKn2nyex+0kysD\nngZzd3iSo/XZ1IGCoX8LKwnmGKS2XwV3kEbNcI\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgo6cQSa+t9NF4ywf5PQFDqmPa7i\nUw1jl1udOILr+5mVAAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECbEwSSIDPjRVIbpy8uOZmMt/0vLEXInUEWUENOI5sEA8uuCZ\nqeIa7R8vqkeK23ElxJD0ya0oPdJUXq3iJebiEN\n-----END SSH SIGNATURE-----\n",
           "size": 495,
           "version": "1.0.0"
         },
         {
-          "date": "2026-11-20T08:41:00Z",
-          "key": "SHA256:s82QHFB7Fj/KYRg/hFcxULFv7YdAMtYnJ5jvFVnetWY",
+          "date": "2026-11-10T08:41:00Z",
+          "key": "SHA256:YjxilYZDBMiVzBgju68l/V6YG2YiXAdvG+T2tSd80Cg",
+          "logo": null,
           "permissions": {
             "network": [
               "tides.example.org"
@@ -186,7 +171,7 @@
           },
           "risk": "medium",
           "sha256": "b76ea8d1d7f493e432cc673e2bfbe70c3198bdf74b0e83f4319e031e20dc449e",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgj5g9j4SNG6M60K1KvIi4ySvGl7\nBKjzSD8Tgv1IBw9/UAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEClYmxVIAKaSyQkZgueIH9EQqrBJ4PBjyhj9WuVKbhkoauI2F\nOfdvcSYoRoGxb/hzom8Bh3JNtHRMFBBdJLmDYI\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgo6cQSa+t9NF4ywf5PQFDqmPa7i\nUw1jl1udOILr+5mVAAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECGYjAZ6RMCDHLP3pvEDtkX46hpLCKVfF6GW+SSNI3CvZt8IA\nNiESYpHsVnSfMFtqDPT1fUI0k6k8aqM+UccvAP\n-----END SSH SIGNATURE-----\n",
           "size": 495,
           "version": "1.1.0"
         }
@@ -204,13 +189,38 @@
       ],
       "versions": [
         {
-          "date": "2026-11-15T17:30:00Z",
-          "key": "SHA256:vjQBqXKHMz92+gq+RC3g3+y+RkAxGAi5kL5+oNWC5ZM",
+          "date": "2026-11-05T17:30:00Z",
+          "key": "SHA256:HRcmEa88XtowVLMTZq/wNOZjx1xqALNAk7kPjBo5hXE",
+          "logo": null,
           "permissions": {},
           "risk": "low",
           "sha256": "20d48e3a09c6005c94b9f16cace6de8a1c85e345e68324aad6f0c116443bab99",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg3tdr3UNoF4FsjlAfC4tMKmUZoS\nbiCmuyoKau/8zTrqYAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEChMJpPyddWpC28ihzrGHShFauher6qDVcs5gwQoMek4oq3kP\nxeaZbRCbaPv2FDk8FaaLGAdwYM7+NHWLF6ggIJ\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgPn9cAORl6IcrYdNs5u6EjmEp+D\nsKZjymb3mfXmZj+fQAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECYNgkcblxggJhkUwKkztUHED/TFikXvQteLSBFYMtpt9zii2\ni5j/RZFkjX22szCxunjccgYnCtI6ETVGRLPeUO\n-----END SSH SIGNATURE-----\n",
           "size": 278,
+          "version": "1.0.0"
+        }
+      ]
+    },
+    {
+      "author": "example-bo",
+      "id": "io.github.example-bo.evening",
+      "licence": "CC0-1.0",
+      "links": [],
+      "name": "Evening",
+      "summary": "Night Light, quiet time and locking the screen for the evening",
+      "tags": [
+        "settings"
+      ],
+      "versions": [
+        {
+          "date": "2026-11-10T20:15:00Z",
+          "key": "SHA256:7vIC90u7huxJZKZbnV0w/Oxac3T2EA+Kl8OmBVFtyB0",
+          "logo": null,
+          "permissions": {},
+          "risk": "low",
+          "sha256": "2cfef8806445c639e874f0971c69a3b2b99bd17af0cdaf2d68e23c8c26046c4d",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgp4CPDSodqy8ONlEZJLlgo+Vz4e\n7ZIyEIjpMO/a2hruQAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEDwwZEW7Uv9DwRly4uuVexiHNAnUel0f8j/hjEya2SYaf63go\n8ZjqGm8gEG4YhaI9Rd+9IclpjDZdL/4mCLIQYA\n-----END SSH SIGNATURE-----\n",
+          "size": 964,
           "version": "1.0.0"
         }
       ]
@@ -227,12 +237,13 @@
       ],
       "versions": [
         {
-          "date": "2026-11-18T19:45:00Z",
-          "key": "SHA256:zjOMj/S7YNeTmEXuZaPs3aq0ztl2sFPn3oHeEaQ6Kqg",
+          "date": "2026-11-08T19:45:00Z",
+          "key": "SHA256:7vIC90u7huxJZKZbnV0w/Oxac3T2EA+Kl8OmBVFtyB0",
+          "logo": null,
           "permissions": {},
           "risk": "low",
           "sha256": "a65c1a1b0e1669ff8b1b7ba440aafed6279eadc5898ba6c68406c5265d78d323",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg3gKMesQc+LVNgk1JW3m8LU4xHi\nIf9ygWq/15gmTi3FgAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEAToSlX/oVEOH6RjPWT9HihMsoGSVDxBRCsqw9kWeFZtKzS/b\nWk9u+E3bA4J/OZqG+QuaU+Q9HgEfwp27qCBKsB\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgp4CPDSodqy8ONlEZJLlgo+Vz4e\n7ZIyEIjpMO/a2hruQAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEALquR2guLh33HB3ldoSvlQRdOCpFMPweJatpt1H13Lt5DbjC\njaay+OSusbfq0/LgeqxrlmyKM2593FDFBrcLsE\n-----END SSH SIGNATURE-----\n",
           "size": 256,
           "version": "1.0.0"
         }
@@ -256,8 +267,9 @@
       ],
       "versions": [
         {
-          "date": "2026-11-16T11:02:00Z",
-          "key": "SHA256:Fy5xOLxTT2gi0vhw1J5qllZNXVNy1ToY320MtSxvrXI",
+          "date": "2026-11-06T11:02:00Z",
+          "key": "SHA256:K/t9ZS2cw/brETcPt2CVtaB8bK6OsQqNSSmnqg1DIzw",
+          "logo": null,
           "permissions": {
             "network": [
               "boiler.example.net"
@@ -265,7 +277,7 @@
           },
           "risk": "medium",
           "sha256": "0833d18ac9e5a1d20d07df3a13aba8a5b955bb21d613c1c4f8538039131b0dbd",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgZ1X2L1xIkJ06htTecUYjlpxw7y\nyapaYoCTDILAaCQQ4AAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECehzW93qHaVjJQmm9RkFP1FHMjQCkGNgiCqsPvpR6uuZgK7R\nUxGPP5MEGn4rePocpNeV15GGZRTofEGxfFWYsG\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7fQxzZDRqu5pxlk0HdsHsosUWu\nz/NifOB8dhbV+PwIUAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEDwdTV78+4YfbcQ1Dz1iiA2mrH6fLclgNMe+KVOzVPsihcm7q\n1WN5u8b9r4ArD9e2RhqPwQ7QM+4VRTsRh/u2YO\n-----END SSH SIGNATURE-----\n",
           "size": 518,
           "version": "1.0.0"
         }
@@ -283,8 +295,9 @@
       ],
       "versions": [
         {
-          "date": "2026-11-16T11:40:00Z",
-          "key": "SHA256:Fy5xOLxTT2gi0vhw1J5qllZNXVNy1ToY320MtSxvrXI",
+          "date": "2026-11-06T11:40:00Z",
+          "key": "SHA256:K/t9ZS2cw/brETcPt2CVtaB8bK6OsQqNSSmnqg1DIzw",
+          "logo": null,
           "permissions": {
             "network": [
               "lamp.example.net"
@@ -292,13 +305,14 @@
           },
           "risk": "medium",
           "sha256": "9eea3aa905fb22baeca1c7ebf6e8445c312c623dd069c1de0a791df64b08a3dc",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgZ1X2L1xIkJ06htTecUYjlpxw7y\nyapaYoCTDILAaCQQ4AAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEDFgTuPmDq10+m8P+cpLYAwynlUuGiqSnWBkq7uxoKWAru0uy\nadYTXEQGhxQkpbvWYee/Tk4v/uD9ZzSJ8gHlEA\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7fQxzZDRqu5pxlk0HdsHsosUWu\nz/NifOB8dhbV+PwIUAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEAcDGYs48juK4AIwfUkI8GV8Za9BRkn6c8SnKLkYOHwvEtZsQ\nzGGtCHrk9xuumKLnW07X9WNBcV+UJi2gZogUEE\n-----END SSH SIGNATURE-----\n",
           "size": 468,
           "version": "1.0"
         },
         {
-          "date": "2026-11-21T15:12:00Z",
-          "key": "SHA256:Fy5xOLxTT2gi0vhw1J5qllZNXVNy1ToY320MtSxvrXI",
+          "date": "2026-11-11T15:12:00Z",
+          "key": "SHA256:K/t9ZS2cw/brETcPt2CVtaB8bK6OsQqNSSmnqg1DIzw",
+          "logo": null,
           "permissions": {
             "network": [
               "lamp.example.net"
@@ -306,7 +320,7 @@
           },
           "risk": "medium",
           "sha256": "59410a3dfaa3387a3634e1fd9890c4d7ada1cc7a4fa5dedc2c3939e65c1723a6",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgZ1X2L1xIkJ06htTecUYjlpxw7y\nyapaYoCTDILAaCQQ4AAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECE5VmQy7Rnn4+bLxUS1cWTS5Oyp8mou7tUWgQmlixwcQJVhn\n+15B2Y7dRfl16Ki+rOKszHwNJQ7IzY9SS2O8UB\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAg7fQxzZDRqu5pxlk0HdsHsosUWu\nz/NifOB8dhbV+PwIUAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEABRVKLyjEO1sk8UfFkYDfRAJ5rN4Ko9N5u1LL4TiV4wSfNAF\nTw+kSgXsc+WxniY4Ss4dt90aPRxbFy1E+dlZsE\n-----END SSH SIGNATURE-----\n",
           "size": 512,
           "version": "1.1"
         }
@@ -330,8 +344,9 @@
       ],
       "versions": [
         {
-          "date": "2026-11-17T08:20:00Z",
-          "key": "SHA256:pKOIeOvUqxi2DXG8gt4dIYKx0IRL/mV5IXZRz4/pRhE",
+          "date": "2026-11-07T08:20:00Z",
+          "key": "SHA256:l4VKANszy/hKvaun4FNi61eMFfj4ez8Hx+LEl341Ye4",
+          "logo": null,
           "permissions": {
             "network": [
               "fuel.example.org"
@@ -339,7 +354,7 @@
           },
           "risk": "medium",
           "sha256": "9e056d2845d515b7c352f755b38747335deb82d23ef61769e7dfb8ea622eb44a",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAglIwqkJhH4ajur70b0sjEuSoII9\nNmi3324N55QXcjjNcAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEAn6FRJyx5dU9VbiN26yAgGQTmNsbClXcPzKE2k+MaNDHFKhq\nwvsTYQrx5OVX3C9M9d4ltSgaVIdTqHGkY/LZkN\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgKP2JBWY7rgraTWQYIjDI8xLWwE\n+/BCb2RROpaAURVWEAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAECrfcvHjcivGT51Ts3Tpn0E3XpTQW3uG8l1Pg9CqxEBprrMWH\nZ+rMKmwFVmg8X6HcgoYClbfZz/H0nYptVRgLQH\n-----END SSH SIGNATURE-----\n",
           "size": 561,
           "version": "2026.11"
         }
@@ -357,8 +372,9 @@
       ],
       "versions": [
         {
-          "date": "2026-11-18T21:00:00Z",
-          "key": "SHA256:hc5pVqqcFHoNyg0QEuLlDY498U+3pwxIOnmBttve4As",
+          "date": "2026-11-08T21:00:00Z",
+          "key": "SHA256:Rm6OUbIs/JSv9E/tFxFYR8zXZ7YNvUcflzxVc65U32E",
+          "logo": null,
           "permissions": {
             "network": [
               "weather.example.com"
@@ -366,7 +382,7 @@
           },
           "risk": "medium",
           "sha256": "bd9e9808b7e31076a5a9089fcd23ec5ed6021314c4955ce3136779455e673967",
-          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgMhZPrTq8wLcWuYF0uaM8R32rU7\npLQTV5ifVXhisdZKQAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEABAbXORa9J4ozErJKLJewS6T2UOYxcgRX2XopH7s5BCf1Art\nKlQlQCaN98fZEnVadtvcUdGwSHevZl10RaYUgI\n-----END SSH SIGNATURE-----\n",
+          "sig": "-----BEGIN SSH SIGNATURE-----\nU1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgl+ZSUyvV0eneNBcGOCfpok40qK\nzUBTctWfgt+JGpTLAAAAAQdHV4aXN0YW50LXJlY2lwZQAAAAAAAAAGc2hhNTEyAAAAUwAA\nAAtzc2gtZWQyNTUxOQAAAEDpEajm8qRta+jq0VUrgr1KeiKeQO0RgwQ1gkiQuFF08AEjXR\ncj+DSyaijXbM18u2++JWqEYLs/uT4DwlGlRrYB\n-----END SSH SIGNATURE-----\n",
           "size": 448,
           "version": "0.1"
         }
