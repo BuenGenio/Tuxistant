@@ -1603,6 +1603,48 @@ class CutShort(Goa):
             self.assertEqual(goamail._rows(box, "Sent", 1, mail.terms("Acme"), 10, 11.5), [])
         self.assertEqual(box.asked, [])
 
+    def test_a_mail_cut_short_is_hidden_again_only_where_something_came(self):
+        """Each mail cut short is hidden as first read, as one that talks of signing in, and
+        again where fetching on brought more of it or the server found no such talk in it. With
+        nothing new, hiding each again took up to 20 ms a mail of the time the lookups of who
+        wrote them were left."""
+        terms = "The Acme terms go on here and on.\n" * 900
+        mails = {uid: message("Acme order", ACME, f"Your Acme order 592837{uid} is on its way.\n"
+                              + terms) for uid in (1, 2)}
+
+        class NoMore(Mailbox):      # a server that won't fetch on, and finds no sign-in talk
+            def uid(self, command, *args):
+                if command == "FETCH" and f"TEXT]<{goamail.TEXT_BYTES}." in args[-1]:
+                    return "NO", []
+                return super().uid(command, *args)
+        for kind, late, shown in ((Mailbox, True, False), (Mailbox, False, True),
+                                  (NoMore, False, True)):
+            clock = Clock(9.9)
+            box = kind(mails, clock, lambda asked: 10.5 if late and "HEADER" in asked else None)
+            with mock.patch.object(goamail, "time", clock), \
+                    mock.patch.object(goamail, "_hidden", wraps=goamail._hidden) as hidden:
+                rows = goamail._rows(box, "INBOX", 0, mail.terms("Acme"), 10, 11.5)
+            bodies = {key[1]: body for key, *_, body in rows}
+            self.assertEqual(sorted(bodies), [1, 2], kind)
+            for uid, body in bodies.items():
+                self.assertEqual(f"592837{uid}" in body, shown, (kind, late))
+            self.assertEqual(hidden.call_count, 2 if late else 4, (kind, late))
+
+        class Talking(Mailbox):     # one whose search for sign-in talk finds it in every mail
+            def uid(self, command, *args):
+                answer = super().uid(command, *args)
+                return ("OK", [b" ".join(b"%d" % uid for uid in self.mails)]) if "UID" in args \
+                    else answer
+        spans = '<span class="x"></span>'      # nothing to count, so it stays short
+        page = ("<p>Your Acme order.</p>" + spans * 2000 + "<p>It ships today, 5928374.</p><p>"
+                + "Thank you for shopping at Acme. " * 20 + "</p>" + spans * 40000)
+        box = Talking({1: message("Acme order", ACME, None, html=page)}, Clock(9.9), lambda _: None)
+        with mock.patch.object(goamail, "time", box.clock), \
+                mock.patch.object(goamail, "_hidden", wraps=goamail._hidden) as hidden:
+            (*_, body), = goamail._rows(box, "INBOX", 0, mail.terms("Acme"), 10, 11.5)
+        self.assertIn("It ships today, [hidden].", body)    # fetched on, and still talking
+        self.assertEqual(hidden.call_count, 2)
+
     def test_what_the_server_is_asked_for_is_sign_in_talk(self):
         for term in goamail.TALK_TERMS:
             self.assertRegex(term, mail.SIGN_IN_TALK)

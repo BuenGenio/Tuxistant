@@ -990,10 +990,14 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float,
     short = [item for item in read if _short(*item[-2:])]
     rows = _kept(stems, folder, read, {uid for uid, *_ in short}, last)
     if short:
-        short = _read_on(imap, short, until)
-        talking = _talking(imap, [uid for uid, *_, body, cut in short if _short(body, cut)],
+        grown = _read_on(imap, short, until)
+        talking = _talking(imap, [uid for uid, *_, body, cut in grown if _short(body, cut)],
                            until)
-        rows |= _kept(stems, folder, short, talking, last)
+        # Hidden again only where something came, more of it or no talk found in it: each mail
+        # hidden again for nothing took time the lookups of who wrote them then didn't have.
+        rows |= _kept(stems, folder, [item for item, was in zip(grown, short)
+                                      if item[2] is not was[2] or item[0] not in talking],
+                      talking, last)
     return [row for row in rows.values() if row]
 
 
