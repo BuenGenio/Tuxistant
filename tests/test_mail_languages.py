@@ -363,7 +363,10 @@ SMART_NUMBERS = ("1250", "4999", "129", "48291")
 # flights and phone numbers was hidden whole: a pickup, gift card, referral or ticket code, an
 # event's access code, a booking's confirmation code, a promo code given in the subject, a word in
 # capitals, and the same in Spanish, Portuguese, Chinese and Arabic. And a security notice's
-# subject that names a password or a PIN, over a text that names neither.
+# subject that names a password or a PIN, over a text that names neither. And a bare "code" that
+# goes on, a word that holds one for a password, as "resenha" and "desenhado" hold senha, or is
+# one in another sense, as clave is a key date, 密码锁 a combination lock, 口令红包 a voucher and
+# كلمة السر "the key to", and Pinterest's pins.
 EVERYDAY_CODE_SUBJECTS = {
     "en": ("Your Acme pickup code", "Your Acme collection code is ready",
            "Your Acme gift card code", "Your Acme e-gift card code", "Your Acme referral code",
@@ -375,35 +378,58 @@ EVERYDAY_CODE_SUBJECTS = {
            "Your invite code for Acme", "Use code SAVE20 for 20% off at Acme",
            "Extra 20% off with code FALL20", "Enter code ACME10 at checkout",
            "Your QR code ticket for Acme Live", "Your Acme Pickup Code",
-           "Your Acme password was changed"),
+           "Your Acme password was changed", "Your Acme code for 20% off", "Your code is inside",
+           "Here's your code for free delivery", "Your Acme code expires Sunday",
+           "Your new code for Acme Rewards",
+           "Show the code at the counter to collect your Acme order",
+           "Your code for 20% off at Acme", "Here's your code for a free Acme coffee",
+           "Scan the code at the gate – Acme Live", "This code gets you 20% off at Acme",
+           "Our code of conduct has changed", "New Pins for you on Acme", "Fresh Pins for you"),
     "es": ("Tu código de recogida Acme", "Código de canje de tu tarjeta regalo Acme",
            "Tu código de confirmación de la reserva Acme", "Código de barras de tu entrada Acme",
            "Tu código de invitado Acme", "Código de acceso al evento Acme",
            "Tu código de cupón Acme", "Tu código de pedido Acme", "Tu código de canje Acme",
            "Código de confirmación de tu reserva Acme", "Usa el código AHORRO20 en Acme",
-           "Código de cupón Acme"),
+           "Código de cupón Acme", "5 claves para ahorrar en Acme",
+           "Palabras clave de tu búsqueda en Acme", "Acme: 4 claves para tu viaje",
+           "Fechas clave de tu viaje a Madrid", "Momentos clave de tu pedido Acme",
+           "Acme Air: tu clave de reservación", "Clave de rastreo de tu transferencia SPEI",
+           "Tu clave de cliente Acme"),
     "pt": ("Código de barras do seu boleto Acme", "Seu código Pix Acme",
            "Código de retirada do seu pedido Acme", "Seu código de confirmação da reserva Acme",
            "Código do cupom Acme", "Seu código de resgate Acme", "Código de indicação Acme",
            "Seu código de retirada Acme", "Código do seu vale-presente Acme",
-           "Use o código ACME10 e ganhe 10%", "Seu boleto Acme: código de barras"),
-    "zh": ("您的取件码 Acme", "Acme 兑换码", "Acme 优惠码已发放", "Acme 电子票二维码", "Acme 取餐码"),
+           "Use o código ACME10 e ganhe 10%", "Seu boleto Acme: código de barras",
+           "Desenhado para você: a nova coleção Acme", "Resenha da semana Acme"),
+    "zh": ("您的取件码 Acme", "Acme 兑换码", "Acme 优惠码已发放", "Acme 电子票二维码", "Acme 取餐码",
+           "Acme 智能密码锁限时优惠", "Acme 口令红包来了"),
     "ar": ("رمز الطلب الخاص بك من Acme", "رمز الاستلام Acme", "رمز القسيمة Acme",
-           "رمز الهدية من Acme", "رمز الدعوة Acme", "كود الكوبون Acme", "رمز الشحنة Acme"),
+           "رمز الهدية من Acme", "رمز الدعوة Acme", "كود الكوبون Acme", "رمز الشحنة Acme",
+           "كلمة السر لرحلة مثالية إلى دبي"),
 }
 # A text that opens with a word for a code or a password that gives its own, a promo banner, a
-# booking's confirmation code or a hotel's Wi-Fi, under the subject of an order: the order's
-# number and date in the subject were hidden.
+# booking's confirmation code or a hotel's Wi-Fi, or with an everyday code, a word for a code in
+# another sense or one that holds a word for a password, under the subject of an order: the
+# order's number and date in the subject were hidden.
 EVERYDAY_CODE_TOPS = {
     "en": ("Use code SPRING10 for 10% off your next order.", "Your confirmation code is HMX4K2.",
            "Wi-Fi password: acme-guest", "Your Acme gift card code is inside.",
-           "Thanks! Use code SAVE20 on your next order."),
+           "Thanks! Use code SAVE20 on your next order.",
+           "Hi Sam, scan the code below at the locker to open it.", "Show the code at the gate.",
+           "Track it with the code in the app.", "We've updated our code of conduct for sellers.",
+           "Use the code at checkout for 10% off your next order.",
+           "Scan the code at the door to get in.", "Enter the code from your receipt at the kiosk.",
+           "Here's your code for free delivery on your next order."),
     "es": ("Usa el código VERANO10 en tu próximo pedido.", "Tu código de confirmación es HMX4K2.",
-           "Contraseña del wifi: acme-guest"),
+           "Contraseña del wifi: acme-guest", "Estos son los datos clave de tu pedido.",
+           "Descubre las claves para disfrutar de tu compra."),
     "pt": ("Use o código VERAO10 no seu próximo pedido.", "Seu código de confirmação é HMX4K2.",
-           "Senha do Wi-Fi: acme-guest"),
-    "zh": ("Wi-Fi 密码：acmeguest", "使用优惠码 SPRING10 立减10元。"),
-    "ar": ("كلمة سر الواي فاي: acme-guest", "استخدم الكود SPRING10 لخصم 10%."),
+           "Senha do Wi-Fi: acme-guest",
+           "Conte-nos o que achou: escreva uma resenha do seu pedido.",
+           "Gostou? Deixe sua resenha e ajude outros clientes.", "Use the code below na loja."),
+    "zh": ("Wi-Fi 密码：acmeguest", "使用优惠码 SPRING10 立减10元。", "复制淘口令打开手机淘宝，领取优惠。"),
+    "ar": ("كلمة سر الواي فاي: acme-guest", "استخدم الكود SPRING10 لخصم 10%.",
+           "كلمة السر لتجربة تسوق مثالية."),
 }
 ORDER_SUBJECTS = {"en": "Your Acme order {ORDER} has shipped – delivery {DATE}",
                   "es": "Tu pedido Acme {ORDER} ha sido enviado – entrega {DATE}",
@@ -434,18 +460,25 @@ NOTICES = {
            "本人操作，请致电 {PHONE}，案例编号 {ORDER}。"),
 }
 # A line real everyday mail has that talks of signing in beside a date, a time, a price or an
-# order: the time as Portuguese writes it, 14h35, and a span of hours, 24-hour, were hidden as
-# codes, as were letters and digits on such a line, which docs/ROADMAP.md lists.
+# order: the time as Portuguese writes it, 14h35 or 14h35min, and a span of time, 24-hour, 24hrs,
+# 10-min or 2-night, were hidden as codes, as were letters and digits on such a line, which
+# docs/ROADMAP.md lists.
 TALKING_LINES = {
     "en": ("Your e-ticket is valid for travel on {DATE} only.",
            "This fare expires at {TIME} today.",
            "Log in to check in from {TIME}.", "Please verify your seat before {TIME}.",
-           "Sign in to see order {ORDER} and pay {PRICE}.", "Sign in for 24-hour support."),
+           "Sign in to see order {ORDER} and pay {PRICE}.", "Sign in for 24-hour support.",
+           "Log in to manage your 2-night stay from {DATE}.",
+           "Sign in to claim your 10-min slot at {TIME}.",
+           "Log in for the 30-minute webinar on {DATE}.", "Sign in for our 24hrs support line."),
     "es": ("Verifica tus datos del vuelo antes de las {TIME}.",
            "Haz login para facturar desde las {TIME} del {DATE}."),
     "pt": ("Faça login para fazer o check-in a partir das {TIME}.",
            "Embarque às 14h35, faça login para ver o cartão.",
-           "Verifique o seu assento até 21h30."),
+           "Verifique o seu assento até 21h30.",
+           "Embarque às 14h35min, faça login para ver o cartão.",
+           "Faça login até as 21h30min para fazer o check-in.",
+           "Verifique o seu assento e faça login até 16h50min."),
     "zh": ("请 login 后办理值机，{TIME} 开始。",),
     "ar": ("سجل login لإتمام إجراءات السفر من الساعة {TIME}.",),
 }
@@ -479,6 +512,24 @@ ITINERARY_FLIGHTS = {"en": ("BA2617", "IB3402"), "es": ("IB3402", "TP1352"),
 TICKET_REST = {"en": "This ticket is valid for one year from the date of issue.",
                "es": "Verifica tus datos antes de viajar.",
                "pt": "Verifique os seus dados antes de viajar."}
+# A text that opens with a promo code, and then a long link or a run of blank lines before an
+# order: the second pass measured the code's reach with the link and the blank lines taken out.
+JOINED_TOPS = {"en": "Use code SPRING10 at checkout for 10% off your next order:",
+               "es": "Usa el código VERANO10 en tu próxima compra:",
+               "pt": "Use o código VERAO10 na sua próxima compra:",
+               "zh": "优惠码 SPRING10 下次购物可用：", "ar": "رمز الخصم SPRING10 لطلبك القادم:"}
+JOINED_TEXTS = {"en": "Your order {ORDER} ships on {DATE}. Call {PHONE}.",
+                "es": "Tu pedido {ORDER} llega el {DATE}. Llámanos al {PHONE}.",
+                "pt": "Seu pedido {ORDER} chega em {DATE}. Ligue {PHONE}.",
+                "zh": "您的订单 {ORDER} 已发货，预计 {DATE} 送达。客服电话 {PHONE}。",
+                "ar": "طلبك {ORDER} يصل في {DATE}. اتصل على {PHONE}."}
+LINK = "https://www.acme.example/track?id=" + "a1b2c3d4e5" * 14
+# A label over a number alone on its line with a "#" glued to it, as a receipt sets an order out.
+ORDER_LABELS = {"en": "Order number", "es": "Número de pedido", "pt": "Número do pedido",
+                "zh": "订单号", "ar": "رقم الطلب"}
+# A part that names no charset, in the older one of its language, as an older sender's script
+# sends it: Thunderbird guesses the charset, and its index holds "código", 验证码 and رمز.
+UNLABELLED = {"en": "cp1252", "es": "cp1252", "pt": "cp1252", "zh": "gbk", "ar": "cp1256"}
 
 
 # ---- HTML -------------------------------------------------------------------------------------
@@ -660,6 +711,9 @@ def corpus():
                 "Ligue {PHONE}. Total: {PRICE}")],
         "ar": [("تأكيد الشحن", "الرمز البريدي: 12345\nموعد التسليم: {DATE} الساعة {TIME}\n"
                 "الهاتف: {PHONE}\nالمبلغ: {PRICE}"),
+               # كود ("code") for a discount, at the top of a bill, names no code being given.
+               ("فاتورة Acme", "كود الخصم موجود في التطبيق.\nرقم الطلب: {ORDER}\nموعد التسليم: "
+                "{DATE} الساعة {TIME}\nخدمة العملاء: {PHONE}"),
                ("رمز الخصم الخاص بك", "مرحبا،\nالعرض ساري حتى {DATE} الساعة {TIME}.\n"
                 "اتصل على {PHONE}. المبلغ: {PRICE}")],
         "en": [("Your Acme discount code inside", "Hello,\nThe sale ends {DATE} at {TIME}.\n"
@@ -697,6 +751,34 @@ def corpus():
                           "subject": "Acme", "plain": None, "html": markup, "cte": "8bit",
                           "charset": "utf-8", "index": index_text(None, markup),
                           "tokens": [(code, "code:pairs")]})
+    # Parts that name no charset, in each language's older one (see UNLABELLED): sign-in mails,
+    # plain and in HTML with no <meta>, and an everyday one.
+    for lang, encoding in UNLABELLED.items():
+        frames = [frame for frame in SIGN_IN[lang] if "{P}" not in frame[1]][:4]
+        for n, (subject, body) in enumerate(frames):
+            code = _digits(rng, 6)
+            text = body.replace("{C}", code)
+            for form in ("plain-8bit", "plain-qp", "html-8bit"):
+                markup = html_of(lang, text, [(code, "code")], "inline", rng) \
+                    if form.startswith("html") else None
+                mails.append({"lang": lang, "kind": "code",
+                              "why": f"{lang} unlabelled {encoding} {subject[:24]!r} | {form}",
+                              "subject": subject.replace("{C}", code),
+                              "plain": None if markup else text, "html": markup,
+                              "cte": "qp" if form.endswith("qp") else "8bit", "charset": None,
+                              "encoding": encoding, "index": index_text(None if markup else text,
+                                                                         markup),
+                              "tokens": [(code, "code:6 digits")]})
+        subject, body = EVERYDAY[lang][0]
+        picked = {slot: VALUES[slot][lang][0] for slot in SLOTS}
+        for slot, value in picked.items():
+            body, subject = body.replace("{" + slot + "}", value), \
+                subject.replace("{" + slot + "}", value)
+        mails.append({"lang": lang, "kind": "ordinary", "why": f"{lang} unlabelled {encoding} everyday",
+                      "subject": subject, "plain": body, "html": None, "cte": "8bit",
+                      "charset": None, "encoding": encoding, "index": body,
+                      "tokens": [(value, slot.lower()) for slot, value in picked.items()
+                                 if value in body]})
     # Decomposed accents (NFD), as some mail programs write them, in Spanish and Portuguese.
     for m in [m for m in mails if m["lang"] in ("es", "pt") and m.get("encoding") is None
               and m["cte"] == "8bit" and m["html"] is None][::3]:
@@ -805,7 +887,9 @@ def more(rng) -> list[dict]:
                 tokens = [(value, slot.lower()) for slot, value in picked.items()
                           if "{" + slot + "}" in line
                           and not (re.search(r"\d", value) and re.search(r"[A-Za-z]", value))]
-                tokens += [(time, "time") for time in ("14h35", "21h30", "24-hour") if time in line]
+                tokens += [(time, "time") for time in ("14h35", "21h30", "14h35min", "21h30min",
+                                                       "16h50min", "24-hour", "2-night", "10-min",
+                                                       "30-minute", "24hrs") if time in line]
                 everyday(lang, f"talking line {line!r}", "Acme travel update",
                          "Hello,\n\n" + fill(line, picked) + "\n\nThanks, Acme", tokens, form)
     cell = ('<tr><td style="padding:8px 16px;font-family:Arial,sans-serif;font-size:14px;'
@@ -824,13 +908,34 @@ def more(rng) -> list[dict]:
                           "charset": "utf-8", "encoding": None, "index": html_text(markup),
                           "tokens": [(f1, "flight"), (f2, "flight")]})
         if lang in TICKET_REST:
-            text = ("\n".join(legs) + "\nBooking reference HMX4K2. Seat 14C.\n"
-                    + (filler + "\n") * (22_000 // len(filler)) + TICKET_REST[lang])
-            mails.append({"lang": lang, "kind": "ordinary",
-                          "why": f"{lang} e-ticket of {len(text)} characters, its rest talks",
-                          "subject": "Your Acme e-ticket", "plain": text, "html": None,
-                          "cte": "8bit", "charset": "utf-8", "encoding": None, "index": text,
-                          "tokens": [(f1, "flight"), (f2, "flight"), ("HMX4K2", "reference")]})
+            # Its flights written as a ticket does and with a space, "BA 2617", whose digits were
+            # hidden once the rest past what 0.5.0 read talked of signing in.
+            for spaced in (False, True):
+                flights = [f"{f[:2]} {f[2:]}" if spaced else f for f in (f1, f2)]
+                text = ("\n".join(leg.replace(f, flight) for leg, f, flight
+                                  in zip(legs, (f1, f2), flights))
+                        + "\nBooking reference HMX4K2. Seat 14C. Booking 48213377.\n"
+                        + (filler + "\n") * (22_000 // len(filler)) + TICKET_REST[lang])
+                mails.append({"lang": lang, "kind": "ordinary",
+                              "why": f"{lang} e-ticket of {len(text)} characters, its rest talks"
+                                     f"{', spaced' if spaced else ''}",
+                              "subject": "Your Acme e-ticket", "plain": text, "html": None,
+                              "cte": "8bit", "charset": "utf-8", "encoding": None, "index": text,
+                              "tokens": [*((flight, "flight") for flight in flights),
+                                         ("HMX4K2", "reference"), ("48213377", "order")]})
+    for lang, top in JOINED_TOPS.items():
+        for n, between in enumerate((f"\n{LINK}\n\n", "\n" * 170) * 3):
+            i += 1
+            picked = pick(lang, i)
+            everyday(lang, f"joined reach {between[:5]!r}", "Your Acme order",
+                     top + between + fill(JOINED_TEXTS[lang], picked),
+                     [(picked[slot], slot.lower()) for slot in ("ORDER", "DATE", "PHONE")],
+                     ("plain-8bit", "html-qp")[n // 2 % 2])
+    for lang, label in ORDER_LABELS.items():
+        for order in ("#5928374", "#A1B2C3"):
+            for form in ("plain-8bit", "html-qp"):
+                everyday(lang, f"own line {order}", "Your Acme order",
+                         f"{thanks[lang]}\n{label}\n{order}\n", [(order, "order")], form)
     return mails
 
 
@@ -841,12 +946,10 @@ AUTHOR = "Acme <account@acme.example>"
 
 def thunderbird_read(m: dict) -> str:
     """This version from Thunderbird's index, as mail._rows and mail._note hide it: the first
-    SCAN_CHARS of the text, and whether the rest talks of signing in (see mail._rest_talks)."""
-    index, start = m["index"], mail.SCAN_CHARS - mail.TALK_REACH
-    cut = len(index) > mail.SCAN_CHARS
-    talk_past = cut and (len(index) > start + mail.REST_CHARS
-                         or mail._talks(index[start:start + mail.REST_CHARS]))
-    subject, body = mail._secret_free(m["subject"], index[:mail.SCAN_CHARS], False, cut, talk_past)
+    SCAN_CHARS of the text, as 0.5.0 read it, and nothing past them."""
+    index = m["index"]
+    subject, body = mail._secret_free(m["subject"], index[:mail.SCAN_CHARS], False,
+                                      len(index) > mail.SCAN_CHARS)
     return mail._shown(subject, mail.SUBJECT_CHARS) + "\n" + mail._shown(body, mail.BODY_CHARS)
 
 
@@ -858,11 +961,13 @@ def server_talks(m: dict) -> bool:
                for term in goamail.TALK_TERMS)
 
 
-def _encoded(text: str, charset: str, encoding: str | None, cte: str, token: str):
+def _encoded(text: str, charset: str | None, encoding: str | None, cte: str, token: str):
+    """(the Content-Type's parameters and the transfer encoding's header, the part's bytes). A
+    charset of None is a part that names none, in encoding."""
     try:
         data = text.encode(encoding or charset)
     except UnicodeEncodeError:
-        charset, data = "utf-8", text.encode("utf-8")
+        charset, data = charset and "utf-8", text.encode("utf-8")
     if cte == "qp":     # with a soft line break inside the token, as a server folding at 76 might
         body = quopri.encodestring(data)
         raw = token.encode(encoding or charset, "replace")
@@ -874,7 +979,8 @@ def _encoded(text: str, charset: str, encoding: str | None, cte: str, token: str
     else:
         body = data.replace(b"\n", b"\r\n")
     name = "quoted-printable" if cte == "qp" else cte
-    return f"charset={charset}\r\nContent-Transfer-Encoding: {name}\r\n", body
+    label = f"; charset={charset}" if charset else ""
+    return f"{label}\r\nContent-Transfer-Encoding: {name}\r\n", body
 
 
 def fetched(m: dict) -> dict:
@@ -898,9 +1004,9 @@ def fetched(m: dict) -> dict:
              for text, kind in ((m["plain"], "plain"), (m["html"], "html")) if text is not None]
     if len(parts) == 1:
         kind, fields, body = parts[0]
-        return {b"HEADER": head + f"Content-Type: text/{kind}; {fields}\r\n".encode(),
+        return {b"HEADER": head + f"Content-Type: text/{kind}{fields}\r\n".encode(),
                 b"TEXT": body}
-    text = b"".join(b"--b\r\n" + f"Content-Type: text/{kind}; {fields}\r\n".encode() + body
+    text = b"".join(b"--b\r\n" + f"Content-Type: text/{kind}{fields}\r\n".encode() + body
                     + b"\r\n" for kind, fields, body in parts)
     return {b"HEADER": head + b'Content-Type: multipart/alternative; boundary="b"\r\n\r\n',
             b"TEXT": text + b"--b--\r\n"}
@@ -908,13 +1014,18 @@ def fetched(m: dict) -> dict:
 
 def online_read(m: dict) -> tuple[str | None, str | None]:
     """(what the model is shown through Online Accounts, the text goamail decoded), as
-    goamail._rows reads a fetched mail, as far as it fetches it, and mail._note hides it. A mail
-    cut there talks of signing in where the server's search says so (see server_talks)."""
-    found = fetched(m)
-    found[b"TEXT"] = found[b"TEXT"][:goamail.TEXT_BYTES]
+    goamail._rows reads a fetched mail, as far as it fetches it, and further for one cut short in
+    the part read (see goamail._read_on), and mail._note hides it. A mail still cut short of
+    SCAN_CHARS talks of signing in where the server's search says so (see server_talks)."""
+    whole = fetched(m)
+    found = {**whole, b"TEXT": whole[b"TEXT"][:goamail.TEXT_BYTES]}
     read = goamail._read(found)
+    if read and read[2]:
+        found = {**whole, b"TEXT": whole[b"TEXT"][:goamail.TEXT_BYTES + goamail.MORE_BYTES]}
+        read = goamail._read(found, goamail.TEXT_BYTES + goamail.MORE_BYTES) or read
     kept = read and goamail._hidden(STEMS, read[0], found, read[1], True, read[2],
-                                    read[2] and server_talks(m))
+                                    read[2] and len(read[1]) < mail.SCAN_CHARS
+                                    and server_talks(m))
     if not kept:
         return None, None
     return (mail._shown(kept[1], mail.SUBJECT_CHARS) + "\n" + mail._shown(kept[2], mail.BODY_CHARS),
@@ -988,7 +1099,9 @@ class FiveLanguages(unittest.TestCase):
         found = defaultdict(list)
         for m, _old, _tb, _online, decoded in self.read:
             index = " ".join(f"{m['subject']}\n{m['index']}".split())
-            if decoded is not None and len(fetched(m)[b"TEXT"]) > goamail.TEXT_BYTES:
+            cut = len(fetched(m)[b"TEXT"]) > goamail.TEXT_BYTES + goamail.MORE_BYTES \
+                or len(m["index"]) > mail.SCAN_CHARS
+            if decoded is not None and cut:
                 decoded = " ".join(decoded.split()).rsplit(" ", 1)[0]    # where the fetch cut it
                 index = index[:len(decoded)]
             if decoded is not None and " ".join(decoded.split()) != index:

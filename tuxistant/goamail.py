@@ -65,6 +65,7 @@ EVERY_HITS = 20         # the newest mails holding every word
 FETCHED = 40            # and with the newest holding some of them, all that is fetched of a mailbox
 HEADER_BYTES = 4096     # of a mail's sender and subject
 TEXT_BYTES = 16_000     # of the rest of it
+MORE_BYTES = 24_000     # and of a part cut short there, as 0.5.0 read 20,000 characters
 FROM_BYTES = 1024
 MAX_LITERAL = 64_000    # more than was asked for is a server not keeping to the request
 MAX_TAKEN = 4_000_000   # all one search may take from a server
@@ -151,6 +152,13 @@ CODECS = {"iso8859-1": "cp1252", "ascii": "cp1252", "iso8859-9": "cp1254", "tis-
 # Chinese sender's 验证码 was gone, and the code after it with it.
 META_CHARSET = re.compile(rb"(?i)<meta\b[^<>]*?charset\s*=\s*[\"']?\s*([\w.:-]{1,40})")
 META_BYTES = 1024
+# A part that names no charset at all, as an older sender's script sends one, Thunderbird reads in
+# the charset it guesses. Read as UTF-8, "Tu código" was "Tu c\ufffddigo", 验证码 and رمز were
+# gone, and the code after each was shown. See _guessed for the charsets it is told apart in.
+HIGH_RUN = re.compile(rb"[\x80-\xff]+")
+GUESSES = (("cp1256", re.compile("[\u0620-\u064a\u066e-\u06d3\u06fa-\u06ff]")),
+           ("gb18030", re.compile("[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")))
+LATIN = re.compile("[A-Za-z\u00c0-\u024f]")
 # An encoded word (RFC 2047), and the space between two of them, which is not part of the text.
 ENCODED_WORD = re.compile(r"=\?([^?\s]+)\?([QqBb])\?([^?\s]*)\?=")
 BETWEEN_WORDS = re.compile(r"(?<=\?=)\s+(?==\?[^?\s]+\?[QqBb]\?)")
@@ -227,10 +235,10 @@ async def _sign_ins(until: float) -> tuple[list[tuple[Account, str]], str]:
     with an account that could have been searched is said before what is wrong with the rest."""
     try:
         bus = await asyncio.wait_for(_connect(), _left(until))
-    except TimeoutError:
-        return [], NO_ANSWER    # a bus that is there but slow: it is no "no mail here"
-    except (OSError, EOFError, LookupError, ValueError, TypeError, AuthError, DBusError):
-        return [], ""
+    except (TimeoutError, AuthError, DBusError):
+        return [], NO_ANSWER    # a bus that is there but slow, or won't let Tux in: no "no mail"
+    except (OSError, EOFError, LookupError, ValueError, TypeError):
+        return [], ""           # no bus, or nothing listening where it should be
     usable, failed, problems = [], [], []
     try:
         objects = (await _call(bus, ROOT, OBJECT_MANAGER, "GetManagedObjects", until))[0]
@@ -703,11 +711,41 @@ def _decoded(part) -> str:
             meta = META_CHARSET.search(data, 0, META_BYTES)
             label = meta and meta[1].decode("ascii")
         try:
-            return data.decode(_codec(label), "replace")
+            return data.decode(_codec(label) if label else _guessed(data), "replace")
         except (LookupError, ValueError, TypeError):
             return data.decode("utf-8", "replace")
     except (ValueError, TypeError, LookupError, AttributeError):
         return ""
+
+
+def _guessed(data: bytes) -> str:
+    """The codec of a part that names no charset: UTF-8 if it is that, as nearly all are. Else, of
+    the older charsets mail in the five languages the support scope names comes in, Windows-1252
+    where most of its bytes past ASCII stand one at a time, as the accents of Spanish or
+    Portuguese do; Windows-1256 or GB18030 where nearly all its letters past ASCII are Arabic's or
+    Chinese ones in it; and Windows-1252 otherwise. Read in GB18030, an accent and the letter
+    after it are one Chinese character between two Latin letters, "c骴igo", which no Chinese
+    text has: so where more than one in ten are that, it is not Chinese."""
+    try:
+        data.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+    runs = [len(run) for run in HIGH_RUN.findall(data)]
+    if 2 * runs.count(1) >= sum(runs):
+        return "cp1252"
+    for codec, script in GUESSES:
+        try:
+            text = data.decode(codec)
+        except UnicodeDecodeError:
+            continue
+        letters = [at for at, char in enumerate(text) if char.isalpha() and not char.isascii()]
+        ours = [at for at in letters if script.match(text, at)]
+        between = sum(1 for at in ours if at and LATIN.match(text, at - 1)
+                      and LATIN.match(text, at + 1))
+        if ours and 10 * len(ours) >= 9 * len(letters) and 10 * between <= len(ours):
+            return codec
+    return "cp1252"
 
 
 def _base64(text: str) -> bytes:
@@ -802,11 +840,34 @@ def _closed(html: str, cut: bool) -> str:
     return html[:start] if cut and start > html.rfind(">") else html
 
 
+def _read_on(imap, read: list[tuple], until: float) -> list[tuple]:
+    """read, as _rows has it, with each mail cut short in the part that is read fetched on for
+    MORE_BYTES more, in one fetch for them all, and read again: so that its text is as much as
+    Thunderbird's index held of it for 0.5.0 wherever that fits, and its talk of signing in is
+    that text's own. Asked of the server instead, a server that matches whole words only didn't
+    find "100% authentic" or "opiniones verificadas", where 0.5.0's verif\\w+ and authenti\\w+
+    did, and one that searches the markup found "signin" in a link. A mail the fetch brings
+    nothing of, or that can't be read again, stays as it was."""
+    cut = [uid for uid, *_, cut in read if cut]
+    if not cut or time.monotonic() > until:
+        return read
+    typ, data = _ask(imap, "FETCH", ",".join(map(str, cut)),
+                     f"(UID BODY.PEEK[TEXT]<{TEXT_BYTES}.{MORE_BYTES}>)")
+    more = _fetched(data) if typ == "OK" else {}
+    again = []
+    for uid, every, found, *message in read:
+        rest = more.get(uid, {}).get(b"TEXT") if message[-1] else None
+        longer = rest is not None and _read({**found, b"TEXT": found.get(b"TEXT", b"") + rest},
+                                            TEXT_BYTES + MORE_BYTES)
+        again.append((uid, every, found, *(longer or message)))
+    return again
+
+
 def _talking(imap, uids: list[int], until: float) -> set[int]:
-    """Of these mails, cut short where they were fetched to, the ones that talk of signing in
-    anywhere in their text, past the cut too: one search for all of them, as the server reads
-    each whole, and one more for each word that isn't ASCII, which goes as a UTF-8 literal. Any
-    it can't be asked about are taken to."""
+    """Of these mails, cut short before 0.5.0's 20,000 characters even where they were fetched on
+    to, the ones that talk of signing in anywhere in their text, past the cut too: one search for
+    all of them, as the server reads each whole, and one more for each word that isn't ASCII,
+    which goes as a UTF-8 literal. Any it can't be asked about are taken to."""
     if not uids:
         return set()
     if time.monotonic() > until:
@@ -858,7 +919,9 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
         message = found and _read(found)
         if message:
             read.append((uid, every, found, *message))
-    talking = _talking(imap, [uid for uid, *_, cut in read if cut], until)
+    read = _read_on(imap, read, until)
+    talking = _talking(imap, [uid for uid, *_, body, cut in read
+                              if cut and len(body) < mail.SCAN_CHARS], until)
     rows = []
     for uid, every, found, message, body, cut in read:
         if time.monotonic() > until:
@@ -873,12 +936,13 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
 # the email package raised over ended the mailbox, and the search found nothing for every
 # question that mail matched. So whatever goes wrong over one mail skips it.
 
-def _read(found: dict) -> tuple | None:
-    """(message, its text, whether that was cut short) of one fetched mail, or None."""
+def _read(found: dict, asked: int = TEXT_BYTES) -> tuple | None:
+    """(message, its text, whether that was cut short) of one fetched mail, of whose text asked
+    bytes were fetched, or None."""
     text = found.get(b"TEXT", b"")
     try:
         message = _parsed(found.get(b"HEADER", b""), text)
-        return message and (message, *_body(message, len(text) >= TEXT_BYTES))
+        return message and (message, *_body(message, len(text) >= asked))
     except Exception:
         return None
 

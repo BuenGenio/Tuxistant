@@ -66,10 +66,8 @@ SUBJECT_CHARS = 200
 SECRET_REACH = 160      # how far after the word for a secret the secret itself is looked for
 SECRET_BEFORE = 60      # and how far before it: "482913 is your code"
 NAMED_CHARS = 300       # how far down a mail's text a word for a secret names one in its subject
-TALK_REACH = 20         # how far before a cut its rest is read from, for words the cut split
 GROWTH = 18             # the most characters NFKC makes of one, as it does of U+FDFA
 PIECE = 1000            # how much of a text that may grow that far is made plain at a time
-REST_CHARS = 50_000     # and how much of that rest: past it, a mail is taken to talk of signing in
 FLOOR_WORK = 4_000_000  # pieces 0.5.0 hides in one text, times its length, looked for made plain
 TRIED = 3               # mails shown to the model, best first
 CHECKED = 6             # the best few have their senders looked up, which can cost a scan each
@@ -238,11 +236,17 @@ UNESCAPES = 4
 # letters that stand for "the", "in", "to", "and", "that", "from" and "as" before it.
 PASSWORDS = (r"passwort\w*|kennwort\w*|contrase[ñn]a\w*|senha\w*|has[łl][oa]\w*|mot de passe"
              r"|wachtwoord\w*|lösenord\w*|passord\w*|adgangskode\w*|kodeord\w*|şifre\w*|hesl[oa]\w*"
-             r"|jelsz[óa]\w*|mật khẩu|kata sandi|पासवर्ड|סיסמ\w*|كلمة (?:ال)?(?:مرور|سر)|رمز المرور"
+             r"|jelsz[óa]\w*|mật khẩu|kata sandi|पासवर्ड|סיסמ\w*|كلمة (?:ال)?مرور|رمز المرور"
              r"|κωδικ\w* πρ[οό]σβασ\w*|συνθηματικ\w*")
-# Arabic كود ("code"), as in كود التحقق, by itself or after ال ("the"), but not inside
-# ركود ("stagnation") or another word that holds its letters.
-ARABIC_CODE = "(?:(?<=\u0627\u0644)|(?<![\u0620-\u064a]))\u0643\u0648\u062f"
+# كلمة السر ("the secret word") is a password too, but it is also "the key to" something, as in
+# "كلمة السر لرحلة مثالية", so it counts only in its own part (see CROSS_WORD).
+OWN_PASSWORDS = rf"{PASSWORDS}|كلمة (?:ال)?سر"
+# Arabic كود ("code"), by itself or after ال ("the"), but not inside ركود ("stagnation") or another
+# word that holds its letters, and only where it names a code being given: before التحقق, التفعيل
+# or الدخول, a colon, هو ("is"), الخاص ("your") or the code itself. "كود الخصم موجود في التطبيق"
+# ("the discount code is in the app") at the top of a bill hid its tracking and account numbers.
+ARABIC_CODE = ("(?:(?<=\u0627\u0644)|(?<![\u0620-\u064a]))\u0643\u0648\u062f"
+               r"(?=\s?:|\s(?:هو(?![\u0620-\u064a])|الخاص|(?:ال)?(?:تحقق|تفعيل|دخول))|\s\d)")
 HEBREW_PREFIXES = "\u05d4\u05d1\u05dc\u05d5\u05e9\u05de\u05db"    # the, in, to, and, that, from, as
 HEBREW_CODE = (f"(?<![\u05d0-\u05ea])[{HEBREW_PREFIXES}]{{0,2}}\u05e7\u05d5\u05d3"   # [prefixes]קוד
                "(?:\u05d9\u05dd|\u05d9)?(?![\u05d0-\u05ea])")                     # ים / י
@@ -257,38 +261,48 @@ def _secret_words(short: str, cjk: str) -> re.Pattern:
         r"|(?<![A-Za-zÀ-ÿ])(?!post|bar|zip)[A-Za-zÀ-ÿ]{0,40}codes?(?![A-Za-z])|c[oó]dig\w*|codic\w*"
         r"|(?<![A-Za-z])k[oó]d\w*"
         r"|(?<![A-Za-zÀ-ÿ])(?!post|stre[cg]?k)[A-Za-zÀ-ÿ]{0,30}kod(?:e[nr]?)?(?![A-Za-z])"
-        rf"|код\w*|парол\w*|(?<![A-Za-z])clave\w*|{PASSWORDS}|mã (?:xác|otp)|कोड|{HEBREW_CODE}"
-        rf"|κωδικ\w*|رمز|{ARABIC_CODE}|{cjk})", re.I)
+        rf"|код\w*|парол\w*|(?<![A-Za-z])clave\w*|{OWN_PASSWORDS}|mã (?:xác|otp)|कोड"
+        rf"|{HEBREW_CODE}|κωδικ\w*|رمز|{ARABIC_CODE}|{cjk})", re.I)
 
 
-NAMING = r"pass(?:words?|phrases?|codes?|wd)|pwd|pins?|otp"
-SECRET_WORD = _secret_words(NAMING + "|pass|keys?|tokens?",
+NAMING = r"pass(?:words?|phrases?|codes?|wd)|pwd|pin|otp"
+SECRET_WORD = _secret_words(NAMING + "|pins|pass|keys?|tokens?",
                             "密码|密碼|비밀번호|認証番号|確認番号|口令|コード|パスワード|暗証|码|碼|코드"
                             "|번호|รหัสผ่าน|รหัส(?!ไปรษณีย์)")
 # A word for a secret in one part of a mail that counts for the other (see _passed): only one
 # that names a sign-in code, a PIN or a password, such as "verification code", "código de
-# seguridad", "رمز التحقق", 验证码, 인증번호 or รหัสยืนยัน, or a bare "code" in small letters after
-# "your", "my", "our", "the" or "this", "new" and at most a name, "Your Acme code" or "Here is
-# your code.", where in capitals, "Your QR code" or "Your Pickup Code", it may be an everyday one.
-# Each such code has a word of its own, a pickup, gift card, referral, ticket or tracking code,
-# a código de recogida or رمز الاستلام, and a list of them always lacked the next one: under any
-# of them, a text of dates, prices, orders and flights lost them all, which 0.5.0 read out. An
-# access code and a confirmation code are an event's and a booking's too. A bare código, كود or
-# رمز, or 码, 번호, コード or รหัส alone, also name an order, a QR code, a barcode or a postcode:
-# "您的订单号码" is "your order number", and 전화번호 a phone number. A bare "pass", "key" or "token"
-# names one only beside it: "Your Acme pass" is a boarding pass.
+# seguridad", "clave de seguridad", "رمز التحقق", 验证码, 인증번호 or รหัสยืนยัน, or a bare "code" in
+# small letters after "your", "the" or "this", "new" and at most a name, where nothing but
+# punctuation or a line end follows it, as in "Your Acme code" or "Here is your code.", or "for" and
+# a name, "That is your code for Acme.", or "you asked for". Each everyday code has a word of its
+# own, a pickup, gift card, referral, ticket or tracking code, a código de recogida or رمز
+# الاستلام, and a list of them always lacked the next one: under any of them, a text of dates,
+# prices, orders and flights lost them all, which 0.5.0 read out. So a bare "code" that goes on,
+# "Your Acme code for 20% off", "Scan the code at the gate" or "our code of conduct", or is in
+# capitals, "Your QR code" or "Your Pickup Code", may be an everyday one, and an access code and a
+# confirmation code are an event's and a booking's. A bare código, clave, كود or رمز, or 码, 번호,
+# コード or รหัส alone, also name an order, a QR code, a barcode, a postcode or a key date, "fechas
+# clave": "您的订单号码" is "your order number", and 전화번호 a phone number. A bare "pass", "key" or
+# "token" names one only beside it: "Your Acme pass" is a boarding pass, and "New Pins for you" is
+# Pinterest's. A word for a password counts only where it starts a word, as "resenha" ("review")
+# and "desenhado" ("designed") hold senha; 密码 not before 锁, 箱 or 学 (a combination lock, a safe,
+# cryptography); and 口令 only as 动态口令 or 登录口令, as 淘口令 is a shop's link and 口令红包 a voucher.
 SIGN_IN_CODE = (r"(?:verification|security|sign[- ]?in|log[- ]?in|one[- ]?time|authentication"
                 r"|2fa|two[- ](?:factor|step))[- ]?codes?")
-CROSS_CJK = ("验证码|驗證碼|校验码|校驗碼|动态码|動態碼|密码|密碼|認証コード|確認コード|認証番号|確認番号"
-             "|口令|ワンタイム|パスワード|暗証|인증번호|비밀번호|인증 ?코드|보안 ?코드|รหัสผ่าน|รหัสยืนยัน")
+CROSS_CJK = ("验证码|驗證碼|校验码|校驗碼|动态码|動態碼|密码(?![锁箱学])|密碼|認証コード|確認コード|認証番号"
+             "|確認番号|动态口令|登录口令|ワンタイム|パスワード|暗証|인증번호|비밀번호|인증 ?코드|보안 ?코드|รหัสผ่าน"
+             "|รหัสยืนยัน")
 CROSS_WORD = re.compile(
     rf"(?=[2A-Za-zÀ-ÿ\u015f\u03ba\u03c3\u092a\u05e1\u0631\u0643"
     rf"{''.join(sorted({word[0] for word in CROSS_CJK.split('|')}))}])(?:"
-    rf"(?<![A-Za-z])(?:{SIGN_IN_CODE}|{NAMING}|clave\w*|c[oó]digos? de (?:verificaci[oó]n"
+    rf"(?<![A-Za-z])(?:{SIGN_IN_CODE}|{NAMING}|(?:c[oó]digos?|claves?) de (?:verificaci[oó]n"
     r"|verifica[cç][aã]o|seguridad|seguran[cç]a|inicio de sesi[oó]n))(?![A-Za-z])"
-    r"|(?<![A-Za-z])(?:your|the|this|my|our)\s{1,3}(?:new\s{1,3})?"
-    r"(?:(?-i:[A-Z][a-z])[\w.&'-]{0,30}\s{1,3})?(?-i:codes?)(?![A-Za-z])"
-    rf"|{PASSWORDS}|mã (?:xác|otp)|(?:رمز|كود) (?:ال)?(?:تحقق|تفعيل|دخول)|{CROSS_CJK})", re.I)
+    r"|(?<![A-Za-z])(?:your|the|this)\s{1,3}(?:new\s{1,3})?"
+    r"(?:(?-i:[A-Z][a-z])[\w.&'-]{0,30}\s{1,3})?(?-i:codes?)"
+    r"(?:\s{1,3}for\s{1,3}(?-i:[A-Z])[\w.&'-]{0,30})?"
+    r"(?=[ \t]*(?:[.!?,:;)\n]|$)|\s{1,3}you\s{1,3}(?:asked\s{1,3}for|requested))"
+    rf"|(?<![^\W\d_])(?:{PASSWORDS})|mã (?:xác|otp)|(?:رمز|كود) (?:ال)?(?:تحقق|تفعيل|دخول)"
+    rf"|{CROSS_CJK})", re.I)
 # A password is whatever follows a colon or "is", even a plain word: the English "is", or that of
 # a language above that writes a space round it, "Ihr Passwort ist", "Vaše heslo je" or "Mật khẩu
 # là". Not that of one that writes none, as Japanese, Chinese, Korean or Thai do, where the
@@ -296,7 +310,7 @@ CROSS_WORD = re.compile(
 # others only as written, so "the EST office" or "ES" in capitals is no "is". The same words make
 # a year after a word for a code the code (see JUST_GIVEN). Where the first is another language's,
 # 0.5.0's first colon or English word is looked for as well (see _passwords).
-PASSWORD_WORD = re.compile(rf"(?:pass(?:words?|phrases?|wd)?|pwd|парол\w*|clave\w*|{PASSWORDS}"
+PASSWORD_WORD = re.compile(rf"(?:pass(?:words?|phrases?|wd)?|pwd|парол\w*|clave\w*|{OWN_PASSWORDS}"
                            r"|パスワード|密码|密碼|비밀번호|รหัสผ่าน)", re.I)
 ENGLISH_IS = r"(?i:is|are|was|will be|(?:changed|set|reset) to)"
 OTHER_IS = r"ist|lautet|est|es|é|è|är|er|je|jest|là|adalah|είναι|هي|هو|היא|הוא"
@@ -392,8 +406,10 @@ SHAPED = re.compile(
     rf"|[A-Z]{{3}} [A-Z]{{3}})(?!{WORD_CHAR})"                                      # KQW XBT
     rf"|{SPACED}|{GROUPED}")
 SUFFIX = "(?:st|nd|rd|th|am|pm|kg|km|gb|mb|x|s)"     # an ordinal's, a time's or a size's
-# And a time as Portuguese and French write one, "14h35", and a span of hours, "24-hour".
-NOT_A_SECRET = re.compile(rf"\d+{SUFFIX}|(?:19|20)\d\d|\d{{1,2}}h\d\d|\d+-hours?", re.I)
+# And a time as Portuguese and French write one, "14h35" or "14h35min", and a span of time,
+# "24-hour", "24hrs", "10-min", "2-night" or "3-week".
+NOT_A_SECRET = re.compile(rf"\d+{SUFFIX}|(?:19|20)\d\d|\d{{1,2}}h\d\d(?:min)?"
+                          r"|\d+-?(?:hours?|hrs?|minutes?|mins?|days?|nights?|weeks?)", re.I)
 SUFFIXED = re.compile(rf"\d+{SUFFIX}", re.I)
 # "code is 2048", "Code: 2048" or "Ihr Code lautet 2048" is no year: after a colon or a word for
 # "is" that GIVEN knows, looked for this far back (see _just_given).
@@ -439,12 +455,13 @@ def _numbers(text: str, seen: str, start: int = 0, end: int | None = None):
 # A line that is nothing but a code, give or take the punctuation a template, html2text or the
 # plain part of an HTML mail puts round one: "*482913*" for a bold code, "482913." or "482913。",
 # "(KQ7X9B)", "`482913`" for code, "- 482913" or "+ 482913" for an item of a list (a bullet is a
-# space to the hiding: see DOTS), "| 482913 |" for a table's cell, "# 482913", or an arrow
-# pointing at it.
-AROUND = (r"""[ \t*_"'“”‘’‹›«»()\[\]{}<>.,:;!?`|#=~/\-\u3001\u3002\u3014\u3015\u2215"""
+# space to the hiding: see DOTS), "| 482913 |" for a table's cell, "# 482913" for a heading, or
+# an arrow pointing at it. A "#" glued to it is an order's, "Order number\n#5928374", as a "+"
+# glued to it is a phone's.
+AROUND = (r"""[ \t*_"'“”‘’‹›«»()\[\]{}<>.,:;!?`|=~/\-\u3001\u3002\u3014\u3015\u2215"""
           r"\u2190-\u21ff\u2794-\u27bf\u2b05-\u2b07\u25b6\u25ba\u25c0\u25c4]*+")
 ALONE = re.compile(
-    rf"^(?:\+[ \t])?{AROUND}((?:\d[ -]?){{4,12}}"
+    rf"^(?:[+#]+[ \t])?{AROUND}((?:\d[ -]?){{4,12}}"
     r"|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,14}"
     r"|(?=[A-Za-z0-9 ]*\d)(?=[A-Za-z0-9 ]*[A-Za-z])(?:[A-Za-z0-9] ){4,13}[A-Za-z0-9]"
     rf"|(?!{AMOUNT})(?=[A-Z0-9 ]{{0,6}}\d)(?=[A-Z0-9 ]{{0,6}}[A-Z])"
@@ -731,8 +748,8 @@ def _searched(author: str) -> str:
     return NO_REPLY.sub(" ", ADDRESS_END.sub(r"\1", author.removesuffix(INDEX_TAIL)))
 
 
-def _spans(seen: str, talk: bool = False, lead: int = 0,
-           joined: bool = False) -> list[tuple[int, int]]:
+def _spans(seen: str, talk: bool = False, lead: int = 0, joined: bool = False,
+           before: str | None = None) -> list[tuple[int, int]]:
     """Where a secret may stand in a mail, as the model reads it: see SECRET_WORD. It is looked
     for as the hiding reads the text (see _apart), but for a password given after "is" or a
     colon, which is whatever the model reads there, dashes and dots in it too: "Sunny—Day—7".
@@ -743,20 +760,21 @@ def _spans(seen: str, talk: bool = False, lead: int = 0,
     there is as 0.5.0 read it. lead: how far from its start the text is in reach of a word for a
     secret that stands before it, in the other part of the mail (see _passed). joined: the
     text's lines are joined, as the model reads them (see _ranged), where letters with digits
-    don't count, as a footer joined to the line before it would talk for that line."""
-    spans, ends, text = [], [], _apart(seen, joined)
+    don't count, as a footer joined to the line before it would talk for that line. before: the
+    text as it was before they were joined, for what is near a word for a secret (see _joining)."""
+    spans, near, ends, text = [], [], [], _apart(seen, joined)
     for word in SECRET_WORD.finditer(text):
         ends.append(word.end())
         if PASSWORD_WORD.fullmatch(word[0]):
             spans += _passwords(seen, word.end())
-        before = max(0, word.start() - SECRET_BEFORE)
-        if not DIGIT.search(text, before, word.start()):
+        back = max(0, word.start() - SECRET_BEFORE)
+        if not DIGIT.search(text, back, word.start()):
             continue    # only saves time: a stranger's mail can hold ten thousand words for a
             # code and no number, and each would look for numbers before it, finding none
-        for number in _numbers(text, seen, before, word.start()):
+        for number in _numbers(text, seen, back, word.start()):
             if not YEAR.fullmatch(number[0]):
-                spans.append(number.span())
-    spans += _shaped(text, ends, lead)
+                near.append(number.span())
+    spans += _joining(seen, near + _shaped(text, ends, lead), before)
     lines = _talking_lines(text)
     found = [*ALONE.finditer(text)]
     if talk or lines:
@@ -767,6 +785,26 @@ def _spans(seen: str, talk: bool = False, lead: int = 0,
     spans += [one.span(one.lastindex or 0) for one in found
               if not YEAR.fullmatch(one[one.lastindex or 0].strip())]
     return sorted(spans)
+
+
+def _joining(seen: str, near: list[tuple[int, int]], before: str | None) -> list:
+    """Of what is near a word for a secret in a text whose lines were joined, what the joining
+    made: a piece with a space in it that the text before (before) doesn't hold, as a line end, a
+    link, a tag or a run of spaces stood there, as in "482\\n913". Anything else stood there as it
+    is, where the first pass looked at it as near the word as that text has it: measured in the
+    joined text, where a link or blank lines were taken out, an order or phone number 200
+    characters past "Use code SPRING10" was hidden. All of it, when there is no text before."""
+    if before is None:
+        return near
+    held, made = {}, []     # each piece looked for once, however often it stands
+    for start, end in near:
+        piece = seen[start:end]
+        if " " in piece:
+            if piece not in held:
+                held[piece] = piece in before
+            if not held[piece]:
+                made.append((start, end))
+    return made
 
 
 def _talking_lines(text: str) -> list[tuple[int, int]]:
@@ -1030,16 +1068,6 @@ def _uncut(text: str) -> str:
     return text[:len(text) - CUT_TAIL.match(text[::-1]).end()]
 
 
-def _talks(rest: str | None) -> bool:
-    """Whether the rest of a mail, past where it is read, talks of signing in. It is looked at as
-    the part that is read would be, by the same steps: as hidden first (_plain), then as the model
-    reads it (_joined, then _plain again). So "sign\nin", "&#115;ign in", a soft hyphen or a tag
-    inside the words count as they would before the cut. A rest that NFKC grows past twice
-    REST_CHARS, as only ligatures do, is taken to talk of signing in rather than read."""
-    first, grown = _made_plain(rest or "", 2 * REST_CHARS)
-    return grown or _talking(first)
-
-
 def _talking(plain: str) -> bool:
     """Whether a text made plain talks of signing in, as it is and with its lines joined."""
     return any(SIGN_IN_TALK.search(_apart(text)) for text in (plain, _plain(_joined(plain))))
@@ -1063,7 +1091,8 @@ def _joined(text: str) -> str:
     return clean(URL.sub(" ", text), len(text))
 
 
-def _hide(text: str, cut: bool = False, talk: bool | None = None, joined: bool = False) -> str:
+def _hide(text: str, cut: bool = False, talk: bool | None = None, joined: bool = False,
+          before: str | None = None) -> str:
     """A mail's text with whatever may be a sign-in code or a password taken out. Odd spaces
     are made plain first, as the model would read "482\u00a0913" as the code it is, and a code
     spelt out one character to a line is put on a line of its own, as the model would read it.
@@ -1077,21 +1106,23 @@ def _hide(text: str, cut: bool = False, talk: bool | None = None, joined: bool =
     _uncut would end it, as part of a code may be too short to hide. Secrets are looked for in
     all of it, so a word for a code in what goes still hides the code before it, and one that
     runs past that end is hidden whole. A text that NFKC grew too far is cut there (see
-    _normal), and taken to talk of signing in. joined: its lines are joined (see _ranged)."""
+    _normal), and taken to talk of signing in. joined: its lines are joined (see _ranged), from
+    before (see _joining)."""
     text, grown = _made_plain(text)
     cut = cut or grown
-    return _hidden(text, cut, cut if talk is None else talk or grown, joined=joined)
+    return _hidden(text, cut, cut if talk is None else talk or grown, joined=joined,
+                   before=before)
 
 
 def _hidden(text: str, cut: bool, talk: bool, lead: int = 0, joined: bool = False,
-            floor=()) -> str:
-    """_hide, of a text already made plain (see _spans for lead and joined), and of what else is
-    in floor (see _floored). Secrets that overlap, as "482913" and "482913-it" do, are one
+            floor=(), before: str | None = None) -> str:
+    """_hide, of a text already made plain (see _spans for lead, joined and before), and of what
+    else is in floor (see _floored). Secrets that overlap, as "482913" and "482913-it" do, are one
     [hidden]. They are looked for with every dash a space (see _apart and _spans), and cut from
     the text as it is."""
     stop = len(_uncut(_apart(text))) if cut else len(text)
     out, at = [], 0
-    for start, end in sorted([*_spans(text, talk, lead, joined), *floor]):
+    for start, end in sorted([*_spans(text, talk, lead, joined, before), *floor]):
         if start >= stop:
             break
         if end > at:
@@ -1131,12 +1162,11 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
             searched = _searched(author)
             if _about(stems, searched, subject, body, every):
                 if row[0] not in hidden:
-                    cut = isinstance(length, int) and length > SCAN_CHARS
-                    talk_past = cut and _rest_talks(db, row[0], length)
                     if time.monotonic() > deadline[0]:
                         break
                     hidden[row[0]] = _secret_free(subject[:SCAN_CHARS], body,
-                                                  len(subject) > SCAN_CHARS, cut, talk_past)
+                                                  len(subject) > SCAN_CHARS,
+                                                  isinstance(length, int) and length > SCAN_CHARS)
                 if _about(stems, searched, *hidden[row[0]], every):
                     rows.append((*row[:3], author, *hidden[row[0]]))
             if len(rows) == limit or time.monotonic() > deadline[0]:
@@ -1145,19 +1175,6 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
         if "interrupted" not in str(e):     # out of time: what was found so far will do
             raise
     return rows
-
-
-def _rest_talks(db: sqlite3.Connection, docid, length: int) -> bool:
-    """Whether the text of a mail past what is read talks of signing in (see _talks). It is read
-    only for a mail about the question, as reading it can take a quarter of a second, and from
-    TALK_REACH before the cut, which may have split a word. A rest longer than REST_CHARS from
-    there is taken to."""
-    start = SCAN_CHARS - TALK_REACH
-    if length > start + REST_CHARS:
-        return True
-    rest = db.execute(f"SELECT substr(c0body, {start + 1}, {REST_CHARS}) "
-                      "FROM messagesText_content WHERE docid = ?", (docid,)).fetchone()
-    return _talks(_text(rest[0])) if rest is not None else True
 
 
 def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
@@ -1191,8 +1208,13 @@ def _secret_free(subject: str, body: str, subject_cut: bool = False, body_cut: b
 
     What 0.5.0's rules hide is hidden too, in the first pass (see _floored), with the glue that
     goamail puts where an inline HTML tag stood (see JOIN). They read 0.5.0's 20,000 characters of
-    the text, and all of the subject: of a text cut shorter, as a mail server sends less of a mail,
-    sign-in talk past the cut counts for them too, and a subject cut at all is taken to talk."""
+    the text, and all of the subject: of a text cut shorter, as a mail server can send less of a
+    mail, sign-in talk past the cut counts for them too, and a subject cut at all is taken to
+    talk. Past those 20,000 characters nothing counts, as 0.5.0 read nothing there: Thunderbird's
+    mail is cut there, so talk_past is only ever Online Accounts'.
+
+    The second pass reads the texts with their lines and links joined, as the model will, and
+    near a word for a secret it hides only what the joining made (see _joining)."""
     (subject, grown, floor, talked), (body, body_grown, body_floor, body_talked) = \
         _floored(subject, talk=subject_cut), \
         _floored(body, glue, talk_past and len(body) < SCAN_CHARS)
@@ -1201,12 +1223,14 @@ def _secret_free(subject: str, body: str, subject_cut: bool = False, body_cut: b
                            [cuts[0] or talked, talk_past or body_grown or body_talked],
                            floors=(floor, body_floor))
     seen = [_plain(_joined(text[:CLEANED_CHARS])) for text in texts]    # as _shown reads them
-    (subject, body), _ = _passed(seen, [len(text) > CLEANED_CHARS for text in texts], talks, True)
+    (subject, body), _ = _passed(seen, [len(text) > CLEANED_CHARS for text in texts], talks, True,
+                                 befores=[text[:CLEANED_CHARS] for text in texts])
     return subject, body
 
 
 def _passed(texts: list[str], cuts: list[bool], talks: list[bool], joined: bool = False,
-            floors: tuple = ((), ())) -> tuple[list[str], list[bool]]:
+            floors: tuple = ((), ()),
+            befores: list | tuple = (None, None)) -> tuple[list[str], list[bool]]:
     """One pass of hiding over a mail's [subject, body], made plain as that pass reads them,
     each taken to talk of signing in where talks says or where it does itself (see
     _secret_free), and whether each did. A word that names a sign-in code in one (see
@@ -1216,15 +1240,15 @@ def _passed(texts: list[str], cuts: list[bool], talks: list[bool], joined: bool 
     text, and one near the top of the text (see NAMED_CHARS) the whole subject. It is no talk of
     signing in for the other part, which would hide every number in it: "Your Acme PIN was
     changed" over a text of a flight, a booking and a phone number further down hid them all.
-    joined: the texts' lines are joined (see _ranged). floors: what else to hide in each (see
-    _floored)."""
+    joined: the texts' lines are joined (see _ranged), from befores (see _joining). floors: what
+    else to hide in each (see _floored)."""
     apart = [_apart(text) for text in texts]
     named = (_names_one(texts[1][:NAMED_CHARS], apart[1][:NAMED_CHARS]),
              _names_one(texts[0], apart[0]))
     return [_hidden(texts[0], cuts[0], talks[0], len(texts[0]) if named[0] else 0, joined,
-                    floors[0]),
+                    floors[0], befores[0]),
             _hidden(texts[1], cuts[1], talks[1], SECRET_REACH if named[1] else 0, joined,
-                    floors[1])], \
+                    floors[1], befores[1])], \
         [bool(talk or SIGN_IN_TALK.search(text)) for talk, text in zip(talks, apart)]
 
 
@@ -1542,9 +1566,13 @@ def _shown(text: str, limit: int) -> str:
     joining puts together, as "sign<b>in, then type 4 8 2 9 1 3" is once clean() reads "sign in",
     could be cut to "4 8 2", too short to hide. And "[hidden]" is longer than most of what it
     stands for, so cutting after hiding also keeps the text within the limit. Only a hostile mail
-    grows past CLEANED_CHARS, and it loses what that cut may have split."""
+    grows past CLEANED_CHARS, and it loses what that cut may have split. The text is one that
+    _secret_free gave, with its secrets hidden by both passes, so near a word for a secret only
+    what joining it again makes is hidden (see _joining): it is joined already, and measured in it,
+    the reach of a word went past what a link and blank lines took up before."""
     cut = len(text) > CLEANED_CHARS
-    return _fit(_hide(_joined(text[:CLEANED_CHARS]), cut, joined=True), limit)
+    return _fit(_hide(_joined(text[:CLEANED_CHARS]), cut, joined=True,
+                      before=text[:CLEANED_CHARS]), limit)
 
 
 async def _note(question: str, mail: Mail, config, seconds: float) -> str:

@@ -102,6 +102,7 @@ class Server:
     def __init__(self, cert: Path, key: Path, boxes: list[Box], mode="ssl", whole_words=False):
         self.boxes, self.mode, self.whole_words = {box.name: box for box in boxes}, mode, whole_words
         self.commands, self.signed_in_with, self.in_clear = [], [], []
+        self.fetched = []           # (uid, section, from, bytes) of each part of a mail fetched
         self.context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.context.load_cert_chain(cert, key)
         self.huge = False           # answer a FETCH with a literal far bigger than was asked for
@@ -303,18 +304,20 @@ class Session:
             if uid not in wanted:
                 continue
             out = f"* {seq} FETCH (UID {uid} INTERNALDATE \"{_internal(when)}\"".encode()
-            for section, fields, limit in re.findall(
-                    r"BODY\.PEEK\[(HEADER\.FIELDS \(([^)]*)\)|TEXT)\]<0\.(\d+)>", items):
+            for section, fields, start, limit in re.findall(
+                    r"BODY\.PEEK\[(HEADER\.FIELDS \(([^)]*)\)|TEXT)\]<(\d+)\.(\d+)>", items):
                 head, _, body = raw.partition(b"\n\n") if b"\r\n\r\n" not in raw else \
                     raw.partition(b"\r\n\r\n")
-                data = (_fields(head, fields.split()) if fields else body)[:int(limit)]
+                start = int(start)
+                data = (_fields(head, fields.split()) if fields else body)[start:start + int(limit)]
+                self.server.fetched.append((uid, section.split()[0], start, int(limit)))
                 if self.server.huge:
-                    out += f" BODY[{section}]<0> {{1000000}}\r\n".encode()
+                    out += f" BODY[{section}]<{start}> {{1000000}}\r\n".encode()
                     self.send(out)
                     self.send(b"x" * 1_000_000)
                     return
                 data = data.ljust(self.server.fat, b" ")
-                out += f" BODY[{section}]<0> {{{len(data)}}}\r\n".encode() + data
+                out += f" BODY[{section}]<{start}> {{{len(data)}}}\r\n".encode() + data
             self.send(out + b")\r\n")
         self.line(f"{tag} OK done")
 

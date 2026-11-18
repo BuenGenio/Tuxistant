@@ -138,8 +138,9 @@ def _part(text: str, subtype: str, cte: str, code: str = "") -> tuple[str, bytes
 
 def online_read(m: dict, talking: bool = False) -> str | None:
     """What the model is shown of a mail through Online Accounts, from the header fields and the
-    text an IMAP FETCH gives (see goamail._rows), then mail._note's hiding. talking: the server's
-    own search finds sign-in talk in the mail (see goamail._talking)."""
+    text an IMAP FETCH gives, and the more of it fetched for a mail cut short in the part read
+    (see goamail._rows and _read_on), then mail._note's hiding. talking: the server's own search
+    finds sign-in talk in the mail, which counts for one still cut short (see goamail._talking)."""
     subject = m["subject"] if m["subject"].isascii() else \
         email.header.Header(m["subject"], "utf-8").encode()
     head = f"From: {AUTHOR}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\n"
@@ -153,7 +154,11 @@ def online_read(m: dict, talking: bool = False) -> str | None:
         text += b"--b--\r\n"
     found = {b"HEADER": header, b"TEXT": text[:goamail.TEXT_BYTES]}
     read = goamail._read(found)
-    kept = read and goamail._hidden(STEMS, read[0], found, read[1], True, read[2], talking)
+    if read and read[2]:
+        found = {b"HEADER": header, b"TEXT": text[:goamail.TEXT_BYTES + goamail.MORE_BYTES]}
+        read = goamail._read(found, goamail.TEXT_BYTES + goamail.MORE_BYTES) or read
+    kept = read and goamail._hidden(STEMS, read[0], found, read[1], True, read[2],
+                                    talking and read[2] and len(read[1]) < mail.SCAN_CHARS)
     if not kept:
         return None
     return mail._shown(kept[1], mail.SUBJECT_CHARS) + "\n" + mail._shown(kept[2], mail.BODY_CHARS)
@@ -454,8 +459,9 @@ def corpus() -> list[dict]:
 
 # Three capitals beside three digits, an amount or a flight: never a code (see mail.AMOUNT).
 AMOUNT = re.compile(r"[A-Z]{3} \d{3}(?:[.,]\d+)?|\d{3}(?:[.,]\d+)? [A-Z]{3}")
-# "2pm-4pm" and "14h35" are no code.
-TIMES = re.compile(r"\d{1,2}(?:am|pm)(?:[-–]\d{1,2}(?:am|pm))?|\d{1,2}h\d\d")
+# "2pm-4pm", "14h35", "14h35min" and "2-night" are no code.
+TIMES = re.compile(r"\d{1,2}(?:am|pm)(?:[-–]\d{1,2}(?:am|pm))?|\d{1,2}h\d\d(?:min)?"
+                   r"|\d+-?(?:hours?|hrs?|minutes?|mins?|days?|nights?|weeks?)", re.I)
 
 
 # What this version hides on purpose that 0.5.0 read out, as CHANGELOG and docs/CONTRACT.md step 5
@@ -582,13 +588,37 @@ class AgainstFiveOh(unittest.TestCase):
 
     def test_a_mail_cut_where_online_accounts_fetched_it_hides_what_0_5_0_hid(self):
         """A server sends the first 16,000 bytes of a mail, where Thunderbird's index held 0.5.0
-        20,000 characters of it: sign-in talk past the cut, which the server's own search finds,
-        counts for 0.5.0's rules too, so a code before a currency's code they don't take for a
-        price, or a price whose sign is after it, is hidden as 0.5.0 hid it. The server is one
-        that matches whole words only, as Gmail is taken to, so it has to be asked for the
-        Spanish and Portuguese words 0.5.0's verif\\w+ took too."""
+        20,000 characters of it: sign-in talk past the cut counts for 0.5.0's rules too, so a code
+        before a currency's code they don't take for a price, or a price whose sign is after it,
+        is hidden as 0.5.0 hid it. The server is one that matches whole words only, as Gmail is
+        taken to: asked, it didn't find "100% authentic" or "opiniones verificadas", which 0.5.0's
+        verif\\w+ and authenti\\w+ took, so the mail is fetched on and its own text decides."""
         filler = "Thanks for being with us this year.\n" * 470
         read = []
+        row = '<tr><td style="padding:8px 16px;font-family:Arial,sans-serif">{}</td></tr>\n'
+        for footer in ("Every item we sell is 100% authentic.", "Certificate of authenticity "
+                       "included.", "Your payment is verifiable in the app.",
+                       "Todas nuestras opiniones son verificadas.", "Vendedores verificados por "
+                       "Acme.", "Verificaremos tu pedido antes del envío.",
+                       "Avaliações verificadas por clientes.", "Todas as verificações foram feitas.",
+                       "Produtos verificados pela Acme."):
+            markup = ("<table>" + row.format("Order 5928374: total 1500 € paid. Call 0345 600 "
+                                             "4321.")
+                      + row.format("Thank you for shopping with Acme this season.") * 150
+                      + row.format(footer) + "</table>")
+            for cte in ("qp", "8bit"):
+                m = {"kind": "code", "why": f"cut html {cte} {footer!r}",
+                     "subject": "Your Acme order", "plain": None, "html": markup, "cte": cte,
+                     "tokens": ["Order 5928374: total 1500 € paid. Call 0345 600 4321."]}
+                encoded = _part(markup, "html", cte, m["tokens"][0])[1]
+                self.assertLess(goamail.TEXT_BYTES, len(encoded))
+                talking = any(re.search(rf"(?<!\w){re.escape(term)}(?!\w)", markup, re.I)
+                              for term in goamail.TALK_TERMS)
+                self.assertFalse(talking, footer)
+                text = index_text(m)
+                read.append((m, old_read(m["subject"], text), thunderbird_read(m["subject"], text),
+                             online_read(m, talking=talking)))
+                self.assertTrue(old_tokens(text), footer)
         for head, talk in (("Use 482913 CAD team.", "Sign in to Acme now."),
                            ("Total 1500 € paid.", "Sign in to Acme now."),
                            ("Ref 4829 1375 CHF.", "Sign in to Acme now."),
