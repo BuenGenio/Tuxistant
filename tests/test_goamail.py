@@ -103,7 +103,8 @@ class Mailbox:
     def __init__(self, mails: dict[int, bytes], clock: Clock, answered):
         self.mails, self.clock, self.answered, self.asked = mails, clock, answered, []
 
-    def select(self, _box, readonly=True):
+    def select(self, box, readonly=True):
+        self.asked.append(f"EXAMINE {box}")
         return "OK", [str(len(self.mails)).encode()]
 
     def uid(self, command, *args):
@@ -1554,6 +1555,10 @@ class CutShort(Goa):
             self.assertEqual(goamail._talking(box, [3, 5], 1.5), {3, 5})
         self.assertEqual(len(box.asked), 2)     # all of the ASCII ones, then one more
         self.assertEqual(clock.now, 2)
+        box.asked = []
+        with mock.patch.object(goamail, "time", clock):    # and the ASCII ones look first too
+            self.assertEqual(goamail._talking(box, [3, 5], clock.now - 1), {3, 5})
+        self.assertEqual(box.asked, [])
 
     def test_mails_are_not_fetched_past_the_search_time(self):
         """A search for the question's words that answered past the search's time still had
@@ -1578,6 +1583,25 @@ class CutShort(Goa):
                 self.assertEqual(len(box.asked), asked, (question, answered))
                 self.assertEqual(hits, [] if answered else [{1}] * len(mail.terms(question)),
                                  (question, answered))
+
+    def test_nothing_more_is_asked_of_a_mailbox_past_the_search_time(self):
+        """A mail cut short whose fetch came back past the search's time, though well before
+        halfway through the lookups' time, is hidden as one that talks of signing in, with no
+        round of fetching on and no search for sign-in talk asked of the server. And a mailbox
+        whose turn comes past the search's time isn't opened."""
+        terms = "The Acme terms go on here and on.\n" * 900
+        cut = message("Acme order", ACME, "Your Acme order 5928374 is on its way.\n" + terms)
+        clock = Clock(9.9)
+        box = Mailbox({2: cut}, clock, lambda asked: 10.5 if "HEADER.FIELDS" in asked else None)
+        with mock.patch.object(goamail, "time", clock):
+            (*_, body), = goamail._rows(box, "INBOX", 0, mail.terms("Acme"), 10, 11.5)
+        self.assertIn("[hidden]", body)
+        self.assertNotIn("5928374", body)
+        self.assertEqual([asked.split()[0] for asked in box.asked], ["EXAMINE", "SEARCH", "FETCH"])
+        box.asked = []
+        with mock.patch.object(goamail, "time", clock):
+            self.assertEqual(goamail._rows(box, "Sent", 1, mail.terms("Acme"), 10, 11.5), [])
+        self.assertEqual(box.asked, [])
 
     def test_what_the_server_is_asked_for_is_sign_in_talk(self):
         for term in goamail.TALK_TERMS:
