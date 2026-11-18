@@ -2260,7 +2260,7 @@ class Permissions(Case):
                 mock.patch.object(system, "_read") as tool:
             _, result = asyncio.run(Skills(config=CONFIG).execute(
                 "system_running", '{"name": "a b"}', session))
-        self.assertEqual(result, {"error": "Say which program or service to check."})
+        self.assertEqual(result, {"error": system.ONE_WORD})
         run.assert_not_called()
         tool.assert_not_called()
         self.assertFalse(session.tainted, "nothing was read")
@@ -2636,7 +2636,8 @@ class SystemRunning(Case):
 
     def test_a_name_of_two_words_on_another_computer_gets_the_same_sentence(self):
         """Not "Say which program": one was named. Nothing was looked at here, so nothing is
-        said about this computer and the conversation isn't marked."""
+        said about this computer and the conversation isn't marked. Here it is asked for in one
+        word, as this computer takes it."""
         session = Session()
         with mock.patch.object(serverstatus, "_run") as run, \
                 mock.patch.object(system, "_read", side_effect=running_here) as tool:
@@ -2648,7 +2649,7 @@ class SystemRunning(Case):
         self.assertFalse(session.tainted)
         with self.assertRaises(ValueError) as raised:
             asked({"name": "home assistant", "on": "this computer"})
-        self.assertEqual(str(raised.exception), "Say which program or service to check.")
+        self.assertEqual(str(raised.exception), system.ONE_WORD)
 
     def test_words_for_this_computer_are_this_computer(self):
         """Its own name too, with "my" or "box" around it as the server's may have."""

@@ -494,6 +494,29 @@ class Running(unittest.TestCase):
                 os.close(kept)
                 os.close(reading)
 
+    def test_a_name_of_more_than_one_word_is_asked_for_in_one(self):
+        """One was named, so not "Say which program", and nothing is read: "the sshd service"
+        looked for as thesshdservice would find nothing, though sshd may be running."""
+        for name, on, why in (("home assistant", None, system.ONE_WORD),
+                              ("Home Assistant", "this computer", system.ONE_WORD),
+                              ("the sshd service", None, system.ONE_WORD),
+                              ("a b", None, system.ONE_WORD),
+                              ("a;rm x", None, "Say which program or service to check."),
+                              ("x", None, "Say which program or service to check.")):
+            with self.subTest(name), mock.patch.object(system, "_read") as read:
+                session = Session()
+                with self.assertRaises(ValueError) as raised:
+                    system.running({"name": name, **({"on": on} if on else {})}, None, session)
+                self.assertEqual(str(raised.exception), why)
+                read.assert_not_called()
+                self.assertFalse(session.tainted)
+        session = Session()
+        with mock.patch.object(system, "_read") as read:
+            _, result = asyncio.run(Skills().execute(
+                "system_running", '{"name": "home assistant"}', session))
+        self.assertEqual(result, {"error": system.ONE_WORD})
+        read.assert_not_called()
+
     def test_a_name_cannot_become_an_option_or_a_command(self):
         for name in ("", "-h", "--user", "a b", "a;rm", "$(x)", "a/b", "x" * 80, "../x", "x"):
             with self.subTest(name), mock.patch.object(system, "_read") as read:

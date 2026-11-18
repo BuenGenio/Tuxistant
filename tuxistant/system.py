@@ -120,6 +120,9 @@ HERE = {"this", "my", "the", "our", "own", "here", "local", "localhost", "comput
 NOTHING = ("", "true", "false", "none", "null")
 ONLY_TWO = "I can only check this computer and the server in Settings."
 SETTINGS_HERE = "The server in Settings is this computer."
+# Here a name is one word, as 0.5.0 took it: "the sshd service" isn't looked for as
+# thesshdservice, which nothing has in it, though sshd may be running.
+ONE_WORD = "Say the name of the program or service in one word."
 
 
 def _settings_host(config) -> str | None:
@@ -361,6 +364,8 @@ def running(args: dict, config, session=None) -> dict:
             # and nothing was looked at here
             raise ValueError(f"{ONLY_TWO} {SETTINGS_HERE}" if settings_here else
                              _only_two(config))
+        if " " in name and SERVICE_NAME.fullmatch(name.replace(" ", "")):
+            raise ValueError(ONE_WORD)      # one was named, in more than one word
         raise ValueError("Say which program or service to check.")
     found, said = here_said(name)
     session.tainted = True      # what runs here is yours, whatever comes after
