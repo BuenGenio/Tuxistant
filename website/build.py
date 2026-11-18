@@ -25,6 +25,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 HERE = Path(__file__).resolve().parent
 SRC = HERE / "src"
@@ -418,7 +419,12 @@ def acc_open(name, title):
 def acc_close(prompt, *actions):
     """The section's call to action, its last element: a line asking, and what to do about it."""
     return (f'<div class="acc-cta"><p>{esc(prompt)}</p><div class="acc-actions">{"".join(actions)}</div></div>'
-            '</div></div></section>')
+            + acc_end())
+
+
+def acc_end():
+    """A section with no call to action of its own, as a skill's on the portal may be."""
+    return '</div></div></section>'
 
 
 def sentences_html(text):
@@ -508,15 +514,17 @@ def head_html(policy, title, description, root, detect=""):
 <link rel="stylesheet" href="{root}style.css">"""
 
 
-def portal_shell(strings, policy):
-    """Wraps a portal body in the site's page, depth folders below the site's root."""
+def portal_site(strings, policy, releases):
+    """What the portal takes from the site: the page around a portal body, depth folders below the
+    site's root, the folding sections, and the download its calls to action offer."""
     def shell(title, description, depth, body, sample):
         root = "../" * depth
         robots = '\n<meta name="robots" content="noindex">' if sample else ""
         return f"""<!doctype html>
 <html lang="en" dir="ltr">
 <head>
-{head_html(policy, f"{title} · Tuxistant skills", description, root)}{robots}
+{head_html(policy, f"{title} · Tuxistant skills", description, root)}
+<link rel="stylesheet" href="{root}skills.css">{robots}
 </head>
 <body>
 {site_header(root, strings, root, current="skills", skills_link=True)}
@@ -529,7 +537,8 @@ def portal_shell(strings, policy):
 </body>
 </html>
 """
-    return shell
+    return SimpleNamespace(shell=shell, acc_open=acc_open, acc_close=acc_close, acc_end=acc_end,
+                           download=cta_download(strings, releases))
 
 
 def page(code, strings, languages, releases, detect, policy, skills_link=False):
@@ -681,7 +690,7 @@ def main(argv=()):
         (dist / "LOCAL-PREVIEW").write_text("A local preview of planned releases. Never deploy it.\n")
         local.append("a local preview")
     if options.portal:
-        shown = build_portal(dist, options.portal, languages["en"], policy)
+        shown = build_portal(dist, options.portal, languages["en"], policy, releases)
         local.append(f"the skills portal with {shown} skill pages")
     if local:
         (dist / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
@@ -689,15 +698,17 @@ def main(argv=()):
           + (f" ({' and '.join(local)}, never to be deployed)" if local else ""))
 
 
-def build_portal(dist, folder, strings, policy):
-    """skills/ and its script, from a registry folder, with the file deploy.sh refuses. Only for
-    looking at until the registry repo exists: the owner decides when it goes live."""
+def build_portal(dist, folder, strings, policy, releases):
+    """skills/ with its script and stylesheet, from a registry folder, with the file deploy.sh
+    refuses. Only for looking at until the registry repo exists: the owner decides when it goes
+    live."""
     portal = _portal()
     (dist / "LOCAL-PORTAL").write_text("The skills portal, built locally. Never deploy it until "
                                        "the registry exists.\n")
-    shutil.copy(SRC / "skills.js", dist)
+    for name in ("skills.js", "skills.css"):
+        shutil.copy(SRC / name, dist)
     try:
-        return portal.build(dist, Path(folder), portal_shell(strings, policy))
+        return portal.build(dist, Path(folder), portal_site(strings, policy, releases))
     except portal.Refused as e:
         raise SystemExit(f"The skills portal wasn't built from {folder}: {e}.") from None
 

@@ -12,16 +12,19 @@ import io
 import json
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 import urllib.parse
+from html import escape as html_escape
 from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tuxistant import registry as tux_registry  # noqa: E402
+from tests.test_website import dom_tree  # noqa: E402
 
 SAMPLE = ROOT / "website/src/registry-sample"
 TIDES = "io.github.example-ada.tides"
@@ -29,6 +32,7 @@ LAMP = "io.github.example-cy.desk-lamp"
 FUEL = "io.github.example-dee.fuel"
 WEATHER = "io.github.example-eve.weather-now"
 KEYS = None     # this run's throwaway keys, by name, for signing a changed copy
+RELEASES = json.loads((ROOT / "website/src/releases.json").read_text())
 
 
 def _module(name, path):
@@ -102,9 +106,9 @@ class Registry:
         dist = self.root / "dist"
         shutil.rmtree(dist, ignore_errors=True)
         dist.mkdir()
-        shell = build.portal_shell(build.load_languages()["en"], "default-src 'none'")
+        site = build.portal_site(build.load_languages()["en"], "default-src 'none'", RELEASES)
         signers = self.folder / "registry_allowed_signers" if own_key else None
-        portal.build(dist, self.folder, shell, signers=signers)
+        portal.build(dist, self.folder, site, signers=signers)
         return dist / "skills"
 
 
@@ -220,6 +224,97 @@ class BuiltPortal(BuiltSite):
             self.assertNotIn(" style=", html, page)
             self.assertNotRegex(html, r"""(href|src)=["']/(?!/)""", page)
 
+    def test_portal_pages_take_the_sites_stylesheet_then_their_own(self):
+        for page in self.pages:
+            sheets = re.findall(r'<link rel="stylesheet" href="([^"]+)">', page.read_text())
+            self.assertEqual([sheet.rsplit("/", 1)[-1] for sheet in sheets],
+                             ["style.css", "skills.css"], page)
+        for page in self.front_pages():
+            self.assertNotIn("skills.css", page.read_text(), page)
+        css = (self.dist / "skills.css").read_text()
+        self.assertNotRegex(css, r"--(bg|panel|line|text|muted|now|soon|accent):",
+                            "the site's colours, not new ones")
+
+    def test_a_skills_sections_fold_as_the_front_pages_do(self):
+        """Each arrives open with a plain heading, for site.js to fold, and only Install ends with
+        a call to action: the download, as the front page's sections offer it."""
+        for skill_id in (TIDES, LAMP, "io.github.example-bo.evening"):
+            html = self.page(skill_id)
+            sections = re.findall(r'<section class="section acc wrap" id="([a-z]+)" '
+                                  r'aria-labelledby="\1-title"><div class="acc-head">'
+                                  r'<div class="acc-fit"><h2 id="\1-title">([^<]+)</h2></div>', html)
+            self.assertEqual(sections, [("does", "What it does"), ("install", "Install"),
+                                        ("file", "The whole recipe"), ("versions", "Versions")])
+            self.assertEqual(html.count('class="acc-cta"'), 1, skill_id)
+            install = html[html.index('id="install"'):html.index('id="file"')]
+            self.assertIn(f'<div class="acc-cta"><p>{html_escape(portal.ASK[True])}</p>', install)
+            self.assertIn(f'href="{RELEASES["linux"]["url"]}" data-cta="download">'
+                          "Download for Linux</a>", install)
+            for plain in ("is-closed", "acc-toggle", "aria-expanded"):
+                self.assertNotIn(plain, html, "only site.js folds a section")
+
+    def test_browse_ends_with_a_call_to_action(self):
+        browse = self.page()
+        self.assertRegex(browse, r'<div class="acc-cta portal-cta"><p>[^<]+</p><div class="acc-actions">'
+                                 r'<a class="btn btn-cta" href="[^"]+" data-cta="download">'
+                                 r'Download for Linux</a></div></div>\s*</section>\s*</main>')
+
+    def scripts(self, html, cases):
+        """The page's own scripts, site.js and skills.js, run by node on a small DOM made from
+        it (tests/site_dom.mjs), as each case's visitor would see it."""
+        with tempfile.TemporaryDirectory() as folder:
+            given, report = Path(folder) / "given.json", Path(folder) / "report.json"
+            given.write_text(json.dumps({
+                "scripts": [str(self.dist / "site.js"), str(self.dist / "skills.js")],
+                "pages": {"page": dom_tree(html)},
+                "cases": [{"page": "page", "userAgent": "", "platform": "", **case}
+                          for case in cases]}))
+            subprocess.run(["node", str(ROOT / "tests/site_dom.mjs"), str(given), str(report)],
+                           check=True, timeout=60)
+            return json.loads(report.read_text())
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node.js")
+    def test_browse_finds_by_words_category_and_tag_and_says_so_in_the_address(self):
+        probes = ["#skill-count", ".card", "#skill-none", "#finder", "#address",
+                  '[aria-current="true"]']
+        cases = [{"steps": [None]}, {"search": "?tag=lights", "steps": [None]},
+                 {"steps": [{"type": ["#skill-search", "Tide"]}]},
+                 {"steps": ['[data-filter="category:home"]']},
+                 {"steps": [{"type": ["#skill-search", "nothing like it"]}]}]
+        seen = []
+        for result in self.scripts(self.page(), [{**case, "probes": probes} for case in cases]):
+            self.assertNotIn("error", result)
+            shown = result[-1]
+            seen.append((shown["#skill-count"][0]["text"],
+                         sorted(card["parts"][0][1] for card in shown[".card"]      # its name
+                                if "hidden" not in card["attrs"]),
+                         "hidden" in shown["#skill-none"][0]["attrs"],
+                         shown["#address"][0]["text"],
+                         [link["text"] for link in shown['[aria-current="true"]']]))
+            self.assertNotIn("hidden", shown["#finder"][0]["attrs"], "the search comes with script")
+        everything, lights, tides, home, nothing = seen
+        self.assertEqual((everything[0], len(everything[1]), everything[4]), ("7 skills", 7, ["All"]))
+        self.assertEqual(lights[:2], ("1 skill", ["Desk lamp"]))
+        self.assertEqual((lights[3], lights[4]), ("?tag=lights", ["lights"]))
+        self.assertEqual((tides[0], tides[1], tides[3]), ("1 skill", ["Tides"], "?q=Tide"))
+        self.assertEqual(home[:2], ("2 skills", ["Boiler boost", "Desk lamp"]))
+        self.assertEqual((home[3], home[4]), ("?category=home", ["Home"]))
+        self.assertEqual(nothing[:3], ("0 skills", [], False), "and says no skills match")
+
+    @unittest.skipUnless(shutil.which("node"), "needs Node.js")
+    def test_a_skills_page_opens_on_what_it_does_and_a_link_opens_its_section(self):
+        cases = [{"steps": [None, "#file-toggle"]}, {"hash": "#versions", "steps": [None]}]
+        results = self.scripts(self.page(TIDES), [{**case, "probes": [".acc"]} for case in cases])
+        for result in results:
+            self.assertNotIn("error", result)
+        closed = [[section["attrs"]["id"] for section in step[".acc"]
+                   if "is-closed" in section["attrs"]["class"].split()] for step in results[0]]
+        self.assertEqual(closed, [["install", "file", "versions"], ["install", "versions"]])
+        arrived = results[1][0][".acc"]
+        self.assertEqual([section["attrs"]["id"] for section in arrived
+                          if "is-closed" not in section["attrs"]["class"].split()],
+                         ["does", "versions"])
+
     def test_portal_pages_have_the_sites_header(self):
         for page in self.pages:
             html = page.read_text()
@@ -265,13 +360,14 @@ class BuiltPortal(BuiltSite):
         self.assertIn("textContent", (self.dist / "skills.js").read_text())
 
     def test_code_wraps_rather_than_hiding_a_line_off_to_the_side(self):
-        css = (self.dist / "style.css").read_text()
+        css = (self.dist / "skills.css").read_text()
         self.assertRegex(css, r"\.code \{[^}]*white-space: pre-wrap;[^}]*overflow-wrap: anywhere")
 
     def test_a_long_word_from_the_index_breaks_rather_than_running_off_the_page(self):
-        css = (self.dist / "style.css").read_text()
+        css = (self.dist / "skills.css").read_text()
         self.assertRegex(css, r"\n\.portal \{[^}]*overflow-wrap: anywhere;")
-        self.assertRegex(css, r"\nh1, h2 \{[^}]*white-space: nowrap;", "headings shrink instead")
+        self.assertRegex((self.dist / "style.css").read_text(), r"\nh1, h2 \{[^}]*white-space: nowrap;",
+                         "headings shrink instead")
         # Everything a stranger writes is inside .portal, so the rule reaches it.
         registry = Registry(self)
         tides = registry.skill(TIDES)
@@ -281,8 +377,8 @@ class BuiltPortal(BuiltSite):
         for page in (skills / "index.html", skills / TIDES / "index.html"):
             html = page.read_text()
             main = re.search(r"<main>(.*)</main>", html, re.S)[1]
-            self.assertRegex(main.strip(), r'^<(section|article) class="portal wrap"', page)
-            self.assertEqual(main.count('class="portal'), 1, page)
+            self.assertRegex(main.strip(), r'^<(section|article) class="portal( wrap)?"', page)
+            self.assertEqual(len(re.findall(r'class="portal( wrap)?"', main)), 1, page)
             self.assertIn("S" * 140, main, page)
         self.assertIn("R" * 300, (skills / TIDES / "index.html").read_text())
 

@@ -768,7 +768,8 @@ class BuiltSite(unittest.TestCase):
         """The owner's call (2026-11-14): the portal stays out of deploys until the registry repo
         exists, so the plain build writes no page of it, nor its script, nor the sample."""
         self.assertFalse((self.dist / "skills").exists())
-        self.assertFalse((self.dist / "skills.js").exists())
+        for portal in ("skills.js", "skills.css"):
+            self.assertFalse((self.dist / portal).exists(), portal)
         self.assertFalse((self.dist / "LOCAL-PORTAL").exists())
         sample = ROOT / "website/src/registry-sample"
         self.assertFalse({file.name for file in sample.rglob("*")}

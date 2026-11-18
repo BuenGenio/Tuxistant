@@ -97,8 +97,9 @@
   systemDark.addEventListener('change', tintBrowserBar);
   tintBrowserBar();
 
-  // Headings never wrap: shrink to fit the parent's content box instead. A skill's name can be 100
-  // characters, so below 14 px it stops shrinking and the stylesheet cuts it with an ellipsis.
+  // Headings never wrap: shrink to fit the parent's content box instead. A skill's name on the
+  // portal can be 100 characters, so a heading marked .fit stops shrinking at 14 px, and the
+  // stylesheet cuts the rest with an ellipsis.
   function fitHeadings() {
     for (const heading of document.querySelectorAll('h1, h2')) {
       heading.style.fontSize = '';
@@ -110,7 +111,8 @@
       const width = range.getBoundingClientRect().width;
       if (width > room && room > 0) {
         const size = parseFloat(getComputedStyle(heading).fontSize);
-        heading.style.fontSize = `${Math.max(14, Math.floor(size * room / width * 10) / 10)}px`;
+        const fitted = Math.floor(size * room / width * 10) / 10;
+        heading.style.fontSize = `${heading.classList.contains('fit') ? Math.max(14, fitted) : fitted}px`;
       }
     }
   }

@@ -3,14 +3,18 @@
 // drives it.
 //
 // usage: node site_dom.mjs INPUT.json REPORT.json (files, as a wrapper round node may print too)
-// INPUT: {"app": path to app.js, "pages": {name: tree}, "cases": [{"page", "userAgent", "platform",
-//        "hash" (optional, the address's #part on arrival), "beforematch" (optional: true for a
-//        browser that knows hidden=until-found, as Chromium does), "steps": [null, a selector to
-//        click, or {"focus": selector}, ...], "probes": [selector, ...]}]}
+// INPUT: {"app": path to app.js, "scripts" (optional: the pages' scripts, in order, in place of
+//        site.js, themes.js and app.js beside app), "pages": {name: tree}, "cases": [{"page",
+//        "userAgent", "platform", "hash" and "search" (optional, the address's #part and ?part on
+//        arrival), "beforematch" (optional: true for a browser that knows hidden=until-found, as
+//        Chromium does), "steps": [null, a selector to click, {"focus": selector}, or {"type":
+//        [selector, text]}, which sets a field's value as typing does, ...], "probes": [selector,
+//        ...]}]}
 // A tree is ["tag", {attributes}, [children]], and a child is a tree or a string of text.
 // REPORT: one entry per case: for each step, after its click, each probe's matches as
-//         {text, attrs, parts}, "#scrolled", what app.js last scrolled into view, and "#active", what
-//         has the focus, as a probe's matches; or {"error"} if app.js threw.
+//         {text, attrs, parts}, "#scrolled", what app.js last scrolled into view, "#active", what
+//         has the focus, and "#address", the address's ?part as a script last set it, as a probe's
+//         matches; or {"error"} if a script threw.
 //
 // The DOM has what app.js uses. It gets no WebGL here, so the hero shows its still CSS drawings,
 // with the themes from the themes.js beside app.js, on a page that measures nothing.
@@ -69,6 +73,8 @@ class Element {
   get href() { return this.getAttribute('href') ?? ''; }
   set href(value) { this.setAttribute('href', value); }
   get hash() { const href = this.href; return href.includes('#') ? href.slice(href.indexOf('#')) : ''; }
+  get value() { return this.getAttribute('value') ?? ''; }
+  set value(text) { this.setAttribute('value', text); }
   get hidden() { return this.hasAttribute('hidden'); }
   set hidden(value) {
     if (value) this.setAttribute('hidden', value === true ? '' : value);
@@ -205,13 +211,16 @@ function describe(element) {
   };
 }
 
-function run(site, app, themes, tree, { userAgent, platform, hash = '', beforematch = false, steps, probes }) {
+function run(scripts, tree, { userAgent, platform, hash = '', search = '', beforematch = false, steps, probes }) {
   const document = documentFrom(tree);
   if (beforematch) document.body.onbeforematch = null;    // what 'onbeforematch' in body looks for
+  const location = { hash, search, pathname: '/skills/', href: `http://127.0.0.1/skills/${search}${hash}` };
   const context = {
     document,
     navigator: { userAgent, platform },
-    location: { hash, href: `http://127.0.0.1/${hash}` },
+    location,
+    history: { replaceState(_state, _title, url) { location.search = url.startsWith('?') ? url : ''; } },
+    URLSearchParams,
     matchMedia: media => ({ media, matches: false, addEventListener() {} }),
     localStorage: { getItem: () => null, setItem() {} },
     addEventListener() {},
@@ -229,12 +238,17 @@ function run(site, app, themes, tree, { userAgent, platform, hash = '', beforema
   context.window = context;
   try {
     vm.createContext(context);
-    vm.runInContext(site, context, { filename: 'site.js' });
-    vm.runInContext(themes, context, { filename: 'themes.js' });
-    vm.runInContext(app, context, { filename: 'app.js' });
-    const special = { '#scrolled': () => document.scrolledTo, '#active': () => document.activeElement };
+    for (const [filename, code] of scripts) vm.runInContext(code, context, { filename });
+    const special = { '#scrolled': () => document.scrolledTo, '#active': () => document.activeElement,
+                      '#address': () => Object.assign(new Element(document, 'address'), { textContent: location.search }) };
     return steps.map(step => {
-      if (step?.focus) {
+      if (step?.type) {
+        const [selector, text] = step.type;
+        const field = document.querySelector(selector);
+        if (!field) throw new Error(`nothing to type into at ${selector}`);
+        field.value = text;
+        for (const listener of field.listeners.input || []) listener.call(field, { type: 'input', target: field });
+      } else if (step?.focus) {
         const target = document.querySelector(step.focus);
         if (!target) throw new Error(`nothing to focus at ${step.focus}`);
         target.focus();
@@ -249,7 +263,6 @@ function run(site, app, themes, tree, { userAgent, platform, hash = '', beforema
 
 const [inputPath, reportPath] = process.argv.slice(2);
 const input = JSON.parse(readFileSync(inputPath, 'utf8'));
-const app = readFileSync(input.app, 'utf8');
-const beside = name => readFileSync(new URL(name, pathToFileURL(input.app)), 'utf8');
-const [site, themes] = [beside('site.js'), beside('themes.js')];
-writeFileSync(reportPath, JSON.stringify(input.cases.map(item => run(site, app, themes, input.pages[item.page], item))));
+const paths = input.scripts ?? ['site.js', 'themes.js', 'app.js'].map(name => new URL(name, pathToFileURL(input.app)));
+const scripts = paths.map(path => [String(path).split('/').at(-1), readFileSync(path, 'utf8')]);
+writeFileSync(reportPath, JSON.stringify(input.cases.map(item => run(scripts, input.pages[item.page], item))));

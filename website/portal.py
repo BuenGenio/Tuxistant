@@ -313,6 +313,12 @@ LEDE = {
     False: "Recipe skills people share for Tuxistant. Each is signed by its publisher and reviewed "
            "before it's merged, and Tux checks it again before installing.",
 }
+# The calls to action: Tuxistant itself, as skills install from its Settings.
+ASK = {
+    True: "Once the registry opens, skills like these install from Tuxistant's Settings. Want it "
+          "on your desktop?",
+    False: "Skills install from Tuxistant's Settings. Want it on your desktop?",
+}
 REFUSED = "Tux's loader refuses this version, so it can't be installed: "
 
 
@@ -331,7 +337,12 @@ def card_html(skill, categories) -> str:
             f'<div class="chips">{tag_chips(skill["tags"], "")}</div></li>')
 
 
-def browse_html(shown) -> str:
+def cta_html(site, sample) -> str:
+    return (f'<div class="acc-cta portal-cta"><p>{esc(ASK[sample])}</p>'
+            f'<div class="acc-actions">{site.download}</div></div>')
+
+
+def browse_html(shown, site) -> str:
     categories = shown["categories"]
     cats = "".join(
         f'<div class="cat"><a class="cat-name" href="?category={esc(c["id"])}" '
@@ -342,15 +353,19 @@ def browse_html(shown) -> str:
     listed = [skill for skill in shown["skills"] if skill["current"]["installable"]]
     cards = "".join(card_html(skill, categories) for skill in listed)
     count = len(listed)
+    sample = shown["sample"]
     return f"""<section class="portal wrap" aria-labelledby="skills-title">
-  <h1 id="skills-title">Skills</h1>
-  <p class="lede">{LEDE[shown["sample"]]}</p>
-  {SAMPLE_NOTE if shown["sample"] else ""}
+  <div class="portal-head">
+    <h1 id="skills-title">Skills</h1>
+    <p class="lede">{LEDE[sample]}</p>
+    {SAMPLE_NOTE if sample else ""}
+  </div>
   <div class="finder" id="finder" hidden><label class="visually-hidden" for="skill-search">Search skills</label><input id="skill-search" type="search" placeholder="Search skills" autocomplete="off" spellcheck="false"></div>
   <nav class="cats" aria-label="Categories and tags"><a class="cat-name" href="./" data-filter="" aria-current="true">All</a>{cats}</nav>
   <h2 class="count" id="skill-count" aria-live="polite">{count} skill{"" if count == 1 else "s"}</h2>
   <ul class="cards" id="skill-list">{cards}</ul>
   <p class="none" id="skill-none"{"" if not count else " hidden"}>No skills match. Try fewer words, or All.</p>
+  {cta_html(site, sample)}
 </section>"""
 
 
@@ -388,7 +403,7 @@ def by_hand_html(skill, current) -> str:
             "      A recipe added by hand isn't switched off if the registry later revokes it.</li>")
 
 
-def install_html(skill, current, sample) -> str:
+def install_html(skill, current, sample, site) -> str:
     """Install steps. The sample's files are made up, so its pages offer neither them nor the
     commands, and nothing is offered for a file Tux's loader refuses."""
     if not current["installable"]:
@@ -399,13 +414,12 @@ def install_html(skill, current, sample) -> str:
             "will check the file's hash and signature itself." if sample else
             "Install shows you a card with the hosts it reaches and its risk first, and Tux checks "
             "the file's hash and signature itself.")
-    return f"""<section class="section" id="install" aria-labelledby="install-title">
-    <h2 id="install-title">Install</h2>
+    return f"""{site.acc_open("install", "Install")}
     <ol class="steps">
       <li><span class="tag tag-soon">Soon</span> In Tuxistant's Settings, open Skills, then Browse, and search for {esc(skill["name"])}. {card}</li>
       {by_hand}
     </ol>
-  </section>"""
+  {site.acc_close(ASK[sample], site.download)}"""
 
 
 def version_html(skill, versions, position) -> str:
@@ -436,7 +450,9 @@ def version_html(skill, versions, position) -> str:
             f"{note}{problem}{changed}</li>")
 
 
-def skill_html(skill, sample) -> str:
+def skill_html(skill, sample, site) -> str:
+    """A skill's page: what it is at the top, then its sections, folded as the front page's are,
+    with what it does open first."""
     current = skill["current"]
     loaded = current["loaded"]
     raw_actions = (current["raw"] or {}).get("actions") or {}
@@ -452,61 +468,61 @@ def skill_html(skill, sample) -> str:
            if loaded else f'<span class="revoked">{esc(REFUSED + current["problem"])}</span>')
     # The sample has nothing to install or report, so its pages have neither button.
     buttons = [] if sample else (
-        (['<a class="btn" href="#install">Install</a>'] if current["installable"] else [])
+        (['<a class="btn btn-cta" href="#install">Install</a>'] if current["installable"] else [])
         + [f'<a class="btn" href="{esc(report_url(skill, current))}" '
            'rel="nofollow noopener">Report this skill</a>'])
     links = "".join(f'<a href="{esc(link["url"])}" rel="nofollow noopener ugc">'
                     f'{esc(link["title"])}</a>' for link in skill["links"])
     history = "".join(version_html(skill, skill["versions"], i)
                       for i in reversed(range(len(skill["versions"]))))
-    return f"""<article class="portal wrap" aria-labelledby="skill-title">
-  <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Skills</a></nav>
-  <h1 id="skill-title" class="fit">{esc(skill["name"])}</h1>
-  <p class="lede">{esc(skill["summary"])}</p>
-  {SAMPLE_NOTE if sample else ""}
-  <p class="why">{why}</p>
-  <dl class="facts">
-    <div><dt>Publisher</dt><dd><a href="https://github.com/{esc(skill["author"])}" rel="nofollow noopener">{esc(skill["author"])}</a></dd></div>
-    <div><dt>Version</dt><dd>{esc(current["version"])}, {esc(current["date"][:10])}</dd></div>
-    <div><dt>Licence</dt><dd>{esc(skill["licence"])}</dd></div>
-    <div><dt>Id</dt><dd><code>{esc(skill["id"])}</code></dd></div>
-    <div><dt>Tags</dt><dd class="chips">{tag_chips(skill["tags"], "../")}</dd></div>
-    {f'<div><dt>Links</dt><dd class="links">{links}</dd></div>' if links else ""}
-  </dl>
-  {f'<div class="buttons">{"".join(buttons)}</div>' if buttons else ""}
-  <section class="section" aria-labelledby="does-title">
-    <h2 id="does-title">What it does</h2>
+    return f"""<article class="portal" aria-labelledby="skill-title">
+  <div class="portal-head wrap">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="../">Skills</a></nav>
+    <h1 id="skill-title" class="fit">{esc(skill["name"])}</h1>
+    <p class="lede">{esc(skill["summary"])}</p>
+    {SAMPLE_NOTE if sample else ""}
+    <p class="why">{why}</p>
+    <dl class="facts">
+      <div><dt>Publisher</dt><dd><a href="https://github.com/{esc(skill["author"])}" rel="nofollow noopener">{esc(skill["author"])}</a></dd></div>
+      <div><dt>Version</dt><dd>{esc(current["version"])}, {esc(current["date"][:10])}</dd></div>
+      <div><dt>Licence</dt><dd>{esc(skill["licence"])}</dd></div>
+      <div><dt>Id</dt><dd><code>{esc(skill["id"])}</code></dd></div>
+      <div><dt>Tags</dt><dd class="chips">{tag_chips(skill["tags"], "../")}</dd></div>
+      {f'<div><dt>Links</dt><dd class="links">{links}</dd></div>' if links else ""}
+    </dl>
+    {f'<div class="buttons">{"".join(buttons)}</div>' if buttons else ""}
+  </div>
+  {site.acc_open("does", "What it does")}
     {actions}
-  </section>
-  {install_html(skill, current, sample)}
-  <section class="section" aria-labelledby="file-title">
-    <h2 id="file-title">The whole recipe</h2>
+  {site.acc_end()}
+  {install_html(skill, current, sample, site)}
+  {site.acc_open("file", "The whole recipe")}
     <p class="file-meta">{esc(skill["file_name"])}, version {esc(current["version"])}, {current["size"]} bytes. SHA-256 {esc(current["sha256"])}.</p>
     <pre class="code">{code(current["text"])}</pre>
-  </section>
-  <section class="section" aria-labelledby="versions-title">
-    <h2 id="versions-title">Versions</h2>
+  {site.acc_end()}
+  {site.acc_open("versions", "Versions")}
     <ol class="history" reversed>{history}</ol>
-  </section>
+  {site.acc_end()}
 </article>"""
 
 
-def build(dist: Path, folder: Path, shell, signers: Path | None = None) -> int:
-    """Writes skills/, skills/<id>/ and, for a real registry, skills/recipes/. shell(title,
-    description, depth, body, sample) wraps a body in the site's page. The index must be signed
-    by the registry key in signers, which is the one Tux ships unless told otherwise, or the
-    sample's own. Returns how many skill pages it wrote."""
+def build(dist: Path, folder: Path, site, signers: Path | None = None) -> int:
+    """Writes skills/, skills/<id>/ and, for a real registry, skills/recipes/. site holds the
+    site's own pieces: shell(title, description, depth, body, sample) wraps a body in the site's
+    page, acc_open, acc_close and acc_end make its folding sections, and download is its download
+    button. The index must be signed by the registry key in signers, which is the one Tux ships
+    unless told otherwise, or the sample's own. Returns how many skill pages it wrote."""
     shown = load(folder, signers)
     out = dist / "skills"
     out.mkdir(parents=True)
     sample = shown["sample"]
-    (out / "index.html").write_text(shell(
-        "Skills", LEDE[sample].split(". ")[0] + ".", 1, browse_html(shown), sample))
+    (out / "index.html").write_text(site.shell(
+        "Skills", LEDE[sample].split(". ")[0] + ".", 1, browse_html(shown, site), sample))
     for skill in shown["skills"]:
         page = out / skill["id"] / "index.html"
         page.parent.mkdir()
-        page.write_text(shell(skill["name"], skill["summary"], 2, skill_html(skill, sample),
-                              sample))
+        page.write_text(site.shell(skill["name"], skill["summary"], 2,
+                                   skill_html(skill, sample, site), sample))
         # Only versions Tux would install, and never the sample's.
         served = [] if sample else [v for v in skill["versions"] if v["installable"]]
         for version in served:
