@@ -113,7 +113,7 @@ Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "How many chemical elements are there?", "What's 15 percent of 80?" | Looks it up instead of guessing: Wikipedia first, then web search, and it says so if neither clearly answers. Sums are worked out on this computer. 0.3.0 preview, not yet tried on a real desktop. |
 | "Search the web for flights to Lisbon", "Research electric bikes" | Reads out the top results, or reads a few pages and tells you what they say, naming its sources. Needs SearXNG. 0.3.0 preview, not yet tried on a real desktop. |
-| "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system |
+| "What's my IP address?", "Which folder is the biggest?", "Is docker running?" | Reads it from the system. "What's running on my server?" asks the server in Settings over ssh, with your own key, and says what docker and systemd list there, in their own words: not yet released, and not yet tried against a real server |
 | "What does my todo file say?", "Install VLC" | Runs a command. Read-only commands run in a sandbox with no click, and anything else shows the exact command first |
 | "Find my CV and send it to my phone" | Several steps in a row, with the same approval cards |
 
