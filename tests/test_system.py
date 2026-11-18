@@ -371,6 +371,29 @@ class Running(unittest.TestCase):
                                "in their name where they have none: 4108 tab\\u000bname\\u2028x; "
                                "and 4109 form\\u000cfeed\\u0085.")
 
+    def test_a_carriage_return_stays_in_its_row_through_the_real_read(self):
+        """As a pgrep that prints a name as it is would give it, through _read itself: a \\r, or
+        \\r\\n, is no line break, and a byte that isn't UTF-8 is replaced, not a read that fails.
+        procps-ng prints each as a ?, so this is for any other pgrep."""
+        real_read = system._read
+        with tempfile.TemporaryDirectory() as folder:
+            raw = Path(folder) / "raw-names"
+            raw.write_bytes(b"#!/bin/sh\nprintf '4100 web\\rxyz\\n4101 a\\r\\n4102 q\\377z\\n"
+                            b"90 watchdogd\\n'\n")
+            raw.chmod(0o755)
+
+            def read(*command):
+                if command[0] == "systemctl":
+                    return 0, ""
+                self.assertEqual(command[0], "pgrep")
+                return real_read(str(raw))
+            with mock.patch.object(system, "_read", side_effect=read):
+                text, _ = said("web")
+        self.assertEqual(text, "On this computer, no service systemd lists has web in its name, "
+                               "and these processes have web in their command line, or in their "
+                               "name where they have none: 4100 web\\u000dxyz; 4101 a\\u000d; "
+                               "4102 q�z; and 90 watchdogd.")
+
     def test_nothing_found_is_said_as_what_was_read(self):
         with listed("nginx.service loaded active running x\n", processes=[(1, "/sbin/init")]):
             self.assertEqual(said("firefox")[0], "No service systemd lists here, and no "

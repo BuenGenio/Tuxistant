@@ -231,13 +231,14 @@ def _on_the_server(args: dict, config, session, here: str | None = None) -> dict
 
 def _read(*command: str) -> tuple[int | None, str]:
     """A tool that reads: its exit code and output, or None for one that couldn't run or took
-    too long. Unlike _tool, it tells an empty list from no list."""
+    too long. Unlike _tool, it tells an empty list from no list. The output is decoded here, not
+    with text=True, whose universal newlines would make a carriage return a line break."""
     try:
-        done = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                              errors="replace", timeout=TOOL_TIMEOUT_S)
+        done = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=TOOL_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError):
         return None, ""
-    return done.returncode, done.stdout
+    return done.returncode, done.stdout.decode("utf-8", "replace")
 
 
 def _pattern(name: str) -> str:
