@@ -542,21 +542,22 @@ def _uids(reply) -> set[int]:
 def _hits(imap, stems: list[mail.Term], until: float) -> list[set[int]]:
     """For each word, the mails holding it. The server is asked for its stem and for the word
     itself, as some servers, Gmail's among them, only match whole words. The words are letters
-    and digits only, so they need no escaping."""
+    and digits only, so they need no escaping. Each search looks at the time first: one that
+    isn't ASCII goes on its own, so a slow answer to a word's first search left its second
+    asked past until."""
     hits = []
     for term in stems:
-        if time.monotonic() > until:
-            return []
         strings = list(dict.fromkeys(text for text in (term.stem, term.word) if text))
-        plain = [text for text in strings if text.isascii()]
+        plain = [f'TEXT "{text}"' for text in strings if text.isascii()]
+        asks = [(("OR " * (len(plain) - 1) + " ".join(plain),), None)] if plain else []
+        asks += [(("CHARSET", "UTF-8", "TEXT"), text.encode())
+                 for text in strings if not text.isascii()]
         found = set()
-        if plain:
-            asked = " ".join(f'TEXT "{text}"' for text in plain)
-            found |= _uids(_ask(imap, "SEARCH", f"OR {asked}" if len(plain) == 2 else asked))
-        for text in strings:
-            if not text.isascii():
-                imap.literal = text.encode()
-                found |= _uids(_ask(imap, "SEARCH", "CHARSET", "UTF-8", "TEXT"))
+        for args, literal in asks:
+            if time.monotonic() > until:
+                return []
+            imap.literal = literal
+            found |= _uids(_ask(imap, "SEARCH", *args))
         hits.append(found)
     return hits
 

@@ -1565,6 +1565,20 @@ class CutShort(Goa):
         self.assertTrue(box.asked)
         self.assertFalse([asked for asked in box.asked if asked.startswith("FETCH")])
 
+    def test_no_search_for_a_word_is_asked_past_the_search_time(self):
+        """A word is asked for by its stem and as said, and where either isn't ASCII each goes
+        in a search of its own, so a slow answer to the first left the second asked past the
+        search's time. A slow answer for one word leaves the next word unasked too."""
+        for question in ("código", "canción", "Acme invoice"):
+            for answered, asked in ((None, 2), (10.5, 1)):     # until is 10
+                clock = Clock(9.9)
+                box = Mailbox({1: message("Acme", ACME, "Hi.")}, clock, lambda _: answered)
+                with mock.patch.object(goamail, "time", clock):
+                    hits = goamail._hits(box, mail.terms(question), 10)
+                self.assertEqual(len(box.asked), asked, (question, answered))
+                self.assertEqual(hits, [] if answered else [{1}] * len(mail.terms(question)),
+                                 (question, answered))
+
     def test_what_the_server_is_asked_for_is_sign_in_talk(self):
         for term in goamail.TALK_TERMS:
             self.assertRegex(term, mail.SIGN_IN_TALK)
