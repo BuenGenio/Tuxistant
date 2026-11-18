@@ -720,7 +720,8 @@ class Relay(Case):
                     text, session, _ = said({"name": name, "on": "my server"},
                                             answer=(0, answer, b""))
                     self.assertEqual(text, f"I reached your server over ssh. On your server, {rows}")
-        self.assertEqual(said({"name": "sshd"}, answer=(255, b"", b"Permission denied"))[0],
+        self.assertEqual(said({"name": "sshd"},
+                              answer=(255, b"", b"me@x: Permission denied (publickey).\r\n"))[0],
                          serverstatus.NO_KEY)
         self.assertTrue(said({"name": f"ssh {HOST}"})[0].startswith(TWO))
         # Nothing read: the answer came over ssh all the same.
@@ -909,6 +910,9 @@ class Errors(Case):
                          serverstatus.HOST_KEY_CHANGED)
         for stderr in (b"ssh: connect to host x port 22: Connection refused\r\n",
                        b"ssh: Could not resolve hostname x: Name or service not known\r\n",
+                       # A connect() this computer refused, as a firewall or an LSM may: no
+                       # server was reached, so its key wasn't turned down.
+                       b"ssh: connect to host x port 22: Permission denied\r\n",
                        b""):
             self.assertEqual(self.failed(stderr), serverstatus.CANT_CONNECT)
 

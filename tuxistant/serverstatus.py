@@ -419,7 +419,9 @@ def _kill(process) -> None:
 def _ssh_failed(errors: bytes) -> str:
     """ssh's own complaint, read only to pick a sentence: none of it is said."""
     text = errors.decode("utf-8", "replace")
-    if "Permission denied" in text or "Too many authentication failures" in text:
+    # ssh's own refusal lists the methods it tried, as "Permission denied (publickey).": a
+    # connect() the system refused says "port 22: Permission denied" and never reached the server.
+    if "Permission denied (" in text or "Too many authentication failures" in text:
         return NO_KEY
     # Before the next one: ssh ends this warning with "Host key verification failed." too.
     if ("REMOTE HOST IDENTIFICATION HAS CHANGED" in text
