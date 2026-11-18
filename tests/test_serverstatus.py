@@ -1831,8 +1831,11 @@ def _flat(path: str) -> str:
 
 
 def _changelog_entry() -> str:
-    """What the changelog says of this round: up to the last release."""
-    return _flat("CHANGELOG.md").partition("## 0.6.0")[0]
+    """What the changelog says of this round: up to the last release, without the lines on mail
+    search, the other change in it, whose words are its own."""
+    entry = (ROOT / "CHANGELOG.md").read_text().partition("## 0.6.0")[0]
+    return " ".join(" ".join(line for line in entry.splitlines()
+                             if "mail" not in line.casefold()).split())
 
 
 def _skills_section() -> str:

@@ -58,6 +58,12 @@ PERMISSION_WORDS = {
     "home_control": "control devices through Home Assistant",
     "home_read": "read the state of your home",
 }
+# What a built-in skill does that its permissions don't say, and the code it does it in: mail
+# search without Thunderbird asks each account's own server, from goamail.py, with no permission
+# of its own to show for it.
+ALSO_DOES = {"org.tuxistant.mail": ("Send your question's words to your mail server",
+                                    "Without Thunderbird, to each account in Online Accounts")}
+ALSO_IN = {"tuxistant.mail": ("tuxistant.goamail",)}
 SKILLS_FOLDER = DATA_DIR / "skills"   # where your skills and recipes go, as skillhost.USER_DIR
 HOME_SERVER = "home"        # a network permission naming the server this install talks to
 SHELL_ACTION = "shell.run"
@@ -70,8 +76,10 @@ LIGHTS_NOTE = ("The TP-Link account your Tapo lights are set up with. The passwo
 HOME_NOTE = ("Make a long-lived access token on your profile page in Home Assistant, under "
              "Security. Enter the address first: a new address needs its own token. Plain "
              "http is only used on your own network")
-MAIL_NOTE = ("Answers come from the mail Thunderbird keeps on this computer. What a mail says "
-             "goes to your own server to be read, and nowhere else")
+MAIL_NOTE = ("Answers come from the mail Thunderbird keeps on this computer, or without it from "
+             "the Google or Microsoft accounts in Online Accounts, each searched on its own "
+             "server, which gets your question's words. What a mail says goes to your own server "
+             "to be read, and nowhere else")
 AUTOMATIC = "Automatic"
 PHONE_NOTE = "Used when you don't name a device"
 CALENDARS_TIMEOUT_MS = 30000    # the daemon connects to each calendar to see if it can be changed
@@ -1539,8 +1547,8 @@ def code_words(details: dict) -> str:
     if details.get("source") in ("yours", "bundled"):
         return ("Its own program, in the files below. It runs in a sandbox that sees its own "
                 "folder and none of your home folder, with the network only if it asks for it")
-    modules = sorted({module_file(a["module"]) for a in details.get("actions", [])
-                      if a.get("module")})
+    modules = sorted({module_file(module) for a in details.get("actions", []) if a.get("module")
+                      for module in (a["module"], *ALSO_IN.get(a["module"], ()))})
     where = f" in {', '.join(modules)}" if modules else ""
     return (f"Built in: Python code{where}. The manifest says what the model is offered, and "
             "the code decides what really happens")
@@ -1563,6 +1571,12 @@ def permission_list(permissions: dict) -> list[tuple[str, str]]:
                               else str(name) for name in value)
         found.append((words[0].upper() + words[1:], where))
     return found
+
+
+def skill_permissions(details: dict) -> list[tuple[str, str]]:
+    """permission_list, and what a built-in skill does besides (see ALSO_DOES)."""
+    also = ALSO_DOES.get(details.get("id")) if details.get("source") == "built-in" else None
+    return permission_list(details.get("permissions") or {}) + ([also] if also else [])
 
 
 def risk_words(risk: str, because: list | None, permissions: dict) -> str:
@@ -1780,9 +1794,13 @@ def risk_badge(risk: str) -> Gtk.Label:
                      css_classes=["risk-badge", RISK_CLASSES.get(risk, "error")])
 
 
-def permission_rows(permissions: dict, risk: str, because: list | None) -> list:
-    """A row for each permission in words, then the risk and why it is that."""
-    rows = [plain_row(what, where) for what, where in permission_list(permissions)]
+def permission_rows(permissions: dict, risk: str, because: list | None,
+                    listed: list[tuple[str, str]] | None = None) -> list:
+    """A row for each permission in words, or for each of listed when it is given, as
+    skill_permissions lists them for a skill on this computer, then the risk and why it is
+    that."""
+    listed = permission_list(permissions) if listed is None else listed
+    rows = [plain_row(what, where) for what, where in listed]
     if not rows:
         rows.append(plain_row("None", "It needs no special permissions"))
     row = plain_row(risk_label(risk), risk_words(risk, because, permissions))
@@ -1887,7 +1905,8 @@ class SkillDialog(Adw.PreferencesDialog):
     def show_permissions(self, skill, because):
         for row in self.permission_rows:
             self.permissions.remove(row)
-        rows = permission_rows(skill["permissions"], skill["risk"], because)
+        rows = permission_rows(skill["permissions"], skill["risk"], because,
+                               skill_permissions(skill))
         self.permission_rows = rows
         for row in rows:
             self.permissions.add(row)

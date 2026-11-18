@@ -124,6 +124,17 @@ class Logic(unittest.TestCase):
         self.assertEqual(sa.permission_list({"network": ["home", "a.org"], "<b>x</b>": True}),
                          [("Use the network", "your own server, a.org"), ("Use <b>x</b>", "")])
 
+    def test_the_mail_skills_page_says_what_its_permissions_dont(self):
+        """Without Thunderbird, mail search sends the question's words to each account's server
+        in Online Accounts, from goamail.py, which no permission of its own says."""
+        from tuxistant.skills import Skills
+        details = Skills().details("org.tuxistant.mail")
+        self.assertEqual(sa.skill_permissions(details), [
+            ("Read your mail", ""), sa.ALSO_DOES["org.tuxistant.mail"]])
+        self.assertIn("tuxistant/goamail.py, tuxistant/mail.py", sa.code_words(details))
+        self.assertEqual(sa.skill_permissions({**details, "source": "yours"}),
+                         [("Read your mail", "")])
+
     def test_risk_words(self):
         self.assertEqual(sa.risk_words("high", ["shell", "files_write"], {}),
                          "Because it can run shell commands and change files")
@@ -1540,6 +1551,19 @@ class Inner(unittest.TestCase):
                 signature="s")
         wait(lambda: [r.get_title() for r in page.problem_rows] == ["coins.yml"],
              "the problems a reload found, with the window open")
+
+    def test_21_a_the_mail_skills_page_shows_what_its_permissions_dont_say(self):
+        """Mail search without Thunderbird sends the question's words to each account's server,
+        which no permission of its own says, so the page shows it beside them."""
+        dialog = open_skill(self.win, "org.tuxistant.mail")
+        shown = texts_of(dialog.permissions)
+        self.assertIn("Read your mail", shown)
+        self.assertIn(sa.ALSO_DOES["org.tuxistant.mail"][0], shown)
+        self.assertIn(sa.ALSO_DOES["org.tuxistant.mail"][1], shown)
+        # And its settings say where the mail comes from, and that each server gets the words.
+        note = dialog.settings.group.get_description()
+        self.assertIn("Online Accounts", note)
+        self.assertIn("question's words", note)
 
     def test_21_a_a_built_in_skill_shows_what_the_model_is_given(self):
         from tuxistant.skills import Skills
