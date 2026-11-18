@@ -24,6 +24,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tests import imap_fake  # noqa: E402
 from tuxistant import goamail, mail, mail_floor  # noqa: E402
 from tuxistant.webfetch import clean  # noqa: E402
 
@@ -137,10 +138,10 @@ def _part(text: str, subtype: str, cte: str, code: str = "") -> tuple[str, bytes
 
 
 def online_read(m: dict, talking: bool = False) -> str | None:
-    """What the model is shown of a mail through Online Accounts, from the header fields and the
-    text an IMAP FETCH gives, and the more of it fetched for a mail cut short in the part read
-    (see goamail._rows and _read_on), then mail._note's hiding. talking: the server's own search
-    finds sign-in talk in the mail, which counts for one still cut short (see goamail._talking)."""
+    """What the model is shown of a mail through Online Accounts: the header fields and the text
+    an IMAP FETCH gives, read by goamail._rows itself, fetching on and all, then mail._note's
+    hiding. talking: the server's own search finds sign-in talk in the mail, which counts for one
+    goamail still holds cut short (see goamail._talking)."""
     subject = m["subject"] if m["subject"].isascii() else \
         email.header.Header(m["subject"], "utf-8").encode()
     head = f"From: {AUTHOR}\r\nSubject: {subject}\r\nMIME-Version: 1.0\r\n"
@@ -152,13 +153,7 @@ def online_read(m: dict, talking: bool = False) -> str | None:
         header = (head + 'Content-Type: multipart/alternative; boundary="b"\r\n\r\n').encode()
         text = b"".join(b"--b\r\n" + h.encode() + b"\r\n" + body + b"\r\n" for h, body in parts)
         text += b"--b--\r\n"
-    found = {b"HEADER": header, b"TEXT": text[:goamail.TEXT_BYTES]}
-    read = goamail._read(found)
-    if read and read[2]:
-        found = {b"HEADER": header, b"TEXT": text[:goamail.TEXT_BYTES + goamail.MORE_BYTES]}
-        read = goamail._read(found, goamail.TEXT_BYTES + goamail.MORE_BYTES) or read
-    kept = read and goamail._hidden(STEMS, read[0], found, read[1], True, read[2],
-                                    talking and read[2] and len(read[1]) < mail.SCAN_CHARS)
+    kept = imap_fake.read_by_goamail(header, text, talking)
     if not kept:
         return None
     return mail._shown(kept[1], mail.SUBJECT_CHARS) + "\n" + mail._shown(kept[2], mail.BODY_CHARS)
@@ -179,10 +174,11 @@ BLOCKS = ("address|article|aside|blockquote|body|caption|center|dd|details|dialo
 def html_text(markup: str) -> str:
     """HTML as Thunderbird's index holds it: without its scripts, styles, head and comments, each
     block on a line of its own, from its opener to its closer, cells spaced, every other tag taken
-    out and character references read."""
+    out, but for a "<" that starts none, which is text, and character references read."""
     text = re.sub(r"(?is)<(script|style|head)\b.*?</\1\s*>|<!--.*?-->", "", markup)
     text = re.sub(rf"(?i)<br\b[^>]*>|</?(?:{BLOCKS})\b[^>]*>", "\n", text)
-    text = html.unescape(re.sub(r"<[^>]*>", "", re.sub(r"(?i)</t[dh]\s*>", " ", text)))
+    text = re.sub(r"<(?=[A-Za-z/!?])[^>]*>", "", re.sub(r"(?i)</t[dh]\s*>", " ", text))
+    text = html.unescape(text)
     return "\n".join(" ".join(line.split()) for line in text.splitlines()).strip()
 
 
@@ -591,30 +587,41 @@ class AgainstFiveOh(unittest.TestCase):
         20,000 characters of it: sign-in talk past the cut counts for 0.5.0's rules too, so a code
         before a currency's code they don't take for a price, or a price whose sign is after it,
         is hidden as 0.5.0 hid it. The server is one that matches whole words only, as Gmail is
-        taken to: asked, it didn't find "100% authentic" or "opiniones verificadas", which 0.5.0's
-        verif\\w+ and authenti\\w+ took, so the mail is fetched on and its own text decides."""
+        taken to, and isn't asked for every form of 0.5.0's verif\\w+ and authenti\\w+, so the
+        mail is fetched on until it holds those 20,000 characters and its own text decides: 300
+        rows of a shop's HTML are 44 KB of markup and 14,000 characters. Counted as the index
+        counts them, an HTML mail heavy in inline tags keeps its talk near the end of those 20,000,
+        and a "<" that starts no tag is text, as it is in the index."""
         filler = "Thanks for being with us this year.\n" * 470
         read = []
-        row = '<tr><td style="padding:8px 16px;font-family:Arial,sans-serif">{}</td></tr>\n'
-        for footer in ("Every item we sell is 100% authentic.", "Certificate of authenticity "
-                       "included.", "Your payment is verifiable in the app.",
-                       "Todas nuestras opiniones son verificadas.", "Vendedores verificados por "
-                       "Acme.", "Verificaremos tu pedido antes del envío.",
-                       "Avaliações verificadas por clientes.", "Todas as verificações foram feitas.",
-                       "Produtos verificados pela Acme."):
-            markup = ("<table>" + row.format("Order 5928374: total 1500 € paid. Call 0345 600 "
-                                             "4321.")
-                      + row.format("Thank you for shopping with Acme this season.") * 150
-                      + row.format(footer) + "</table>")
+        rows = ('<tr><td style="padding:8px 16px;font-family:Arial,sans-serif">{}</td></tr>\n',
+                '<tr><td style="padding:8px 16px;font-family:Arial,sans-serif;color:#333333;'
+                'font-size:14px;line-height:20px">{}</td></tr>\n')
+        tags = "".join(f"<p>Item {n}: Acme<b>Kitchen</b>Ware<i>Set</i>Deluxe edition, boxed.</p>"
+                       for n in range(370))
+        top = "Order 5928374: total 1500 € paid. Call 0345 600 4321."
+        pages = [("<table>" + row.format(top)
+                  + row.format("Thank you for shopping with Acme this season.") * count
+                  + row.format(footer) + "</table>", footer)
+                 for footer in ("Every item we sell is 100% authentic.", "Certificate of "
+                                "authenticity included.", "Your payment is verifiable in the app.",
+                                "Todas nuestras opiniones son verificadas.", "Vendedores "
+                                "verificados por Acme.", "Verificaremos tu pedido antes del envío.",
+                                "Verifícalo en la app de Acme.",
+                                "Avaliações verificadas por clientes.", "Todas as verificações "
+                                "foram feitas.", "Produtos verificados pela Acme.")
+                 for row, count in ((rows[0], 150), (rows[1], 300))]
+        pages += [(f"<p>{top}</p>{tags}<p>Log in to your Acme account to see it.</p>"
+                   + "<p>Thanks for shopping with Acme.</p>" * 40, "inline tags"),
+                  ("<table><tr><td>For orders < 100 € sign in to pay.</td><td>Order 5928374</td>"
+                   "</tr></table>", "a bare <")]
+        for markup, footer in pages:
             for cte in ("qp", "8bit"):
-                m = {"kind": "code", "why": f"cut html {cte} {footer!r}",
+                m = {"kind": "code", "why": f"cut html {cte} {len(markup)} {footer!r}",
                      "subject": "Your Acme order", "plain": None, "html": markup, "cte": cte,
-                     "tokens": ["Order 5928374: total 1500 € paid. Call 0345 600 4321."]}
-                encoded = _part(markup, "html", cte, m["tokens"][0])[1]
-                self.assertLess(goamail.TEXT_BYTES, len(encoded))
+                     "tokens": [top]}
                 talking = any(re.search(rf"(?<!\w){re.escape(term)}(?!\w)", markup, re.I)
                               for term in goamail.TALK_TERMS)
-                self.assertFalse(talking, footer)
                 text = index_text(m)
                 read.append((m, old_read(m["subject"], text), thunderbird_read(m["subject"], text),
                              online_read(m, talking=talking)))

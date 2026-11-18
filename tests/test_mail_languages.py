@@ -28,6 +28,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tests import imap_fake  # noqa: E402
 from tests.test_mail_differential import html_text, old_read, old_tokens  # noqa: E402
 from tuxistant import goamail, mail  # noqa: E402
 
@@ -145,6 +146,8 @@ SIGN_IN = {
         ("كود التحقق من Acme", "كود التحقق الخاص بك هو {C}. لا تشاركه مع أحد."),
         ("Acme", "كود التفعيل: {C}"),
         ("Acme", "{C} هو كود التحقق الخاص بك."),
+        ("Acme", "كود التأكيد الخاص بك هو {C}"), ("Acme", "كود تسجيل الدخول: {C}"),
+        ("Acme", "كود الأمان: {C}"), ("Acme", "كودك هو {C}"),
         ("حسابك الجديد", "اسم المستخدم: sam.p\nكلمة المرور المؤقتة: {P}\nيرجى تغييرها بعد "
          "تسجيل الدخول."),
         ("بيانات الواي فاي", "الشبكة: Hotel-Guest\nكلمة السر: {P}\nموعد المغادرة 11:00"),
@@ -525,6 +528,15 @@ JOINED_TEXTS = {"en": "Your order {ORDER} ships on {DATE}. Call {PHONE}.",
                 "ar": "طلبك {ORDER} يصل في {DATE}. اتصل على {PHONE}."}
 LINK = "https://www.acme.example/track?id=" + "a1b2c3d4e5" * 14
 # A label over a number alone on its line with a "#" glued to it, as a receipt sets an order out.
+# A footer's talk of signing in split by a line end, as a plain part wrapped at a width splits it,
+# which 0.5.0 didn't read as talk.
+WRAPPED_TALK = ("You can log\nin to your account to see your orders.",
+                "Please sign\nin to the app to change your delivery.",
+                "This offer is valid\nfor 30 days from today.",
+                "Use the one\ntime link in the app to manage alerts.",
+                "Turn on two\nfactor protection in your settings.",
+                "Our bags are single\nuse free.",
+                "Logging\nin is not needed to track it.")
 ORDER_LABELS = {"en": "Order number", "es": "Número de pedido", "pt": "Número do pedido",
                 "zh": "订单号", "ar": "رقم الطلب"}
 # A part that names no charset, in the older one of its language, as an older sender's script
@@ -932,10 +944,22 @@ def more(rng) -> list[dict]:
                      [(picked[slot], slot.lower()) for slot in ("ORDER", "DATE", "PHONE")],
                      ("plain-8bit", "html-qp")[n // 2 % 2])
     for lang, label in ORDER_LABELS.items():
-        for order in ("#5928374", "#A1B2C3"):
+        for order in ("#5928374", "#A1B2C3", "(5928374)", "5928374."):
             for form in ("plain-8bit", "html-qp"):
                 everyday(lang, f"own line {order}", "Your Acme order",
                          f"{thanks[lang]}\n{label}\n{order}\n", [(order, "order")], form)
+    for form in ("plain-8bit", "html-qp"):
+        everyday("pt", "a queue's senha", "Sua senha de atendimento",
+                 "Protocolo 4829137. Clínica (11) 3456-7890.",
+                 [("4829137", "order"), ("(11) 3456-7890", "phone")], form)
+    for n, (subject, body) in enumerate(EVERYDAY["en"]):
+        for t, footer in enumerate(WRAPPED_TALK):
+            i += 1
+            picked = pick("en", i)
+            everyday("en", f"wrapped talk {footer.split(chr(10))[0]!r}", fill(subject, picked),
+                     fill(body, picked) + "\n" + footer,
+                     [(value, slot.lower()) for slot, value in picked.items()
+                      if "{" + slot + "}" in body], ("plain-8bit", "html-qp")[(n + t) % 2])
     return mails
 
 
@@ -1013,23 +1037,17 @@ def fetched(m: dict) -> dict:
 
 
 def online_read(m: dict) -> tuple[str | None, str | None]:
-    """(what the model is shown through Online Accounts, the text goamail decoded), as
-    goamail._rows reads a fetched mail, as far as it fetches it, and further for one cut short in
-    the part read (see goamail._read_on), and mail._note hides it. A mail still cut short of
-    SCAN_CHARS talks of signing in where the server's search says so (see server_talks)."""
+    """(what the model is shown through Online Accounts, the text goamail decoded), as goamail
+    reads a fetched mail itself, fetching on and all (see imap_fake.read_by_goamail), and
+    mail._note hides it. Where goamail asks the server about sign-in talk, it finds it where
+    server_talks says so."""
     whole = fetched(m)
-    found = {**whole, b"TEXT": whole[b"TEXT"][:goamail.TEXT_BYTES]}
-    read = goamail._read(found)
-    if read and read[2]:
-        found = {**whole, b"TEXT": whole[b"TEXT"][:goamail.TEXT_BYTES + goamail.MORE_BYTES]}
-        read = goamail._read(found, goamail.TEXT_BYTES + goamail.MORE_BYTES) or read
-    kept = read and goamail._hidden(STEMS, read[0], found, read[1], True, read[2],
-                                    read[2] and len(read[1]) < mail.SCAN_CHARS
-                                    and server_talks(m))
-    if not kept:
+    kept = imap_fake.read_by_goamail(whole[b"HEADER"], whole[b"TEXT"], server_talks(m))
+    decoded = imap_fake.decoded_by_goamail(whole[b"HEADER"], whole[b"TEXT"])
+    if not kept or not decoded:
         return None, None
     return (mail._shown(kept[1], mail.SUBJECT_CHARS) + "\n" + mail._shown(kept[2], mail.BODY_CHARS),
-            goamail._subject(read[0]) + "\n" + read[1].replace(mail.JOIN, ""))
+            decoded[0] + "\n" + decoded[1].replace(mail.JOIN, ""))
 
 
 # ---- what is shown of a token ---------------------------------------------------------------
@@ -1099,7 +1117,7 @@ class FiveLanguages(unittest.TestCase):
         found = defaultdict(list)
         for m, _old, _tb, _online, decoded in self.read:
             index = " ".join(f"{m['subject']}\n{m['index']}".split())
-            cut = len(fetched(m)[b"TEXT"]) > goamail.TEXT_BYTES + goamail.MORE_BYTES \
+            cut = len(fetched(m)[b"TEXT"]) > goamail.READ_ON_BYTES \
                 or len(m["index"]) > mail.SCAN_CHARS
             if decoded is not None and cut:
                 decoded = " ".join(decoded.split()).rsplit(" ", 1)[0]    # where the fetch cut it

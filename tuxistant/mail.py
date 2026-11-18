@@ -234,19 +234,25 @@ UNESCAPES = 4
 # รหัสไปรษณีย์ ("postcode"), and Hebrew words that hold קוד, such as נקודות ("points"), מיקוד
 # ("postcode"), ברקוד ("barcode") and קודם ("earlier"), as קוד counts only as a word with the
 # letters that stand for "the", "in", "to", "and", "that", "from" and "as" before it.
-PASSWORDS = (r"passwort\w*|kennwort\w*|contrase[ñn]a\w*|senha\w*|has[łl][oa]\w*|mot de passe"
+PASSWORDS = (r"passwort\w*|kennwort\w*|contrase[ñn]a\w*|has[łl][oa]\w*|mot de passe"
              r"|wachtwoord\w*|lösenord\w*|passord\w*|adgangskode\w*|kodeord\w*|şifre\w*|hesl[oa]\w*"
              r"|jelsz[óa]\w*|mật khẩu|kata sandi|पासवर्ड|סיסמ\w*|كلمة (?:ال)?مرور|رمز المرور"
              r"|κωδικ\w* πρ[οό]σβασ\w*|συνθηματικ\w*")
 # كلمة السر ("the secret word") is a password too, but it is also "the key to" something, as in
-# "كلمة السر لرحلة مثالية", so it counts only in its own part (see CROSS_WORD).
-OWN_PASSWORDS = rf"{PASSWORDS}|كلمة (?:ال)?سر"
-# Arabic كود ("code"), by itself or after ال ("the"), but not inside ركود ("stagnation") or another
-# word that holds its letters, and only where it names a code being given: before التحقق, التفعيل
-# or الدخول, a colon, هو ("is"), الخاص ("your") or the code itself. "كود الخصم موجود في التطبيق"
-# ("the discount code is in the app") at the top of a bill hid its tracking and account numbers.
-ARABIC_CODE = ("(?:(?<=\u0627\u0644)|(?<![\u0620-\u064a]))\u0643\u0648\u062f"
-               r"(?=\s?:|\s(?:هو(?![\u0620-\u064a])|الخاص|(?:ال)?(?:تحقق|تفعيل|دخول))|\s\d)")
+# "كلمة السر لرحلة مثالية", so it counts only in its own part (see CROSS_WORD), and so does senha,
+# which is also a ticket for a queue, "Sua senha de atendimento", but where it names a password.
+OWN_PASSWORDS = rf"{PASSWORDS}|senha\w*|كلمة (?:ال)?سر"
+SENHA = r"senhas?(?=[ \t]*(?:[.!?,:;)\n]|$)| (?:tempor[aá]ria|provis[oó]ria|de acesso))"
+# Arabic كود ("code"), by itself or after ال ("the"), or with ك or كم ("your") on its end, but not
+# inside ركود ("stagnation") or another word that holds its letters, and only where it names a
+# code being given: before a word for checking, activating, signing in, confirming, security, a
+# one-time or a temporary or secret code, التحقق, التفعيل, الدخول, تسجيل, التأكيد, الأمان, لمرة,
+# المؤقت or السري, a colon, هو ("is"), الخاص ("your") or the code itself. "كود الخصم موجود في
+# التطبيق" ("the discount code is in the app") at the top of a bill hid its tracking and account
+# numbers, and so would a promo code, "كودك الترويجي".
+ARABIC_CODE = ("(?:(?<=\u0627\u0644)|(?<![\u0620-\u064a]))\u0643\u0648\u062f(?:\u0643\u0645?)?"
+               r"(?=\s?:|\s(?:هو|الخاص|تسجيل|لمرة|(?:ال)?(?:تحقق|تفعيل|دخول|تأكيد|أمان|مؤقت|سري))"
+               r"(?![\u0620-\u064a])|\s\d)")
 HEBREW_PREFIXES = "\u05d4\u05d1\u05dc\u05d5\u05e9\u05de\u05db"    # the, in, to, and, that, from, as
 HEBREW_CODE = (f"(?<![\u05d0-\u05ea])[{HEBREW_PREFIXES}]{{0,2}}\u05e7\u05d5\u05d3"   # [prefixes]קוד
                "(?:\u05d9\u05dd|\u05d9)?(?![\u05d0-\u05ea])")                     # ים / י
@@ -285,8 +291,10 @@ SECRET_WORD = _secret_words(NAMING + "|pins|pass|keys?|tokens?",
 # clave": "您的订单号码" is "your order number", and 전화번호 a phone number. A bare "pass", "key" or
 # "token" names one only beside it: "Your Acme pass" is a boarding pass, and "New Pins for you" is
 # Pinterest's. A word for a password counts only where it starts a word, as "resenha" ("review")
-# and "desenhado" ("designed") hold senha; 密码 not before 锁, 箱 or 学 (a combination lock, a safe,
-# cryptography); and 口令 only as 动态口令 or 登录口令, as 淘口令 is a shop's link and 口令红包 a voucher.
+# and "desenhado" ("designed") hold senha, and senha only where nothing but punctuation follows it
+# or before temporária, provisória or de acesso (see SENHA); 密码 not before 锁, 箱 or 学 (a
+# combination lock, a safe, cryptography); and 口令 only as 动态口令 or 登录口令, as 淘口令 is a
+# shop's link and 口令红包 a voucher.
 SIGN_IN_CODE = (r"(?:verification|security|sign[- ]?in|log[- ]?in|one[- ]?time|authentication"
                 r"|2fa|two[- ](?:factor|step))[- ]?codes?")
 CROSS_CJK = ("验证码|驗證碼|校验码|校驗碼|动态码|動態碼|密码(?![锁箱学])|密碼|認証コード|確認コード|認証番号"
@@ -301,7 +309,7 @@ CROSS_WORD = re.compile(
     r"(?:(?-i:[A-Z][a-z])[\w.&'-]{0,30}\s{1,3})?(?-i:codes?)"
     r"(?:\s{1,3}for\s{1,3}(?-i:[A-Z])[\w.&'-]{0,30})?"
     r"(?=[ \t]*(?:[.!?,:;)\n]|$)|\s{1,3}you\s{1,3}(?:asked\s{1,3}for|requested))"
-    rf"|(?<![^\W\d_])(?:{PASSWORDS})|mã (?:xác|otp)|(?:رمز|كود) (?:ال)?(?:تحقق|تفعيل|دخول)"
+    rf"|(?<![^\W\d_])(?:{PASSWORDS}|{SENHA})|mã (?:xác|otp)|(?:رمز|كود) (?:ال)?(?:تحقق|تفعيل|دخول)"
     rf"|{CROSS_CJK})", re.I)
 # A password is whatever follows a colon or "is", even a plain word: the English "is", or that of
 # a language above that writes a space round it, "Ihr Passwort ist", "Vaše heslo je" or "Mật khẩu
@@ -452,14 +460,13 @@ def _numbers(text: str, seen: str, start: int = 0, end: int | None = None):
             if not (number["money"] and PRICED.match(seen, number.end())))
 
 
-# A line that is nothing but a code, give or take the punctuation a template, html2text or the
-# plain part of an HTML mail puts round one: "*482913*" for a bold code, "482913." or "482913。",
-# "(KQ7X9B)", "`482913`" for code, "- 482913" or "+ 482913" for an item of a list (a bullet is a
-# space to the hiding: see DOTS), "| 482913 |" for a table's cell, "# 482913" for a heading, or
-# an arrow pointing at it. A "#" glued to it is an order's, "Order number\n#5928374", as a "+"
-# glued to it is a phone's.
-AROUND = (r"""[ \t*_"'“”‘’‹›«»()\[\]{}<>.,:;!?`|=~/\-\u3001\u3002\u3014\u3015\u2215"""
-          r"\u2190-\u21ff\u2794-\u27bf\u2b05-\u2b07\u25b6\u25ba\u25c0\u25c4]*+")
+# A line that is nothing but a code, give or take the dressing html2text or the plain part of an
+# HTML mail puts round one: "*482913*" for a bold code, "`482913`" for code, "- 482913" or
+# "+ 482913" for an item of a list (a bullet is a space to the hiding: see DOTS), "| 482913 |" for
+# a table's cell, "# 482913" for a heading, or an arrow pointing at it. Not brackets or a full stop,
+# as an order's number has a line to itself as "(5928374)" or "5928374.", nor a "#" glued to it,
+# "Order number\n#5928374", as a "+" glued to it is a phone's: 0.5.0 read each of those out.
+AROUND = (r"[ \t*_`|\-\u2190-\u21ff\u2794-\u27bf\u2b05-\u2b07\u25b6\u25ba\u25c0\u25c4]*+")
 ALONE = re.compile(
     rf"^(?:[+#]+[ \t])?{AROUND}((?:\d[ -]?){{4,12}}"
     r"|(?=[A-Za-z0-9-]*\d)(?=[A-Za-z0-9-]*[A-Za-z])[A-Za-z0-9-]{5,14}"
@@ -761,7 +768,11 @@ def _spans(seen: str, talk: bool = False, lead: int = 0, joined: bool = False,
     secret that stands before it, in the other part of the mail (see _passed). joined: the
     text's lines are joined, as the model reads them (see _ranged), where letters with digits
     don't count, as a footer joined to the line before it would talk for that line. before: the
-    text as it was before they were joined, for what is near a word for a secret (see _joining)."""
+    text as it was before they were joined, for what is near a word for a secret (see _joining).
+    There, talk of signing in the caller hasn't said the text has (talk) is talk only joining its
+    lines made, as in "log\\nin", which 0.5.0 didn't read as talk: near it, it hides only what the
+    joining made, as a word for a secret does. Taken as talk, it hid every order and phone number
+    of a plain part wrapped at a width, which 0.5.0 read out."""
     spans, near, ends, text = [], [], [], _apart(seen, joined)
     for word in SECRET_WORD.finditer(text):
         ends.append(word.end())
@@ -774,10 +785,12 @@ def _spans(seen: str, talk: bool = False, lead: int = 0, joined: bool = False,
         for number in _numbers(text, seen, back, word.start()):
             if not YEAR.fullmatch(number[0]):
                 near.append(number.span())
-    spans += _joining(seen, near + _shaped(text, ends, lead), before)
     lines = _talking_lines(text)
+    if lines and not talk and before is not None:
+        near += _near_talk(text, seen)
+    spans += _joining(seen, near + _shaped(text, ends, lead), before)
     found = [*ALONE.finditer(text)]
-    if talk or lines:
+    if talk or lines and before is None:
         found += [number for number in _numbers(text, seen) if not _glued(text, number)]
     if not joined:
         found += [mixed for start, end in lines for mixed in MIXED.finditer(text, start, end)
@@ -805,6 +818,20 @@ def _joining(seen: str, near: list[tuple[int, int]], before: str | None) -> list
             if not held[piece]:
                 made.append((start, end))
     return made
+
+
+def _near_talk(text: str, seen: str) -> list[tuple[int, int]]:
+    """The numbers within SECRET_BEFORE before or SECRET_REACH after talk of signing in, but for a
+    year or one glued as _glued has it. Reaches that overlap are looked through once."""
+    reaches = []
+    for talk in SIGN_IN_TALK.finditer(text):
+        start, end = max(0, talk.start() - SECRET_BEFORE), talk.end() + SECRET_REACH
+        if reaches and start <= reaches[-1][1]:
+            reaches[-1][1] = end
+        else:
+            reaches.append([start, end])
+    return [number.span() for start, end in reaches for number in _numbers(text, seen, start, end)
+            if not _glued(text, number) and not YEAR.fullmatch(number[0])]
 
 
 def _talking_lines(text: str) -> list[tuple[int, int]]:
@@ -1177,6 +1204,11 @@ def _rows(db: sqlite3.Connection, stems: list[Term], every: bool, skipped: list[
     return rows
 
 
+def indexed(text: str) -> int:
+    """How many characters of a text Thunderbird's index holds: none where goamail put a JOIN."""
+    return len(text) - text.count(JOIN)
+
+
 def _kept(stems: list[Term], author: str, subject: str, body: str, every: bool,
           subject_cut: bool = False, body_cut: bool = False,
           talk_past: bool = False, glue: str = "") -> tuple | None:
@@ -1214,18 +1246,27 @@ def _secret_free(subject: str, body: str, subject_cut: bool = False, body_cut: b
     mail is cut there, so talk_past is only ever Online Accounts'.
 
     The second pass reads the texts with their lines and links joined, as the model will, and
-    near a word for a secret it hides only what the joining made (see _joining)."""
+    near a word for a secret it hides only what the joining made (see _joining), and so near talk
+    of signing in that only joining the lines made."""
     (subject, grown, floor, talked), (body, body_grown, body_floor, body_talked) = \
         _floored(subject, talk=subject_cut), \
-        _floored(body, glue, talk_past and len(body) < SCAN_CHARS)
+        _floored(body, glue, talk_past and indexed(body) < SCAN_CHARS)
     cuts = [subject_cut or grown, body_cut or body_grown]
     texts, talks = _passed([subject, body], cuts,
                            [cuts[0] or talked, talk_past or body_grown or body_talked],
                            floors=(floor, body_floor))
     seen = [_plain(_joined(text[:CLEANED_CHARS])) for text in texts]    # as _shown reads them
+    talks = [talk or bool(SIGN_IN_TALK.search(_apart(joined))) and _talks_by_line(
+        text[:CLEANED_CHARS]) for talk, joined, text in zip(talks, seen, texts)]
     (subject, body), _ = _passed(seen, [len(text) > CLEANED_CHARS for text in texts], talks, True,
                                  befores=[text[:CLEANED_CHARS] for text in texts])
     return subject, body
+
+
+def _talks_by_line(text: str) -> bool:
+    """Whether a text made plain talks of signing in as the model reads it, but with its lines
+    kept apart, as clean() makes "sign<b>in" talk but "log\\nin" was none to 0.5.0 (see _spans)."""
+    return bool(SIGN_IN_TALK.search(_apart(_plain(_joined(text.replace("\n", " | "))))))
 
 
 def _passed(texts: list[str], cuts: list[bool], talks: list[bool], joined: bool = False,

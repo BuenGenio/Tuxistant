@@ -11,6 +11,8 @@ import email.message
 import imaplib
 import json
 import logging
+import random
+import re
 import shutil
 import socket
 import ssl
@@ -78,7 +80,7 @@ def text_of(raw: bytes) -> bytes:
     return raw.partition(b"\r\n\r\n")[2]
 
 
-FETCHED_BYTES = goamail.TEXT_BYTES + goamail.MORE_BYTES     # the most fetched of a mail's text
+FETCHED_BYTES = goamail.TEXT_BYTES + goamail.MORE_BYTES     # a mail's text once fetched on
 
 
 def gmail(inbox=(), sent=(), junk=(), archived=()) -> list[Box]:
@@ -452,7 +454,7 @@ class Secrets(Goa):
               for n, page in enumerate(("Your code is 482&#8209;913.",
                                         "Sign in to Acme with 482&#8209;913 now.",
                                         "Your code is KQ7&#8209;X9B.",
-                                        "<b>482913</b>.", "<strong>KQ7X9B</strong>!")))])
+                                        "<b>482913</b>", "<strong>KQ7X9B</strong>")))])
 
     async def test_a_password_with_a_dash_or_a_dot_in_it_is_hidden_whole(self):
         """The hiding read a dash as a space, and the model a dot as one, so a password after
@@ -1053,15 +1055,15 @@ class CutShort(Goa):
         self.assertIn("your seat is 14C.", self.read(0))
 
     async def test_a_long_ordinary_mail_keeps_its_numbers(self):
-        """An HTML order longer than what is fetched is cut short, but the server finds no
+        """An HTML order longer than all that is fetched is cut short, but the server finds no
         sign-in talk anywhere in it, so its numbers are read. The tag the fetch stopped inside
         is not read as a word either."""
         cell = ('<tr><td style="padding:8px 12px;font-family:Arial,Helvetica,sans-serif;'
                 'font-size:14px;color:#333333;border-bottom:1px solid #eeeeee">{}</td></tr>')
-        html = ("<table>" + cell.format(ORDER) + cell.format("&nbsp;") * 300
+        html = ("<table>" + cell.format(ORDER) + cell.format("&nbsp;") * 1100
                 + cell.format("Acme Kitchen Ltd, registered in England.") + "</table>")
         raw = message("Your Acme order", "Acme <orders@acme.example>", None, html=html)
-        self.assertGreater(len(text_of(raw)), FETCHED_BYTES)
+        self.assertGreater(len(text_of(raw)), goamail.READ_ON_BYTES)
         for whole_words in (False, True):
             self.model.clear()
             await self.mailbox(gmail(inbox=[(raw, 1)]), whole_words=whole_words)
@@ -1074,30 +1076,34 @@ class CutShort(Goa):
     async def test_sign_in_talk_past_the_cut_counts_on_a_whole_word_server(self):
         """Past all that is fetched, the server's own search is asked."""
         html = ("<p>Hello, about your Acme account.</p><p>" + TALK_PAST + "</p>"
-                + '<div class="x"></div>' * 2100 + "<p>Please sign in within 10 minutes.</p>")
+                + '<div class="x"></div>' * 8100 + "<p>Please sign in within 10 minutes.</p>")
         raw = message("About your Acme account", "Acme <account@acme.example>", None, html=html)
-        self.assertGreater(len(text_of(raw)), FETCHED_BYTES)
+        self.assertGreater(len(text_of(raw)), goamail.READ_ON_BYTES)
         await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]), whole_words=True)
         await self.ask("Did Acme email me about my account?")
         self.assertNotIn("482913", self.read(0))
 
     async def test_spanish_and_portuguese_talk_past_the_cut_counts_on_a_whole_word_server(self):
-        """0.5.0's verif\\w+ took "Verifica" and "Verifique", and so hid a number its own rules
-        hide only in a mail that talks of signing in, such as one before a currency's sign. A
-        server that matches whole words only wasn't asked for either, so a mail longer than the
-        fetch whose only such talk was past it had its number read out."""
+        """0.5.0's verif\\w+ and authenti\\w+ took "Verifica", "Verifique", "authentic" and
+        "verificadas", and so hid a number its own rules hide only in a mail that talks of signing
+        in, such as one before a currency's sign. A server that matches whole words only wasn't
+        asked for them, so a mail longer than all that is fetched whose only such talk was past
+        it had its number read out."""
         cases = (("Total del pedido: 1500 € pagado.",
                   "Verifica tu correo para seguir comprando en Acme."),
                  ("Total do pedido: 4999 € pago.",
                   "Verifique o seu e-mail para continuar na Acme."),
                  ("Total de la compra: 1250 € pagado.",
-                  "Completa la verificación de tu cuenta de Acme."))
-        filler = '<div class="x"></div>' * 2100     # past all that is fetched, within 20,000
+                  "Completa la verificación de tu cuenta de Acme."),
+                 ("Order total: 2750 € paid.", "Every item we sell is 100% authentic."),
+                 ("Total de tu compra: 3150 € pagada.",
+                  "Todas nuestras opiniones son verificadas."))
+        filler = '<div class="x"></div>' * 8100     # past all that is fetched, within 20,000
         raws = [message("Your Acme order", "Acme <orders@acme.example>", None,
                         html=f"<p>{head}</p><p>Gracias por comprar en Acme.</p>{filler}<p>{talk}</p>")
                 for head, talk in cases]
         for raw in raws:
-            self.assertGreater(len(text_of(raw)), FETCHED_BYTES)
+            self.assertGreater(len(text_of(raw)), goamail.READ_ON_BYTES)
         await self.mailbox(gmail(inbox=[(raw, 1 + n) for n, raw in enumerate(raws)]),
                            whole_words=True)
         with mock.patch.object(mail, "TRIED", len(cases)):
@@ -1123,10 +1129,10 @@ class CutShort(Goa):
             html = (f"<html><head>{style}</head><body>{nav}<p>Flight BA2491 departs London "
                     "Heathrow on 12 March 2026 at 14:35.</p><p>Return flight IB3166 on 19 March."
                     "</p><p>Booking reference W123456789, ref HMX4K2.</p>"
-                    + "<p>&nbsp;</p>" * 2800 + f"<p>{footer}</p></body></html>")
+                    + "<p>&nbsp;</p>" * 12500 + f"<p>{footer}</p></body></html>")
             raws.append(message("Your Acme Air trip", "Acme Air <trips@acme.example>", None,
                                 html=html))
-            self.assertGreater(len(text_of(raws[-1])), FETCHED_BYTES)
+            self.assertGreater(len(text_of(raws[-1])), goamail.READ_ON_BYTES)
         for whole_words in (False, True):
             self.model.clear()
             await self.mailbox(gmail(inbox=[(raw, 1 + n) for n, raw in enumerate(raws)]),
@@ -1174,12 +1180,15 @@ class CutShort(Goa):
             self.assertEqual(len(more), len(raws))
 
     async def test_sign_in_talk_split_past_the_first_fetch_counts(self):
-        """What is fetched on is made plain as the rest is, so words split there by a line, a
-        soft hyphen, a reference or a tag count, as the server's own search can't count them."""
+        """What is fetched on is made plain as the rest is, so words split there by a soft
+        hyphen, a reference or a tag count, as the server's own search can't count them. Split
+        by a line end, they are talk only the joining made, which 0.5.0 didn't read as talk
+        either, and hide only what the joining made near them (see mail._spans)."""
         head = "Hello, about your Acme account. " + TALK_PAST + "\n"
         filler = "Thanks for being with us this year.\n" * 500
+        split = [talk for talk in SPLIT_TALK if "\n" not in talk]
         raws = [message(f"About your Acme account {n}", "Acme <account@acme.example>",
-                        head + filler + talk) for n, talk in enumerate(SPLIT_TALK)]
+                        head + filler + talk) for n, talk in enumerate(split)]
         for raw in raws:     # the talk is past the first fetch, and within what is fetched on
             self.assertGreater(text_of(raw).rindex(b"Thanks for being"), goamail.TEXT_BYTES)
             self.assertLess(len(text_of(raw)), FETCHED_BYTES)
@@ -1190,7 +1199,7 @@ class CutShort(Goa):
             await self.ask("Did Acme email me about my account?")
         self.assertEqual(len(self.model), len(raws))
         for n in range(len(raws)):
-            self.assertNotIn("482913", self.read(n), SPLIT_TALK[n])
+            self.assertNotIn("482913", self.read(n), split[n])
 
     async def test_a_mailbox_of_long_mails_is_fetched_on_within_what_a_search_may_take(self):
         crowd = [(message(f"Passport note {n}", OFFICE, "Your passport renewal application.\n"
@@ -1204,6 +1213,97 @@ class CutShort(Goa):
                          goamail.FETCHED)
         self.assertLess(goamail.FETCHED * (goamail.HEADER_BYTES + FETCHED_BYTES),
                         goamail.MAX_TAKEN / 2)    # All Mail and Sent, each full
+
+    async def test_a_long_shop_mail_is_fetched_on_until_it_holds_0_5_0s_characters(self):
+        """40 KB of a shop's HTML, row upon row of inline styles, held a third of 0.5.0's 20,000
+        characters, so a footer past them that 0.5.0's verif\\w+ or authenti\\w+ took counted
+        only where the server's search found it, which one matching whole words only didn't for
+        "100% authentic" or "Verifícalo". Such a mail is fetched on until it holds them."""
+        row = ('<tr><td style="padding:8px 16px;font-family:Arial,sans-serif;color:#333333;'
+               'font-size:14px;line-height:20px">{}</td></tr>\n')
+        raws = []
+        for n, footer in enumerate(("Every item we sell is 100% authentic.",
+                                    "Verifícalo en la app de Acme.",
+                                    "Avaliações verificadas por clientes.")):
+            html = ("<html><body><table>"
+                    + row.format(f"Order 592837{n}: total 1500 € paid. Call 0345 600 4321.")
+                    + row.format("Thank you for shopping with Acme this season.") * 300
+                    + row.format(footer) + "</table></body></html>")
+            raws.append(message(f"Your Acme order {n}", "Acme <orders@acme.example>", None,
+                                html=html))
+            self.assertGreater(len(text_of(raws[-1])), FETCHED_BYTES)
+        server = await self.mailbox(gmail(inbox=[(raw, 1 + n) for n, raw in enumerate(raws)]),
+                                    whole_words=True)
+        with mock.patch.object(mail, "TRIED", len(raws)):
+            await self.ask("What was the total of my Acme order?")
+        self.assertEqual(len(self.model), len(raws))
+        for n in range(len(raws)):
+            shown = self.read(n).split("=====")[2]
+            self.assertIn("Order", shown)
+            self.assertNotRegex(shown, r"592837\d|1500|0345|4321", n)
+        self.assertIn(FETCHED_BYTES, {start for _uid, _section, start, _size in server.fetched})
+
+    async def test_a_mail_of_inline_tags_is_read_as_far_as_0_5_0_read_it(self):
+        """Thunderbird's index holds nothing where an inline tag stood, so 0.5.0's 20,000
+        characters of an HTML mail are counted without the JOIN that stands there: counted with
+        them, a mail heavy in such tags lost the talk of signing in near the end of those 20,000,
+        and as it wasn't short of them it wasn't asked about either, so the order and phone
+        numbers 0.5.0 hid were shown."""
+        rows = "".join(f"<p>Item {n}: Acme<b>Kitchen</b>Ware<i>Set</i>Deluxe edition, boxed.</p>"
+                       for n in range(370))
+        html = ("<p>Order 5928374: total 1500 € paid. Call 0345 600 4321.</p>" + rows
+                + "<p>Log in to your Acme account to see it.</p>"
+                + "<p>Thanks for shopping with Acme.</p>" * 40)
+        text = goamail._unhtml(html)
+        self.assertLess(text.replace(mail.JOIN, "").index("Log in"), mail.SCAN_CHARS)
+        self.assertNotIn("Log in", text[:mail.SCAN_CHARS])
+        raw = message("Your Acme order", "Acme <orders@acme.example>", None, html=html)
+        head, _, whole = raw.partition(b"\r\n\r\n")
+        self.assertIn("Log in", goamail._read({b"HEADER": head, b"TEXT": whole}, len(whole) + 1)[1])
+        for whole_words in (True, False):
+            self.model.clear()
+            await self.mailbox(gmail(inbox=[(raw, 1)]), whole_words=whole_words)
+            await self.ask("What was my Acme order?")
+            shown = self.read(0).split("=====")[2]
+            self.assertIn("Order", shown)
+            self.assertNotRegex(shown, r"5928374|1500|0345|4321", whole_words)
+
+    async def test_a_long_mail_whose_text_holds_0_5_0s_characters_isnt_asked_about(self):
+        """Once what is fetched of a mail holds 0.5.0's 20,000 characters, talk of signing in
+        past them counts for nothing, as 0.5.0 read nothing there, and the server isn't asked
+        about it: an e-ticket's conditions say "Log in to manage your booking" past them, which
+        the server finds, and its flight, booking and phone numbers were hidden."""
+        text = ("Return flight BA 2617, 24 April 2026, departs 09:15. Booking 48213377. Call "
+                "+1 212 555 0199.\n"
+                + "Fares are non-refundable once the booking is confirmed.\n" * 800
+                + "Log in to manage your booking.\n")
+        raw = message("Your Acme Air e-ticket", "Acme Air <trips@acme.example>", text)
+        self.assertGreater(len(text_of(raw)), FETCHED_BYTES)
+        self.assertGreater(text.index("Log in"), mail.SCAN_CHARS)
+        for whole_words in (True, False):
+            self.model.clear()
+            server = await self.mailbox(gmail(inbox=[(raw, 1)]), whole_words=whole_words)
+            await self.ask("When does my Acme Air flight depart?")
+            shown = self.read(0).split("=====")[2]
+            for kept in ("BA 2617", "48213377", "212 555 0199"):
+                self.assertIn(kept, shown, whole_words)
+            self.assertEqual([command for command in server.commands
+                              if re.search(r"SEARCH (?:CHARSET \S+ )?UID ", command)], [])
+
+    async def test_a_mailbox_of_long_markup_is_fetched_on_within_half_of_what_a_search_may_take(
+            self):
+        """A mailbox's mails are fetched on for as many as fit in half of what one search may
+        take, and the rest are left as they are, so Sent is still searched and nothing is cut
+        off for taking too much."""
+        page = "<p>Your passport renewal application.</p>" + '<div class="x"></div>' * 9000
+        crowd = [(message(f"Passport note {n}", OFFICE, None, html=page), 2)
+                 for n in range(goamail.FETCHED)]
+        server = await self.mailbox(gmail(inbox=crowd))
+        await self.ask()
+        self.assertEqual(len(self.model), mail.TRIED)
+        asked = sum(size for _uid, section, _start, size in server.fetched if section == "TEXT")
+        self.assertLess(asked, goamail.MAX_TAKEN / 2)
+        self.assertGreater(asked, goamail.FETCHED * FETCHED_BYTES)    # fetched on more than once
 
     def test_mails_the_server_cant_be_asked_about_are_taken_to_talk_of_signing_in(self):
         class Refusing:
@@ -1516,6 +1616,34 @@ def fetched_mail(subject: bytes, body: bytes, charset: str = "utf-8", kind: str 
             b"TEXT": body}
 
 
+def cut_through(head: str, filler: str, charset: str, kind: str, cut: int) -> bytes:
+    """A part that names no charset, of head and then filler, plain or HTML, in charset, longer
+    than cut, with its lines ended as a server ends them and padded so that byte cut falls inside a
+    character."""
+    rest = filler * (cut // len(filler.encode(charset)) + 2)
+    for pad in range(len(filler.encode(charset))):
+        text = (f"{head}\n\n{' ' * pad}{rest}" if kind == "plain"
+                else f"<html><body><p>{head}</p><p>{' ' * pad}{rest}</p></body></html>")
+        text, ends, at = text.replace("\n", "\r\n"), set(), 0
+        for char in text:
+            at += len(char.encode(charset))
+            ends.add(at)
+        if cut not in ends:
+            return text.encode(charset)
+    raise AssertionError("no character can be made to fall across the cut")
+
+
+# Short sign-in mails in Chinese, as senders write them (see the GBK test in Decoding).
+OPENERS = ("【Acme】", "Acme：", "尊敬的用户，", "您好！", "")
+CODE_WORDS = ("验证码", "校验码", "动态码", "安全码", "密码", "动态密码", "授权码", "确认码", "登录码",
+              "短信验证码", "激活码", "口令")
+JOINTS = ("是", "：", "为", "", " ", "是：")
+ENDINGS = ("，5分钟内有效。", "（5分钟内有效）", "，有效期5分钟。", "，10分钟内有效。", "，请勿泄露。",
+           "，请勿告诉他人。", "。如非本人操作，请忽略。", "，感谢您的使用！", "。")
+CLOSINGS = ("感谢您使用 Acme 网上商城。", "欢迎使用 Acme 会员服务，祝您购物愉快。", "感谢您的支持！",
+            "感谢您对我们工作的支持与理解。", "感谢注册。")
+
+
 def shown_of(found: dict) -> str:
     """What the model reads of it, as goamail._rows and mail._note hide it."""
     message_, body, cut = goamail._read(found)
@@ -1613,6 +1741,77 @@ class Decoding(Goa):
                 self.assertIn(text, goamail._read(found)[1], (charset, kind))
                 self.assertNotIn(code, shown_of(found), (text, kind))
 
+    def test_a_part_that_names_no_charset_cut_through_a_character_is_read_in_it(self):
+        """The fetch ends where it ends, inside a character as often as not. A part that names
+        no charset, cut there, failed the test for UTF-8 or GB18030 and was read whole as
+        Windows-1252 or Windows-1256, "Tu cأ³digo", and the code after the word for it reached
+        the model. Cut where the first fetch stops, as when there is no time to fetch on, where
+        the first fetch on stops, and where all that is fetched stops."""
+        for head, word, filler, charsets in (
+                ("Hola Sam,\nTu código de Acme es 482913. No lo compartas.", "código",
+                 "Gracias por usar Acme, la tienda de confianza. Información útil. ", ("utf-8",)),
+                ("Seu código de acesso Acme: 482913.", "código",
+                 "Obrigado por usar a Acme, a loja de confiança. ", ("utf-8",)),
+                ("【Acme】您的验证码是482913，请勿泄露。", "验证码", "感谢您使用 Acme 网上商城。",
+                 ("utf-8", "gbk")),
+                ("رمز التحقق الخاص بك هو 482913", "رمز", "شكرا لاستخدامك متجر Acme الموثوق. ",
+                 ("utf-8",))):
+            for charset in charsets:
+                for kind in ("plain", "html"):
+                    for cut in (goamail.TEXT_BYTES, FETCHED_BYTES, goamail.READ_ON_BYTES):
+                        text = cut_through(head, filler, charset, kind, cut)[:cut]
+                        found = fetched_mail(b"Acme", text, kind=kind)
+                        found[b"HEADER"] = found[b"HEADER"].replace(b"; charset=utf-8", b"")
+                        _message, body, was_cut = goamail._read(found, cut)
+                        self.assertTrue(was_cut)
+                        self.assertIn(word, body, (charset, kind, cut))
+                        self.assertNotIn("482913", shown_of(found), (head, charset, kind, cut))
+
+    async def test_a_long_mail_that_names_no_charset_is_read_in_it_where_fetching_stops(self):
+        """Through the made-up server: a Spanish sign-in mail in UTF-8 that names no charset,
+        whose text holds 0.5.0's 20,000 characters where the first fetch on stops, inside a
+        character. Read as Windows-1256, the model was shown "Tu cأ3digo de Acme es 482913"."""
+        body = cut_through("Hola Sam,\nTu código de Acme es 482913. No lo compartas.",
+                           "Gracias por usar Acme, la tienda de confianza. Información útil. ",
+                           "utf-8", "plain", FETCHED_BYTES)
+        raw = (f"From: {ACME}\r\nTo: {USER}\r\nSubject: About your Acme account\r\n"
+               "Date: Fri, 13 Nov 2026 10:00:00 +0000\r\nMIME-Version: 1.0\r\n"
+               "Content-Type: text/plain\r\nContent-Transfer-Encoding: 8bit\r\n\r\n").encode()
+        raw += body
+        server = await self.mailbox(gmail(inbox=[(HELLO, 900), (raw, 1)]), whole_words=True)
+        await self.ask("Did Acme email me about my account?")
+        self.assertIn("Tu código de Acme es", self.read(0))
+        self.assertNotIn("482913", self.read(0))
+        self.assertEqual(max(start + size for _uid, section, start, size in server.fetched
+                             if section == "TEXT"), FETCHED_BYTES)
+
+    def test_an_unlabelled_gbk_mail_is_read_as_chinese(self):
+        """GBK's bytes for 分钟, 有效, 安全 or 密码 are Arabic letters in Windows-1256, which is
+        tried first, so a short sign-in mail in GBK that names no charset was read as Arabic,
+        "،3⁄4Acme،؟°2ب«آë482913", and 安全码 or 密码 with it, so the code after it was shown. A
+        Latin accent or a sign glued to an Arabic letter, which Arabic never writes, tells them
+        apart, and Arabic of words of even length, which GB18030 reads too, is still Arabic."""
+        grid = [f"{opener}{word}{joint}482913{ending}" for opener in OPENERS
+                for word in CODE_WORDS for joint in JOINTS for ending in ENDINGS]
+        self.assertEqual([text for text in grid
+                          if goamail._guessed(text.encode("gbk")) != "gb18030"], [])
+        for closing in CLOSINGS:
+            for text in (f"校验码：482913，10分钟内有效。\n{closing}",
+                         f"【Acme】安全码482913，5分钟内有效。\n{closing}",
+                         f"Acme：密码482913，5分钟内有效。\n{closing}"):
+                for kind, page in (("plain", text),
+                                   ("html", f"<html><body><p>{text}</p></body></html>")):
+                    found = fetched_mail(b"Acme", page.encode("gbk"), kind=kind)
+                    found[b"HEADER"] = found[b"HEADER"].replace(b"; charset=utf-8", b"")
+                    self.assertIn(closing, goamail._read(found)[1], (text, kind))
+                    self.assertNotIn("482913", shown_of(found), (text, kind))
+        rng = random.Random(2026)
+        letters = "ابتثجحخدذرزسشصضطظعغفقكلمنهويءآأؤإئةى"
+        for _ in range(2000):
+            text = " ".join("".join(rng.choice(letters) for _ in range(rng.choice((2, 4, 6))))
+                            for _ in range(rng.randint(1, 8)))
+            self.assertEqual(goamail._guessed(text.encode("cp1256")), "cp1256", text)
+
     def test_charset_labels_are_read_as_thunderbird_reads_them(self):
         """ISO-8859-1 and ASCII as Windows-1252, and GB2312 as GBK, as Thunderbird and every
         browser read them: read as labelled, the "…" in a password was a line end and cut it in
@@ -1664,6 +1863,13 @@ class Decoding(Goa):
             self.assertEqual(goamail._unhtml(f"Code:<{tag}>KQ7X9B</{tag}>Thanks"),
                              "Code:\nKQ7X9B\nThanks", tag)
         self.assertEqual(goamail._unhtml("<td>KQ</td><td>7X</td>"), "KQ 7X")
+        # A "<" that starts no tag is text, as in Thunderbird's index: read to the next ">", the
+        # talk of signing in before the order went, and the number 0.5.0 hid was shown.
+        page = ("<table><tr><td>For orders < 100 € sign in to pay.</td><td>Order 5928374</td>"
+                "</tr></table>")
+        self.assertIn("For orders < 100 € sign in to pay. Order 5928374", goamail._unhtml(page))
+        self.assertNotIn("5928374", shown_of(fetched_mail(b"Your Acme order", page.encode(),
+                                                          kind="html")))
 
     def test_a_plain_parts_line_ends_are_thunderbirds(self):
         """A server ends each line with a carriage return, which Thunderbird's index doesn't

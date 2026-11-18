@@ -4,7 +4,8 @@ tests of tuxistant/goamail.py.
 The server keeps its mail in memory and writes down every command it is sent, so a test can see
 what was asked for as well as what came back. It speaks enough IMAP for goamail and no more:
 CAPABILITY, STARTTLS, AUTHENTICATE XOAUTH2, LIST, SELECT and EXAMINE, UID SEARCH, UID FETCH and
-LOGOUT. Its certificate is made for each test run and trusted only where a test says so.
+LOGOUT. Its certificate is made for each test run and trusted only where a test says so. A
+connection that holds one mail in this process (Canned) reads a corpus through goamail's own code.
 
 Online Accounts is three or four interfaces on a dbus-daemon of the test's own, with no service
 files, so nothing on the real bus is ever started or asked.
@@ -13,6 +14,7 @@ import asyncio
 import base64
 import email.message
 import email.utils
+import functools
 import re
 import socket
 import ssl
@@ -25,6 +27,8 @@ from pathlib import Path
 
 from dbus_fast.aio import MessageBus
 from dbus_fast.service import PropertyAccess, ServiceInterface, dbus_property, method
+
+from tuxistant import goamail, mail
 
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 TOKEN = "ya29.made-up-token-never-real"
@@ -80,9 +84,11 @@ def _internal(when: datetime) -> str:
     return f"{when.day:02d}-{MONTHS[when.month - 1]}-{when.year} {when:%H:%M:%S} +0000"
 
 
+@functools.lru_cache(maxsize=256)
 def _text_of(raw: bytes, head: bool = True) -> str:
     """What a real server searches: the header lines, unless it is asked for the BODY only, and
-    the decoded text of each part."""
+    the decoded text of each part. Kept, as a search for sign-in talk asks for each of its words
+    of every mail, and a long one took seconds to parse that often."""
     parsed = email.message_from_bytes(raw)
     words = [raw.split(b"\r\n\r\n", 1)[0].split(b"\n\n", 1)[0].decode("utf-8", "replace")
              if head else ""]
@@ -342,6 +348,55 @@ def _fields(head: bytes, names: list[str]) -> bytes:
         if keep:
             lines.append(line)
     return b"".join(line + b"\r\n" for line in lines) + b"\r\n"
+
+
+class Canned:
+    """A connection to a server that holds one mail, in this process, for goamail's own reading
+    of a mailbox (goamail._rows): its search for the question's words finds the mail, a FETCH
+    from any offset gives that much of it, and its search for sign-in talk finds it where talks
+    says the server would. So a corpus is read by goamail's rules, fetching on and all, rather
+    than by a copy of them."""
+    literal = None
+    taken = 0
+
+    def __init__(self, header: bytes, text: bytes, talks: bool = False):
+        self.header, self.text, self.talks = header, text, talks
+
+    def select(self, _box, readonly=True):
+        return "OK", [b"1"]
+
+    def uid(self, command, *args):
+        self.literal = None
+        if command == "SEARCH":
+            return "OK", [b"1" if "UID" not in args or self.talks else b""]
+        head, out = b'1 (UID 1 INTERNALDATE "13-Nov-2026 10:00:00 +0000"', []
+        for section, start, size in re.findall(
+                r"BODY\.PEEK\[(HEADER\.FIELDS \([^)]*\)|TEXT)\]<(\d+)\.(\d+)>", args[-1]):
+            data = (self.text if section == "TEXT" else self.header)[int(start):][:int(size)]
+            self.taken += len(data)
+            out.append((head + f" BODY[{section}]<{start}> {{{len(data)}}}".encode(), data))
+            head = b""
+        return "OK", [*out, b")"]
+
+
+def read_by_goamail(header: bytes, text: bytes, talks: bool = False) -> tuple | None:
+    """(author, subject, body) as goamail._rows gives them of a mail with these header fields and
+    text, with its secrets hidden, or None if it isn't about Acme."""
+    rows = goamail._rows(Canned(header, text, talks), "INBOX", 0, mail.terms("Acme"),
+                         time.monotonic() + 60)
+    return rows[0][3:] if rows else None
+
+
+def decoded_by_goamail(header: bytes, text: bytes) -> tuple[str, str] | None:
+    """(subject, body) as goamail reads them from such a mail, fetched on as it fetches one on,
+    before anything is hidden, or None if it can't be read."""
+    found = {b"HEADER": header, b"TEXT": text[:goamail.TEXT_BYTES]}
+    read = goamail._read(found)
+    if not read:
+        return None
+    _uid, _every, _found, message, body, _cut = goamail._read_on(
+        Canned(header, text), [(1, True, found, *read)], time.monotonic() + 60)[0]
+    return goamail._subject(message), body
 
 
 # Online Accounts.

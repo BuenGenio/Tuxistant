@@ -65,7 +65,8 @@ EVERY_HITS = 20         # the newest mails holding every word
 FETCHED = 40            # and with the newest holding some of them, all that is fetched of a mailbox
 HEADER_BYTES = 4096     # of a mail's sender and subject
 TEXT_BYTES = 16_000     # of the rest of it
-MORE_BYTES = 24_000     # and of a part cut short there, as 0.5.0 read 20,000 characters
+MORE_BYTES = 24_000     # then at a time, of a part cut short there, as 0.5.0 read 20,000 characters
+READ_ON_BYTES = 160_000     # and in all, as 20,000 characters of a shop's HTML can take that much
 FROM_BYTES = 1024
 MAX_LITERAL = 64_000    # more than was asked for is a server not keeping to the request
 MAX_TAKEN = 4_000_000   # all one search may take from a server
@@ -77,13 +78,16 @@ FIELDS = "FROM SUBJECT MIME-VERSION CONTENT-TYPE CONTENT-TRANSFER-ENCODING"
 # off, so "verif" finds "verification" on a server that finds any part of a word. Gmail's finds
 # whole words only, so the words a * stands for most are asked for too, in Spanish and Portuguese
 # as well, as 0.5.0's talk took "Verifica tu correo" and "Verifique o seu e-mail". One that isn't
-# ASCII is asked for on its own (see _talking).
+# ASCII is asked for on its own (see _talking). So are those a shop's or a review's footer writes,
+# "100% authentic" or "opiniones verificadas", which 0.5.0's talk took too.
 TALK_TERMS = tuple(dict.fromkeys(
     [word.rstrip("*").replace(" ", gap) for word in mail.SIGN_IN_WORDS for gap in ("", " ", "-")]
-    + ["verify", "verified", "verifying", "verification", "authenticate", "authenticated",
+    + ["verify", "verified", "verifies", "verifying", "verifiable", "verification",
+       "authentic", "authenticity", "authentically", "authenticate", "authenticated",
        "authentication", "authenticator", "verifica", "verificar", "verifique", "verifiquem",
-       "verificado", "verificada", "verificamos", "verificacion", "verificacao", "verificación",
-       "verificação"]))
+       "verificado", "verificada", "verificados", "verificadas", "verificamos", "verificaremos",
+       "verificou", "verificara", "verificará", "verificacion", "verificacao", "verificaciones",
+       "verificacoes", "verificación", "verificação", "verificações"]))
 CA_FILE = None          # the system's certificates. Only a test points this anywhere else
 MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
 
@@ -117,7 +121,10 @@ BLOCKS = ("address|article|aside|blockquote|body|caption|center|dd|details|dialo
           "|main|menu|nav|ol|p|plaintext|pre|section|summary|table|tbody|tfoot|thead|title|tr|ul"
           "|xmp")
 BREAK = re.compile(rf"(?i)<br\b[^<>]*>|</?(?:{BLOCKS})\b[^<>]*>")
-TAG = re.compile(r"<[^>]*>")
+# A tag starts where HTML starts one, at a "<" before a letter, "/", "!" or "?". Any other "<" is
+# text, as in Thunderbird's index: read as a tag to the next ">", "For orders < 100 € sign in to
+# pay.</td><td>Order 5928374" lost its talk of signing in, and the order number 0.5.0 hid was shown.
+TAG = re.compile(r"<(?=[A-Za-z/!?])[^>]*>")
 # Every other element is inline, which a browser and Thunderbird's index join what stands either
 # side of, but for a table's cell and a quote, which they set apart. Between two digits an inline
 # tag is taken out: made spaces, "<span>48</span><span>29</span><span>13</span>" read "48 29 13",
@@ -135,6 +142,10 @@ INLINE = re.compile(rf"(?i)(?<=\d)(?:{INLINE_TAG})+(?=\d)|(?<={mail.GLUE_LETTER.
                     rf"(?:{INLINE_TAG})+|(?<!>)(?:{INLINE_TAG})+(?={mail.GLUE_LETTER.pattern})")
 JOINED = re.compile(rf"(?i)(?:{INLINE_TAG})+")
 SPACING = re.compile(rf"[\s{mail.JOIN}]+")    # what str.split splits on, and the joins
+# The first 0.5.0's 20,000 characters of a text as Thunderbird's index counts them, which holds
+# nothing where a JOIN stands: counted with them, an HTML mail heavy in inline tags lost talk of
+# signing in that 0.5.0 read near the end of its 20,000. _spaced leaves no two JOINs together.
+INDEXED = re.compile(rf"(?:{mail.JOIN}?[^{mail.JOIN}]){{{mail.SCAN_CHARS}}}")
 # A server ends each line of a mail with a carriage return, which Thunderbird's index doesn't
 # keep: before one, a code was never alone on its line to 0.5.0's rules, and 0.5.0's reach of
 # 60 or 160 characters was shorter by one for each line.
@@ -159,6 +170,10 @@ HIGH_RUN = re.compile(rb"[\x80-\xff]+")
 GUESSES = (("cp1256", re.compile("[\u0620-\u064a\u066e-\u06d3\u06fa-\u06ff]")),
            ("gb18030", re.compile("[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")))
 LATIN = re.compile("[A-Za-z\u00c0-\u024f]")
+GLUED_TO_ARABIC = re.compile("[\u0620-\u064a\u066e-\u06d3\u06fa-\u06ff]"
+                             "[\u00a1-\u00bf\u00c0-\u024f\u00d7\u00f7]|"
+                             "[\u00a1-\u00bf\u00c0-\u024f\u00d7\u00f7]"
+                             "[\u0620-\u064a\u066e-\u06d3\u06fa-\u06ff]")
 # An encoded word (RFC 2047), and the space between two of them, which is not part of the text.
 ENCODED_WORD = re.compile(r"=\?([^?\s]+)\?([QqBb])\?([^?\s]*)\?=")
 BETWEEN_WORDS = re.compile(r"(?<=\?=)\s+(?==\?[^?\s]+\?[QqBb]\?)")
@@ -719,33 +734,41 @@ def _decoded(part) -> str:
 
 
 def _guessed(data: bytes) -> str:
-    """The codec of a part that names no charset: UTF-8 if it is that, as nearly all are. Else, of
-    the older charsets mail in the five languages the support scope names comes in, Windows-1252
-    where most of its bytes past ASCII stand one at a time, as the accents of Spanish or
-    Portuguese do; Windows-1256 or GB18030 where nearly all its letters past ASCII are Arabic's or
-    Chinese ones in it; and Windows-1252 otherwise. Read in GB18030, an accent and the letter
-    after it are one Chinese character between two Latin letters, "c骴igo", which no Chinese
-    text has: so where more than one in ten are that, it is not Chinese."""
-    try:
-        data.decode("utf-8")
+    """The codec of a part that names no charset: UTF-8 if it is that, as nearly all are, but for
+    a character the fetch cut at its end. Else, of the older charsets mail in the five languages
+    the support scope names comes in, Windows-1252 where most of its bytes past ASCII stand one at
+    a time, as the accents of Spanish or Portuguese do; Windows-1256 or GB18030 where nearly all
+    its letters past ASCII are Arabic or Chinese ones in it; and Windows-1252 otherwise. Read in
+    GB18030, an accent and the letter after it are one Chinese character between two Latin
+    letters, "c骴igo", which no Chinese text has: so where more than one in ten are that, it is
+    not Chinese. Windows-1256 reads any bytes, and GBK read in it is mostly Arabic letters too,
+    with a Latin accent or a sign glued to them, "ؤرéض¤", which Arabic never writes."""
+    if _decodes(data, "utf-8") is not None:
         return "utf-8"
-    except UnicodeDecodeError:
-        pass
     runs = [len(run) for run in HIGH_RUN.findall(data)]
     if 2 * runs.count(1) >= sum(runs):
         return "cp1252"
     for codec, script in GUESSES:
-        try:
-            text = data.decode(codec)
-        except UnicodeDecodeError:
+        text = _decodes(data, codec)
+        if text is None:
             continue
         letters = [at for at, char in enumerate(text) if char.isalpha() and not char.isascii()]
         ours = [at for at in letters if script.match(text, at)]
         between = sum(1 for at in ours if at and LATIN.match(text, at - 1)
                       and LATIN.match(text, at + 1))
-        if ours and 10 * len(ours) >= 9 * len(letters) and 10 * between <= len(ours):
+        odd = len(GLUED_TO_ARABIC.findall(text)) if codec == "cp1256" else 0
+        if ours and 10 * len(ours) >= 9 * len(letters) and 10 * between <= len(ours) \
+                and 50 * odd <= len(ours):
             return codec
     return "cp1252"
+
+
+def _decodes(data: bytes, codec: str) -> str | None:
+    """data read in codec, but for a character cut short at its end, or None if it isn't that."""
+    try:
+        return codecs.getincrementaldecoder(codec)().decode(data, final=False)
+    except UnicodeDecodeError:
+        return None
 
 
 def _base64(text: str) -> bytes:
@@ -821,7 +844,14 @@ def _body(message, fetched_cut: bool = False) -> tuple[str, bool]:
             marked = (_decoded(part), fetched_cut and part is leaves[-1])
     text, cut = plain if plain and plain[0].strip() else (
         (_unhtml(_closed(*marked)), marked[1]) if marked else ("", False))
-    return text[:mail.SCAN_CHARS], cut or len(text) > mail.SCAN_CHARS
+    first = INDEXED.match(text)
+    return (first[0], cut or first.end() < len(text)) if first else (text, cut)
+
+
+def _short(body: str, cut: bool) -> bool:
+    """Whether a mail's text was cut short where it was fetched before 0.5.0's 20,000 characters,
+    as Thunderbird's index counts them."""
+    return cut and mail.indexed(body) < mail.SCAN_CHARS
 
 
 def _attached(part) -> bool:
@@ -841,26 +871,37 @@ def _closed(html: str, cut: bool) -> str:
 
 
 def _read_on(imap, read: list[tuple], until: float) -> list[tuple]:
-    """read, as _rows has it, with each mail cut short in the part that is read fetched on for
-    MORE_BYTES more, in one fetch for them all, and read again: so that its text is as much as
-    Thunderbird's index held of it for 0.5.0 wherever that fits, and its talk of signing in is
-    that text's own. Asked of the server instead, a server that matches whole words only didn't
-    find "100% authentic" or "opiniones verificadas", where 0.5.0's verif\\w+ and authenti\\w+
-    did, and one that searches the markup found "signin" in a link. A mail the fetch brings
-    nothing of, or that can't be read again, stays as it was."""
-    cut = [uid for uid, *_, cut in read if cut]
-    if not cut or time.monotonic() > until:
-        return read
-    typ, data = _ask(imap, "FETCH", ",".join(map(str, cut)),
-                     f"(UID BODY.PEEK[TEXT]<{TEXT_BYTES}.{MORE_BYTES}>)")
-    more = _fetched(data) if typ == "OK" else {}
-    again = []
-    for uid, every, found, *message in read:
-        rest = more.get(uid, {}).get(b"TEXT") if message[-1] else None
-        longer = rest is not None and _read({**found, b"TEXT": found.get(b"TEXT", b"") + rest},
-                                            TEXT_BYTES + MORE_BYTES)
-        again.append((uid, every, found, *(longer or message)))
-    return again
+    """read, as _rows has it, with each mail cut short in the part that is read before 0.5.0's
+    20,000 characters fetched on, MORE_BYTES at a time in one fetch for them all, and read again,
+    until it holds them, its part ends or READ_ON_BYTES of it have come: so that its text is as
+    much as Thunderbird's index held of it for 0.5.0, and its talk of signing in is that text's
+    own. Asked of the server instead, a server that matches whole words only didn't find "100%
+    authentic" or "opiniones verificadas", where 0.5.0's verif\\w+ and authenti\\w+ did, and one
+    that searches the markup found "signin" in a link; and the 40 KB of a shop's HTML fetched in
+    one go held a third of those 20,000 characters. A mailbox's mails take no more than half of
+    what a search may take, which leaves the rest for Sent. A mail that can't be fetched on in
+    that, in time or at all, or read again, stays as it was."""
+    at, given_up = TEXT_BYTES, set()
+    while at < READ_ON_BYTES and time.monotonic() <= until:
+        room = (MAX_TAKEN // 2 - imap.taken) // (MORE_BYTES + 256)
+        short = [uid for uid, *_, body, cut in read
+                 if uid not in given_up and _short(body, cut)][:max(0, room)]
+        if not short:
+            break
+        typ, data = _ask(imap, "FETCH", ",".join(map(str, short)),
+                         f"(UID BODY.PEEK[TEXT]<{at}.{MORE_BYTES}>)")
+        more, at, again = _fetched(data) if typ == "OK" else {}, at + MORE_BYTES, []
+        for uid, every, found, *message in read:
+            rest = more.get(uid, {}).get(b"TEXT") if uid in short else None
+            grown = rest is not None and {**found, b"TEXT": found.get(b"TEXT", b"") + rest}
+            longer = grown and _read(grown, at)
+            if longer:
+                found, message = grown, longer
+            elif uid in short:
+                given_up.add(uid)
+            again.append((uid, every, found, *message))
+        read = again
+    return read
 
 
 def _talking(imap, uids: list[int], until: float) -> set[int]:
@@ -920,8 +961,7 @@ def _rows(imap, box: str, folder: int, stems: list[mail.Term], until: float) -> 
         if message:
             read.append((uid, every, found, *message))
     read = _read_on(imap, read, until)
-    talking = _talking(imap, [uid for uid, *_, body, cut in read
-                              if cut and len(body) < mail.SCAN_CHARS], until)
+    talking = _talking(imap, [uid for uid, *_, body, cut in read if _short(body, cut)], until)
     rows = []
     for uid, every, found, message, body, cut in read:
         if time.monotonic() > until:
