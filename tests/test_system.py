@@ -159,20 +159,23 @@ def listed(services="", user="", processes=(), codes=(0, 0, None)):
                 found.append(f"{pid} {shown}".rstrip() + "\n")
         code = codes[2] if codes[2] is not None else 0 if found else 1
         return code, "".join(found)
-    threads = {str(pid) for pid, line, *_ in processes if not line}
+    threads = {(str(pid), own[0][:63] if own else "") for pid, line, *own in processes
+               if not line}
     with mock.patch.object(system, "_read", side_effect=read) as reading, \
-            mock.patch.object(system, "_kernel_thread", side_effect=threads.__contains__):
+            mock.patch.object(system, "_kernel_thread",
+                              side_effect=lambda pid, name: (pid, name) in threads):
         yield reading
 
 
 @contextlib.contextmanager
 def pgrep_prints(output, code=0, threads=()):
     """A stand-in for _read whose systemctl lists nothing and whose pgrep prints output, whatever
-    it is asked, and for _kernel_thread, whose kernel threads are these pids. Gives the latter."""
+    it is asked, and for _kernel_thread, whose kernel threads are these pids, under any name: the
+    real one's check of the name is KernelThreads'. Gives the latter."""
     with mock.patch.object(system, "_read", side_effect=lambda *command: (
             (0, "") if command[0] == "systemctl" else (code, output))), \
             mock.patch.object(system, "_kernel_thread",
-                              side_effect=set(threads).__contains__) as kernel_thread:
+                              side_effect=lambda pid, name: pid in threads) as kernel_thread:
         yield kernel_thread
 
 
@@ -359,7 +362,7 @@ class Running(unittest.TestCase):
                 for secret in ("S3cr3tP4ss", "S3cret", "--", "sixteen"):
                     self.assertNotIn(secret, text)
         # Looked up by the pid on its line, as the one in the last line here.
-        kernel_thread.assert_called_once_with("244")
+        kernel_thread.assert_called_once_with("244", "kworker/R-nvme-wq")
 
     def test_lines_are_split_at_newlines_only(self):
         """pgrep ends each line with a newline. Any other line break is part of a name, which a
@@ -527,34 +530,66 @@ class Running(unittest.TestCase):
 
 class KernelThreads(unittest.TestCase):
     """How Tux tells a kernel thread, whose long name it says, from any other process: by the
-    flag Linux sets in /proc/<pid>/stat, and nothing else of it."""
+    flag Linux sets in /proc/<pid>/stat and the name there, and nothing else of it."""
 
-    def test_the_flag_in_proc_and_nothing_else(self):
+    @contextlib.contextmanager
+    def proc(self):
+        """A made-up /proc, in place of this computer's."""
         with tempfile.TemporaryDirectory() as folder:
             proc = Path(folder)
             for pid, line in (
                     # As Linux 7.2 gives them, flags 0x4208060 and 0x400000.
                     ("244", "244 (kworker/R-nvme-wq) I 2 0 0 0 -1 69238880 0 0 0 0 0 0 0 0 0 "
                             "-20 1 0 39 0 0\n"),
+                    ("2", "2 (kthreadd) S 0 0 0 0 -1 2129984 0 0 0 0 0 0 0 0 20 0 1 0 1 0\n"),
                     ("4100", "4100 (worker) S 1 4100 4100 0 -1 4194304 235 0 0 0\n"),
                     # A name, which any program gives itself, with a ) and spaces in it.
                     ("4101", "4101 (a) I 2 0 0) S 1 4101 4101 0 -1 4194304 1 0 0 0\n"),
                     ("4102", "4102 (b) 1 2 3 4) I 2 0 0 0 -1 2097152 0 0\n"),
+                    ("4107", "4107 (kw (x)) I 2 0 0 0 -1 2097152 0 0\n"),
                     ("4103", "4103 (x) S 1\n"), ("4104", "not a stat line\n")):
                 (proc / pid).mkdir()
                 (proc / pid / "stat").write_text(line)
             (proc / "4105").mkdir()
             (proc / "4105" / "cmdline").write_text("")
             with mock.patch.object(system, "PROC", proc):
-                for pid, thread in (("244", True), ("4100", False), ("4101", False),
-                                    ("4102", True), ("4103", False), ("4104", False),
-                                    ("4105", False), ("4106", False)):
-                    with self.subTest(pid):
-                        self.assertIs(system._kernel_thread(pid), thread)
+                yield
+
+    def test_the_flag_and_the_name_in_proc_and_nothing_else(self):
+        with self.proc():
+            for pid, name, thread in (
+                    ("244", "kworker/R-nvme-wq", True), ("2", "kthreadd", True),
+                    # A kernel thread's pid with anything but its name, as a pgrep that
+                    # printed a command line raw could give after a newline in it.
+                    ("244", "kworker/R-nvme-w", False), ("244", "kworker/R-nvme-wq ", False),
+                    ("2", "--db-password=S3cr3tP4ss --queue jobs", False),
+                    ("4100", "worker", False), ("4101", "a) I 2 0 0", False),
+                    ("4102", "b) 1 2 3 4", True), ("4102", "b", False), ("4107", "kw (x)", True),
+                    ("4103", "x", False),
+                    ("4104", "not a stat line", False), ("4105", "", False),
+                    ("4106", "x", False)):
+                with self.subTest(pid=pid, name=name):
+                    self.assertIs(system._kernel_thread(pid, name), thread)
         # This test's own process, as Linux itself gives it.
-        self.assertIs(system._kernel_thread(str(os.getpid())), False)
+        own = Path("/proc/self/stat").read_text()
+        own = own[own.index("(") + 1:own.rindex(")")]
+        self.assertIs(system._kernel_thread(str(os.getpid()), own), False)
         self.assertEqual(system.PROC, Path("/proc"))
         self.assertEqual(system.PF_KTHREAD, 0x00200000)
+
+    def test_a_kernel_thread_s_pid_with_another_name_is_counted_not_said(self):
+        """Whatever a pgrep prints: up to 63 characters are said only as the name a kernel
+        thread has in its stat."""
+        output = ("2 --db-password=S3cr3tP4ss --queue jobs\n244 kworker/R-nvme-wq\n"
+                  "244 kworker/R-nvme-wq --token sk-live\n")
+        with self.proc(), mock.patch.object(system, "_read", side_effect=lambda *command: (
+                (0, "") if command[0] == "systemctl" else (0, output))):
+            found, text = system.here_said("worker")
+        self.assertTrue(found)
+        self.assertEqual(text, "On this computer, no service systemd lists has worker in its "
+                               "name, and these processes have worker in their command line, or "
+                               "in their name where they have none: 244 kworker/R-nvme-wq, and "
+                               "pgrep listed 2 processes in a way I couldn't read.")
 
 
 class Folders(unittest.TestCase):

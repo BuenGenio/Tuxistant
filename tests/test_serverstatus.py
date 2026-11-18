@@ -2013,14 +2013,17 @@ class Docs(Case):
         self.assertIn("or in their own name where the command line is empty, as a kernel thread's "
                       "or a zombie's is", _changelog_entry())
         self.assertIn("A line from pgrep that isn't a pid and a name of up to 15 characters, or of "
-                      "up to 63 for a process Linux flags as a kernel thread, such as "
-                      "`kworker/R-nvme-wq`, is counted, not said.", _changelog_entry())
+                      "up to 63 that is the name of a process Linux flags as a kernel thread, "
+                      "such as `kworker/R-nvme-wq`, is counted, not said.", _changelog_entry())
         # A kernel thread's name is longer than 15 characters, as Linux keeps it whole.
         self.assertIn("A line from pgrep is said only as a pid and a name of up to 15 characters, "
                       "as long as Linux keeps a user process's own name, or of up to 63 for a "
                       "process its `/proc/<pid>/stat` flags as a kernel thread, which has no "
-                      "command line and whose name Linux keeps whole, such as "
-                      "`kworker/R-nvme-wq`.", skills)
+                      "command line and whose name Linux 5.17 and later keep whole, such as "
+                      "`kworker/R-nvme-wq`, when that is the name its stat gives.", skills)
+        self.assertIn("so whatever a pgrep prints, no more than 15 characters after its pid are "
+                      "read out for any process but a kernel thread, and for one only its name.",
+                      skills)
         for text in (skills, _changelog_entry(), _flat("docs/SECURITY.md"),
                      " ".join(system._processes_here.__doc__.split())):
             self.assertNotIn("as long as Linux keeps a process's own name", text)
@@ -2152,8 +2155,11 @@ class Docs(Case):
         self.assertIn("no more than 15 characters of a line after its pid can be read out for "
                       "any process but a kernel thread", section)
         self.assertIn("or of up to 63 when its `/proc/<pid>/stat` flags the process as a kernel "
-                      "thread, which has no command line and whose name Linux keeps whole, such "
-                      "as `kworker/R-nvme-wq`. Tux reads only that flag there.", section)
+                      "thread, which has no command line and whose name Linux 5.17 and later "
+                      "keep whole, such as `kworker/R-nvme-wq`, and gives that same name. Tux "
+                      "reads only that name and that flag there.", section)
+        self.assertIn("can be read out for any process but a kernel thread, and for one only its "
+                      "name.", section)
         self.assertEqual(system.PROCESS_LINE.pattern, r"([0-9]+) (.{1,15})")
         self.assertEqual(system.KERNEL_THREAD_LINE.pattern, r"([0-9]+) (.{16,63})")
 
