@@ -308,5 +308,25 @@ class ConcurrentAndScaled(unittest.TestCase):
                 self.assertEqual(img.getpixel((x0 + size - 1, y0 + size)), BG, scale)
 
 
+class TheHarnessKeepsItsModules(unittest.TestCase):
+    def test_each_isolated_run_passes_the_site_folder_through(self):
+        """Each harness script starts its shell with env -i and a HOME of its own, so the
+        Python it runs finds dbus_fast only through PYTHONUSERBASE. shot.sh didn't pass it, so
+        where dbus_fast is in the user's site folder, as on a test server, its fake daemon
+        couldn't start and every test here failed. It names a site folder, not the HOME."""
+        for name in ("shot.sh", "card.sh", "e2e.sh"):
+            with self.subTest(name):
+                script = (HERE / name).read_text()
+                self.assertTrue("userbase=$(python3 -m site --user-base)" in script, name)
+                self.assertTrue('PYTHONUSERBASE="$userbase"' in script, name)
+                runs = script.split("\nenv -i ")[1:]
+                self.assertTrue(runs)
+                for run in runs:
+                    command = run.split("dbus-run-session")[0] if "dbus-run-session" in run \
+                        else run.split("\n\n")[0]
+                    self.assertTrue('PYTHONUSERBASE="$userbase"' in command
+                                    or '"${isolated[@]}"' in command, command)
+
+
 if __name__ == "__main__":
     unittest.main()

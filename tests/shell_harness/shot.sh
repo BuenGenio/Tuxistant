@@ -152,11 +152,14 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM
 
 timeout_s=${TUX_TIMEOUT:-150}
+# The fake daemon needs its Python modules (dbus_fast) from the user's site folder while HOME
+# points elsewhere. It names a site folder, not the user's HOME, so the isolation holds.
+userbase=$(python3 -m site --user-base)
 env -i PATH="$PATH" HOME="$work/home" USER="${USER:-tux}" LOGNAME="${LOGNAME:-tux}" LANG=C.UTF-8 \
     XDG_RUNTIME_DIR="$work/run" XDG_CONFIG_HOME="$work/config" XDG_DATA_HOME="$work/data" \
     XDG_CACHE_HOME="$work/cache" XDG_STATE_HOME="$work/state" GSETTINGS_BACKEND=keyfile \
     XDG_CURRENT_DESKTOP=GNOME XDG_SESSION_TYPE=wayland PYTHONDONTWRITEBYTECODE=1 \
-    TUX_PROBE_JS="${TUX_PROBE_JS:-}" \
+    PYTHONUSERBASE="$userbase" TUX_PROBE_JS="${TUX_PROBE_JS:-}" \
     timeout -k 8 "$timeout_s" dbus-run-session --config-file="$work/bus.conf" -- \
     "$here/shot.sh" --inner "$work" "$theme" "$out" "$scenario" &
 outer=$!
