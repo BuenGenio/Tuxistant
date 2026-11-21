@@ -18,6 +18,15 @@ PAST_HOLD = 0.12
 INSIDE_HOLD = 0.02
 
 
+async def _ended(task):
+    """Cancel a client's task and wait until it has stopped, so it dials nothing more."""
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 class FakeHelper:
     """The socket side of tuxistant-fn."""
 
@@ -39,10 +48,15 @@ class FakeHelper:
         await self.clients[-1].drain()
 
     async def stop(self):
+        # Close the server before the clients, and close a connection it took that this list
+        # never saw: one the client made as its task was cancelled would keep wait_closed()
+        # waiting for ever, as it waits for every connection since Python 3.12.
+        self.server.close()
         for client in self.clients:
             client.close()
-        self.server.close()
-        await self.server.wait_closed()
+        if hasattr(self.server, "close_clients"):
+            self.server.close_clients()
+        await asyncio.wait_for(self.server.wait_closed(), 2)
 
 
 class Timing(Case):
@@ -66,7 +80,7 @@ class Timing(Case):
 
         self.client = FnClient(self.config, start, end, path=self.path)
         task = asyncio.create_task(self.client.run())
-        self.addCleanup(task.cancel)
+        self.addAsyncCleanup(_ended, task)
 
     async def test_hold_fires_after_fn_hold_ms_and_up_ends_it(self):
         await self.helper.send("down")
@@ -371,7 +385,7 @@ class SlowToStart(Case):
                                on_dictate_cancel=note("dropped"), on_dictate_mode=note("mode"),
                                dictating=lambda _go: self.going)
         task = asyncio.create_task(self.client.run())
-        self.addCleanup(task.cancel)
+        self.addAsyncCleanup(_ended, task)
         self.addCleanup(self.client._disarm)
         await asyncio.wait_for(self.helper.connected.wait(), 2)
 
@@ -439,7 +453,7 @@ class Connection(Case):
         with mock.patch.object(fnclient, "RETRY_S", 0.02):
             client = FnClient(config, mock.AsyncMock(), mock.AsyncMock(), path=path)
             task = asyncio.create_task(client.run())
-            self.addCleanup(task.cancel)
+            self.addAsyncCleanup(_ended, task)
             await asyncio.sleep(0.06)
             self.assertFalse(task.done())
             helper = FakeHelper(path)
@@ -455,7 +469,7 @@ class Connection(Case):
             await helper.start()
             client = FnClient(config, mock.AsyncMock(), mock.AsyncMock(), path=path)
             task = asyncio.create_task(client.run())
-            self.addCleanup(task.cancel)
+            self.addAsyncCleanup(_ended, task)
             await asyncio.wait_for(helper.connected.wait(), 2)
             await helper.stop()
             again = FakeHelper(path)
