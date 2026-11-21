@@ -1669,7 +1669,10 @@ class Inner(unittest.TestCase):
                 dialog.push_subpage(page)
                 settle(30)
                 took = time.monotonic() - began
-                self.assertLess(took, 1.0, f"{len(manifest)} characters took {took:.2f} s")
+                # 2 s, not 1: a busy or slow machine took 1.05 to 1.56 s. The 96 s it guards against
+                # still fails, and the 1.7 s regression, the long line wrapped at words, is held by
+                # the check on the 'long' tag's own wrap mode below, not by this time.
+                self.assertLess(took, 2.0, f"{len(manifest)} characters took {took:.2f} s")
                 buffer = page.text.get_buffer()
                 self.assertEqual(buffer.get_text(*buffer.get_bounds(), False), manifest)
                 self.assertEqual(colours(buffer.get_start_iter()), ["key"])
@@ -1677,6 +1680,8 @@ class Inner(unittest.TestCase):
                                  "the rest of the manifest still wraps between words")
                 long_tag = buffer.get_tag_table().lookup("long")
                 self.assertFalse(buffer.get_iter_at_line(0)[1].has_tag(long_tag))
+                self.assertEqual((long_tag.props.wrap_mode, long_tag.props.wrap_mode_set),
+                                 (Gtk.WrapMode.CHAR, True), "a long line wraps anywhere")
                 if name == "long line":
                     _found, at = buffer.get_iter_at_line(8)
                     self.assertTrue(at.has_tag(long_tag), "only the long line wraps anywhere")

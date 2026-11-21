@@ -602,6 +602,10 @@ class CheckTests(BrowseCase):
         """start() runs apply(), which refuses a damaged state.json. Were that to end run(), no
         check would run all session, and Settings would never be told why."""
         await self.installed_v1()
+        # A day old by the test's clock, so the check is due at once. Left at the file's real
+        # time, the check never came once real time passed NOW minus a day, as the test's
+        # clock stands still, and the test timed out.
+        os.utime(self.state / registry.HELD_INDEX, (NOW - browse.CHECK_EVERY_S,) * 2)
         (self.state / registry.STATE).write_text("damaged")
         later = self.restarted()
         with mock.patch.object(browse, "FIRST_CHECK_S", 0), self.assertLogs(
