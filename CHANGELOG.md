@@ -1,5 +1,7 @@
 # Changelog
 
+## Not yet released
+
 ## 0.7.0, a preview
 
 A preview, published as a GitHub prerelease. 0.5.0 stays the stable release and what the website offers.
