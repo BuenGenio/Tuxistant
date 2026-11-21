@@ -49,8 +49,8 @@ class FakeHelper:
 
     async def stop(self):
         # Close the server before the clients, and close a connection it took that this list
-        # never saw: one the client made as its task was cancelled would keep wait_closed()
-        # waiting for ever, as it waits for every connection since Python 3.12.
+        # had not seen yet: one the client made as its task was cancelled would keep
+        # wait_closed() waiting for ever, as it waits for every connection since Python 3.12.
         self.server.close()
         for client in self.clients:
             client.close()
@@ -467,6 +467,9 @@ class Connection(Case):
         with mock.patch.object(fnclient, "RETRY_S", 0.02):
             helper = FakeHelper(path)
             await helper.start()
+            # For a test that fails before the stop below. After it, a second stop() does
+            # nothing: the server and its clients are closed and nothing is left to wait for.
+            self.addAsyncCleanup(helper.stop)
             client = FnClient(config, mock.AsyncMock(), mock.AsyncMock(), path=path)
             task = asyncio.create_task(client.run())
             self.addAsyncCleanup(_ended, task)
