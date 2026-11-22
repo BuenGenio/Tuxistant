@@ -1328,10 +1328,15 @@ class CutShort(Goa):
             server = await self.mailbox(gmail(inbox=[(raw, 1 + n / 100)
                                                      for n, raw in enumerate(raws)]),
                                         whole_words=whole_words)
-            # Hiding 40 long shop mails twice took past the search's 7 s on a CPU held at about
-            # 650 MHz, one run in five, and then no mail reached the model. This test is about
-            # where each mail is fetched on from, so it gets time it can't run out of.
+            # This test is about where each mail is fetched on from, not about time, so it is
+            # given time it can't run out of. The made-up server's search of these 40 mails for
+            # talk of signing in, whole words only, took 3.5 s on an idle machine and past the 4 s
+            # a read may wait (CONNECT_S) on a busy one, and the mailbox then came to nothing. The
+            # search's own 7 s (SEARCH_S) are capped by what mail.search leaves it (LIMIT_S), so
+            # that grows too.
             with mock.patch.object(mail, "TRIED", goamail.FETCHED), \
+                    mock.patch.object(mail, "LIMIT_S", 120), \
+                    mock.patch.object(goamail, "CONNECT_S", 60), \
                     mock.patch.object(goamail, "SEARCH_S", 60), \
                     mock.patch.object(goamail, "LOOKUP_S", 30):
                 await self.ask("What was the total of my Acme order?")
