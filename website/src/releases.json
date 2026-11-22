@@ -15,11 +15,20 @@
     "url": null
   },
   "preview": {
-    "version": "0.7.0",
-    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.7.0.tar.gz",
-    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.7.0"
+    "version": "0.8.0",
+    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.8.0.tar.gz",
+    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.8.0"
   },
   "history": [
+    {
+      "version": "0.8.0",
+      "date": "2026-11-23",
+      "channel": "preview",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.8.0",
+      "features": [
+        {"icon": "mail", "label": {"en": "The doctor command explains mail search", "es": "El comando doctor explica la búsqueda", "pt": "O comando doctor explica a busca", "zh": "Doctor 命令说明邮件搜索", "ar": "أمر doctor يوضّح ما سيفعله بحث البريد"}}
+      ]
+    },
     {
       "version": "0.7.0",
       "date": "2026-11-21",

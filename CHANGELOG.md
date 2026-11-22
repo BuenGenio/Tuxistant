@@ -1,8 +1,14 @@
 # Changelog
 
-## Not yet released
+## 0.8.0, a preview
 
-`tuxistant doctor` says what mail search will really do.
+A preview, published as a GitHub prerelease. 0.5.0 stays the stable release and what the website offers.
+
+A small release: 0.7.0 with one change you can see. `tuxistant doctor`'s line about mail search now says what a search will really do. With "Search my mail" off in Settings it says `mail search available  off: "Search my mail" is off in Settings`, where 0.7.0 said Online Accounts would be searched whenever Thunderbird held no mail, though with the switch off nothing is searched. With the switch on and no mail in Thunderbird, it says a search goes to the Google or Microsoft accounts in Online Accounts whose Mail switch is on, rather than that Online Accounts will be searched: doctor doesn't ask Online Accounts whether it has such an account, so it says the rule. Nothing else in what Tux does has changed.
+
+The new doctor line has run only in tests, not yet on a real desktop. Check 16 under "Check on the real desktop" in docs/ROADMAP.md is its first real run. Nothing 0.7.0 added has been tried on a real desktop, a real Online Accounts account or a real server yet either: see 0.7.0 below.
+
+The rest changes only the docs and the tests. docs/ROADMAP.md, docs/SECURITY.md and docs/CONTRACT.md now say of the codes and passwords mail search hides what the start of 0.7.0's changelog says: what 0.5.0's rules hide in the text each path reads. They said every code or password 0.5.0 hid is hidden, on both paths, and so did the second item of 0.7.0's list below, which now says the same as the rest, but a few mails read through Online Accounts show a code 0.5.0 hid in Thunderbird's copy of them. docs/ROADMAP.md also lists a limit of 0.7.0's mail search found since: through Online Accounts a search has 7 seconds to sign in, search and fetch, then 3 to look up who the best few mails are from, and a mail server that is silent for 4 seconds while Tux waits for its answer, or still answering when those 10 are up, ends that account's search: what had been read from that mailbox is dropped, so a stall in the inbox, or in Gmail's All Mail, leaves no mail from that account for the model. The picture of Settings' History page in the README shows what Tux has said about docker since 0.7.0. Three fixes to the tests: the headless shell tests run where Python's modules are in the user's own site folder, a test of the Fn helper cleans up after itself when it fails early, and a mail search test that failed on a busy machine, as the made-up mail server was slow to answer, now gives it time enough.
 
 One change reaches what 0.7.0 already did:
 

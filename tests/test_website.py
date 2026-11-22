@@ -707,8 +707,10 @@ class BuiltSite(unittest.TestCase):
         self.build.check_releases(releases, languages)
 
         def broken(change):
+            # A release may have one chip, so the slips go to the newest with two or more, where
+            # a slip in a chip after the first is caught too.
             copy = json.loads(json.dumps(releases))
-            change(copy["history"][0])
+            change(next(entry for entry in copy["history"] if len(entry["features"]) > 1))
             return copy
         slips = {
             "an unknown icon": lambda entry: entry["features"][0].update(icon="rocket"),

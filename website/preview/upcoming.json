@@ -1,5 +1,5 @@
 {
-  "about": "A local preview of the site once the current rounds ship: python3 website/build.py --preview website/preview/upcoming.json writes website/dist-preview/. Never deployed. Planned entries carry their planned date, and every claim stays Soon. What 0.8.0 holds isn't settled yet, so no entry, preview link or claim is planned for it: add them here once it is.",
+  "about": "A local preview of the site once the current rounds ship: python3 website/build.py --preview website/preview/upcoming.json writes website/dist-preview/. Never deployed. Planned entries carry their planned date, and every claim stays Soon. What 0.9.0 holds isn't settled yet, so no entry, preview link or claim is planned for it: add them here once it is.",
   "releases": [],
   "claims": {
     "en": [],
@@ -9,10 +9,10 @@
     "ar": []
   },
   "banner": {
-    "en": "Local preview of the site once 0.8.0 ships. Not deployed, and what 0.8.0 holds isn't settled yet.",
-    "es": "Vista previa local del sitio cuando salga 0.8.0. No está publicada, y lo que traerá 0.8.0 aún no está decidido.",
-    "pt": "Prévia local do site quando sair a 0.8.0. Não está publicada, e o que a 0.8.0 trará ainda não está decidido.",
-    "zh": "本地预览：0.8.0 发布后的网站样子。未上线，0.8.0 的内容尚未确定。",
-    "ar": "معاينة محلية للموقع بعد صدور 0.8.0. غير منشورة، ولم يُحسم بعد ما سيتضمنه 0.8.0."
+    "en": "Local preview of the site once 0.9.0 ships. Not deployed, and what 0.9.0 holds isn't settled yet.",
+    "es": "Vista previa local del sitio cuando salga 0.9.0. No está publicada, y lo que traerá 0.9.0 aún no está decidido.",
+    "pt": "Prévia local do site quando sair a 0.9.0. Não está publicada, e o que a 0.9.0 trará ainda não está decidido.",
+    "zh": "本地预览：0.9.0 发布后的网站样子。未上线，0.9.0 的内容尚未确定。",
+    "ar": "معاينة محلية للموقع بعد صدور 0.9.0. غير منشورة، ولم يُحسم بعد ما سيتضمنه 0.9.0."
   }
 }

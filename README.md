@@ -22,7 +22,7 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 
 ## Install
 
-There are six releases to choose from:
+There are seven releases to choose from:
 
 - **0.5.0**, the stable release, and what the website offers. It adds recipe skills you write in YAML, a page for every skill in Settings, follow-up questions, hands-free dictation and an agreement before anything goes to the cloud. All of it was reviewed and tested, but most of it hasn't been tried on a real desktop yet; [CHANGELOG.md](CHANGELOG.md) says how far each part was.
 - **0.2.0**, the last release whose additions all worked on the owner's own desktop.
@@ -30,8 +30,9 @@ There are six releases to choose from:
 - **0.4.0**, a preview. It adds opening apps and Settings pages, and a click before the facts lookup sends a question that may be about your home. None of it has been tried on a real desktop yet.
 - **0.6.0**, a preview. It holds Tux's side of the skills registry, for sharing recipe skills: the signature checks, the switch-off of revoked recipes and a Browse page in Settings. The registry doesn't exist yet, so nothing is fetched and Settings doesn't show Browse: as installed it works as 0.5.0 does. None of it has been tried on a real desktop yet.
 - **0.7.0**, a preview. It adds mail search without Thunderbird, in a Google or Microsoft account in GNOME Online Accounts, behind the same "Search my mail" switch, which starts off, and asks your own server what docker and systemd list there. Neither has been tried on a real desktop, a real account or a real server yet, and whether Microsoft's mail server takes the token Online Accounts hands out isn't known.
+- **0.8.0**, a preview, and a small one: 0.7.0 with `tuxistant doctor` saying what mail search will really do, that "Search my mail" is off when it is, and with it on and no mail in Thunderbird, that a search goes to the Google or Microsoft accounts in Online Accounts whose Mail switch is on. The rest is docs and tests. Not yet tried on a real desktop.
 
-On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for another release, use `--branch v0.2.0`, `--branch v0.3.0`, `--branch v0.4.0`, `--branch v0.6.0` or `--branch v0.7.0` instead:
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for another release, use `--branch v0.2.0`, `--branch v0.3.0`, `--branch v0.4.0`, `--branch v0.6.0`, `--branch v0.7.0` or `--branch v0.8.0` instead:
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
@@ -39,7 +40,7 @@ git clone --branch v0.5.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
 
-Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`, or `tar xzf Tuxistant-0.7.0.tar.gz && cd Tuxistant-0.7.0` for the newest preview.
+Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`, or `tar xzf Tuxistant-0.8.0.tar.gz && cd Tuxistant-0.8.0` for the newest preview.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
@@ -96,7 +97,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 ## What you can ask
 
-Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has them all. Of those, only mail search has been used on a real desktop so far. Parts of a row marked 0.7.0 preview are only in that preview, and haven't been tried on a real desktop yet.
+Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has them all. Of those, only mail search has been used on a real desktop so far. Parts of a row marked 0.7.0 preview are only in the 0.7.0 and 0.8.0 previews, and haven't been tried on a real desktop yet.
 
 | Ask | What happens |
 |---|---|
@@ -151,7 +152,7 @@ The same things work from a terminal:
 | `tuxistant cancel` | Stop everything |
 | `tuxistant say <text>` | Speak some text |
 | `tuxistant history` | Show recent requests |
-| `tuxistant doctor` | Check the Python modules, the server, the API key, PipeWire, the Fn helper if it is installed, whether the calendar can be used and any mail was found, that the extension is enabled, that the daemon can start, that approval cards can show, and whether the skill sandbox works if Tapo lights or your own skills need it |
+| `tuxistant doctor` | Check the Python modules, the server, the API key, PipeWire, the Fn helper if it is installed, whether the calendar can be used, whether "Search my mail" is on and any mail was found, that the extension is enabled, that the daemon can start, that approval cards can show, and whether the skill sandbox works if Tapo lights or your own skills need it |
 | `tuxistant settings` | Open Settings |
 | `tuxistant daemon` | Run the daemon in the foreground |
 
