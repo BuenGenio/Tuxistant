@@ -1328,7 +1328,12 @@ class CutShort(Goa):
             server = await self.mailbox(gmail(inbox=[(raw, 1 + n / 100)
                                                      for n, raw in enumerate(raws)]),
                                         whole_words=whole_words)
-            with mock.patch.object(mail, "TRIED", goamail.FETCHED):
+            # Hiding 40 long shop mails twice took past the search's 7 s on a CPU held at about
+            # 650 MHz, one run in five, and then no mail reached the model. This test is about
+            # where each mail is fetched on from, so it gets time it can't run out of.
+            with mock.patch.object(mail, "TRIED", goamail.FETCHED), \
+                    mock.patch.object(goamail, "SEARCH_S", 60), \
+                    mock.patch.object(goamail, "LOOKUP_S", 30):
                 await self.ask("What was the total of my Acme order?")
             self.assertGreater(len(self.model), mail.TRIED)
             for n in range(len(self.model)):
