@@ -22,9 +22,12 @@ FN_HELPER = "/usr/local/lib/tuxistant/tuxistant-fn"
 MODULES = {"dbus_fast": "python3-dbus-fast", "websockets": "python3-websockets",
            "yaml": "python3-yaml", "gi": "python3-gi"}
 SKILLS_LOAD = "skills load"
-# What doctor says of mail, by whether Thunderbird holds any, as a search decides it.
-MAIL_DETAIL = {True: "", False: "Thunderbird holds no mail: Online Accounts will be searched",
+# What doctor says of mail, by whether Thunderbird holds any, as a search decides it. It says
+# the rule, not that an account is there: knowing that would mean asking Online Accounts.
+MAIL_DETAIL = {True: "", False: ("Thunderbird holds no mail: a search goes to the accounts in "
+                                 "Online Accounts whose Mail switch is on"),
                None: "Thunderbird's mail index couldn't be read"}
+MAIL_OFF = "off: \"Search my mail\" is off in Settings"
 
 
 async def call(member: str, signature: str = "", body: tuple = ()) -> list:
@@ -227,7 +230,7 @@ def checks(config) -> list[tuple[bool, str, str]]:
         # Optional, like the helper: without the bindings only the calendar is missing.
         (True, "calendar available", "" if calendars.available() else
          "not installed: the calendar needs evolution-data-server and gir1.2-ecal-2.0"),
-        (True, "mail search available", MAIL_DETAIL[mail.holds_mail()]),
+        (True, "mail search available", mail_detail(config)),
         (extension_installed(), "GNOME extension installed", EXTENSION),
         (extension_enabled(), "GNOME extension enabled", EXTENSION),
         (daemon_activatable(), "daemon can be started", BUS_NAME),
@@ -237,6 +240,11 @@ def checks(config) -> list[tuple[bool, str, str]]:
         (not problems, SKILLS_LOAD, f"{len(problems)} with a problem" if problems else ""),
         (shared, "skills registry", shared_detail),
     ]
+
+
+def mail_detail(config) -> str:
+    """With the switch off nothing is searched, so nothing is said of Thunderbird or accounts."""
+    return MAIL_DETAIL[mail.holds_mail()] if config["mail_search"] else MAIL_OFF
 
 
 def doctor() -> int:

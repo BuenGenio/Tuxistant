@@ -64,12 +64,17 @@ class Doctor(unittest.TestCase):
 
     def test_the_mail_line_says_what_a_search_would_search(self):
         """An empty profile has an index too, and a search goes past it to Online Accounts."""
-        def detail():
-            return next(detail for _, what, detail in cli.checks(self.config(9))
+        def detail(on=True):
+            config = self.config(9)
+            config.values["mail_search"] = on
+            return next(detail for _, what, detail in cli.checks(config)
                         if what == "mail search available")
 
-        searched = "Thunderbird holds no mail: Online Accounts will be searched"
+        searched = ("Thunderbird holds no mail: a search goes to the accounts in Online Accounts "
+                    "whose Mail switch is on")
         self.assertEqual(detail(), searched)
+        self.assertEqual(detail(on=False), 'off: "Search my mail" is off in Settings',
+                         "with the switch off nothing is searched, Online Accounts included")
         build(self.folder / "mail", [], "empty.default")
         self.assertEqual(detail(), searched)
         build(self.folder / "mail", [{"subject": "Hi", "author": "a@b.example", "body": "Hi."}])
@@ -77,6 +82,7 @@ class Doctor(unittest.TestCase):
         for profile in ("empty.default", "abcd1234.default"):
             (self.folder / "mail" / profile / mail.INDEX).write_bytes(b"not an index" * 100)
         self.assertEqual(detail(), "Thunderbird's mail index couldn't be read")
+        self.assertEqual(detail(on=False), 'off: "Search my mail" is off in Settings')
 
     def test_bad_key_is_reachable_but_not_accepted(self):
         results = self.results(self.config(self.fake().port, key="wrong"))

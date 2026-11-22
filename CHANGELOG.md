@@ -2,6 +2,14 @@
 
 ## Not yet released
 
+`tuxistant doctor` says what mail search will really do.
+
+One change reaches what 0.7.0 already did:
+
+- `tuxistant doctor`'s "mail search available" line says when "Search my mail" is off in Settings, and then no longer says Online Accounts will be searched. With it on and no mail in Thunderbird, it says a search goes to the accounts in Online Accounts whose Mail switch is on, not that one is there. Not yet tried on a real desktop.
+
+After updating, nothing needs doing.
+
 ## 0.7.0, a preview
 
 A preview, published as a GitHub prerelease. 0.5.0 stays the stable release and what the website offers.
