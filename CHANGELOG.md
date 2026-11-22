@@ -6,7 +6,7 @@
 
 One change reaches what 0.7.0 already did:
 
-- `tuxistant doctor`'s "mail search available" line says when "Search my mail" is off in Settings, and then no longer says Online Accounts will be searched. With it on and no mail in Thunderbird, it says a search goes to the accounts in Online Accounts whose Mail switch is on, not that one is there. Not yet tried on a real desktop.
+- `tuxistant doctor`'s "mail search available" line says when "Search my mail" is off in Settings, and then no longer says Online Accounts will be searched. With it on and no mail in Thunderbird, it says a search goes to the Google or Microsoft accounts in Online Accounts whose Mail switch is on, not that one is there. Not yet tried on a real desktop.
 
 After updating, nothing needs doing.
 

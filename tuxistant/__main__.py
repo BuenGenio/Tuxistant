@@ -23,9 +23,11 @@ MODULES = {"dbus_fast": "python3-dbus-fast", "websockets": "python3-websockets",
            "yaml": "python3-yaml", "gi": "python3-gi"}
 SKILLS_LOAD = "skills load"
 # What doctor says of mail, by whether Thunderbird holds any, as a search decides it. It says
-# the rule, not that an account is there: knowing that would mean asking Online Accounts.
-MAIL_DETAIL = {True: "", False: ("Thunderbird holds no mail: a search goes to the accounts in "
-                                 "Online Accounts whose Mail switch is on"),
+# the rule, not that an account is there: knowing that would mean asking Online Accounts. Only
+# an account that signs in through its provider's page is searched (goamail._account), and of
+# those Online Accounts offers Google's and Microsoft's.
+MAIL_DETAIL = {True: "", False: ("Thunderbird holds no mail: a search goes to the Google or "
+                                 "Microsoft accounts in Online Accounts whose Mail switch is on"),
                None: "Thunderbird's mail index couldn't be read"}
 MAIL_OFF = "off: \"Search my mail\" is off in Settings"
 
@@ -243,8 +245,10 @@ def checks(config) -> list[tuple[bool, str, str]]:
 
 
 def mail_detail(config) -> str:
-    """With the switch off nothing is searched, so nothing is said of Thunderbird or accounts."""
-    return MAIL_DETAIL[mail.holds_mail()] if config["mail_search"] else MAIL_OFF
+    """With the switch off nothing is searched, so nothing is said of Thunderbird or accounts.
+    Only true is on, as for mail.search and Skills.offered: "false" in a config file written by
+    hand is off."""
+    return MAIL_DETAIL[mail.holds_mail()] if config["mail_search"] is True else MAIL_OFF
 
 
 def doctor() -> int:

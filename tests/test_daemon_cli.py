@@ -70,15 +70,23 @@ class Doctor(unittest.TestCase):
             return next(detail for _, what, detail in cli.checks(config)
                         if what == "mail search available")
 
-        searched = ("Thunderbird holds no mail: a search goes to the accounts in Online Accounts "
-                    "whose Mail switch is on")
+        searched = ("Thunderbird holds no mail: a search goes to the Google or Microsoft accounts "
+                    "in Online Accounts whose Mail switch is on")
+        off = 'off: "Search my mail" is off in Settings'
         self.assertEqual(detail(), searched)
-        self.assertEqual(detail(on=False), 'off: "Search my mail" is off in Settings',
+        self.assertEqual(detail(on=False), off,
                          "with the switch off nothing is searched, Online Accounts included")
+        # Only true is on, as for the search itself and the model's list of tools: a config
+        # file written by hand can say "false", which a plain if took for on.
+        for written in ("false", "true", 1, 0, None, [], {"on": True}):
+            with self.subTest(written=written):
+                self.assertEqual(detail(on=written), off)
         build(self.folder / "mail", [], "empty.default")
         self.assertEqual(detail(), searched)
         build(self.folder / "mail", [{"subject": "Hi", "author": "a@b.example", "body": "Hi."}])
         self.assertEqual(detail(), "")
+        self.assertEqual(detail(on=False), off, "with mail in Thunderbird, off is still off")
+        self.assertEqual(detail(on="false"), off)
         for profile in ("empty.default", "abcd1234.default"):
             (self.folder / "mail" / profile / mail.INDEX).write_bytes(b"not an index" * 100)
         self.assertEqual(detail(), "Thunderbird's mail index couldn't be read")
