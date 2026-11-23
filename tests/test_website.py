@@ -701,6 +701,37 @@ class BuiltSite(unittest.TestCase):
             if text[0].lower() != text[0].upper():
                 self.assertTrue(text[0].isupper(), (version, code, text))
 
+    def test_a_command_a_chip_names_is_written_as_it_is_typed(self):
+        """`tuxistant doctor` is typed in small letters, so every language writes it that way,
+        and one whose script has capitals finds another way to start the chip."""
+        cli = (ROOT / "tuxistant/__main__.py").read_text()
+        commands = set(re.findall(r'commands\.add_parser\("(\w+)"', cli))
+        self.assertIn("doctor", commands)
+        history = json.loads((ROOT / "website/src/releases.json").read_text())["history"]
+        named = [(entry["version"], command, feature["label"]) for entry in history
+                 for feature in entry["features"]
+                 for command in re.findall(r"\b(\w+) command\b", feature["label"]["en"])
+                 if command in commands]
+        self.assertTrue(named)
+        for version, command, label in named:
+            for code, text in label.items():
+                with self.subTest(version=version, code=code):
+                    self.assertRegex(text, rf"(?<!\w){command}(?!\w)")
+
+    def test_a_chip_about_mail_search_says_mail_in_every_language(self):
+        """In the word for mail that 0.3.0's "Mail search" chip uses, as "the search" alone
+        could be any search: of the web, of files or of facts."""
+        mail = {"en": "mail", "es": "correo", "pt": "e-mail", "zh": "邮件", "ar": "البريد"}
+        self.assertEqual(set(mail), set(self.build.load_languages()))
+        history = json.loads((ROOT / "website/src/releases.json").read_text())["history"]
+        chips = [(entry["version"], feature["label"]) for entry in history
+                 for feature in entry["features"] if feature["icon"] == "mail"]
+        self.assertGreaterEqual(len(chips), 3)
+        for version, label in chips:
+            for code, word in mail.items():
+                with self.subTest(version=version, code=code):
+                    self.assertIn(word, label[code].casefold())
+
     def test_a_slip_in_the_chips_stops_the_build(self):
         languages = self.build.load_languages()
         releases = json.loads((ROOT / "website/src/releases.json").read_text())
