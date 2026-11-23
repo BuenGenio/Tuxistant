@@ -2,6 +2,14 @@
 
 ## Not yet released
 
+Tux says a song's title as it is written, whatever script or emoji it holds.
+
+One change reaches what 0.8.0 already did:
+
+- Media: a song's title and artist, and a player's name, are said and shown as they are written. The right-to-left marks and isolates round an Arabic or Hebrew title, other characters nobody sees, and a terminal's colour codes are left out, where 0.8.0 read each of them out as an escape: a backslash, a u and a number. Joined emoji, such as a family, a heart on fire or Scotland's flag, are kept whole, and a long title is never cut inside one. A title made only of characters nobody sees counts as no title. Not yet tried with a real player.
+
+After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension is unchanged.
+
 ## 0.8.0, a preview
 
 A preview, published as a GitHub prerelease. 0.5.0 stays the stable release and what the website offers.

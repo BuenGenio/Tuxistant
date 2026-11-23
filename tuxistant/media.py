@@ -18,16 +18,18 @@ one time limit, and closes both. Gio could make the same calls from a thread, bu
 another, so each frozen player would cost its own wait.
 """
 import asyncio
+import itertools
 import math
 import os
 import re
 import subprocess
+import unicodedata
 from urllib.parse import unquote, urlsplit
 
 from dbus_fast import AuthError, DBusError, Message, MessageFlag, MessageType, unpack_variants
 from dbus_fast.aio import MessageBus
 
-from .gate import APP_SAYS, Speak, shown
+from .gate import APP_SAYS, Speak
 
 DBUS, DBUS_PATH = "org.freedesktop.DBus", "/org/freedesktop/DBus"
 PROPERTIES = "org.freedesktop.DBus.Properties"
@@ -93,6 +95,24 @@ NOT_NAMES = {"the", "my", "a", "an", "this", "that", "it", "on", "in", "music", 
              "everything", "computer", "system", "one"}
 ALIASES = {"chrome": "chromium"}    # Chrome's bus name says chromium, and people say either
 NUMBER = r"[+-]?\d+(?:[.,]\d+)?"
+# Other people's text is said and shown as it is seen. What nobody sees is left out rather than
+# read out as an escape: controls, the bidi marks and isolates round a right-to-left title, and
+# the rest of Unicode's default ignorables, which unicodedata can't look up (as in mail.py).
+# Joiners, the selectors that make a picture an emoji or text, and a flag's tags stay where
+# they join or style what is seen: a family of emoji, a Persian word, Scotland's flag.
+JOINERS, SELECTORS, TAGS = "\u200c\u200d", "\ufe0e\ufe0f", "\U000e0000-\U000e007f"
+ATTACHED = frozenset(JOINERS + SELECTORS)
+IGNORABLE = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0d"
+                       "\uffa0\ufff0-\ufff8\U000e0000-\U000e0fff]")
+BLANKS = frozenset(("Cc", "Zl", "Zp", "Cs", "Co", "Cn", "Zs"))     # each one a space
+TERMINAL = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")     # a colour or a cursor move
+FLAGS = re.compile(f"(\U0001f3f4[\U000e0030-\U000e0039\U000e0061-\U000e007a]{{2,7}}\U000e007f)"
+                   f"|[{TAGS}]+")
+# Kept after a mark, a digit or a symbol, as in a keycap or a heart, never after a letter.
+PRESENTED = re.compile(rf"(?<=[^\s\w{JOINERS}{SELECTORS}{TAGS}]|\d)([{SELECTORS}])[{SELECTORS}]*"
+                       rf"|[{SELECTORS}]+")
+JOINED = re.compile(rf"(?<=[^\s{JOINERS}{TAGS}])([{JOINERS}])[{JOINERS}]*"
+                    rf"(?=[^\s{JOINERS}{SELECTORS}{TAGS}])|[{JOINERS}]+")
 
 
 class Refused(Exception):
@@ -151,21 +171,63 @@ def _run(coroutine):
 
 def _text(value, limit: int) -> str:
     """Other people's text for a result: a web page writes a title, any program its own name.
-    Flattened, cut and escaped. The cut is made here so it ends in a plain ellipsis, where
-    shown() would add a count of characters for the voice to read out. It still does that to
-    text that grew in the escaping, which no real title does."""
-    if not isinstance(value, str):
-        return ""
-    flat = " ".join(value.split())
-    if len(flat) > limit:
-        flat = flat[:limit].rstrip() + "…"
-    return shown(flat, limit + 1)
+    Flattened, with nothing in it that would be read out as an escape, and cut short."""
+    return _cut(_seen(value), limit) if isinstance(value, str) else ""
 
 
-def _strings(value) -> list[str]:
-    """xesam:artist is a list, and some players send one string anyway."""
+def _texts(value, limit: int, most: int = 1) -> list[str]:
+    """xesam:artist is a list, and some players send one string anyway. One with nothing
+    left to say is passed over."""
     values = value if isinstance(value, list) else [value]
-    return [text for text in values if isinstance(text, str) and text.strip()]
+    return list(itertools.islice(filter(None, (_text(text, limit) for text in values)), most))
+
+
+def _seen(text: str) -> str:
+    """Text as a reader sees it: what nobody sees goes, and a control or a line break is a
+    space. A joiner, a selector or a tag that joins or styles nothing goes too."""
+    text = TERMINAL.sub("", text) if "\x1b" in text or "\x9b" in text else text
+    found = set(text)
+    text = text.translate({ord(char): instead for char in found
+                           if (instead := _instead(char)) != char})
+    if found & ATTACHED or max(found, default="") >= "\U000e0020":
+        for pattern in (FLAGS, PRESENTED, JOINED):  # in this order: each looks at what is left
+            text = pattern.sub(_kept, text)
+    return " ".join(text.split())
+
+
+def _kept(match) -> str:
+    return match[1] or ""
+
+
+def _instead(char: str) -> str:
+    """What one character becomes: itself, a space or nothing. A joiner, a selector or a tag
+    is itself for now: what is beside it decides."""
+    if char in JOINERS + SELECTORS or "\U000e0020" <= char <= "\U000e007f":
+        return char
+    kind = unicodedata.category(char)
+    if kind == "Cf" or IGNORABLE.match(char):
+        return ""
+    return " " if kind in BLANKS or char == "\u2800" else char
+
+
+def _cut(text: str, limit: int) -> str:
+    """Ends in a plain ellipsis if cut, where shown() would add a count of characters for the
+    voice to read out. Never cut inside what is drawn as one: a letter and its marks, an emoji
+    and what joins or styles it, a flag."""
+    if len(text) <= limit:
+        return text
+    end = limit
+    while end > 0 and _belongs(text[end - 1], text[end]):
+        end -= 1
+    return text[:end].rstrip() + "…"
+
+
+def _belongs(before: str, char: str) -> bool:
+    """Whether char is drawn as one with the character before it."""
+    regional = "\U0001f1e6" <= before <= "\U0001f1ff" and "\U0001f1e6" <= char <= "\U0001f1ff"
+    return (before in JOINERS or char in JOINERS or "\U000e0000" <= char <= "\U000e007f"
+            or unicodedata.category(char)[0] == "M" or "\U0001f3fb" <= char <= "\U0001f3ff"
+            or regional)
 
 
 def _join(names: list[str]) -> str:
@@ -185,10 +247,10 @@ def _file_name(url) -> str:
 
 def _track(meta: dict) -> str:
     """What is on, as a phrase: "Heroes by David Bowie"."""
-    titles = _strings(meta.get("xesam:title"))
-    title = _text(titles[0] if titles else _file_name(meta.get("xesam:url")), MAX_TITLE_CHARS)
-    artists = _strings(meta.get("xesam:artist")) or _strings(meta.get("xesam:albumArtist"))
-    artist = _join([_text(name, MAX_ARTIST_CHARS) for name in artists[:3]])
+    titles = _texts(meta.get("xesam:title"), MAX_TITLE_CHARS)
+    title = titles[0] if titles else _text(_file_name(meta.get("xesam:url")), MAX_TITLE_CHARS)
+    artist = _join(_texts(meta.get("xesam:artist"), MAX_ARTIST_CHARS, 3)
+                   or _texts(meta.get("xesam:albumArtist"), MAX_ARTIST_CHARS, 3))
     if title and artist:
         return f"{title} by {artist}"
     return title or (f"something by {artist}" if artist else "")
@@ -217,7 +279,7 @@ def _player(name: str, root: dict, props: dict) -> dict:
     meta = meta if isinstance(meta, dict) else {}
     status = str(props.get("PlaybackStatus", "")).casefold()
     controls = props.get("CanControl") is not False
-    album = _text(next(iter(_strings(meta.get("xesam:album"))), ""), MAX_ALBUM_CHARS)
+    album = next(iter(_texts(meta.get("xesam:album"), MAX_ALBUM_CHARS)), "")
     return {"name": name, "app": _app(name, root.get("Identity")),
             "status": status if status in ("playing", "paused") else "stopped",
             "controls": controls,
