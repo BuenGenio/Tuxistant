@@ -703,7 +703,10 @@ class BuiltSite(unittest.TestCase):
 
     def test_a_command_a_chip_names_is_written_as_it_is_typed(self):
         """`tuxistant doctor` is typed in small letters, so every language writes it that way,
-        and one whose script has capitals finds another way to start the chip."""
+        and one whose script has capitals finds another way to start the chip. Each calls it a
+        command or quotes it, as a bare "doctor explains" is a physician explaining."""
+        command_word = {"en": "command", "es": "comando", "pt": "comando", "zh": "命令",
+                        "ar": "أمر"}
         cli = (ROOT / "tuxistant/__main__.py").read_text()
         commands = set(re.findall(r'commands\.add_parser\("(\w+)"', cli))
         self.assertIn("doctor", commands)
@@ -717,11 +720,14 @@ class BuiltSite(unittest.TestCase):
             for code, text in label.items():
                 with self.subTest(version=version, code=code):
                     self.assertRegex(text, rf"(?<!\w){command}(?!\w)")
+                    quoted = re.search(rf"[«“\"]{command}[»”\"]", text)
+                    self.assertTrue(quoted or command_word[code] in text.casefold(), text)
 
     def test_a_chip_about_mail_search_says_mail_in_every_language(self):
         """In the word for mail that 0.3.0's "Mail search" chip uses, as "the search" alone
-        could be any search: of the web, of files or of facts."""
-        mail = {"en": "mail", "es": "correo", "pt": "e-mail", "zh": "邮件", "ar": "البريد"}
+        could be any search: of the web, of files or of facts. In Portuguese it is the plural,
+        as "no e-mail" could be a search inside one mail."""
+        mail = {"en": "mail", "es": "correo", "pt": "nos e-mails", "zh": "邮件", "ar": "البريد"}
         self.assertEqual(set(mail), set(self.build.load_languages()))
         history = json.loads((ROOT / "website/src/releases.json").read_text())["history"]
         chips = [(entry["version"], feature["label"]) for entry in history

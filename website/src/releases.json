@@ -26,7 +26,7 @@
       "channel": "preview",
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.8.0",
       "features": [
-        {"icon": "mail", "label": {"en": "The doctor command explains mail search", "es": "Búsqueda en el correo: doctor la explica", "pt": "Comando doctor explica a busca no e-mail", "zh": "“doctor”命令说明邮件搜索", "ar": "أمر doctor يوضّح ما سيفعله بحث البريد"}}
+        {"icon": "mail", "label": {"en": "The doctor command explains mail search", "es": "«doctor» explica la búsqueda de correo", "pt": "Comando doctor explica busca nos e-mails", "zh": "“doctor”命令说明邮件搜索", "ar": "أمر doctor يوضّح ما سيفعله بحث البريد"}}
       ]
     },
     {
