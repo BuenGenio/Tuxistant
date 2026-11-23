@@ -2,11 +2,11 @@
 
 ## Not yet released
 
-Tux says a song's title as it is written, whatever script or emoji it holds, and `tuxistant doctor` says how many accounts a mail search reaches.
+Tux no longer reads out escapes in a song's title, and `tuxistant doctor` says how many accounts a mail search reaches.
 
 Two changes reach what 0.8.0 already did:
 
-- Media: a song's title and artist, and a player's name, are said and shown as they are written. The right-to-left marks and isolates round an Arabic or Hebrew title, other characters nobody sees, and a terminal's colour codes are left out, where 0.8.0 read each of them out as an escape: a backslash, a u and a number. Joined emoji, such as a family, a heart on fire or Scotland's flag, are kept whole, and a long title is never cut inside one. A title made only of characters nobody sees counts as no title. Not yet tried with a real player.
+- Media: a song's title and artist, and a player's name, no longer have escapes read out in them. In 0.8.0 the right-to-left marks and isolates round an Arabic or Hebrew title, the start of a terminal's colour code and the joiners inside a joined emoji were each read out as an escape: a backslash, a u and a number. Now the marks are left out, as are other characters nobody sees, some of which 0.8.0 kept as they were, and a terminal's codes for a colour, a window title or a link. Joined emoji, such as a family, a heart on fire or Scotland's flag, are kept whole, and a long title is cut between them rather than inside one. A title made only of characters nobody sees counts as no title. Only the text has changed: the voice still reads a title as English, so one in Arabic or Hebrew may come out wrong or not at all. Not yet tried with a real player.
 - `tuxistant doctor`'s "mail search available" line, with "Search my mail" on and no mail in Thunderbird, says a search goes to at most 3 of the Google or Microsoft accounts in Online Accounts whose Mail switch is on: `at most 3 of them`. A search has stopped at three since 0.7.0, and 0.8.0's line didn't say so. Not yet tried on a real desktop.
 
 After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension is unchanged. `tuxistant doctor` has its new line straight away.

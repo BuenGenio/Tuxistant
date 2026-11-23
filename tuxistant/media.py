@@ -101,13 +101,24 @@ NUMBER = r"[+-]?\d+(?:[.,]\d+)?"
 # Joiners, the selectors that make a picture an emoji or text, and a flag's tags stay where
 # they join or style what is seen: a family of emoji, a Persian word, Scotland's flag.
 JOINERS, SELECTORS, TAGS = "\u200c\u200d", "\ufe0e\ufe0f", "\U000e0000-\U000e007f"
+REGIONAL = "".join(map(chr, range(0x1f1e6, 0x1f200)))    # two of these letters make a flag
+LINKERS = "\u094d\u09cd\u0acd\u0b4d\u0c4d\u0d4d"    # a virama that joins two consonants as one
+# Hangul spelled out in its letters, as a Mac names files: a vowel or a last consonant is drawn
+# as one with the Hangul before it.
+FOLLOWING = re.compile("[\u1160-\u11ff\ud7b0-\ud7ff]")
+HANGUL = re.compile("[\u1100-\u11ff\ua960-\ua97f\uac00-\ud7a3\ud7b0-\ud7ff]")
 ATTACHED = frozenset(JOINERS + SELECTORS)
 IGNORABLE = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\ufe00-\ufe0d"
                        "\uffa0\ufff0-\ufff8\U000e0000-\U000e0fff]")
 BLANKS = frozenset(("Cc", "Zl", "Zp", "Cs", "Co", "Cn", "Zs"))     # each one a space
-TERMINAL = re.compile(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]")     # a colour or a cursor move
-FLAGS = re.compile(f"(\U0001f3f4[\U000e0030-\U000e0039\U000e0061-\U000e007a]{{2,7}}\U000e007f)"
-                   f"|[{TAGS}]+")
+# A colour or a cursor move, a window's title or a link, the end of one, and a character set
+# as tput sgr0 sends. A U+009B alone is a space: it is most often cp1252's › read as Latin-1.
+TERMINAL = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|\\|[!-/]+[0-~])")
+# Only England's, Scotland's and Wales's flags are drawn from tags. Any other tags could spell
+# out text nobody sees, so that flag is a black flag.
+SUBDIVISIONS = "|".join("".join(chr(0xe0000 + ord(letter)) for letter in name)
+                        for name in ("gbeng", "gbsct", "gbwls"))
+FLAGS = re.compile(f"(\U0001f3f4(?:{SUBDIVISIONS})\U000e007f)|[{TAGS}]+")
 # Kept after a mark, a digit or a symbol, as in a keycap or a heart, never after a letter.
 PRESENTED = re.compile(rf"(?<=[^\s\w{JOINERS}{SELECTORS}{TAGS}]|\d)([{SELECTORS}])[{SELECTORS}]*"
                        rf"|[{SELECTORS}]+")
@@ -185,7 +196,7 @@ def _texts(value, limit: int, most: int = 1) -> list[str]:
 def _seen(text: str) -> str:
     """Text as a reader sees it: what nobody sees goes, and a control or a line break is a
     space. A joiner, a selector or a tag that joins or styles nothing goes too."""
-    text = TERMINAL.sub("", text) if "\x1b" in text or "\x9b" in text else text
+    text = TERMINAL.sub("", text) if "\x1b" in text else text
     found = set(text)
     text = text.translate({ord(char): instead for char in found
                            if (instead := _instead(char)) != char})
@@ -213,21 +224,31 @@ def _instead(char: str) -> str:
 def _cut(text: str, limit: int) -> str:
     """Ends in a plain ellipsis if cut, where shown() would add a count of characters for the
     voice to read out. Never cut inside what is drawn as one: a letter and its marks, an emoji
-    and what joins or styles it, a flag."""
+    and what joins or styles it, a flag. One such thing longer than the limit is cut at the
+    limit, as an ellipsis alone would say nothing, and what then joins nothing goes."""
     if len(text) <= limit:
         return text
     end = limit
-    while end > 0 and _belongs(text[end - 1], text[end]):
+    while end > 0 and _drawn_as_one(text, end):
         end -= 1
-    return text[:end].rstrip() + "…"
+    return _seen(text[:end or limit]) + "…"
+
+
+def _drawn_as_one(text: str, at: int) -> bool:
+    """Whether text[at] is drawn as one with the character before it. A run of regional
+    letters is a row of flags, paired from the start of the run."""
+    before, char = text[at - 1], text[at]
+    if before in REGIONAL and char in REGIONAL:
+        return (at - len(text[:at].rstrip(REGIONAL))) % 2 == 1
+    return _belongs(before, char)
 
 
 def _belongs(before: str, char: str) -> bool:
-    """Whether char is drawn as one with the character before it."""
-    regional = "\U0001f1e6" <= before <= "\U0001f1ff" and "\U0001f1e6" <= char <= "\U0001f1ff"
+    """Whether char is drawn as one with the character before it, leaving out flags."""
     return (before in JOINERS or char in JOINERS or "\U000e0000" <= char <= "\U000e007f"
             or unicodedata.category(char)[0] == "M" or "\U0001f3fb" <= char <= "\U0001f3ff"
-            or regional)
+            or (before in LINKERS and unicodedata.category(char) == "Lo")
+            or bool(FOLLOWING.match(char) and HANGUL.match(before)))
 
 
 def _join(names: list[str]) -> str:

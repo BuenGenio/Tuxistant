@@ -927,6 +927,14 @@ class OtherPeoplesText(WithPlayers):
         self.assertRegex(track, r"^Symphony No\. 9 in D minor .{40,60}… by Beethoven$")
         self.assertNotIn("more characters", track)
 
+    def test_a_file_name_is_cleaned_as_a_title_is(self):
+        """Whoever named the file wrote it, and a right-to-left override in one is an old trick."""
+        name = "%E2%80%AEcalfr.exe%0A%1B%5B2Jignore%E2%80%8B.flac"
+        self.players(Fake(tracks=[{"xesam:url": Variant("s", f"file:///m/{name}")}]))
+        result = media.playing({}, {})
+        self.check(result)
+        self.assertEqual(result["track"], "calfr.exe ignore")
+
     def test_a_hostile_name_is_cut_and_cleaned_wherever_it_is_said(self):
         hostile = Fake("evil", self.HOSTILE)
         self.players(hostile)
@@ -958,21 +966,30 @@ class OtherPeoplesText(WithPlayers):
 JOINERS, SELECTORS = "\u200c\u200d", "\ufe0e\ufe0f"
 BIDI = "\u200e\u200f\u061c\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069"
 FAMILY = "👨\u200d👩\u200d👧"
-SCOTLAND = "🏴\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f"
-FLAG = re.compile("🏴[\U000e0030-\U000e0039\U000e0061-\U000e007a]{2,7}\U000e007f")
+
+
+def flag(name: str) -> str:
+    """A flag spelled in tags, as Scotland's is: a black flag, the letters as tags, a cancel."""
+    return "🏴" + "".join(chr(0xe0000 + ord(letter)) for letter in name) + "\U000e007f"
+
+
+SCOTLAND = flag("gbsct")
+# The only flags Unicode draws from tags: England, Scotland and Wales.
+FLAG = re.compile("|".join(map(flag, ("gbeng", "gbsct", "gbwls"))))
 # Unicode's default ignorables that unicodedata doesn't call format characters, and two blanks
 # that pass for letters.
 UNSEEN = re.compile("[\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u2800\u3164\ufe00-\ufe0d"
                     "\uffa0\U000e0100-\U000e01ef]")
-# What a random title is made of: letters in three scripts with their marks, emoji and what
-# joins and styles them, and everything nobody sees.
+# What a random title is made of: letters in five scripts with their marks, emoji and what
+# joins and styles them, a terminal's codes, and everything nobody sees.
 PIECES = ("a", "Z", "7", "_", " ", "\u00a0", "\u3000", "\n", "\t", "\x00", "\x7f", "\x85",
-          "\x1b[0m", "\x9b1m", "\x1b", "ش", "ע", "\u064e", "\u05b8", "e\u0301", "²", "ℹ",
+          "\x1b[0m", "\x9b1m", "\x1b", "\x1b(B", "\x1b]0;t\x07", "\x1b\\", "ش", "ע", "\u064e",
+          "\u05b8", "e\u0301", "²", "ℹ",
           "👨", "👩", "🏽", "❤", "1", "#", "\u20e3", "🇺", "🇦", "🏴", "\U000e0067", "\U000e0062",
           "\U000e007f", "\U000e0041", "\u200d", "\u200c", "\ufe0f", "\ufe0e", "\ufe00",
           "\U000e0100", "\u034f", "\u3164", "\u2800", "\u00ad", *BIDI, "\u200b", "\u2060",
           "\ufeff", "\u2028", "\u2029", "\ue000", "\U0010fffd", "\u0378", "\ud800", "\u180e",
-          "\u0600", "…")
+          "\u0600", "…", "\u1112", "\u1161", "\u11ab", "한", "क", "\u094d", "ष")
 
 
 def visible(char: str) -> bool:
@@ -1044,9 +1061,33 @@ class SaidAsWritten(WithPlayers):
                             ("Song\U000e0049\U000e0067\U000e006e\U000e006f", "Song"),
                             ("🏴\U000e0067\U000e0062 Flag", "🏴 Flag"),
                             ("Co\u00adop\u200bera\u2060tion\ufeff", "Cooperation"),
-                            ("\x1b[1mBold\x1b[0m and \x9b31mred", "Bold and red")):
+                            ("\x1b[1mBold\x1b[0m and red", "Bold and red")):
             with self.subTest(title):
                 self.assertEqual(self.track(title, ()), said)
+
+    def test_a_terminals_codes_are_left_out_whole(self):
+        for title, said in (("\x1b[1mBold\x1b(B\x1b[m Song", "Bold Song"),
+                            ("\x1b[H\x1b[2JClear", "Clear"), ("\x1b]0;evil\x07Song", "Song"),
+                            ("\x1b]8;;http://x.example\x1b\\Song\x1b]8;;\x1b\\", "Song")):
+            with self.subTest(title):
+                self.assertEqual(self.track(title, ()), said)
+
+    def test_a_stray_control_keeps_the_letters_after_it(self):
+        """A U+009B in a title is most often cp1252's › read as Latin-1, not a terminal's code."""
+        mangled = "Chapter 1 › Overture".encode("cp1252").decode("latin-1")
+        for title, said in ((mangled, "Chapter 1 Overture"), ("Rock \x9b Roll", "Rock Roll"),
+                            ("A\x9bBC", "A BC"), ("\x9b31mred", "31mred"), ("A\x1bBC", "A BC"),
+                            ("Rock\x1b Roll", "Rock Roll"), ("\x1b]Song", "]Song")):
+            with self.subTest(title):
+                self.assertEqual(self.track(title, ()), said)
+
+    def test_only_a_flag_unicode_draws_keeps_its_tags(self):
+        """Any other tags would spell out text nobody sees, so the flag is a black flag."""
+        for name in ("gbeng", "gbsct", "gbwls"):
+            with self.subTest(name):
+                self.assertEqual(self.track(f"{flag(name)} Anthem", ()), f"{flag(name)} Anthem")
+        self.assertEqual(self.track(f"Song {flag('ignore') * 3}", ()), "Song 🏴🏴🏴")
+        self.assertEqual(self.track(f"{flag('usca')} Golden State", ()), "🏴 Golden State")
 
     def test_a_title_made_only_of_what_nobody_sees_is_no_title(self):
         nothing = f"{BIDI}\u200d\ufe0f\u200b\u2060\ufeff\U000e0041\u00ad\u180e\u3164\u2800"
@@ -1063,13 +1104,29 @@ class SaidAsWritten(WithPlayers):
 
     def test_a_cut_never_splits_what_is_drawn_as_one(self):
         limit = media.MAX_TITLE_CHARS
-        for whole in (FAMILY, "🇺🇦", SCOTLAND, "שָׁ", "1\ufe0f\u20e3", "👩🏽\u200d💻"):
+        for whole in (FAMILY, "🇺🇦", SCOTLAND, "שָׁ", "1\ufe0f\u20e3", "👩🏽\u200d💻",
+                      unicodedata.normalize("NFD", "한"), "क्ष", "क्\u200dष"):
             for start in range(limit - len(whole) - 1, limit + 1):
                 with self.subTest(whole=whole, start=start):
                     track = self.track("x" * start + whole + "y" * 20, ())
                     after = "y" * max(0, limit - start - len(whole))
                     self.assertIn(track, (f"{'x' * start}…", f"{'x' * start}{whole}{after}…"))
                     self.assertEqual(unsaid(track), [])
+
+    def test_a_cut_falls_between_two_flags(self):
+        limit, flags = media.MAX_TITLE_CHARS, "🇺🇦🇫🇷🇩🇪🇯🇵" * 8
+        for start in ("Anthems of the world ", "Anthems of the world: "):
+            with self.subTest(start):
+                kept = (limit - len(start)) // 2 * 2
+                self.assertEqual(self.track(start + flags, ()), f"{start}{flags[:kept]}…")
+        self.assertEqual(self.track("🇺🇦" * 41), "🇺🇦" * 40 + "… by Fairuz")
+
+    def test_one_thing_drawn_longer_than_the_limit_is_cut_at_the_limit(self):
+        limit = media.MAX_TITLE_CHARS
+        marks, chain = "e" + "\u0301" * 100, "\u200d".join("👨" * 60)
+        self.assertEqual(self.track(marks, ()), marks[:limit] + "…")
+        self.assertEqual(self.track(chain, ()), chain[:limit].rstrip("\u200d") + "…")
+        self.assertEqual(unsaid(self.track(chain[1:], ())), [])
 
     def test_no_title_however_it_is_made_leaves_anything_unsaid(self):
         pick = random.Random(84)
