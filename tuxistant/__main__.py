@@ -25,9 +25,11 @@ SKILLS_LOAD = "skills load"
 # What doctor says of mail, by whether Thunderbird holds any, as a search decides it. It says
 # the rule, not that an account is there: knowing that would mean asking Online Accounts. Only
 # an account that signs in through its provider's page is searched (goamail._account), and of
-# those Online Accounts offers Google's and Microsoft's.
+# those Online Accounts offers Google's and Microsoft's. A search takes the first few it can use
+# and leaves the rest, so {most} is goamail's own number.
 MAIL_DETAIL = {True: "", False: ("Thunderbird holds no mail: a search goes to the Google or "
-                                 "Microsoft accounts in Online Accounts whose Mail switch is on"),
+                                 "Microsoft accounts in Online Accounts whose Mail switch is on, "
+                                 "at most {most} of them"),
                None: "Thunderbird's mail index couldn't be read"}
 MAIL_OFF = "off: \"Search my mail\" is off in Settings"
 
@@ -247,8 +249,11 @@ def checks(config) -> list[tuple[bool, str, str]]:
 def mail_detail(config) -> str:
     """With the switch off nothing is searched, so nothing is said of Thunderbird or accounts.
     Only true is on, as for mail.search and Skills.offered: "false" in a config file written by
-    hand is off."""
-    return MAIL_DETAIL[mail.holds_mail()] if config["mail_search"] is True else MAIL_OFF
+    hand is off. goamail needs dbus_fast, which checks() has found by the time it gets here."""
+    if config["mail_search"] is not True:
+        return MAIL_OFF
+    from . import goamail
+    return MAIL_DETAIL[mail.holds_mail()].format(most=goamail.MAX_ACCOUNTS)
 
 
 def doctor() -> int:

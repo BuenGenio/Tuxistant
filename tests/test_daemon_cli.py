@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.mail_index import build  # noqa: E402
 from tests.test_daemon_fakes import FakeSpeech  # noqa: E402
 from tuxistant import __main__ as cli  # noqa: E402
-from tuxistant import mail  # noqa: E402
+from tuxistant import goamail, mail  # noqa: E402
 from tuxistant.config import Config  # noqa: E402
 
 
@@ -62,16 +62,17 @@ class Doctor(unittest.TestCase):
         self.assertTrue(results["Fn helper running"], "holding Fn is optional")
         self.assertFalse(results["GNOME extension installed"])
 
+    def mail_line(self, on=True) -> str:
+        config = self.config(9)
+        config.values["mail_search"] = on
+        return next(detail for _, what, detail in cli.checks(config)
+                    if what == "mail search available")
+
     def test_the_mail_line_says_what_a_search_would_search(self):
         """An empty profile has an index too, and a search goes past it to Online Accounts."""
-        def detail(on=True):
-            config = self.config(9)
-            config.values["mail_search"] = on
-            return next(detail for _, what, detail in cli.checks(config)
-                        if what == "mail search available")
-
+        detail = self.mail_line
         searched = ("Thunderbird holds no mail: a search goes to the Google or Microsoft accounts "
-                    "in Online Accounts whose Mail switch is on")
+                    "in Online Accounts whose Mail switch is on, at most 3 of them")
         off = 'off: "Search my mail" is off in Settings'
         self.assertEqual(detail(), searched)
         self.assertEqual(detail(on=False), off,
@@ -91,6 +92,17 @@ class Doctor(unittest.TestCase):
             (self.folder / "mail" / profile / mail.INDEX).write_bytes(b"not an index" * 100)
         self.assertEqual(detail(), "Thunderbird's mail index couldn't be read")
         self.assertEqual(detail(on=False), 'off: "Search my mail" is off in Settings')
+
+    def test_the_mail_line_counts_the_accounts_as_a_search_does(self):
+        """goamail takes the first few accounts it can use and leaves the rest, and the line
+        says how many from the same number, so the two can't drift."""
+        self.assertEqual(goamail.MAX_ACCOUNTS, 3)
+        self.assertTrue(self.mail_line().endswith("whose Mail switch is on, at most 3 of them"))
+        with mock.patch.object(goamail, "MAX_ACCOUNTS", 5):
+            self.assertTrue(self.mail_line().endswith(", at most 5 of them"))
+            self.assertEqual(self.mail_line(on=False), 'off: "Search my mail" is off in Settings')
+        build(self.folder / "mail", [{"subject": "Hi", "author": "a@b.example", "body": "Hi."}])
+        self.assertEqual(self.mail_line(), "", "with mail in Thunderbird no account is searched")
 
     def test_bad_key_is_reachable_but_not_accepted(self):
         results = self.results(self.config(self.fake().port, key="wrong"))
