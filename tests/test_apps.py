@@ -54,7 +54,12 @@ def fixture(home: Path) -> list[apps.App]:
         made("com.spotify.Client.desktop", "Spotify", "Flatpak"),
         made("org.gnome.Ptyxis.desktop", "Terminal", generics=["Terminal"]),
         made("org.gnome.Nautilus.desktop", "Files", keywords=["explorer", "folder"]),
-        made("org.gnome.Rhythmbox3.desktop", "Rhythmbox", generics=["Music Player"]),
+        # As Ubuntu installs them: Rhythmbox's full name has "Music" in it, and Showtime is
+        # called "Video Player".
+        made("org.gnome.Rhythmbox3.desktop", "Rhythmbox", generics=["Music Player"],
+             names=["Rhythmbox Music Player"], keywords=["Audio", "Song", "MP3", "Playlist"]),
+        made("org.gnome.Showtime.desktop", "Video Player",
+             keywords=["Video", "Movie", "Film", "Clip", "Player", "Showtime"]),
         made("dev.alextren.Spot.desktop", "Spot", generics=["Music Player"]),
         made("io.github.Riff.desktop", "Riff", generics=["Music Player"]),
         made("org.gnome.Chess.desktop", "Chess", generics=["Board Game"]),
@@ -574,7 +579,11 @@ class LooseNames(NoDesktop):
         for name, page in (("إعدادات الصوت", "sound"), ("الإعدادات الصوت", "sound"),
                            ("صوت", "sound"), ("الصوت", "sound"), ("صفحة الشبكة", "network"),
                            ("شبكة", "network"), ("افتح إعدادات البلوتوث", "bluetooth"),
-                           ("شبكة المحمول", "wwan"), ("الشاشات", "display")):
+                           ("شبكة المحمول", "wwan"), ("الشاشات", "display"),
+                           # A hamza on the first alif is a letter, not the article's.
+                           ("ألوان", "color"), ("إعدادات ألوان", "color"), ("الألوان", "color"),
+                           ("الالوان", "color"), ("أَلْوَان", "color"),
+                           ("إتاحة", "universal-access")):
             with self.subTest(name):
                 self.opens(name, f"gnome-{page}-panel.desktop")
 
@@ -697,7 +706,7 @@ class OwnFolders(NoDesktop):
         for name, key in (("descargas", "DOWNLOAD"), ("carpeta de descargas", "DOWNLOAD"),
                           ("abre mi carpeta de descargas", "DOWNLOAD"),
                           ("Documentos", "DOCUMENTS"), ("la carpeta de Imágenes", "PICTURES"),
-                          ("Vídeos", "VIDEOS"), ("Escritorio", "DESKTOP"),
+                          ("carpeta de vídeos", "VIDEOS"), ("Escritorio", "DESKTOP"),
                           ("plantillas", "TEMPLATES"), ("carpeta personal", apps.HOME),
                           ("pasta de downloads", "DOWNLOAD"), ("Área de Trabalho", "DESKTOP"),
                           ("minhas imagens", "PICTURES"), ("Transferências", "DOWNLOAD"),
@@ -736,21 +745,67 @@ class OwnFolders(NoDesktop):
         self.opens_folder("videos folder", "VIDEOS")
         self.opens_folder("música", "MUSIC")
 
-    def test_a_folder_beats_an_app_that_only_has_the_word(self):
-        self.entries += [made("org.gnome.Evince.desktop", "Document Viewer"),
+    def test_the_music_and_video_players_0_9_0_opened_still_open(self):
+        """Ubuntu's Rhythmbox has "Music" in its full name and Showtime is "Video Player": an
+        app with the word in its name or generic name wins unless "folder" is said."""
+        for name, desktop_id in (("music", "org.gnome.Rhythmbox3.desktop"),
+                                 ("open music", "org.gnome.Rhythmbox3.desktop"),
+                                 ("my music", "org.gnome.Rhythmbox3.desktop"),
+                                 ("the music app", "org.gnome.Rhythmbox3.desktop"),
+                                 ("videos", "org.gnome.Showtime.desktop"),
+                                 ("the video app", "org.gnome.Showtime.desktop"),
+                                 ("open the videos app", "org.gnome.Showtime.desktop")):
+            with self.subTest(name):
+                self.opens(name, desktop_id)
+        self.assertEqual(self.opened, [])
+        self.opens_folder("my music folder", "MUSIC")
+        self.opens_folder("open my videos folder", "VIDEOS")
+
+    def test_an_app_with_the_word_in_its_name_wins_unless_folder_is_said(self):
+        self.entries += [made("org.gnome.Papers.desktop", "Document Viewer",
+                              keywords=["pdf", "document", "viewer"]),
                          made("io.github.shiftey.Desktop.desktop", "GitHub Desktop"),
                          made("org.gnome.Shotwell.desktop", "Shotwell",
                               keywords=["pictures", "photos"])]
-        self.opens_folder("documents", "DOCUMENTS")
-        self.opens_folder("desktop", "DESKTOP")
+        self.opens("documents", "org.gnome.Papers.desktop")
+        self.opens("desktop", "io.github.shiftey.Desktop.desktop")
+        self.opens_folder("my documents folder", "DOCUMENTS")
+        self.opens_folder("carpeta de documentos", "DOCUMENTS")
+        self.opens_folder("the desktop folder", "DESKTOP")
+        # Keywords and close spellings lose to the folder, as they lose to a Settings page.
         self.opens_folder("pictures", "PICTURES")
-        self.opens("document viewer", "org.gnome.Evince.desktop")
+        self.opens("document viewer", "org.gnome.Papers.desktop")
         self.opens("github desktop", "io.github.shiftey.Desktop.desktop")
 
-    def test_a_settings_word_keeps_it_a_page(self):
-        for name in ("desktop settings", "music settings", "home settings"):
+    def test_an_app_said_is_never_a_folder(self):
+        self.entries += [made("org.gnome.Papers.desktop", "Document Viewer"),
+                         made("org.gnome.Shotwell.desktop", "Shotwell",
+                              keywords=["pictures", "photos"])]
+        self.opens("the documents app", "org.gnome.Papers.desktop")
+        self.opens("pictures app", "org.gnome.Shotwell.desktop")
+        self.opens("the pictures application", "org.gnome.Shotwell.desktop")
+        for name in ("downloads app", "the home program", "open the templates app"):
+            with self.subTest(name), self.assertRaises(ValueError):
+                self.open(name)
+        self.assertEqual(self.opened, [])
+
+    def test_folder_said_beats_an_app_named_exactly_that(self):
+        """A web page installed as an app names it, so "Downloads Folder" is no way in."""
+        web_apps = self.home / ".local/share/applications"
+        self.entries += [made("chrome-abc-Default.desktop", "Downloads Folder", "home",
+                              path=str(web_apps / "chrome-abc-Default.desktop")),
+                         made("chrome-def-Default.desktop", "Carpeta personal", "home",
+                              path=str(web_apps / "chrome-def-Default.desktop"))]
+        for name, key in (("my downloads folder", "DOWNLOAD"), ("Downloads Folder", "DOWNLOAD"),
+                          ("carpeta personal", apps.HOME), ("la carpeta personal", apps.HOME)):
+            with self.subTest(name):
+                self.opens_folder(name, key)
+
+    def test_a_settings_word_keeps_it_off_the_folders(self):
+        for name in ("desktop settings", "home settings", "downloads preferences"):
             with self.subTest(name):
                 self.assertTrue(self.said(name).startswith("Settings has no page called"))
+        self.opens("music settings", "org.gnome.Rhythmbox3.desktop")    # as "Firefox settings"
         self.assertEqual(self.opened, [])
 
     def test_a_folder_that_is_not_set_up(self):
@@ -761,7 +816,18 @@ class OwnFolders(NoDesktop):
                          "computer.")
         self.assertEqual(self.said("music folder"), "Your Music folder isn't set up on this "
                          "computer.")
-        self.assertEqual(self.said("videos"), "Your Videos folder isn't set up on this "
+        self.assertEqual(self.said("my videos folder"), "Your Videos folder isn't set up on "
+                         "this computer.")
+        self.assertEqual(self.opened, [])
+
+    def test_a_folder_linked_to_the_home_folder_is_not_set_up(self):
+        (self.home / "Downloads").rmdir()
+        (self.home / "Downloads").symlink_to(self.home)
+        (self.home / "Up").symlink_to(self.home / "Documents" / "..")
+        self.folders["DOCUMENTS"] = str(self.home / "Up")
+        self.assertEqual(self.said("downloads"), "Your Downloads folder isn't set up on this "
+                         "computer.")
+        self.assertEqual(self.said("documents"), "Your Documents folder isn't set up on this "
                          "computer.")
         self.assertEqual(self.opened, [])
 
@@ -788,12 +854,23 @@ class OwnFolders(NoDesktop):
                 ("PICTURES", str(self.home / ".hidden" / "Pictures"),
                  "Your Pictures folder is inside a hidden folder, so I've left it closed."),
                 ("VIDEOS", str(self.home / "Snapshots"),
-                 "Your Videos folder is inside a hidden folder, so I've left it closed.")):
+                 "Your Videos folder is inside a hidden folder, so I've left it closed."),
+                # As user-dirs.dirs can have it: "$HOME/../other" is outside, not hidden.
+                ("TEMPLATES", f"{self.home}/../{Path(outside.name).name}",
+                 "Your Templates folder isn't inside your home folder, so I've left it "
+                 "closed.")):
             self.folders[key] = path
             name = next(folder.title for folder in apps.FOLDERS if folder.key == key)
             with self.subTest(key):
                 self.assertEqual(self.said(f"my {name} folder"), said)
         self.assertEqual(self.opened, [])
+
+    def test_the_home_folder_is_the_one_file_open_refuses(self):
+        """The exception SECURITY.md names: it opens where GLib says, unchecked."""
+        for value in ("~", "~/", str(self.home)):
+            with self.subTest(value), self.assertRaisesRegex(ValueError, "inside your home"):
+                files.resolve(value, Session())
+        self.opens_folder("my home folder", apps.HOME)
 
     def test_a_link_inside_the_home_folder_opens_where_it_points(self):
         (self.home / "Big" / "Downloads").mkdir(parents=True)

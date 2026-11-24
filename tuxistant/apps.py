@@ -246,6 +246,8 @@ PAGE_TERMS = frozenset(_words(word) for word in (
     "ajustes", "preferencias", "opciones", "página", "configurações", "configuração",
     "definições", "preferências", "opções", "painel", "إعدادات", "صفحة"))
 CJK_PAGE = ("设置", "页面", "面板")
+# Arabic's article: a plain alif and a lam, joined to a word of two letters or more.
+ARTICLE = re.compile(r"(?<![^\W_])\u0627\u0644(?=[^\W_]{2})")
 FOLD = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ð": "d", "ħ": "h", "ı": "i", "ŀ": "l",
                       "æ": "ae", "œ": "oe", "þ": "th"})     # letters NFKD leaves whole
 
@@ -358,9 +360,12 @@ def _kind_asked(query: str) -> tuple[str, str | None]:
 
 
 def _form_words(text: str) -> list[str]:
-    """_words() with the letters NFKD leaves whole folded, and Arabic's article off each word."""
-    return [word[2:] if len(word) > 3 and word.startswith("ال") else word
-            for word in _words(text).translate(FOLD).split()]
+    """_words() with the letters NFKD leaves whole folded, and Arabic's article off each word.
+    The article is found while a hamza is still on its letter, as _words() makes أ, إ and آ a
+    plain alif, and "ألوان" has none."""
+    text = "".join(c for c in unicodedata.normalize("NFKC", str(text)[:MAX_SAID])
+                   if not unicodedata.combining(c))
+    return _words(ARTICLE.sub("", text)).translate(FOLD).split()
 
 
 def _unframed(words: list[str], terms) -> list[str]:
@@ -424,8 +429,9 @@ def _page(query: str, entries: list[App], settings: bool, tier: int | None,
     """With "settings" said, any page the words name. Otherwise an app named exactly this wins
     ("Terminal", "Clocks"), then a page named exactly this ("Bluetooth" is the page, not Blueman),
     then an app with the word in its name, generic name, id or program ("zoom" is Zoom Workplace,
-    not Accessibility), then a page's other words. A page's name is also looked for in all that
-    was said, as one can hold a settings word: "Ratón y panel táctil"."""
+    not Accessibility), then a page's other words. A page's name is also looked for in the words
+    just as they came, as they can hold a settings word ("Ratón y panel táctil"), and _words()
+    drops the hamza that tells "ألوان" from a word with the article."""
     if settings:
         return (_page_named(entries, query, said) or _page_word(query)
                 or _page_inside(query))
@@ -709,12 +715,21 @@ def _folder_paths() -> dict[str, str | None]:
 
 
 def _set_up(folder: Folder, paths: dict) -> str | None:
-    """A folder set to the home folder isn't used, as xdg-user-dirs has it."""
+    """A folder set to the home folder isn't used, as xdg-user-dirs has it, and nor is one that
+    is the home folder by a link or a "..": it isn't a folder of its own."""
     path, home = paths.get(folder.key), paths.get(HOME)
     if not path or (folder.key != HOME and home
-                    and os.path.normpath(path) == os.path.normpath(home)):
+                    and os.path.realpath(path) == os.path.realpath(home)):
         return None
     return path
+
+
+def _checked(path: Path) -> Path:
+    """files._checked, but a folder really outside the home folder is called that even when its
+    path goes through "..", which files._checked would call a hidden folder: "$HOME/../other"."""
+    if files._inside(path.resolve()) is None:
+        raise ValueError(files.OUTSIDE)
+    return files._checked(path)
 
 
 def _framed(words: list[str]) -> tuple[list[str], bool]:
@@ -749,8 +764,7 @@ def _folder_asked(query: str, paths: dict) -> tuple[Folder | None, bool]:
     whole = _without(query.split(), LEADING)
     if whole:
         whole = [_cut(whole[0], CJK_LEADING, front=True), *whole[1:]]
-    bare, called = _framed(whole)
-    called = called or any(word in FOLDER_TERMS for word in whole)     # "carpeta personal"
+    bare, called = _framed(whole)       # "carpeta personal" is called a folder too
     for said in (" ".join(whole), " ".join(bare)):
         if folder := _folder_called(said, paths):
             return folder, called
@@ -759,12 +773,13 @@ def _folder_asked(query: str, paths: dict) -> tuple[Folder | None, bool]:
 
 def _open_folder(folder: Folder, paths: dict, config, session) -> dict:
     """As file.open opens a folder, with gio open and no card: inside the home folder and outside
-    hidden ones, links followed. Only the path GLib gave is opened, never anything said."""
+    hidden ones, links followed. The home folder itself, which file.open refuses, opens where
+    GLib says it is. Only the path GLib gave is opened, never anything said."""
     path = _set_up(folder, paths)
     if path is None:
         return _say(session, config, NO_FOLDER.format(title=folder.title))
     try:
-        real = Path(path).resolve() if folder.key == HOME else files._checked(Path(path))
+        real = Path(path).resolve() if folder.key == HOME else _checked(Path(path))
     except ValueError as e:
         refusal = {files.OUTSIDE: FOLDER_OUTSIDE, files.HIDDEN: FOLDER_HIDDEN}.get(str(e),
                                                                                   FOLDER_GONE)
@@ -784,9 +799,13 @@ def open_app(args: dict, config, session):
     query, settings = _settings_asked(said if _page_word(said) else _without_tail(said))
     if not query and not settings:
         raise ValueError(NO_NAME)
-    # Only the folders GLib names, so a path the model wrote never reaches the opener.
+    # Only the folders GLib names, so a path the model wrote never reaches the opener. Never
+    # with "settings" or "app" said: "the music app" is Rhythmbox Music Player.
     paths = _folder_paths()
-    folder, called = (None, False) if settings else _folder_asked(query, paths)
+    asked_app = _without_tail(said) != said
+    folder, called = (None, False) if settings or asked_app else _folder_asked(query, paths)
+    # "Folder" said: the folder, even beside an app named exactly that, as a web page installed
+    # as an app could name itself "Downloads Folder".
     if folder and called:
         return _open_folder(folder, paths, config, session)
     entries = _installed()
@@ -801,10 +820,12 @@ def open_app(args: dict, config, session):
         return _open_found(exact, config, session)
     # "Firefox settings" opens Firefox, as Settings has no page for it.
     tier, found = _matching_kind(query, entries)
-    # An app named exactly that, such as GNOME's Music, wins unless "folder" was said.
-    if folder and tier != 0:
+    # An app with the name, its generic name or the word in its name, such as GNOME's Music or
+    # Rhythmbox Music Player, wins as in 0.9.0. The folder beats keywords and close spellings,
+    # as a Settings page's other words do.
+    if folder and (tier is None or tier >= LOOSE_TIER):
         return _open_folder(folder, paths, config, session)
-    if panel := _page(query, entries, settings, tier, said):
+    if panel := _page(query, entries, settings, tier, str(args.get("name") or "")):
         return _open_panel(panel, entries, config, session)
     if found:
         return _open_found(found, config, session)
