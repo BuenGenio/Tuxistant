@@ -73,6 +73,70 @@ def fixture(home: Path) -> list[apps.App]:
     ]
 
 
+# Settings' pages as its desktop files name them in English, then translated, close to what
+# GNOME Settings 50 shows, written from memory: the names, not the words, are what is tested.
+PAGE_FILES = ("about", "applications", "background", "bluetooth", "color", "datetime", "display",
+              "keyboard", "mouse", "multitasking", "network", "notifications", "online-accounts",
+              "power", "printers", "privacy", "region", "search", "sharing", "sound", "system",
+              "ubuntu", "universal-access", "users", "wacom", "wellbeing", "wifi", "wwan")
+TRANSLATED = {
+    "en": ("Settings", "About", "Apps", "Appearance", "Bluetooth", "Color Management",
+           "Date & Time", "Displays", "Keyboard", "Mouse & Touchpad", "Multitasking", "Network",
+           "Notifications", "Online Accounts", "Power", "Printers", "Privacy & Security",
+           "Region & Language", "Search", "Sharing", "Sound", "System", "Ubuntu Desktop",
+           "Accessibility", "Users", "Graphics Tablets", "Wellbeing", "Wi-Fi", "Mobile Network"),
+    "es": ("Configuración", "Acerca de", "Aplicaciones", "Apariencia", "Bluetooth", "Color",
+           "Fecha y hora", "Pantallas", "Teclado", "Ratón y panel táctil", "Multitarea", "Red",
+           "Notificaciones", "Cuentas en línea", "Energía", "Impresoras",
+           "Privacidad y seguridad", "Región e idioma", "Buscar", "Compartir", "Sonido",
+           "Sistema", "Escritorio de Ubuntu", "Accesibilidad", "Usuarios", "Tableta gráfica",
+           "Bienestar", "Wi-Fi", "Red móvil"),
+    "pt": ("Configurações", "Sobre", "Aplicativos", "Aparência", "Bluetooth", "Cor",
+           "Data e hora", "Telas", "Teclado", "Mouse e touchpad", "Multitarefa", "Rede",
+           "Notificações", "Contas online", "Energia", "Impressoras", "Privacidade e segurança",
+           "Região e idioma", "Pesquisa", "Compartilhamento", "Som", "Sistema",
+           "Área de trabalho do Ubuntu", "Acessibilidade", "Usuários", "Mesa digitalizadora",
+           "Bem-estar", "Wi-Fi", "Rede móvel"),
+    "zh": ("设置", "关于", "应用", "外观", "蓝牙", "颜色", "日期和时间", "显示器", "键盘",
+           "鼠标和触摸板", "多任务", "网络", "通知", "在线账户", "电源", "打印机", "隐私和安全",
+           "区域和语言", "搜索", "共享", "声音", "系统", "Ubuntu 桌面", "无障碍", "用户", "数位板",
+           "健康", "无线局域网", "移动网络"),
+    "ar": ("الإعدادات", "حول", "التطبيقات", "المظهر", "بلوتوث", "الألوان", "التاريخ والوقت",
+           "الشاشات", "لوحة المفاتيح", "الفأرة ولوحة اللمس", "تعدد المهام", "الشبكة", "التنبيهات",
+           "الحسابات على الشبكة", "الطاقة", "الطابعات", "الخصوصية والأمان", "المنطقة واللغة",
+           "البحث", "المشاركة", "الصوت", "النظام", "سطح مكتب أوبنتو", "الإتاحة", "المستخدمون",
+           "لوح الرسم", "الرفاهية", "واي فاي", "شبكة المحمول"),
+    "de": ("Einstellungen", "Info", "Anwendungen", "Darstellung", "Bluetooth", "Farben",
+           "Datum und Zeit", "Bildschirme", "Tastatur", "Maus und Tastfeld", "Multitasking",
+           "Netzwerk", "Benachrichtigungen", "Online-Konten", "Energie", "Drucker",
+           "Datenschutz und Sicherheit", "Region und Sprache", "Suche", "Freigabe", "Klang",
+           "System", "Ubuntu-Arbeitsfläche", "Barrierefreiheit", "Benutzer", "Grafiktablett",
+           "Wohlbefinden", "WLAN", "Mobiles Netzwerk"),
+    "fr": ("Paramètres", "À propos", "Applications", "Apparence", "Bluetooth", "Couleur",
+           "Date et heure", "Écrans", "Clavier", "Souris et pavé tactile", "Multitâche", "Réseau",
+           "Notifications", "Comptes en ligne", "Énergie", "Imprimantes",
+           "Confidentialité et sécurité", "Région et langue", "Recherche", "Partage", "Son",
+           "Système", "Bureau Ubuntu", "Accessibilité", "Utilisateurs", "Tablette graphique",
+           "Bien-être", "Wi-Fi", "Réseau mobile"),
+}
+
+
+def exact_page(entries: list[apps.App], query: str):
+    """0.9.0's rule, to compare with: a page's title as said, or a name it shows as it is."""
+    by_id = {entry.id: entry for entry in entries}
+    return next((panel for panel in apps.PANELS
+                 if apps._squash(query) == apps._squash(apps._words(panel.title))
+                 or (panel.desktop in by_id and query in by_id[panel.desktop].names)), None)
+
+
+def settings_in(language: str) -> list[apps.App]:
+    """Settings and every page as Gio lists them with the desktop in that language."""
+    settings, *pages = TRANSLATED[language]
+    return [made(apps.SETTINGS_ID, settings, shown=False, names=["Settings"]),
+            *(made(f"gnome-{page}-panel.desktop", name, shown=False, names=[english])
+              for page, name, english in zip(PAGE_FILES, pages, TRANSLATED["en"][1:]))]
+
+
 def would_launch(*_args, **_kwargs):
     raise AssertionError("would launch for real")
 
@@ -451,6 +515,160 @@ class SettingsPages(NoDesktop):
     def test_every_page_is_a_settings_page_file(self):
         for panel in apps.PANELS:
             self.assertRegex(panel.desktop, r"^gnome-[a-z-]+-panel\.desktop$")
+
+
+class LooseNames(NoDesktop):
+    """A page's name, its own or translated, said with what is round it in speech."""
+
+    def speak(self, language: str):
+        names = {apps.SETTINGS_ID} | {f"gnome-{page}-panel.desktop" for page in PAGE_FILES}
+        self.entries = [e for e in self.entries if e.id not in names] + settings_in(language)
+
+    def test_the_fixture_is_whole(self):
+        self.assertEqual({len(names) for names in TRANSLATED.values()}, {len(PAGE_FILES) + 1})
+        self.assertEqual({f"gnome-{page}-panel.desktop" for page in PAGE_FILES},
+                         {panel.desktop for panel in apps.PANELS})
+
+    def test_each_language_s_names_said_as_written(self):
+        for language in TRANSLATED:
+            self.speak(language)
+            for page, name in zip(PAGE_FILES, TRANSLATED[language][1:]):
+                with self.subTest(language=language, name=name):
+                    self.opens(name, f"gnome-{page}-panel.desktop")
+
+    def test_spanish_round_a_page_s_name(self):
+        self.speak("es")
+        for name, page in (("configuración de sonido", "sound"),
+                           ("la configuración del sonido", "sound"), ("SONIDO", "sound"),
+                           ("sonído", "sound"), ("  el   sonido  ", "sound"),
+                           ("ajustes de Bluetooth", "bluetooth"), ("abre la pantalla", "display"),
+                           ("las preferencias de pantallas", "display"),
+                           ("página de la red", "network"), ("opciones de energía", "power"),
+                           ("ratón y panel táctil", "mouse"), ("raton y panel tactil", "mouse"),
+                           ("la red movil", "wwan"), ("redmóvil", "wwan"), ("wi fi", "wifi"),
+                           ("la configuración de la impresora", "printers"),
+                           ("acerca de", "about"), ("configuración de fecha y hora", "datetime"),
+                           ("pantallas settings", "display"), ("the sonido settings", "sound")):
+            with self.subTest(name):
+                self.opens(name, f"gnome-{page}-panel.desktop")
+
+    def test_portuguese_round_a_page_s_name(self):
+        self.speak("pt")
+        for name, page in (("o som", "sound"), ("configurações de som", "sound"),
+                           ("as configurações do som", "sound"), ("painel de rede", "network"),
+                           ("a tela", "display"), ("definições de energia", "power"),
+                           ("configurações da área de trabalho do ubuntu", "ubuntu"),
+                           ("opções de privacidade e segurança", "privacy"),
+                           ("bem estar", "wellbeing"), ("Mouse e Touchpad", "mouse")):
+            with self.subTest(name):
+                self.opens(name, f"gnome-{page}-panel.desktop")
+
+    def test_chinese_and_arabic_round_a_page_s_name(self):
+        self.speak("zh")
+        for name, page in (("声音设置", "sound"), ("打开蓝牙设置", "bluetooth"),
+                           ("网络 设置", "network"), ("显示器页面", "display"),
+                           ("ubuntu桌面", "ubuntu")):
+            with self.subTest(name):
+                self.opens(name, f"gnome-{page}-panel.desktop")
+        self.speak("ar")
+        for name, page in (("إعدادات الصوت", "sound"), ("الإعدادات الصوت", "sound"),
+                           ("صوت", "sound"), ("الصوت", "sound"), ("صفحة الشبكة", "network"),
+                           ("شبكة", "network"), ("افتح إعدادات البلوتوث", "bluetooth"),
+                           ("شبكة المحمول", "wwan"), ("الشاشات", "display")):
+            with self.subTest(name):
+                self.opens(name, f"gnome-{page}-panel.desktop")
+
+    def test_what_settings_is_called_here_is_a_settings_word(self):
+        self.speak("de")
+        for name, page in (("Einstellungen für Klang", "sound"), ("Klang-Einstellungen", "sound"),
+                           ("die Bildschirme", "display"), ("das Netzwerk", "network"),
+                           ("WLAN Einstellungen", "wifi"), ("Einstellungen von Energie", "power")):
+            with self.subTest(name):
+                self.opens(name, f"gnome-{page}-panel.desktop")
+        self.speak("fr")
+        for name, page in (("les écrans", "display"), ("l'énergie", "power"),
+                           ("paramètres du son", "sound"), ("paramètres de l'énergie", "power"),
+                           ("ECRANS", "display"), ("le réseau mobile", "wwan")):
+            with self.subTest(name):
+                self.opens(name, f"gnome-{page}-panel.desktop")
+
+    def test_the_english_name_loosely_in_any_language(self):
+        self.speak("es")
+        for name, page in (("the displays", "display"), ("mouse & touchpad", "mouse"),
+                           ("Date and time", "datetime"), ("date & time", "datetime"),
+                           ("color management", "color"), ("WiFi", "wifi"),
+                           ("graphics tablet", "wacom"), ("mobile network", "wwan"),
+                           ("the online accounts page", "online-accounts"),
+                           ("ajustes de Wi-Fi", "wifi"), ("la página de accessibility",
+                                                         "universal-access"),
+                           ("o painel de multitasking", "multitasking")):
+            with self.subTest(name):
+                self.opens(name, f"gnome-{page}-panel.desktop")
+
+    def test_letters_nfkd_leaves_whole(self):
+        self.entries += [made("gnome-power-panel.desktop", "Zasilanie łódź", shown=False),
+                         made("gnome-sound-panel.desktop", "Lyd og Støj", shown=False)]
+        self.entries = [e for e in self.entries
+                        if e.id != "gnome-sound-panel.desktop" or e.name != "Sound"]
+        self.opens("zasilanie lodz", "gnome-power-panel.desktop")
+        self.opens("lyd og stoj", "gnome-sound-panel.desktop")
+
+    def test_no_two_pages_share_a_name_said_loosely(self):
+        """Every name in every language, as one list: a loose form never names two pages."""
+        terms = sorted({*apps._page_terms(None),
+                        *(tuple(apps._form_words(names[0])) for names in TRANSLATED.values())})
+        owners = {}
+        for _, *pages in TRANSLATED.values():
+            for page, name in zip(PAGE_FILES, pages):
+                owners.setdefault(apps._loose(name, terms), set()).add(page)
+        for panel in apps.PANELS:
+            page = panel.desktop.removeprefix("gnome-").removesuffix("-panel.desktop")
+            owners.setdefault(apps._loose(panel.title, terms), set()).add(page)
+        self.assertNotIn("", owners)
+        self.assertEqual({form: pages for form, pages in owners.items() if len(pages) > 1}, {})
+
+    def test_a_page_s_own_words_still_name_only_it(self):
+        """Loose names don't take one page's words for another's, in any language."""
+        for language in TRANSLATED:
+            self.speak(language)
+            for panel in apps.PANELS:
+                for word in (*panel.words, panel.title):
+                    found = apps._page_named(self.entries, apps._words(word))
+                    with self.subTest(language=language, word=word):
+                        self.assertIn(found, (panel, None))
+
+    def test_common_words_name_no_page_they_did_not_name_before(self):
+        """"app" is the Apps page and Spanish "red" is Red, as they were: nothing new."""
+        common = sorted({*apps.LEADING, *apps.LINKS, *apps.FILLER, *apps.VERBS, *apps.TAIL,
+                         *apps.FOLDER_TERMS, *apps.SETTINGS_WORDS, *(" ".join(term) for term
+                                                                     in apps._page_terms(None)),
+                         "setting", "configuración", "einstellungen", "paramètres", "设置",
+                         "الإعدادات", "y", "e", "et", "und", "and", "en", "on", "it", "is", "no",
+                         "si", "um", "una", "un", "music", "files", "home", "photos", "red",
+                         "sound recorder", "power statistics", "system monitor",
+                         "bluetooth manager", "network displays", "color picker",
+                         "online accounts helper", "la la", "de de", "the page", "o a",
+                         "page of settings", "settings page", "config", "setup"})
+        for language in TRANSLATED:
+            self.speak(language)
+            for word in common:
+                said = apps._words(word)
+                with self.subTest(language=language, word=word):
+                    self.assertEqual(apps._page_named(self.entries, said),
+                                     exact_page(self.entries, said))
+
+    def test_an_app_named_exactly_that_still_wins(self):
+        self.speak("es")
+        self.entries.append(made("org.example.Sonido.desktop", "El Sonido"))
+        self.opens("el sonido", "org.example.Sonido.desktop")
+        self.opens("sonido", "gnome-sound-panel.desktop")
+
+    def test_an_app_with_the_name_inside_its_own_still_loses(self):
+        """As before: a page's name beats an app with that word in its name."""
+        self.speak("es")
+        self.entries.append(made("org.example.Grabadora.desktop", "Grabadora de sonido"))
+        self.opens("la configuración del sonido", "gnome-sound-panel.desktop")
+        self.opens("grabadora de sonido", "org.example.Grabadora.desktop")
 
 
 class OwnFolders(NoDesktop):

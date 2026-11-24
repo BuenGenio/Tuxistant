@@ -2,11 +2,12 @@
 
 ## Not yet released
 
-"Open my Downloads folder" opens the folder.
+"Open my Downloads folder" opens the folder, and a Settings page's translated name is found when said with an article or a settings word round it.
 
-One change reaches what 0.9.0 already did:
+Two changes reach what 0.9.0 already did:
 
 - Apps: "Open my Downloads folder" opens your Downloads folder in your file manager, where 0.9.0 said no app had that name and offered to look for a folder. Your Desktop, Documents, Downloads, Music, Pictures, Videos, Templates and Public folders and your home folder open by name, wherever GLib says they are: by the English name, by the name the folder really has, or by a Spanish, Portuguese, Chinese or Arabic name. Only those open, never another folder or a path. An app named exactly the same, such as GNOME's Music, still wins unless you say "folder". A folder opens the way `file_open` opens one, with no card, and only inside your home folder and outside hidden folders. Not yet tried on a real desktop.
+- Apps: a Settings page's name, in English or as Settings shows it in your language, is found when said with an article or a word for settings or for a page round it, as in "la configuración del sonido", "o painel de som", "إعدادات الصوت", "声音设置" or "Einstellungen für Klang", and whatever its case, accents, spaces or a plural s. In 0.9.0 a translated name had to be said just as Settings shows it, and Spanish's "Ratón y panel táctil" couldn't be found at all, as its "panel" was taken for a settings word. A page's other words, such as "wallpaper", are still English only. Not yet tried on a real desktop.
 
 After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension is unchanged.
 

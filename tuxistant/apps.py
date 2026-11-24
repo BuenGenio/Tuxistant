@@ -98,6 +98,20 @@ def _without_filler(words: list[str]) -> list[str]:
     return words
 
 
+def _without(words: list[str], unwanted) -> list[str]:
+    while len(words) > 1 and words[0] in unwanted:
+        words = words[1:]
+    return words
+
+
+def _cut(word: str, affixes, front: bool) -> str:
+    """word without the affixes on that end, as long as something is left: "打开我的文档" is 文档."""
+    for affix in affixes:
+        if len(word) > len(affix) and (word.startswith(affix) if front else word.endswith(affix)):
+            return _cut(word[len(affix):] if front else word[:-len(affix)], affixes, front)
+    return word
+
+
 def _words(text) -> str:
     """One form for what was said, the table's words and every app's names, so plurals, accents
     and "Wi-Fi" against "wifi" meet."""
@@ -216,12 +230,24 @@ FOLDERS = (
 # Round a folder's name, as in "my Downloads folder", "carpeta de descargas" or "下载文件夹". In
 # _words() form, which has already taken English's "my" and "open" off the front.
 FOLDER_TERMS = {"folder", "directory", "carpeta", "pasta", "مجلد"}
+# Said in front of a name in Spanish, Portuguese and Arabic, as English's are in FILLER and VERBS,
+# and in French and German, as Settings shows its pages in those too: "mi carpeta", "les écrans".
 LEADING = {_single(word) for word in ("mi", "mis", "el", "la", "los", "las", "meu", "minha",
                                       "meus", "minhas", "o", "os", "as", "abre", "abrir", "abra",
-                                      "افتح")}
-LINKS = {"de", "del", "do", "da", "dos", "das", "of"}
+                                      "افتح", "le", "les", "l", "der", "die", "das", "den", "dem")}
+LINKS = {"de", "del", "do", "da", "dos", "das", "of", "for", "du", "des", "d", "von", "fur"}
 CJK_LEADING = ("打开", "我的")      # Chinese writes them with no space: "打开我的下载"
 CJK_FOLDER = ("文件夹", "目录")
+# Round a page's name: a word for settings or for a page, in the languages the site uses, as in
+# "la configuración del sonido", "o painel de som", "إعدادات الصوت" or "声音设置". What Settings
+# itself is called on this computer counts as well, so "Einstellungen für Klang" is Klang.
+PAGE_TERMS = frozenset(_words(word) for word in (
+    "settings", "preferences", "options", "page", "panel", "configuración", "configuraciones",
+    "ajustes", "preferencias", "opciones", "página", "configurações", "configuração",
+    "definições", "preferências", "opções", "painel", "إعدادات", "صفحة"))
+CJK_PAGE = ("设置", "页面", "面板")
+FOLD = str.maketrans({"ł": "l", "ø": "o", "đ": "d", "ð": "d", "ħ": "h", "ı": "i", "ŀ": "l",
+                      "æ": "ae", "œ": "oe", "þ": "th"})     # letters NFKD leaves whole
 
 
 @dataclass(frozen=True)
@@ -331,12 +357,52 @@ def _kind_asked(query: str) -> tuple[str, str | None]:
     return query, None
 
 
-def _page_named(query: str, entries: list[App]) -> Panel | None:
-    """A page's own title, or the name its desktop file shows, translated or not."""
+def _form_words(text: str) -> list[str]:
+    """_words() with the letters NFKD leaves whole folded, and Arabic's article off each word."""
+    return [word[2:] if len(word) > 3 and word.startswith("ال") else word
+            for word in _words(text).translate(FOLD).split()]
+
+
+def _unframed(words: list[str], terms) -> list[str]:
+    """words without articles in front, or a settings or page word in front or behind, with
+    "de" or "of" between it and the name. Something is always left."""
+    while True:
+        words = _without(words, LEADING)
+        for term in terms:
+            if len(words) > len(term) and tuple(words[:len(term)]) == term:
+                words = _without(words[len(term):], LINKS)
+                break
+            if len(words) > len(term) and tuple(words[-len(term):]) == term:
+                words = words[:-len(term)]
+                break
+        else:
+            return words
+
+
+def _loose(text: str, terms) -> str:
+    """One form for a page's name as said and as written: "la configuración del sonido" meets
+    Sonido, "声音设置" meets 声音, "Wi Fi" meets "Wi-Fi" and "الصوت" meets "صوت"."""
+    words = _form_words(text)
+    if words:
+        words[0] = _cut(words[0], CJK_LEADING, front=True)
+        words[-1] = _cut(words[-1], CJK_PAGE, front=False)
+    return "".join(_unframed(words, terms))
+
+
+def _page_terms(settings: App | None) -> list[tuple]:
+    names = settings.names if settings else ()
+    return sorted({tuple(_form_words(term)) for term in (*PAGE_TERMS, *names)} - {()})
+
+
+def _page_named(entries: list[App], *said: str) -> Panel | None:
+    """A page's own title, or the name its desktop file shows, translated or not, matched
+    loosely: case, accents, spaces, a plural s, an article, and a settings or page word."""
     by_id = {entry.id: entry for entry in entries}
+    terms = _page_terms(by_id.get(SETTINGS_ID))
+    wanted = {form for form in (_loose(text, terms) for text in said) if form}
     for panel in PANELS:
-        if _squash(query) == _squash(_words(panel.title)) or (
-                panel.desktop in by_id and query in by_id[panel.desktop].names):
+        names = (panel.title, *(by_id[panel.desktop].names if panel.desktop in by_id else ()))
+        if wanted & {_loose(name, terms) for name in names}:
             return panel
     return None
 
@@ -353,16 +419,19 @@ def _page_inside(query: str) -> Panel | None:
     return max(inside, key=lambda found: found[0], default=(0, None))[1]
 
 
-def _page(query: str, entries: list[App], settings: bool, tier: int | None) -> Panel | None:
+def _page(query: str, entries: list[App], settings: bool, tier: int | None,
+          said: str = "") -> Panel | None:
     """With "settings" said, any page the words name. Otherwise an app named exactly this wins
     ("Terminal", "Clocks"), then a page named exactly this ("Bluetooth" is the page, not Blueman),
     then an app with the word in its name, generic name, id or program ("zoom" is Zoom Workplace,
-    not Accessibility), then a page's other words."""
+    not Accessibility), then a page's other words. A page's name is also looked for in all that
+    was said, as one can hold a settings word: "Ratón y panel táctil"."""
     if settings:
-        return _page_named(query, entries) or _page_word(query) or _page_inside(query)
+        return (_page_named(entries, query, said) or _page_word(query)
+                or _page_inside(query))
     if tier == 0:
         return None
-    if named := _page_named(query, entries):
+    if named := _page_named(entries, query, said):
         return named
     return _page_word(query) if tier is None or tier >= LOOSE_TIER else None
 
@@ -648,20 +717,6 @@ def _set_up(folder: Folder, paths: dict) -> str | None:
     return path
 
 
-def _without(words: list[str], unwanted) -> list[str]:
-    while len(words) > 1 and words[0] in unwanted:
-        words = words[1:]
-    return words
-
-
-def _cut(word: str, affixes, front: bool) -> str:
-    """word without the affixes on that end, as long as something is left: "打开我的文档" is 文档."""
-    for affix in affixes:
-        if len(word) > len(affix) and (word.startswith(affix) if front else word.endswith(affix)):
-            return _cut(word[len(affix):] if front else word[:-len(affix)], affixes, front)
-    return word
-
-
 def _framed(words: list[str]) -> tuple[list[str], bool]:
     """words with a folder term taken off either end, and whether there was one."""
     called = False
@@ -749,7 +804,7 @@ def open_app(args: dict, config, session):
     # An app named exactly that, such as GNOME's Music, wins unless "folder" was said.
     if folder and tier != 0:
         return _open_folder(folder, paths, config, session)
-    if panel := _page(query, entries, settings, tier):
+    if panel := _page(query, entries, settings, tier, said):
         return _open_panel(panel, entries, config, session)
     if found:
         return _open_found(found, config, session)
