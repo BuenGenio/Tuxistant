@@ -1,7 +1,8 @@
-"""Opening apps and Settings pages. Nothing here reaches the desktop: the app list is made up, the
-launcher only records, and subprocess fails any test that would start something for real. The
-tests that run real code put stand-in gio and systemd-run on a PATH that holds nothing else, and
-the real Gio list is read only in a child process with temporary XDG folders and no session bus.
+"""Opening apps, Settings pages and your own folders. Nothing here reaches the desktop: the app
+list and the folders are made up, both openers only record, and subprocess fails any test that
+would start something for real. The tests that run real code put stand-in gio and systemd-run on
+a PATH that holds nothing else, and the real Gio list and GLib's folders are read only in a child
+process with temporary XDG folders and no session bus.
 """
 import asyncio
 import importlib.util
@@ -16,19 +17,24 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tuxistant import apps  # noqa: E402
+from tuxistant import apps, files  # noqa: E402
 from tuxistant.config import DEFAULTS  # noqa: E402
 from tuxistant.gate import APP_SAYS, DECLINED, MAX_DETAIL_CHARS, Ask, Session, Speak  # noqa: E402
 from tuxistant.skills import Skills  # noqa: E402
 
 REAL_INSTALLED = apps._installed
 REAL_LAUNCH = apps._launch
+REAL_OPEN = files._launch
 REAL_RUN = subprocess.run
 REAL_POPEN = subprocess.Popen
 DRIVER = Path(__file__).resolve().parent / "apps_driver.py"
 VOICE = DEFAULTS["voice"]
 SYSTEM = "/usr/share/applications"
 FLATPAK = "/var/lib/flatpak/exports/share/applications"
+# The folders GLib names, as they are called in an English home folder.
+FOLDER_NAMES = {"DESKTOP": "Desktop", "DOCUMENTS": "Documents", "DOWNLOAD": "Downloads",
+                "MUSIC": "Music", "PICTURES": "Pictures", "VIDEOS": "Videos",
+                "TEMPLATES": "Templates", "PUBLIC_SHARE": "Public"}
 
 
 def made(desktop_id, name, kind="system", shown=True, generics=(), keywords=(), names=(),
@@ -82,11 +88,18 @@ class NoDesktop(unittest.TestCase):
         backup.write_text("[Desktop Entry]\nType=Application\nName=Backup now\n"
                           "Exec=sh -c 'rsync -a ~ /mnt/backup'\\nrm -rf ~\n")
         self.defaults = {"https": "hidden-thing.desktop"}
+        self.folders = {apps.HOME: str(self.home)}
+        for key, name in FOLDER_NAMES.items():
+            (self.home / name).mkdir()
+            self.folders[key] = str(self.home / name)
         self.launched = []
+        self.opened = []
         apps._launched.clear()
         for patch in (mock.patch.object(apps, "_installed", lambda: list(self.entries)),
                       mock.patch.object(apps, "_default_for", self.defaults.get),
                       mock.patch.object(apps, "_launch", self.record),
+                      mock.patch.object(apps, "_folder_paths", lambda: dict(self.folders)),
+                      mock.patch.object(files, "_launch", self.record_folder),
                       mock.patch.object(apps.subprocess, "run", would_launch),
                       mock.patch.object(apps.subprocess, "Popen", would_launch),
                       mock.patch.dict(os.environ, {"HOME": str(self.home), "XDG_DATA_HOME": ""})):
@@ -95,6 +108,10 @@ class NoDesktop(unittest.TestCase):
 
     def record(self, path):
         self.launched.append(path)
+        return True
+
+    def record_folder(self, path):
+        self.opened.append(path)
         return True
 
     def path(self, desktop_id):
@@ -116,6 +133,15 @@ class NoDesktop(unittest.TestCase):
         before = len(self.launched)
         self.said(name)
         self.assertEqual(self.launched[before:], [self.path(desktop_id)], name)
+
+    def opens_folder(self, name, key) -> str:
+        """What is said for name, which must open the folder GLib gave for key and nothing else."""
+        apps._launched.clear()
+        launched, opened = len(self.launched), len(self.opened)
+        text = self.said(name)
+        self.assertEqual(self.launched[launched:], [], name)
+        self.assertEqual(self.opened[opened:], [Path(self.folders[key]).resolve()], name)
+        return text
 
 
 class Matching(NoDesktop):
@@ -427,6 +453,185 @@ class SettingsPages(NoDesktop):
             self.assertRegex(panel.desktop, r"^gnome-[a-z-]+-panel\.desktop$")
 
 
+class OwnFolders(NoDesktop):
+    """"Open my Downloads folder" opens the folder GLib names, as file.open would."""
+
+    def test_each_folder_by_its_name(self):
+        for name, key in (("downloads", "DOWNLOAD"), ("Open my Downloads folder", "DOWNLOAD"),
+                          ("the download directory", "DOWNLOAD"), ("Desktop", "DESKTOP"),
+                          ("my documents", "DOCUMENTS"), ("my music folder", "MUSIC"),
+                          ("Pictures", "PICTURES"), ("videos folder", "VIDEOS"),
+                          ("templates", "TEMPLATES"), ("the Public folder", "PUBLIC_SHARE"),
+                          ("home", apps.HOME), ("my home folder", apps.HOME),
+                          ("open the home directory", apps.HOME), ("down loads", "DOWNLOAD")):
+            with self.subTest(name):
+                self.opens_folder(name, key)
+
+    def test_what_is_said(self):
+        self.assertEqual(self.opens_folder("downloads", "DOWNLOAD"),
+                         "Opening your Downloads folder.")
+        self.assertEqual(self.opens_folder("my home folder", apps.HOME),
+                         "Opening your home folder.")
+        self.assertEqual(self.opens_folder("public folder", "PUBLIC_SHARE"),
+                         "Opening your Public folder.")
+
+    def test_in_the_languages_the_site_uses(self):
+        for name, key in (("descargas", "DOWNLOAD"), ("carpeta de descargas", "DOWNLOAD"),
+                          ("abre mi carpeta de descargas", "DOWNLOAD"),
+                          ("Documentos", "DOCUMENTS"), ("la carpeta de Imágenes", "PICTURES"),
+                          ("Vídeos", "VIDEOS"), ("Escritorio", "DESKTOP"),
+                          ("plantillas", "TEMPLATES"), ("carpeta personal", apps.HOME),
+                          ("pasta de downloads", "DOWNLOAD"), ("Área de Trabalho", "DESKTOP"),
+                          ("minhas imagens", "PICTURES"), ("Transferências", "DOWNLOAD"),
+                          ("a pasta pessoal", apps.HOME), ("música", "MUSIC"),
+                          ("下载", "DOWNLOAD"), ("下载文件夹", "DOWNLOAD"),
+                          ("打开我的文档", "DOCUMENTS"), ("桌面", "DESKTOP"),
+                          ("主文件夹", apps.HOME), ("التنزيلات", "DOWNLOAD"),
+                          ("مجلد التنزيلات", "DOWNLOAD"), ("المستندات", "DOCUMENTS"),
+                          ("سطح المكتب", "DESKTOP")):
+            with self.subTest(name):
+                self.opens_folder(name, key)
+
+    def test_by_the_name_the_folder_really_has(self):
+        """A French home folder: GLib says where Downloads is, and that is what opens."""
+        french = self.home / "Téléchargements"
+        french.mkdir()
+        self.folders["DOWNLOAD"] = str(french)
+        for name in ("téléchargements", "Telechargements folder", "downloads", "descargas"):
+            with self.subTest(name):
+                self.opens_folder(name, "DOWNLOAD")
+        self.assertNotIn(self.home / "Downloads", self.opened)
+
+    def test_the_home_folder_is_not_called_by_its_own_name(self):
+        """Its name is the user's, and an app may have it."""
+        with self.assertRaises(ValueError):
+            self.open(self.home.name)
+        self.assertEqual(self.opened, [])
+
+    def test_an_app_named_exactly_that_wins_unless_folder_is_said(self):
+        self.entries += [made("org.gnome.Music.desktop", "Music"),
+                         made("org.gnome.Totem.desktop", "Videos")]
+        self.opens("music", "org.gnome.Music.desktop")
+        self.opens("open my music", "org.gnome.Music.desktop")
+        self.opens("Videos", "org.gnome.Totem.desktop")
+        self.opens_folder("my music folder", "MUSIC")
+        self.opens_folder("videos folder", "VIDEOS")
+        self.opens_folder("música", "MUSIC")
+
+    def test_a_folder_beats_an_app_that_only_has_the_word(self):
+        self.entries += [made("org.gnome.Evince.desktop", "Document Viewer"),
+                         made("io.github.shiftey.Desktop.desktop", "GitHub Desktop"),
+                         made("org.gnome.Shotwell.desktop", "Shotwell",
+                              keywords=["pictures", "photos"])]
+        self.opens_folder("documents", "DOCUMENTS")
+        self.opens_folder("desktop", "DESKTOP")
+        self.opens_folder("pictures", "PICTURES")
+        self.opens("document viewer", "org.gnome.Evince.desktop")
+        self.opens("github desktop", "io.github.shiftey.Desktop.desktop")
+
+    def test_a_settings_word_keeps_it_a_page(self):
+        for name in ("desktop settings", "music settings", "home settings"):
+            with self.subTest(name):
+                self.assertTrue(self.said(name).startswith("Settings has no page called"))
+        self.assertEqual(self.opened, [])
+
+    def test_a_folder_that_is_not_set_up(self):
+        self.folders["DOWNLOAD"] = None
+        self.folders["MUSIC"] = str(self.home)
+        self.folders["VIDEOS"] = f"{self.home}/"
+        self.assertEqual(self.said("downloads"), "Your Downloads folder isn't set up on this "
+                         "computer.")
+        self.assertEqual(self.said("music folder"), "Your Music folder isn't set up on this "
+                         "computer.")
+        self.assertEqual(self.said("videos"), "Your Videos folder isn't set up on this "
+                         "computer.")
+        self.assertEqual(self.opened, [])
+
+    def test_a_folder_that_is_not_there(self):
+        self.folders["TEMPLATES"] = str(self.home / "Gone")
+        (self.home / "Public").rmdir()
+        (self.home / "Public").write_text("a file, not a folder")
+        self.assertEqual(self.said("templates"), "I can't find your Templates folder.")
+        self.assertEqual(self.said("public"), "I can't find your Public folder.")
+        self.assertEqual(self.opened, [])
+
+    def test_the_line_file_open_holds(self):
+        """Only inside the home folder and outside hidden folders, links followed."""
+        outside = tempfile.TemporaryDirectory()
+        self.addCleanup(outside.cleanup)
+        (self.home / ".hidden" / "Pictures").mkdir(parents=True)
+        (self.home / "Linked").symlink_to(outside.name)
+        (self.home / "Snapshots").symlink_to(self.home / ".hidden" / "Pictures")
+        for key, path, said in (
+                ("DOWNLOAD", outside.name, "Your Downloads folder isn't inside your home "
+                                           "folder, so I've left it closed."),
+                ("MUSIC", str(self.home / "Linked"), "Your Music folder isn't inside your home "
+                                                     "folder, so I've left it closed."),
+                ("PICTURES", str(self.home / ".hidden" / "Pictures"),
+                 "Your Pictures folder is inside a hidden folder, so I've left it closed."),
+                ("VIDEOS", str(self.home / "Snapshots"),
+                 "Your Videos folder is inside a hidden folder, so I've left it closed.")):
+            self.folders[key] = path
+            name = next(folder.title for folder in apps.FOLDERS if folder.key == key)
+            with self.subTest(key):
+                self.assertEqual(self.said(f"my {name} folder"), said)
+        self.assertEqual(self.opened, [])
+
+    def test_a_link_inside_the_home_folder_opens_where_it_points(self):
+        (self.home / "Big" / "Downloads").mkdir(parents=True)
+        (self.home / "Downloads").rmdir()
+        (self.home / "Downloads").symlink_to(self.home / "Big" / "Downloads")
+        self.said("downloads")
+        self.assertEqual(self.opened, [self.home.resolve() / "Big" / "Downloads"])
+
+    def test_only_those_folders_whatever_is_said(self):
+        """Nothing said becomes a path: the model can only pick one of GLib's folders."""
+        projects = self.home / "Projects"
+        projects.mkdir()
+        allowed = {Path(path).resolve() for path in self.folders.values()}
+        for name in ("~/Projects", "Projects folder", "/etc", "/etc folder", "~/.ssh",
+                     "file:///etc/passwd", "../..", "Downloads/../.ssh", "/tmp/Downloads",
+                     "Downloads; rm -rf ~", "carpeta de proyectos", "my folder", "folder",
+                     "carpeta", "下载/../.ssh", str(projects)):
+            apps._launched.clear()
+            try:
+                self.open(name)
+            except ValueError:
+                pass
+            with self.subTest(name):
+                self.assertLessEqual(set(self.opened), allowed)
+        self.assertNotIn(projects.resolve(), self.opened)
+        self.assertEqual(self.launched, [self.path("org.gnome.Nautilus.desktop")] * 2,
+                         "\"my folder\" and \"folder\" are the Files app's keyword")
+
+    def test_a_folder_it_does_not_know_is_offered_to_file_find(self):
+        with self.assertRaises(ValueError) as caught:
+            self.open("Projects folder")
+        self.assertEqual(str(caught.exception), apps.NOT_FOUND.format(name="project folder"))
+
+    def test_the_same_call_twice_in_one_reply_opens_once(self):
+        self.assertEqual([self.said("downloads"), self.said("my downloads folder")],
+                         ["Opening your Downloads folder."] * 2)
+        self.assertEqual(self.opened, [Path(self.folders["DOWNLOAD"]).resolve()])
+
+    def test_a_folder_that_wont_open_says_so(self):
+        with mock.patch.object(files, "_launch", lambda _path: False):
+            self.assertEqual([self.said("downloads"), self.said("downloads")],
+                             ["Your Downloads folder wouldn't open."] * 2)
+
+    def test_no_folder_word_is_a_page_or_another_folder(self):
+        owners = {}
+        for folder in apps.FOLDERS:
+            for word in folder.words:
+                owners.setdefault(apps._squash(word), set()).add(folder.key)
+        self.assertEqual({word: keys for word, keys in owners.items() if len(keys) > 1}, {})
+        pages = {apps._squash(word) for panel in apps.PANELS
+                 for word in (*panel.words, apps._words(panel.title))}
+        self.assertEqual(set(owners) & pages, set())
+        self.assertEqual({folder.key for folder in apps.FOLDERS},
+                         {apps.HOME, *FOLDER_NAMES})
+
+
 class Replies(NoDesktop):
     def test_a_launch_is_said_by_the_app(self):
         result, session = self.open("flatpak firefox")
@@ -527,6 +732,16 @@ class ThroughExecute(NoDesktop):
     def test_a_settings_page_opens_with_no_card_after_private_data(self):
         self.run_tool("bluetooth settings", tainted=True)
         self.assertEqual(self.launched, [self.path("gnome-bluetooth-panel.desktop")])
+
+    def test_a_folder_opens_with_no_card_after_private_data(self):
+        """As file.open does. Nothing in it goes back to the model, which only hears it opened."""
+        result, session = self.run_tool("my Downloads folder", tainted=True)
+        self.assertEqual(result, {APP_SAYS: True})
+        self.assertEqual(self.opened, [(self.home / "Downloads").resolve()])
+        self.assertEqual(session.after[0].text, "Opening your Downloads folder.")
+        result, session = self.run_tool("documents")
+        self.assertEqual(result, {APP_SAYS: True})
+        self.assertFalse(session.tainted, "opening reads nothing into the conversation")
 
     def test_an_unknown_name_is_an_error_with_the_words_said(self):
         result, _ = self.run_tool("Frobnicator")
@@ -832,6 +1047,14 @@ class ReallyLaunching(NoDesktop):
         self.stand_in("gio", "exit 1")
         self.assertFalse(apps._launch(f"{SYSTEM}/firefox.desktop"))
 
+    def test_a_folder_through_file_open_s_opener(self):
+        self.stand_in("gio")
+        self.stand_in("systemd-run")
+        with mock.patch.object(files, "_launch", REAL_OPEN):
+            self.assertEqual(self.said("my downloads folder"), "Opening your Downloads folder.")
+        self.assertEqual(self.calls(),
+                         [f"{self.bin}/gio open -- {(self.home / 'Downloads').resolve()}"])
+
     def test_an_app_that_stays_does_not_hold_it_up(self):
         self.stand_in("gio", "/bin/sleep 3 &\nexit 0")
         started = time.monotonic()
@@ -886,6 +1109,9 @@ class RealGioList(unittest.TestCase):
                             + lines)
         (root / "config/mimeapps.list").write_text(
             "[Default Applications]\nx-scheme-handler/https=browse.desktop\n")
+        (root / "config/user-dirs.dirs").write_text(
+            '# written by xdg-user-dirs-update\nXDG_DOWNLOAD_DIR="$HOME/Descargas"\n'
+            'XDG_MUSIC_DIR="$HOME/"\nXDG_PICTURES_DIR="$HOME/Fotos y más"\n')
         env = {"HOME": str(root / "home"), "XDG_DATA_HOME": str(root / "data"),
                "XDG_CONFIG_HOME": str(root / "config"), "XDG_DATA_DIRS": str(root / "sys"),
                "XDG_CONFIG_DIRS": str(root / "xdg"),
@@ -926,6 +1152,18 @@ class RealGioList(unittest.TestCase):
         self.assertEqual(self.found["mine.desktop"]["kind"], "home")
         self.assertEqual(self.found["shadow.desktop"]["name"], "Home Shadow")
         self.assertTrue(self.found["shadow.desktop"]["path"].startswith(str(self.root / "data")))
+
+    def test_your_folders_where_glib_says_they_are(self):
+        """Desktop is GLib's own default, Music set to the home folder means none, and a folder
+        the file leaves out isn't set."""
+        home = str(self.root / "home")
+        folders = self.report["folders"]
+        self.assertEqual(folders, {"HOME": home, "DESKTOP": f"{home}/Desktop",
+                                   "DOWNLOAD": f"{home}/Descargas", "MUSIC": home,
+                                   "PICTURES": f"{home}/Fotos y más", "DOCUMENTS": None,
+                                   "VIDEOS": None, "TEMPLATES": None, "PUBLIC_SHARE": None})
+        music = next(folder for folder in apps.FOLDERS if folder.key == "MUSIC")
+        self.assertIsNone(apps._set_up(music, folders))
 
     def test_the_driver_refuses_a_real_home(self):
         done = drive({"PATH": "/nonexistent"})

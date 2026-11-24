@@ -415,6 +415,24 @@ class EveryActionIsCutOff(unittest.TestCase):
                 self.assertTrue(apps._launch("/eval/applications/firefox.desktop"))
             self.assertIn("(would open firefox.desktop)", printed.getvalue())
 
+    def test_a_folder_app_open_names_is_not_opened(self):
+        """app.open opens your Downloads folder with file.open's opener and no card."""
+        self.assertIn("files._launch", ACTIONS["app.open"])
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / "Downloads").mkdir()
+            paths = {"HOME": home, "DOWNLOAD": f"{home}/Downloads"}
+            session, printed = Session(), io.StringIO()
+            with install(), contextlib.redirect_stdout(printed), \
+                    mock.patch.dict(os.environ, {"HOME": home}), \
+                    mock.patch.object(apps, "_folder_paths", lambda: paths), \
+                    mock.patch.object(subprocess, "run",
+                                      side_effect=AssertionError("something was started")):
+                result = apps.open_app({"name": "my Downloads folder"}, DEFAULTS, session)
+        self.assertEqual(result, {APP_SAYS: True})
+        self.assertEqual([said.text for said in session.after],
+                         ["Opening your Downloads folder."])
+        self.assertIn("(would open Downloads)", printed.getvalue())
+
     def test_no_evaluation_reaches_your_server(self):
         """system.running on the server has no card, so it would really run: ssh is never
         started, whatever server the evaluation has, by a Popen imported by name too."""

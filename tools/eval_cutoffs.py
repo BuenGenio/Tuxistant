@@ -37,8 +37,9 @@ ACTIONS = {
     # Reads which phones KDE Connect knows and their battery. Nothing is sent to one.
     "phone.battery": (), "phone.ring": ("phone._activate",),
     "file.open": ("files._launch",),
-    # Opens a window with no card: the list is made up, and nothing is started.
-    "app.open": ("apps._installed", "apps._default_for", "apps._launch"),
+    # Opens a window with no card: the list is made up, and nothing is started. A folder of yours
+    # goes to file.open's opener, so it isn't opened either.
+    "app.open": ("apps._installed", "apps._default_for", "apps._launch", "files._launch"),
     "calendar.events": ("calendars.Eds", "calendars._backend"),
     "calendar.add": ("calendars.Eds", "calendars._backend"),
     # Thunderbird's index is a made-up one, so Online Accounts is never reached: blocked anyway.

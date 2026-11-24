@@ -1,8 +1,8 @@
-"""Opening an installed app or a page of GNOME Settings. Only a desktop file from Gio's own list is
-ever started, with no files, addresses or arguments, so nothing the model writes reaches a command
-line. Names are matched here, not by the model. App names are other people's text (a browser's
-'install as app' uses the page title), so every reply naming one is said by the app, never
-returned to the model.
+"""Opening an installed app, a page of GNOME Settings or one of your own folders. Only a desktop
+file from Gio's own list is ever started, with no files, addresses or arguments, and only a folder
+GLib names is opened, so nothing the model writes reaches a command line. Names are matched here,
+not by the model. App names are other people's text (a browser's 'install as app' uses the page
+title), so every reply naming one is said by the app, never returned to the model.
 """
 import difflib
 import hashlib
@@ -17,6 +17,7 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import files
 from .files import _tilde
 from .gate import APP_SAYS, MAX_DETAIL_CHARS, Ask, Speak, shown
 
@@ -79,6 +80,12 @@ CARD_WHY = {"home": "It was added in your home folder, not installed as a packag
             "other": "It isn't from an installed package, so it can run any command."}
 OVER_DBUS = "It may be started over D-Bus by a service of its own, not by this command."
 IN_TERMINAL = "It runs in a terminal."
+OPENING_FOLDER = "Opening your {title} folder."
+NO_FOLDER = "Your {title} folder isn't set up on this computer."
+FOLDER_GONE = "I can't find your {title} folder."
+FOLDER_OUTSIDE = "Your {title} folder isn't inside your home folder, so I've left it closed."
+FOLDER_HIDDEN = "Your {title} folder is inside a hidden folder, so I've left it closed."
+FOLDER_WONT_OPEN = "Your {title} folder wouldn't open."
 
 
 def _single(word: str) -> str:
@@ -174,6 +181,47 @@ PANELS = (
                "fingerprint", "login", "automatic login"),
     _panel_row("gnome-ubuntu-panel.desktop", "Ubuntu Desktop", "ubuntu desktop", "ubuntu", "dock"),
 )
+
+
+@dataclass(frozen=True)
+class Folder:
+    key: str                # GLib.UserDirectory.DIRECTORY_<key>, or HOME for the home folder
+    title: str              # as said back: "Opening your Downloads folder."
+    words: frozenset        # what it is called, in _words() form
+
+
+def _folder_row(key: str, title: str, *words: str) -> Folder:
+    return Folder(key, title, frozenset(_words(word) for word in words))
+
+
+HOME = "HOME"
+# Your own folders, as GLib knows them, called what xdg-user-dirs and Files call them in the
+# languages the site uses: English, Spanish, Portuguese, Chinese and Arabic, written from memory
+# and not yet checked against their translations. The name a folder really has is matched too,
+# so a French or a German one answers to its own name.
+FOLDERS = (
+    _folder_row(HOME, "home", "home", "carpeta personal", "pasta pessoal", "主文件夹", "主目录",
+                "المنزل"),
+    _folder_row("DESKTOP", "Desktop", "desktop", "escritorio", "área de trabalho",
+                "ambiente de trabalho", "桌面", "سطح المكتب"),
+    _folder_row("DOCUMENTS", "Documents", "documents", "documentos", "文档", "المستندات"),
+    _folder_row("DOWNLOAD", "Downloads", "downloads", "descargas", "transferências", "下载",
+                "التنزيلات"),
+    _folder_row("MUSIC", "Music", "music", "música", "音乐", "الموسيقى"),
+    _folder_row("PICTURES", "Pictures", "pictures", "imágenes", "imagens", "图片", "الصور"),
+    _folder_row("VIDEOS", "Videos", "videos", "vídeos", "视频", "الفيديو"),
+    _folder_row("TEMPLATES", "Templates", "templates", "plantillas", "modelos", "模板", "القوالب"),
+    _folder_row("PUBLIC_SHARE", "Public", "public", "público", "公共", "العامة"),
+)
+# Round a folder's name, as in "my Downloads folder", "carpeta de descargas" or "下载文件夹". In
+# _words() form, which has already taken English's "my" and "open" off the front.
+FOLDER_TERMS = {"folder", "directory", "carpeta", "pasta", "مجلد"}
+LEADING = {_single(word) for word in ("mi", "mis", "el", "la", "los", "las", "meu", "minha",
+                                      "meus", "minhas", "o", "os", "as", "abre", "abrir", "abra",
+                                      "افتح")}
+LINKS = {"de", "del", "do", "da", "dos", "das", "of"}
+CJK_LEADING = ("打开", "我的")      # Chinese writes them with no space: "打开我的下载"
+CJK_FOLDER = ("文件夹", "目录")
 
 
 @dataclass(frozen=True)
@@ -518,10 +566,15 @@ def _flag(keys, key: str) -> bool:
 
 
 def _launch_and_say(app: App, text: str, config, session) -> dict:
-    if not _again(app.id):
-        if not _launch(app.path):
-            return _say(session, config, WONT_OPEN.format(name=app.name))
-        _remember(app.id)
+    return _opened(app.id, lambda: _launch(app.path), text, WONT_OPEN.format(name=app.name),
+                   config, session)
+
+
+def _opened(key: str, launch, text: str, failed: str, config, session) -> dict:
+    if not _again(key):
+        if not launch():
+            return _say(session, config, failed)
+        _remember(key)
     return _say(session, config, text)
 
 
@@ -575,12 +628,112 @@ def _launch(path: str) -> bool:
         return False
 
 
+def _folder_paths() -> dict[str, str | None]:
+    """Your folders where GLib says they are, by FOLDERS' keys: None for one that isn't set."""
+    GLib = _glib()
+    paths = {HOME: GLib.get_home_dir()}
+    for folder in FOLDERS:
+        if folder.key != HOME:
+            paths[folder.key] = GLib.get_user_special_dir(
+                getattr(GLib.UserDirectory, f"DIRECTORY_{folder.key}"))
+    return paths
+
+
+def _set_up(folder: Folder, paths: dict) -> str | None:
+    """A folder set to the home folder isn't used, as xdg-user-dirs has it."""
+    path, home = paths.get(folder.key), paths.get(HOME)
+    if not path or (folder.key != HOME and home
+                    and os.path.normpath(path) == os.path.normpath(home)):
+        return None
+    return path
+
+
+def _without(words: list[str], unwanted) -> list[str]:
+    while len(words) > 1 and words[0] in unwanted:
+        words = words[1:]
+    return words
+
+
+def _cut(word: str, affixes, front: bool) -> str:
+    """word without the affixes on that end, as long as something is left: "打开我的文档" is 文档."""
+    for affix in affixes:
+        if len(word) > len(affix) and (word.startswith(affix) if front else word.endswith(affix)):
+            return _cut(word[len(affix):] if front else word[:-len(affix)], affixes, front)
+    return word
+
+
+def _framed(words: list[str]) -> tuple[list[str], bool]:
+    """words with a folder term taken off either end, and whether there was one."""
+    called = False
+    if words and (last := _cut(words[-1], CJK_FOLDER, front=False)) != words[-1]:
+        words, called = [*words[:-1], last], True
+    if len(words) > 1 and words[-1] in FOLDER_TERMS:
+        words, called = words[:-1], True
+    if len(words) > 1 and words[0] in FOLDER_TERMS:
+        words, called = _without(words[1:], LINKS), True
+    return words, called
+
+
+def _folder_called(said: str, paths: dict) -> Folder | None:
+    squashed = _squash(said)
+    if not squashed:
+        return None
+    for folder in FOLDERS:
+        if squashed in {_squash(word) for word in folder.words}:
+            return folder
+    for folder in FOLDERS:      # the home folder's own name is yours, not a name for it
+        path = _set_up(folder, paths) if folder.key != HOME else None
+        if path and squashed == _squash(_words(Path(path).name)):
+            return folder
+    return None
+
+
+def _folder_asked(query: str, paths: dict) -> tuple[Folder | None, bool]:
+    """Which of your folders was named, and whether it was called a folder: "downloads", "my
+    Downloads folder", "carpeta de descargas", "下载文件夹", "مجلد التنزيلات"."""
+    whole = _without(query.split(), LEADING)
+    if whole:
+        whole = [_cut(whole[0], CJK_LEADING, front=True), *whole[1:]]
+    bare, called = _framed(whole)
+    called = called or any(word in FOLDER_TERMS for word in whole)     # "carpeta personal"
+    for said in (" ".join(whole), " ".join(bare)):
+        if folder := _folder_called(said, paths):
+            return folder, called
+    return None, False
+
+
+def _open_folder(folder: Folder, paths: dict, config, session) -> dict:
+    """As file.open opens a folder, with gio open and no card: inside the home folder and outside
+    hidden ones, links followed. Only the path GLib gave is opened, never anything said."""
+    path = _set_up(folder, paths)
+    if path is None:
+        return _say(session, config, NO_FOLDER.format(title=folder.title))
+    try:
+        real = Path(path).resolve() if folder.key == HOME else files._checked(Path(path))
+    except ValueError as e:
+        refusal = {files.OUTSIDE: FOLDER_OUTSIDE, files.HIDDEN: FOLDER_HIDDEN}.get(str(e),
+                                                                                  FOLDER_GONE)
+        return _say(session, config, refusal.format(title=folder.title))
+    except (OSError, RuntimeError):
+        return _say(session, config, FOLDER_GONE.format(title=folder.title))
+    if not real.is_dir():
+        return _say(session, config, FOLDER_GONE.format(title=folder.title))
+    return _opened(f"folder:{real}", lambda: files._launch(real),
+                   OPENING_FOLDER.format(title=folder.title),
+                   FOLDER_WONT_OPEN.format(title=folder.title), config, session)
+
+
 def open_app(args: dict, config, session):
     said = _words(args.get("name") or "")
     # "Default apps" is a page's word, though "apps" is usually only the end of an app's name.
     query, settings = _settings_asked(said if _page_word(said) else _without_tail(said))
     if not query and not settings:
         raise ValueError(NO_NAME)
+    # Only the folders GLib names, so a path the model wrote never reaches the opener.
+    paths = _folder_paths()
+    folder, called = (None, False) if settings else _folder_asked(query, paths)
+    if folder and called:
+        return _open_folder(folder, paths, config, session)
     entries = _installed()
     if not query or (settings and query == "gnome"):     # "GNOME Settings", "GNOME Control Center"
         return _open_by_id(SETTINGS_ID, OPENING_SETTINGS, entries, config, session)
@@ -593,6 +746,9 @@ def open_app(args: dict, config, session):
         return _open_found(exact, config, session)
     # "Firefox settings" opens Firefox, as Settings has no page for it.
     tier, found = _matching_kind(query, entries)
+    # An app named exactly that, such as GNOME's Music, wins unless "folder" was said.
+    if folder and tier != 0:
+        return _open_folder(folder, paths, config, session)
     if panel := _page(query, entries, settings, tier):
         return _open_panel(panel, entries, config, session)
     if found:

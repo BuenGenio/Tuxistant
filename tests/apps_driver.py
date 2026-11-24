@@ -1,5 +1,6 @@
 """Run by test_apps.py with temporary XDG folders, a PATH of stand-ins and no session bus. It reads
-the real Gio app list there and prints it as JSON on its last line. Nothing is launched.
+the real Gio app list there, and where GLib says your own folders are, and prints them as JSON on
+its last line. Nothing is launched or opened.
 
 It refuses to run unless HOME, XDG_DATA_HOME, XDG_DATA_DIRS, XDG_CONFIG_HOME and XDG_CONFIG_DIRS
 are set to folders in the temp folder, as are XDG_CACHE_HOME, XDG_STATE_HOME and XDG_RUNTIME_DIR
@@ -15,7 +16,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tuxistant import apps  # noqa: E402
+from tuxistant import apps, files  # noqa: E402
 
 
 def in_temp(folder: str) -> bool:
@@ -41,9 +42,9 @@ def no_launch(*_args, **_kwargs):
 
 def main() -> None:
     refuse_a_real_desktop()
-    apps._launch = no_launch
+    apps._launch = files._launch = no_launch
     report = {"apps": [asdict(app) for app in apps._installed()],
-              "https": apps._default_for("https")}
+              "https": apps._default_for("https"), "folders": apps._folder_paths()}
     print(json.dumps(report, default=sorted))
 
 

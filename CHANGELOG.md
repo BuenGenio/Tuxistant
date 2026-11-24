@@ -2,6 +2,14 @@
 
 ## Not yet released
 
+"Open my Downloads folder" opens the folder.
+
+One change reaches what 0.9.0 already did:
+
+- Apps: "Open my Downloads folder" opens your Downloads folder in your file manager, where 0.9.0 said no app had that name and offered to look for a folder. Your Desktop, Documents, Downloads, Music, Pictures, Videos, Templates and Public folders and your home folder open by name, wherever GLib says they are: by the English name, by the name the folder really has, or by a Spanish, Portuguese, Chinese or Arabic name. Only those open, never another folder or a path. An app named exactly the same, such as GNOME's Music, still wins unless you say "folder". A folder opens the way `file_open` opens one, with no card, and only inside your home folder and outside hidden folders. Not yet tried on a real desktop.
+
+After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension is unchanged.
+
 ## 0.9.0, a preview
 
 A preview, published as a GitHub prerelease. 0.5.0 stays the stable release and what the website offers.

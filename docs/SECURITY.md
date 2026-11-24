@@ -181,7 +181,7 @@ A community skill must never be able to choose or download a model, because that
 
 ## Opening apps
 
-Tux can open an installed app or a page of GNOME Settings. Nothing has attacked this yet, so this is the threat model it was built to, not a record of attacks.
+Tux can open an installed app, a page of GNOME Settings or one of your own folders. Nothing has attacked this yet, so this is the threat model it was built to, not a record of attacks.
 
 The model can be made to emit any tool call, so it is assumed to ask for anything. It only ever names an app. The name is matched on this computer against Gio's list of installed apps, and only the desktop file that matched is started, with `gio launch`. No file, address, desktop action or argument goes with it, so nothing the model writes reaches a command line.
 
@@ -192,10 +192,12 @@ The model can be made to emit any tool call, so it is assumed to ask for anythin
 - **A shadow.** A file in your home folder with the same id as a packaged app or a Settings page is what Gio would run, so it is judged as a home folder entry and gets the card.
 - **The file changing while the card is up.** It is read again after the click, and if it is not the same, Tux leaves it alone.
 - **A name written to be read out.** App names can come from a web page, so a reply naming an app is said by the app and never returned to the model, with angle brackets removed and hidden characters shown as escapes.
+- **A folder.** The model may name one of your own folders, such as Downloads, and only those: Desktop, Documents, Downloads, Music, Pictures, Videos, Templates, Public and the home folder. The path is GLib's, never anything the model wrote, so "~/.ssh", "/etc" or "Downloads/../.ssh" opens nothing. It is held to `file.open`'s line: inside the home folder and outside hidden folders, with links followed, so a Downloads folder set to `/etc` or linked into a hidden folder is left closed. It opens as `file.open` opens a folder, with `gio open` and no card, even after web text: opening sends nothing out, and the model hears only that it was opened, never what is in it.
 
 What doesn't hold:
 
 - A packaged app that does something as soon as it starts opens with no card, even after web text.
+- A folder opens in whatever app is set to open folders, and nothing checks which. If that is an entry in your home folder, its command runs with no card, where asked for as an app it would show one. A file opened with `file.open` has always gone the same way.
 - A remote-desktop app can be opened with no card.
 - The file is checked after the click, but `gio launch` reads it a moment later, so a process already running as you could swap it in between.
 - When the entry may start over D-Bus, the card says so, but the D-Bus service file that then runs is neither shown nor checked.
