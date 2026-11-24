@@ -2,6 +2,8 @@
 import contextlib
 import io
 import os
+import site
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -163,6 +165,32 @@ class Doctor(unittest.TestCase):
             results = cli.checks(self.config(9))
         self.assertEqual(results, [(False, "Python modules present", "on Ubuntu or Debian: "
                                     "sudo apt install python3-dbus-fast python3-websockets")])
+
+    def test_a_missing_dbus_fast_is_named_by_doctor_as_it_is_run(self):
+        """In a Python started without it, as the test above hides it only once the command line
+        is imported. A module imported before checks() has looked, such as goamail, which needs
+        dbus_fast, would stop doctor with a traceback instead of naming the package. Not yet
+        websockets: the command line imports mail search, which needs it (docs/ROADMAP.md)."""
+        # None in sys.modules is how Python records a module that can't be imported.
+        without = self.folder / "without"
+        without.mkdir()
+        (without / "sitecustomize.py").write_text("import sys\nsys.modules['dbus_fast'] = None\n")
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8",
+               "HOME": str(self.folder / "home"), "XDG_CONFIG_HOME": str(self.folder / "config"),
+               "XDG_DATA_HOME": str(self.folder / "data"), "XDG_RUNTIME_DIR": str(self.folder),
+               "XDG_STATE_HOME": str(self.folder / "state"),
+               "DBUS_SESSION_BUS_ADDRESS": f"unix:path={self.folder / 'no-bus'}",
+               "TUXISTANT_FN_SOCKET": str(self.folder / "fn.sock"),
+               "TUXISTANT_FN_HELPER": str(self.folder / "tuxistant-fn"),
+               "PYTHONPATH": os.pathsep.join((str(without), str(Path(cli.__file__).parent.parent))),
+               # HOME is a temp folder, and the other modules may be in the user's site folder.
+               "PYTHONUSERBASE": site.getuserbase()}
+        done = subprocess.run([sys.executable, "-P", "-m", "tuxistant", "doctor"], env=env,
+                              cwd=self.folder, capture_output=True, text=True, timeout=60)
+        self.assertNotIn("Traceback", done.stderr)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertEqual(done.stdout, "FAIL  Python modules present  on Ubuntu or Debian: "
+                                      "sudo apt install python3-dbus-fast\n")
 
     def test_a_command_that_needs_a_missing_module_says_so(self):
         err = io.StringIO()
