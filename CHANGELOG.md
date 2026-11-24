@@ -1,8 +1,14 @@
 # Changelog
 
-## Not yet released
+## 0.9.0, a preview
 
-Tux no longer reads out escapes in a song's title, and `tuxistant doctor` says how many accounts a mail search reaches.
+A preview, published as a GitHub prerelease. 0.5.0 stays the stable release and what the website offers.
+
+A small release: 0.8.0 with two changes. Tux no longer reads out escapes in a song's title or artist, or in a player's name. In 0.8.0 the marks round an Arabic or Hebrew title, the start of a terminal's colour code and the joiners inside a joined emoji were each read out as a backslash, a u and a number; now what nobody sees is left out, and joined emoji are kept whole. And with no mail in Thunderbird, `tuxistant doctor`'s line about mail search says a search reaches at most 3 of the accounts in Online Accounts, which is as many as a search has reached since 0.7.0. Nothing else in what Tux does has changed.
+
+Neither change has been tried on a real desktop. The change to titles has only run in tests, with stand-in players, one of them a made-up player on a private bus, and never with a real one: no real player has sent such a title yet, and nobody has heard how the voice says one. The doctor line has only run in tests too, with made-up settings and a made-up Thunderbird folder. Checks 19 and 16 under "Check on the real desktop" in docs/ROADMAP.md are their first real runs. Nothing 0.7.0 added has been tried on a real desktop, a real Online Accounts account or a real server yet either: see 0.7.0 below.
+
+The rest changes only the docs, a test and the website. docs/ROADMAP.md's limit on media titles now says what is said and what isn't known, among them that the voice reads a title as English, and docs/SKILLS.md says what is left out of a title, where it said control characters are shown as escapes. docs/ROADMAP.md also lists a limit found since: `tuxistant doctor` stops with a Python error, rather than naming the package, when python3-websockets is missing, as it has since 0.3.0, though `./install.sh` names it. A new test runs doctor in a Python without dbus_fast, which it names. On the website, 0.8.0's chip in Spanish, Portuguese and Chinese now says what the English one does: that the doctor command, written as it is typed, explains mail search.
 
 Two changes reach what 0.8.0 already did:
 
