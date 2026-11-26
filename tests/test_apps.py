@@ -1038,6 +1038,24 @@ class ThroughExecute(NoDesktop):
         self.assertEqual(result, {APP_SAYS: True})
         self.assertFalse(session.tainted, "opening reads nothing into the conversation")
 
+    def test_settings_says_the_skill_opens_your_folders_and_the_model_isn_t_told(self):
+        """Settings' "What it does" names your own folders. That line is the skill's, which the
+        model is never sent, so routing is as it was. The action's own description is what the
+        model is sent, and Settings shows it word for word, so it still says "Not for files or
+        folders" there, as ROADMAP.md says, until routing is measured again."""
+        about = self.skills.details("org.tuxistant.apps")
+        listed = next(skill for skill in self.skills.listing() if skill["id"] == about["id"])
+        for shown in (about["description"], listed["description"]):
+            self.assertIn("your own folders, such as Downloads", shown)
+        sent = json.dumps(self.skills.tools())
+        self.assertIn('"app_open"', sent)
+        self.assertNotIn("your own folders", sent)
+        (action,) = about["actions"]
+        self.assertEqual(action["tool"], self.skills.tool("app.open"))
+        self.assertIn("Not for files or folders", action["tool"]["description"])
+        roadmap = (Path(__file__).resolve().parent.parent / "docs/ROADMAP.md").read_text()
+        self.assertIn('still says "Not for files or folders"', roadmap)
+
     def test_an_unknown_name_is_an_error_with_the_words_said(self):
         result, _ = self.run_tool("Frobnicator")
         self.assertEqual(result, {"error": apps.NOT_FOUND.format(name="frobnicator")})

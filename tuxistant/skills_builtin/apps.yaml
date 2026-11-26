@@ -1,6 +1,6 @@
 id: org.tuxistant.apps
 name: Apps
-description: Opens the apps installed on this computer and the pages of GNOME Settings
+description: Opens the apps installed on this computer, the pages of GNOME Settings and your own folders, such as Downloads
 version: 1.0.0
 permissions: {}
 actions:
