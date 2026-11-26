@@ -22,7 +22,7 @@ Speech recognition, the language model and speech synthesis run on a [LocalAI](h
 
 ## Install
 
-There are eight releases to choose from:
+There are nine releases to choose from:
 
 - **0.5.0**, the stable release, and what the website offers. It adds recipe skills you write in YAML, a page for every skill in Settings, follow-up questions, hands-free dictation and an agreement before anything goes to the cloud. All of it was reviewed and tested, but most of it hasn't been tried on a real desktop yet; [CHANGELOG.md](CHANGELOG.md) says how far each part was.
 - **0.2.0**, the last release whose additions all worked on the owner's own desktop.
@@ -32,8 +32,9 @@ There are eight releases to choose from:
 - **0.7.0**, a preview. It adds mail search without Thunderbird, in a Google or Microsoft account in GNOME Online Accounts, behind the same "Search my mail" switch, which starts off, and asks your own server what docker and systemd list there. Neither has been tried on a real desktop, a real account or a real server yet, and whether Microsoft's mail server takes the token Online Accounts hands out isn't known.
 - **0.8.0**, a preview, and a small one: 0.7.0 with `tuxistant doctor` saying what mail search will really do, that "Search my mail" is off when it is, and with it on and no mail in Thunderbird, that a search goes to the Google or Microsoft accounts in Online Accounts whose Mail switch is on. The rest is docs and tests. Not yet tried on a real desktop.
 - **0.9.0**, a preview, and a small one: 0.8.0 with no escapes read out in a song's title, its artist or a player's name, such as for the marks round an Arabic or Hebrew title or the joiners inside an emoji, and `tuxistant doctor` saying a mail search reaches at most 3 accounts in Online Accounts. Not yet tried with a real player or on a real desktop.
+- **0.10.0**, a preview, and a small one: 0.9.0 with your own folders, such as Downloads, opening by name, a Settings page's name in your language found when said with an article or a word for settings round it, and `tuxistant doctor` naming a missing python3-websockets. Not yet tried on a real desktop.
 
-On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for another release, use `--branch v0.2.0`, `--branch v0.3.0`, `--branch v0.4.0`, `--branch v0.6.0`, `--branch v0.7.0`, `--branch v0.8.0` or `--branch v0.9.0` instead:
+On Ubuntu 26.04, add the two Python modules it doesn't come with, and `git` to fetch the code. This takes 0.5.0; for another release, use `--branch v0.2.0`, `--branch v0.3.0`, `--branch v0.4.0`, `--branch v0.6.0`, `--branch v0.7.0`, `--branch v0.8.0`, `--branch v0.9.0` or `--branch v0.10.0` instead:
 
 ```sh
 sudo apt install git python3-dbus-fast python3-websockets
@@ -41,7 +42,7 @@ git clone --branch v0.5.0 https://github.com/BuenGenio/Tuxistant.git
 cd Tuxistant
 ```
 
-Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`, or `tar xzf Tuxistant-0.9.0.tar.gz && cd Tuxistant-0.9.0` for the newest preview.
+Or take a download from the [releases page](https://github.com/BuenGenio/Tuxistant/releases), or 0.5.0 from the website, and skip `git`: `tar xzf Tuxistant-0.5.0.tar.gz && cd Tuxistant-0.5.0`, or `tar xzf Tuxistant-0.10.0.tar.gz && cd Tuxistant-0.10.0` for the newest preview.
 
 Other systems name these packages differently. The installer stops before copying anything if a module is missing, and says which.
 
@@ -98,7 +99,7 @@ It only ever types: it never presses Enter, so nothing is sent or run until you 
 
 ## What you can ask
 
-Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has them all. Of those, only mail search has been used on a real desktop so far. Parts of a row marked 0.7.0 preview are only in the 0.7.0, 0.8.0 and 0.9.0 previews, and haven't been tried on a real desktop yet.
+Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has them all. Of those, only mail search has been used on a real desktop so far. Parts of a row marked 0.7.0 preview are only in the 0.7.0, 0.8.0, 0.9.0 and 0.10.0 previews, and parts marked 0.10.0 preview only in 0.10.0. None of them has been tried on a real desktop yet.
 
 | Ask | What happens |
 |---|---|
@@ -111,7 +112,7 @@ Rows marked 0.3.0 preview or 0.4.0 preview came in those previews, and 0.5.0 has
 | "Turn off the lights", "Make the lamp warm white" | Switches, dims and colours Tapo smart lights on your network. Add your TP-Link account on the Lights page, under Skills in Settings. From 0.3.0 this needs the skill sandbox: bubblewrap and Linux 6.12 or newer (see Requirements) |
 | "Turn off the kitchen light", "Is the front door locked?", "Set the heating to 21" | Controls and reads your Home Assistant by the names you gave things there: lights, plugs, fans, heating, blinds, locks and scenes. Unlocking, opening, activating a scene and running a script wait for a click. Add the address and a long-lived access token on the Home Assistant page, under Skills in Settings. Until both are there, Tux doesn't offer it. 0.3.0 preview, not yet tried on a real desktop. |
 | "Pause the music", "Skip this song", "Turn it up", "What's playing?" | Pauses, resumes and skips whatever is playing in a player that speaks MPRIS, such as Spotify, VLC or a browser, tells you the song and who it is by, and sets the volume, never above 100 percent. 0.3.0 preview, not yet tried on a real desktop. |
-| "Open Firefox", "Open the Bluetooth settings" | Opens an installed app or a page of GNOME Settings. A shortcut added in your home folder rather than installed as a package waits for a click. 0.4.0 preview, not yet tried on a real desktop. |
+| "Open Firefox", "Open the Bluetooth settings", "Open my Downloads folder" | Opens an installed app or a page of GNOME Settings. A shortcut added in your home folder rather than installed as a package waits for a click. 0.4.0 preview, not yet tried on a real desktop. Your own folders, such as Downloads or Pictures, open by name in your file manager with no click: 0.10.0 preview. |
 | "Set a pasta timer for 8 minutes", "Remind me at 5pm to call mum", "How long is left on the pasta?" | Tux says it out loud when it is due and leaves a notification. Timers and reminders are kept through a restart. "Cancel the pasta timer" or "cancel my timers" removes them. Each is said once, with no snooze, and the computer has to be on with you logged in. 0.3.0 preview, not yet tried on a real desktop. |
 | "How do you say thank you in Ukrainian?" | Translates on your own server and says it in a native voice. "Translate what I've selected into French" works too |
 | "How many chemical elements are there?", "What's 15 percent of 80?" | Looks it up instead of guessing: Wikipedia first, then web search, and it says so if neither clearly answers. Sums are worked out on this computer. 0.3.0 preview, not yet tried on a real desktop. |

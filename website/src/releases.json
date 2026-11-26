@@ -15,11 +15,21 @@
     "url": null
   },
   "preview": {
-    "version": "0.9.0",
-    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.9.0.tar.gz",
-    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.9.0"
+    "version": "0.10.0",
+    "url": "https://github.com/BuenGenio/Tuxistant/archive/refs/tags/v0.10.0.tar.gz",
+    "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.10.0"
   },
   "history": [
+    {
+      "version": "0.10.0",
+      "date": "2026-11-27",
+      "channel": "preview",
+      "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.10.0",
+      "features": [
+        {"icon": "apps", "label": {"en": "Opening folders such as Downloads", "es": "Abrir carpetas como Descargas", "pt": "Abrir pastas como Downloads", "zh": "打开“下载”等文件夹", "ar": "فتح مجلدات مثل التنزيلات"}},
+        {"icon": "settings", "label": {"en": "Settings pages found by more names", "es": "Páginas de Configuración por más nombres", "pt": "Páginas de Configurações por mais nomes", "zh": "设置页面名称说法更灵活", "ar": "العثور على صفحات الإعدادات بأسماء أكثر"}}
+      ]
+    },
     {
       "version": "0.9.0",
       "date": "2026-11-25",

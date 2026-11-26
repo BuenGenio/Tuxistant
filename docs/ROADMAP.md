@@ -2,11 +2,11 @@
 
 Where the project stands and what comes next. Keep this current: it is how the next person picks up the work.
 
-Last updated 2026-11-24.
+Last updated 2026-11-26.
 
 ## Where things stand
 
-Steps 1 to 3 of the plan below are built, and most of step 4. Step 5, recipe skills, is built for 0.5.0 and not yet tried on a real desktop. `v0.5.0` is the latest stable release, and `v0.9.0` the newest preview. `v0.2.0` is the last release that holds only what has worked on the owner's real desktop, plus what 0.1.0 already had. What has come since passes its unit tests and has been evaluated against the real server, with the results and the failures in [TESTING.md](TESTING.md), and most of it has **not yet run on the real desktop**: the list under "Check on the real desktop" says what has.
+Steps 1 to 3 of the plan below are built, and most of step 4. Step 5, recipe skills, is built for 0.5.0 and not yet tried on a real desktop. `v0.5.0` is the latest stable release, and `v0.10.0` the newest preview. `v0.2.0` is the last release that holds only what has worked on the owner's real desktop, plus what 0.1.0 already had. What has come since passes its unit tests and has been evaluated against the real server, with the results and the failures in [TESTING.md](TESTING.md), and most of it has **not yet run on the real desktop**: the list under "Check on the real desktop" says what has.
 
 
 | Part | State |

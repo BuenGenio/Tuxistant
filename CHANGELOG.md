@@ -1,8 +1,14 @@
 # Changelog
 
-## Not yet released
+## 0.10.0, a preview
 
-"Open my Downloads folder" opens the folder, a Settings page's translated name is found when said with an article or a settings word round it, and `tuxistant doctor` names a missing python3-websockets.
+A preview, published as a GitHub prerelease. 0.5.0 stays the stable release and what the website offers.
+
+A small release: 0.9.0 with three changes. "Open my Downloads folder" opens your Downloads folder, where 0.9.0 said no app had that name: your Desktop, Documents, Downloads, Music, Pictures, Videos, Templates and Public folders and your home folder now open by name, with no card, and an app that 0.9.0 opened by its name, its generic name or a word in its name, such as Rhythmbox for "Open music", still wins unless you say "folder". A Settings page's name in your language is found when said with an article or a word for settings round it, as in "la configuración del sonido", where 0.9.0 found a translated name, whatever its case or accents, only on its own or with English words such as "the" or "settings" round it. And `tuxistant doctor` names python3-websockets when it is missing, where since 0.3.0 it stopped with a Python error. Nothing else in what Tux does has changed.
+
+None of the three has been tried on a real desktop. The folders and the Settings names have only run in tests, with a made-up list of apps and Settings pages and made-up folders in a throwaway home folder. The model's choice of tool hasn't been measured since either: when it last was, "Open my Downloads folder" went to opening an app every time, and no tool description has changed, but whether the model still sends it there isn't known. The doctor change has only run in a Python started without websockets. Check 22 under "Check on the real desktop" in docs/ROADMAP.md is the first real run of the folders and the Settings names. Nothing 0.7.0 added has been tried on a real desktop, a real Online Accounts account or a real server yet either: see 0.7.0 below.
+
+The rest changes only the docs, the tests and the website. docs/ROADMAP.md lists what the folders and the Settings names don't do, among them that the Spanish, Portuguese, Chinese and Arabic names for the folders were written from memory and haven't been checked by a native speaker, that a folder moved in user-dirs.dirs opens at its new place only once the daemon has restarted, and that the description of `app_open` Settings shows still says "Not for files or folders". It no longer lists `tuxistant doctor` stopping without python3-websockets. docs/SKILLS.md and docs/SECURITY.md say which folders open, with no card, docs/SECURITY.md why they need none, and docs/TESTING.md that routing hasn't been measured since. The evaluations hold back the folder opener, as they hold back the app opener. On the website, 0.9.0's mail chip now says in all five languages that the doctor command states mail search's limit, where it was a label after a colon, with no verb.
 
 Three changes reach what 0.9.0 already did:
 
@@ -10,7 +16,7 @@ Three changes reach what 0.9.0 already did:
 - Apps: a Settings page's name, in English or as Settings shows it in your language, is found when said with an article or a word for settings or for a page round it, in Spanish, Portuguese, Chinese or Arabic or with the name Settings itself has on your computer, as in "la configuración del sonido", "o painel de som", "إعدادات الصوت", "声音设置" or "Einstellungen für Klang", and with its spaces taken out, as in "redmóvil". 0.9.0 already found a translated name whatever its case, accents or a plural s, but only with its words apart as Settings writes them and nothing round it but English words, such as "the" or "settings". Spanish's "Ratón y panel táctil" couldn't be found at all, as its "panel" was taken for a settings word. A page's other words, such as "wallpaper", are still English only. Not yet tried on a real desktop.
 - `tuxistant doctor` names python3-websockets when it is missing, as it names python3-dbus-fast, python3-yaml and python3-gi: `FAIL  Python modules present  on Ubuntu or Debian: sudo apt install python3-websockets`. Since 0.3.0 it stopped with a Python error instead, as the command line read mail search, which needs websockets, before doctor looked. `./install.sh` already named it. Tested in a Python started without websockets, not yet on a real desktop.
 
-After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension is unchanged.
+After updating, restart the daemon with `systemctl --user restart tuxistant`, or log out and back in. The extension is unchanged. `tuxistant doctor` has its change straight away.
 
 ## 0.9.0, a preview
 
