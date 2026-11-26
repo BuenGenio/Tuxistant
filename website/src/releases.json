@@ -27,7 +27,7 @@
       "page": "https://github.com/BuenGenio/Tuxistant/releases/tag/v0.9.0",
       "features": [
         {"icon": "media", "label": {"en": "No escapes read out in song titles", "es": "No lee códigos en títulos de canciones", "pt": "Não lê códigos em títulos de músicas", "zh": "歌曲标题中不再读出转义码", "ar": "لا تُقرأ رموز الهروب في عناوين الأغاني"}},
-        {"icon": "mail", "label": {"en": "The doctor command: mail search's limit", "es": "«doctor»: límite de búsqueda de correo", "pt": "“doctor”: limite da busca nos e-mails", "zh": "“doctor”命令：邮件搜索的上限", "ar": "أمر doctor: حدّ بحث البريد"}}
+        {"icon": "mail", "label": {"en": "The doctor command names the mail limit", "es": "«doctor» indica el límite del correo", "pt": "“doctor” diz limite da busca nos e-mails", "zh": "“doctor”命令显示邮件搜索的上限", "ar": "أمر doctor يذكر حدّ بحث البريد"}}
       ]
     },
     {

@@ -707,6 +707,25 @@ class BuiltSite(unittest.TestCase):
         command or quotes it, as a bare "doctor explains" is a physician explaining."""
         command_word = {"en": "command", "es": "comando", "pt": "comando", "zh": "命令",
                         "ar": "أمر"}
+        for version, command, label in self.chips_naming_a_command():
+            for code, text in label.items():
+                with self.subTest(version=version, code=code):
+                    self.assertRegex(text, rf"(?<!\w){command}(?!\w)")
+                    quoted = re.search(rf"[«“\"]{command}[»”\"]", text)
+                    self.assertTrue(quoted or command_word[code] in text.casefold(), text)
+
+    def test_a_chip_that_names_a_command_says_what_it_does(self):
+        """With a verb, as 0.8.0's "explains" does, in every language, rather than a label after
+        a colon: 0.9.0's "The doctor command: mail search's limit" said nothing of what doctor
+        does with it, and could be read as doctor setting the limit."""
+        for version, command, label in self.chips_naming_a_command():
+            for code, text in label.items():
+                with self.subTest(version=version, code=code):
+                    self.assertNotRegex(text, r"[:：]", text)
+
+    def chips_naming_a_command(self) -> list:
+        """(version, command, label) for each chip whose English names a command of the
+        command line, such as "The doctor command explains mail search"."""
         cli = (ROOT / "tuxistant/__main__.py").read_text()
         commands = set(re.findall(r'commands\.add_parser\("(\w+)"', cli))
         self.assertIn("doctor", commands)
@@ -716,12 +735,7 @@ class BuiltSite(unittest.TestCase):
                  for command in re.findall(r"\b(\w+) command\b", feature["label"]["en"])
                  if command in commands]
         self.assertTrue(named)
-        for version, command, label in named:
-            for code, text in label.items():
-                with self.subTest(version=version, code=code):
-                    self.assertRegex(text, rf"(?<!\w){command}(?!\w)")
-                    quoted = re.search(rf"[«“\"]{command}[»”\"]", text)
-                    self.assertTrue(quoted or command_word[code] in text.casefold(), text)
+        return named
 
     def test_a_chip_about_mail_search_says_mail_in_every_language(self):
         """In the word for mail that 0.3.0's "Mail search" chip uses, as "the search" alone
