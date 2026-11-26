@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import BUS_NAME, BUS_PATH, __version__, calendars, mail
+from . import BUS_NAME, BUS_PATH, __version__, calendars
 from .config import Config
 from .fnclient import SOCKET
 
@@ -249,10 +249,11 @@ def checks(config) -> list[tuple[bool, str, str]]:
 def mail_detail(config) -> str:
     """With the switch off nothing is searched, so nothing is said of Thunderbird or accounts.
     Only true is on, as for mail.search and Skills.offered: "false" in a config file written by
-    hand is off. goamail needs dbus_fast, which checks() has found by the time it gets here."""
+    hand is off. Mail search needs websockets and goamail needs dbus_fast, which checks() has
+    found by the time it gets here, so both are imported only now."""
     if config["mail_search"] is not True:
         return MAIL_OFF
-    from . import goamail
+    from . import goamail, mail
     return MAIL_DETAIL[mail.holds_mail()].format(most=goamail.MAX_ACCOUNTS)
 
 

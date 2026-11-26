@@ -380,7 +380,6 @@ Move site claims from Soon to Now only after the matching check passes.
 - A process already running as you, outside the sandbox, can do whatever you can. Only the shell can answer a card, but card text is broadcast on the session bus.
 - The approval card's wait before Allow works now starts from a painted frame. That fix is in the extension, so the real desktop has it only after `./install.sh` and a login.
 - `./uninstall.sh` leaves the extension's name in GNOME's list of enabled extensions. It is harmless, and installing again finds it already enabled.
-- `tuxistant doctor` stops with a Python error, rather than naming the package, when `python3-websockets` is missing, as it has since 0.3.0: the command line imports mail search, which needs it, before doctor looks. `./install.sh` names it, and doctor names a missing `python3-dbus-fast`, `python3-yaml` or `python3-gi` (`tests/test_daemon_cli.py` runs it without dbus_fast).
 - Nothing has run on x86-64 or on Fedora. The server kit is x86-64 only and the desktop has only run on aarch64.
 - Approval cards are click-only, with no keyboard path. During a popup menu or a polkit dialog a click may not reach the card, which then times out as a no.
 - Kokoro is English-only here. Ukrainian uses the lowest-quality Piper voice, as no better one exists in the gallery. Chinese Traditional has not been tried on the Mandarin voice.

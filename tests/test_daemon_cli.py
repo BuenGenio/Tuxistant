@@ -166,15 +166,15 @@ class Doctor(unittest.TestCase):
         self.assertEqual(results, [(False, "Python modules present", "on Ubuntu or Debian: "
                                     "sudo apt install python3-dbus-fast python3-websockets")])
 
-    def test_a_missing_dbus_fast_is_named_by_doctor_as_it_is_run(self):
-        """In a Python started without it, as the test above hides it only once the command line
-        is imported. A module imported before checks() has looked, such as goamail, which needs
-        dbus_fast, would stop doctor with a traceback instead of naming the package. Not yet
-        websockets: the command line imports mail search, which needs it (docs/ROADMAP.md)."""
+    def doctor_without(self, *modules) -> subprocess.CompletedProcess:
+        """Runs python3 -P -m tuxistant doctor in a Python started without these modules, as the
+        test above hides them only once the command line is imported. A module imported before
+        checks() has looked would stop doctor with a traceback instead of naming the package."""
         # None in sys.modules is how Python records a module that can't be imported.
         without = self.folder / "without"
-        without.mkdir()
-        (without / "sitecustomize.py").write_text("import sys\nsys.modules['dbus_fast'] = None\n")
+        without.mkdir(exist_ok=True)
+        (without / "sitecustomize.py").write_text(
+            "import sys\n" + "".join(f"sys.modules[{name!r}] = None\n" for name in modules))
         env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "LANG": "C.UTF-8",
                "HOME": str(self.folder / "home"), "XDG_CONFIG_HOME": str(self.folder / "config"),
                "XDG_DATA_HOME": str(self.folder / "data"), "XDG_RUNTIME_DIR": str(self.folder),
@@ -185,12 +185,27 @@ class Doctor(unittest.TestCase):
                "PYTHONPATH": os.pathsep.join((str(without), str(Path(cli.__file__).parent.parent))),
                # HOME is a temp folder, and the other modules may be in the user's site folder.
                "PYTHONUSERBASE": site.getuserbase()}
-        done = subprocess.run([sys.executable, "-P", "-m", "tuxistant", "doctor"], env=env,
+        return subprocess.run([sys.executable, "-P", "-m", "tuxistant", "doctor"], env=env,
                               cwd=self.folder, capture_output=True, text=True, timeout=60)
+
+    def assertNames(self, done, packages):
         self.assertNotIn("Traceback", done.stderr)
         self.assertEqual(done.returncode, 1, done.stderr)
         self.assertEqual(done.stdout, "FAIL  Python modules present  on Ubuntu or Debian: "
-                                      "sudo apt install python3-dbus-fast\n")
+                                      f"sudo apt install {packages}\n")
+
+    def test_a_missing_dbus_fast_is_named_by_doctor_as_it_is_run(self):
+        """goamail needs dbus_fast, so the command line imports it only once doctor has looked."""
+        self.assertNames(self.doctor_without("dbus_fast"), "python3-dbus-fast")
+
+    def test_a_missing_websockets_is_named_by_doctor_as_it_is_run(self):
+        """Mail search needs it, through realtime, so the command line imports mail only once
+        doctor has looked. 0.9.0 imported it first and stopped with a traceback."""
+        for modules, packages in ((("websockets",), "python3-websockets"),
+                                  (("dbus_fast", "websockets"),
+                                   "python3-dbus-fast python3-websockets")):
+            with self.subTest(modules=modules):
+                self.assertNames(self.doctor_without(*modules), packages)
 
     def test_a_command_that_needs_a_missing_module_says_so(self):
         err = io.StringIO()
